@@ -2306,11 +2306,13 @@ export class SchemaGenerator {
   }
 
   /**
-   * Helper for {@link pairUnionMemberNodes}: whether `node` is a CFC alias
-   * read as one alternative for every semantic member of `type`, retaining
-   * the labels only its syntax represents. Wrappers with their own union
-   * rules follow those rules: §7 for `Default`, and `scope-placement.ts` for
-   * scopes.
+   * Whether `node`, a union member that stands for the member or members of
+   * `type`, is read whole, as one alternative for all of them
+   * (`pairUnionMemberNodes()`): where it is a CFC alias the CFC formatter
+   * reads, whose labels the node alone can spell. A wrapper, such as
+   * `Default<T, V>` or a cell, is not, nor is a scope wrapper, since each has
+   * rules of its own for its place in a union: §7's for `Default`, and
+   * `scope-placement.ts`'s for a scope.
    */
   #readsWhole(
     type: ts.Type,
@@ -2328,17 +2330,17 @@ export class SchemaGenerator {
 
   /**
    * Helper for {@link #narrowedFromLabels}, which returns the labels `type`,
-   * written as `typeNode` where given, attaches at its top in `context`. A
+   * spelled by `typeNode` where given, attaches at its top in `context`. A
    * value that may be missing, `T | undefined` or `T | null`, has the labels
    * of `T`, which formatting attaches to that member. A node narrowed from
    * any other union stands for any of its members, so it has the labels
    * formatting attaches to the union joined with those of its members
-   * (`joinMemberIfcLabels()`). A member is represented by the node of the union
+   * (`joinMemberIfcLabels()`). A member is spelled by the node of the union
    * `typeNode` writes, read through parentheses and aliases
    * (`readAuthoredTypeNode()`), that it is read at
-   * (`pairUnionMemberNodes()`). A member denoted by several written
-   * alternatives may be under the labels of any of them, even when the
-   * checker reduces the whole union to that member.
+   * (`pairUnionMemberNodes()`). A member that several nodes read whole stand
+   * for may be under the labels of any of them, even where the checker
+   * reduces the whole union to that member.
    */
   #labelsOf(
     type: ts.Type,
@@ -2362,11 +2364,12 @@ export class SchemaGenerator {
     const values = type.isUnion()
       ? type.types.filter((member) => (member.flags & nullish) === 0)
       : [type];
-    const covers = values.length === 1 && paired?.covering.get(values[0]!);
-    if (covers) {
+    const wholeNodes = values.length === 1 &&
+      paired?.wholeNodes.get(values[0]!);
+    if (wholeNodes) {
       return joinMemberIfcLabels(
         {},
-        covers.map(({ type, node }) =>
+        wholeNodes.map(({ type, node }) =>
           this.#labelsOf(type, node, context) ?? {}
         ),
       );
@@ -2386,9 +2389,9 @@ export class SchemaGenerator {
     return joinMemberIfcLabels(
       labels ?? {},
       values.flatMap((member) => {
-        const covers = paired?.covering.get(member);
-        return covers
-          ? covers.map(({ node, type }) =>
+        const wholeNodes = paired?.wholeNodes.get(member);
+        return wholeNodes
+          ? wholeNodes.map(({ node, type }) =>
             this.#labelsOf(type, node, context) ?? {}
           )
           : [this.#labelsOf(member, memberNode(member), context) ?? {}];

@@ -101,26 +101,26 @@ export type ReadsWhole = (
   context: GenerationContext,
 ) => boolean;
 
-/** A written union member read as one alternative, and the type it denotes. */
-export interface CoveringMemberNode {
+/** A union member node read whole, and the type it stands for. */
+export interface WholeMemberNode {
   readonly node: ts.TypeNode;
   readonly type: ts.Type;
 }
 
 /**
  * The nodes the members of a union are read at, `members` its members and
- * `unionNode` the written union:
+ * `unionNode` the union node spelling it:
  *
  * - `ordered` holds, for each member, the node whose type it is
  *   (`orderMemberNodesBySemanticType()`). A member node that writes a union,
  *   through parentheses and aliases without type parameters, is read for the
  *   members it writes (`readUnionMemberNodes()`), since the checker folds
  *   those into `members`.
- * - `covering` holds, by each semantic member, all the nodes `readsWhole`
- *   accepts for it, in written order. A node can denote several members,
- *   as `Confidential<A | B, …>` does, and several nodes can denote the same
- *   member. Two alternatives whose labels differ only in the policy a
- *   `typeof` names have one type where the policies' bindings have one type.
+ * - `wholeNodes` holds, by each member they stand for, the nodes `readsWhole`
+ *   accepts, in the order they are written. A node can stand for several
+ *   members, as `Confidential<A | B, …>` does, and several nodes for the same
+ *   member: two whose labels differ only in the policy a `typeof` names have
+ *   one type where the policies' bindings have one type.
  */
 export function pairUnionMemberNodes(
   members: readonly ts.Type[],
@@ -129,22 +129,22 @@ export function pairUnionMemberNodes(
   readsWhole: (type: ts.Type, node: ts.TypeNode) => boolean,
 ): {
   ordered: Array<ts.TypeNode | undefined>;
-  covering: Map<ts.Type, CoveringMemberNode[]>;
+  wholeNodes: Map<ts.Type, WholeMemberNode[]>;
 } {
   const read = new Set<ts.TypeNode>();
   const memberNodes = unionNode.types.flatMap((node) =>
     readUnionMemberNodes(node, checker, read)
   );
   const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
-  const covering = new Map<ts.Type, CoveringMemberNode[]>();
+  const wholeNodes = new Map<ts.Type, WholeMemberNode[]>();
   for (const node of memberNodes) {
     const type = getTypeNodeMemberType(node, checker);
     if (!type || !readsWhole(type, node)) continue;
     for (const member of type.isUnion() ? type.types : [type]) {
-      covering.set(member, [...covering.get(member) ?? [], { node, type }]);
+      wholeNodes.set(member, [...wholeNodes.get(member) ?? [], { node, type }]);
     }
   }
-  return { ordered, covering };
+  return { ordered, wholeNodes };
 }
 
 export class UnionFormatter implements TypeFormatter {
@@ -184,7 +184,7 @@ export class UnionFormatter implements TypeFormatter {
       (member, at) => this.#readsWhole(member, at, context),
     );
     return members.some((member) =>
-        (paired.covering.get(member)?.length ?? 0) > 1
+        (paired.wholeNodes.get(member)?.length ?? 0) > 1
       )
       ? this.formatType(type, context)
       : undefined;
@@ -282,7 +282,7 @@ export class UnionFormatter implements TypeFormatter {
     // so we fall through to the anyOf path which emits { type: "undefined" } explicitly.
     if (
       hasNull && nonNull.length === 1 &&
-      (paired?.covering.get(nonNull[0]!)?.length ?? 0) < 2
+      (paired?.wholeNodes.get(nonNull[0]!)?.length ?? 0) < 2
     ) {
       const item = generate(nonNull[0]!, members.indexOf(nonNull[0]!));
       return { anyOf: [item, { type: "null" }] };
@@ -341,16 +341,16 @@ export class UnionFormatter implements TypeFormatter {
     // it denotes. The node retains what their types cannot, such as a policy
     // binding in `Confidential<A | B, …>`. Nodes sharing even a single member
     // remain separate alternatives.
-    const readCovering = new Set<ts.TypeNode>();
+    const readWholeNodes = new Set<ts.TypeNode>();
     let unionOptions = members.flatMap((m, index) => {
-      const covers = paired?.covering.get(m);
-      if (!covers) return [generate(m, index)];
-      return covers.filter(({ node }) => !readCovering.has(node)).map(
+      const wholeNodes = paired?.wholeNodes.get(m);
+      if (!wholeNodes) return [generate(m, index)];
+      return wholeNodes.filter(({ node }) => !readWholeNodes.has(node)).map(
         ({ node, type }) => {
-          readCovering.add(node);
+          readWholeNodes.add(node);
           return this.#schemaGenerator.formatChildType(
             type,
-            covers.length > 1
+            wholeNodes.length > 1
               ? { ...context, inlineUnionMember: node }
               : context,
             node,

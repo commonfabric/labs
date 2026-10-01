@@ -801,7 +801,7 @@ Default paths of §7:
     as one alternative for all of them, where it is a CFC alias that
     `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
     `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
-    only the node represents, as a `PolicyOf<typeof rules>` binding. Several
+    only the node can spell, as a `PolicyOf<typeof rules>` binding. Several
     such nodes can stand for the same members, as two whose policies differ
     only in a `typeof` binding do where the bindings have one type, and each
     is an alternative of its own, in the order written. Its members are
