@@ -244,11 +244,9 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** A room is to be offered to its recipient through
-  their profile share inbox, but no offer names a room yet and the manager
-  reads none, so nothing delivers a notice to a principal who shares no space
-  with the sender end to end (see
-  [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
+- **Delivering a notice.** Nothing delivers a notice to a principal who shares
+  no space with the sender end to end, and the route one will take is not yet
+  decided (see [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
   document written by two sets of writers (see
