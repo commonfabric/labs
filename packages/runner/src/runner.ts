@@ -3195,9 +3195,23 @@ export class Runner {
             meta: ignoreReadForScheduling,
           });
           if (currentValue === undefined) {
-            derivedCell.setRawUntyped(
-              fabricFromConvertibleJsValue(schemaDefault),
-            );
+            const seed = fabricFromConvertibleJsValue(schemaDefault);
+            derivedCell.setRawUntyped(seed);
+            // The cell is the pattern's own and absent until now, so its
+            // default is an initialization whether or not anything projects
+            // it: a result field, a sub-pattern's argument, or nothing.
+            const seeded = derivedCell.getAsNormalizedFullLink();
+            tx.recordCfcWritePolicyInput({
+              kind: "initialization",
+              mode: "seed",
+              target: {
+                space: seeded.space,
+                id: seeded.id,
+                scope: seeded.scope,
+                path: [...seeded.path],
+              },
+              value: seed,
+            }, runtimeWritePolicyAuthorization);
           }
         }
       }

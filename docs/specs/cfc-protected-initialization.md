@@ -11,8 +11,11 @@ existing unprotected value.
 When the runtime serializes a constructed cell with a default, it materializes
 the seed and records the cell's complete schema for CFC preparation. The value,
 schema document, and CFC envelope commit together. Failure aborts the operation.
-The reference that exposes the cell requires its own protection: changing that
-reference must not provide an alternative way to replace the protected value.
+The default a pattern's setup writes into an internal cell it materializes for
+the pattern is recorded as the same initialization, whether the pattern exports
+the cell, passes it to a sub-pattern, or keeps it to itself. The reference that
+exposes the cell requires its own protection: changing that reference must not
+provide an alternative way to replace the protected value.
 
 When a generated initializer returns the same protected cell again, its changed
 default does not replace an existing backing value. The runtime may record a
