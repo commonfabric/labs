@@ -1394,11 +1394,13 @@ export const renderReportLines = (
   const lines: string[] = [`artifact root: ${report.artifactRoot}`];
   for (const family of report.families) {
     lines.push("", `===== RUN ${family.familyId} (${family.runs.length} runs)`);
-    for (const run of family.runs) lines.push(...renderRunLines(run));
-    lines.push(...renderTotalsLines(family.totals));
+    for (const run of family.runs) {
+      for (const line of renderRunLines(run)) lines.push(line);
+    }
+    for (const line of renderTotalsLines(family.totals)) lines.push(line);
   }
   lines.push("", `===== ALL ${report.families.length} FAMILIES`);
-  lines.push(...renderTotalsLines(report.totals));
+  for (const line of renderTotalsLines(report.totals)) lines.push(line);
   return lines;
 };
 

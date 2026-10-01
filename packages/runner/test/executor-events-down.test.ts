@@ -31,6 +31,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { maxOf } from "@commonfabric/utils/math";
 import { resultSchemaMetaSpelling } from "../src/result-schema-meta.ts";
 import {
   decodeMemoryBoundary,
@@ -4492,7 +4493,7 @@ describe("Phase 3 events-down (serving side)", () => {
       // AND the watermark has advanced past the last of them, the drain's
       // pending-entry scan can no longer select any of them — a re-delivery is
       // excluded by construction, not by having failed to show up yet.
-      const lastSeq = Math.max(...allEntries().map((entry) => entry.seq ?? 0));
+      const lastSeq = maxOf(allEntries().map((entry) => entry.seq ?? 0));
       await awaitAdmitted(server, () =>
         allEntries().length === 3 &&
         allEntries().every((entry) => entry.consequenced === true) &&

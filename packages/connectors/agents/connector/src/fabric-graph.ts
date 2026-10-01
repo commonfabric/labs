@@ -301,18 +301,17 @@ async function resolveStableGraphLinks(
       offset < value.length;
       offset += HYDRATION_BATCH_SIZE
     ) {
-      resolved.push(
-        ...await Promise.all(
-          value.slice(offset, offset + HYDRATION_BATCH_SIZE).map((child) =>
-            resolveStableGraphLinks(
-              connection,
-              child,
-              cache,
-              preserveLinkFields,
-            )
-          ),
+      const resolvedBatch = await Promise.all(
+        value.slice(offset, offset + HYDRATION_BATCH_SIZE).map((child) =>
+          resolveStableGraphLinks(
+            connection,
+            child,
+            cache,
+            preserveLinkFields,
+          )
         ),
       );
+      for (const resolvedChild of resolvedBatch) resolved.push(resolvedChild);
     }
     return resolved;
   }

@@ -68,6 +68,7 @@ export const rawBytesDecoder: LanguageDecoder = {
     const chunkSize = 32 * 1024;
     for (let offset = 0; offset < bytes.length; offset += chunkSize) {
       chunks.push(
+        // deno-lint-ignore cf-spread/no-spread-arguments -- one chunk, at most chunkSize bytes, per call
         String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)),
       );
     }

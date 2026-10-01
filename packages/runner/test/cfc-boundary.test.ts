@@ -2795,15 +2795,36 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(stored.value?.["/"][LINK_V1_TAG]).not.toHaveProperty(
         "cfcLabelView",
       );
+      const referenceIntegrity = {
+        type: "https://commonfabric.org/cfc/atom/LinkReference",
+        source: {
+          space: signer.did(),
+          id: source.getAsNormalizedFullLink().id,
+          path: [],
+        },
+        target: {
+          space: signer.did(),
+          id: target.getAsNormalizedFullLink().id,
+          path: [],
+        },
+      };
       expect(stored.cfc?.labelMap?.entries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             path: [],
-            label: { integrity: ["selected-by-alice"] },
+            label: {
+              integrity: expect.arrayContaining([
+                referenceIntegrity,
+                "selected-by-alice",
+              ]),
+            },
           }),
           expect.objectContaining({
             path: ["title"],
-            label: { confidentiality: ["selected-title"] },
+            label: {
+              confidentiality: ["selected-title"],
+              integrity: [referenceIntegrity],
+            },
           }),
         ]),
       );

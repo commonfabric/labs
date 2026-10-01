@@ -10,6 +10,7 @@ import type {
 import {
   assertValidFabricValueLayer,
   cloneIfNecessary,
+  debugStr,
   deepFreeze,
   type FabricConvertibleJsValue,
   fabricFromConvertibleJsValue,
@@ -804,6 +805,7 @@ const cellMethods = new Set<
   "send",
   "update",
   "push",
+  "pushAll",
   "addUnique",
   "increment",
   "remove",
@@ -2659,13 +2661,28 @@ export class CellImpl<T extends FabricValue>
     return this as unknown as Cell<T>;
   }
 
+  /** @inheritDoc */
   push(
-    ...value: T extends (infer U)[] ? (U | AnyCellWrapping<U>)[] : never
+    ...value: T extends readonly (infer U)[] ? (U | AnyCellWrapping<U>)[]
+      : never
+  ): void {
+    this.pushAll(value);
+  }
+
+  /** @inheritDoc */
+  pushAll(
+    values: T extends readonly (infer U)[] ? readonly (U | AnyCellWrapping<U>)[]
+      : never,
   ): void {
     if (!this.#tx) {
       throw new Error(
-        "Cell.push() requires transaction and array value\n" +
-          "help: use in handlers only, ensure cell is typed as array",
+        "Cell.push() or Cell.pushAll() requires transaction and array " +
+          "value\nhelp: use in handlers only, ensure cell is typed as array",
+      );
+    }
+    if (!Array.isArray(values)) {
+      throw new TypeError(
+        debugStr`Cell.pushAll() requires an array of values, not $quote${values}`,
       );
     }
 
@@ -2702,8 +2719,8 @@ export class CellImpl<T extends FabricValue>
     if (!Array.isArray(currentValue)) {
       if (currentValue !== undefined) {
         throw new Error(
-          "Cell.push() requires transaction and array value\n" +
-            "help: use in handlers only, ensure cell is typed as array",
+          "Cell.push() or Cell.pushAll() requires transaction and array " +
+            "value\nhelp: use in handlers only, ensure cell is typed as array",
         );
       }
 
@@ -2741,12 +2758,12 @@ export class CellImpl<T extends FabricValue>
     const array: readonly unknown[] = currentValue;
 
     // Append the new values to the array, preserving sparse holes in the original.
-    const combined = new Array(array.length + value.length);
+    const combined = new Array(array.length + values.length);
     array.forEach((v, i) => {
       combined[i] = v;
     });
-    for (let i = 0; i < value.length; i++) {
-      combined[array.length + i] = value[i];
+    for (let i = 0; i < values.length; i++) {
+      combined[array.length + i] = values[i];
     }
     // The anchor id source makes sure each pushed object gets its own doc,
     // its id drawn from the frame this cell was made in (`frameAnchorIds()`).
@@ -2764,7 +2781,7 @@ export class CellImpl<T extends FabricValue>
     // operation instead of a position diffed against a possibly-stale base.
     this.#tx.recordMergeableOp?.(resolvedLink, {
       op: "append",
-      count: value.length,
+      count: values.length,
     });
   }
 
@@ -2813,8 +2830,9 @@ export class CellImpl<T extends FabricValue>
 
       diffAndUpdate(this.#runtime, this.#tx, resolvedLink, [], cause);
       const resolvedSchema = resolveSchema(this.schema);
-      // Annotated for the same reason as in `push()`: `processDefaultValue()`
-      // returns `any`, which would discard the narrowing on assignment.
+      // Annotated for the same reason as in `pushAll()`:
+      // `processDefaultValue()` returns `any`, which would discard the
+      // narrowing on assignment.
       const created: FabricValue[] =
         isObjectOrArray(resolvedSchema) && Array.isArray(resolvedSchema.default)
           ? processDefaultValue(
@@ -2824,12 +2842,12 @@ export class CellImpl<T extends FabricValue>
             resolvedSchema.default,
           )
           : [];
-      // As in `push()`, `currentValue` is now the created array.
+      // As in `pushAll()`, `currentValue` is now the created array.
       currentValue = created;
     }
 
-    // Read-only for the same reason as in `push()`: the comparisons below only
-    // read, and the replacement is built separately.
+    // Read-only for the same reason as in `pushAll()`: the comparisons below
+    // only read, and the replacement is built separately.
     const array: readonly FabricValue[] = currentValue;
 
     // Keep only the values not already present (by stored-value equality,

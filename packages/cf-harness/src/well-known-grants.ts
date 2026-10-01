@@ -80,12 +80,16 @@ const connectorGrantClasses = (grant: HarnessConnectorGrantSpec): string[] =>
     : [grant.cfcClass !== undefined ? grant.cfcClass : grant.name];
 
 /** Human-readable connection and classes, shared by prompts and launch reports. */
-export const connectorGrantLabel = (grant: HarnessConnectorGrantSpec): string =>
-  `${grant.source.connection}${
+export const connectorGrantLabel = (
+  grant: HarnessConnectorGrantSpec,
+): string => {
+  const classes = connectorGrantClasses(grant);
+  return `${grant.source.connection}${
     grant.source.companionKey === undefined
       ? ""
       : ` / ${grant.source.companionKey}`
-  } (${connectorGrantClasses(grant).join(", ")})`;
+  }${classes.length === 0 ? "" : ` (${classes.join(", ")})`}`;
+};
 
 /** Describes the receipt's account state, quoting provider text as data. */
 const connectorViewerDescription = (
@@ -144,18 +148,22 @@ const connectorObservationDescription = (
 /**
  * Describes a connector using validated identity, classes, and receipt metadata.
  */
-const connectorGrantDescription = (grant: HarnessConnectorGrantSpec): string =>
-  `${
-    connectorGrantLabel(grant)
-  }: a read-only connector database whose columns carry \`${
-    connectorGrantClasses(grant).join("`, `")
-  }\` CFC labels. Account identity: ${
+const connectorGrantDescription = (
+  grant: HarnessConnectorGrantSpec,
+): string => {
+  const classes = connectorGrantClasses(grant);
+  return `${connectorGrantLabel(grant)}: a read-only connector database ${
+    classes.length === 0
+      ? "whose reads carry CFC labels"
+      : `whose columns carry \`${classes.join("`, `")}\` CFC labels`
+  }. Account identity: ${
     connectorViewerDescription(grant.viewer)
   }. Physical rows at injection: ${
     grant.rowCount ?? "unknown"
   } (including metadata and history). Newest observed at: ${
     connectorObservationDescription(grant.observation)
   } (when Loom observed a record, not its content time). Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
+};
 
 /**
  * The name a model may be handed for `grant` beside its token: a connector
@@ -218,9 +226,10 @@ export const checkConnectorGrantSpec = (
     throw new Error("connector grant must carry only one class metadata field");
   }
   if (spec.cfcClasses !== undefined || spec.cfcClass !== undefined) {
+    // An empty `cfcClasses` is a store whose contract classifies nothing.
     const classes = connectorGrantClasses(spec);
     if (
-      !Array.isArray(classes) || classes.length === 0 ||
+      !Array.isArray(classes) ||
       classes.some((value) =>
         typeof value !== "string" || !HANDLE_NAME_PATTERN.test(value)
       )

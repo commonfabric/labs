@@ -48,7 +48,7 @@ function cellResource(
     initialize?: (value: FabricValue) => FabricValue | Promise<FabricValue>;
     set?: (value: FabricValue) => void | Promise<void>;
     sink?: (listener: (value: FabricValue | undefined) => void) => BridgeCancel;
-    push?: (...values: FabricValue[]) => void | Promise<void>;
+    push?: (values: readonly FabricValue[]) => void | Promise<void>;
   } = {},
 ): BridgeResource {
   return {
@@ -385,9 +385,9 @@ describe("Fabric iframe bridge", () => {
     const pushes: FabricValue[][] = [];
     const bridge = createFabricBridge({
       items: cellResource(() => value, {
-        push: (...members) => {
-          pushes.push(members);
-          value.push(...members as number[]);
+        push: (members) => {
+          pushes.push([...members]);
+          for (const member of members as number[]) value.push(member);
         },
       }),
     });
@@ -403,6 +403,34 @@ describe("Fabric iframe bridge", () => {
       expect(pushes).toEqual([[1], [2]]);
       expect(value).toEqual([0, 1, 2]);
       expect(items.get()).toEqual([0, 1, 2]);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("carries a list of any length to the host as one append", async () => {
+    const members = Array.from({ length: 200_000 }, (_, index) => index);
+    const pushes: (readonly FabricValue[])[] = [];
+    const bridge = createFabricBridge({
+      items: cellResource(() => [], {
+        push: (values) => {
+          pushes.push(values);
+        },
+      }),
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const items = client.cell<number[]>("items");
+      await items.pull();
+      await items.pushAll(members);
+      expect(pushes.length).toBe(1);
+      expect(pushes[0]).toEqual(members);
+      expect(items.get()).toEqual(members);
     } finally {
       client.disconnect();
       host.disconnect();

@@ -844,7 +844,7 @@ const watchReadRoots = (
           : { scope: watch.query.scope }),
       });
     } else {
-      roots.push(...watch.query.roots);
+      for (const root of watch.query.roots) roots.push(root);
     }
   }
   return roots;

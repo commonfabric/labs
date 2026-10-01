@@ -139,7 +139,9 @@ Deno.test("profile-home shows every fresh verified identity with a badge bound t
 
     const ops: VDomOp[] = [];
     const reconciler = new WorkerReconciler({
-      onOps: (batch) => ops.push(...batch),
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
     });
     const cancel = reconciler.mount(
       result.key(UI).asSchema(rendererVDOMSchema),

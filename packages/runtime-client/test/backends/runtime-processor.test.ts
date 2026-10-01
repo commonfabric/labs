@@ -4118,7 +4118,7 @@ describe("runtime-processor", () => {
         },
       };
       const cellWithTx = {
-        push: (...values: unknown[]) => {
+        pushAll: (values: readonly unknown[]) => {
           expect(values).toEqual(["new value"]);
         },
         send: (value: unknown) => {

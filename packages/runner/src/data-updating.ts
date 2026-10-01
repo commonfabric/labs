@@ -772,7 +772,7 @@ export function initializeScopedArgumentSlots(
         !areNormalizedLinksSame(target, resolvedTarget)
       ) continue;
       if (!present) {
-        changes.push(...normalizeAndDiff(
+        const childChanges = normalizeAndDiff(
           runtime,
           tx,
           childLink,
@@ -781,7 +781,8 @@ export function initializeScopedArgumentSlots(
           options,
           { seen: new Map() },
           undefined,
-        ));
+        );
+        for (const change of childChanges) changes.push(change);
       }
       const parent = tx.readValueOrThrow({
         ...target,
@@ -813,7 +814,7 @@ export function initializeScopedArgumentSlots(
         }
         if (presentAncestor) continue;
       }
-      changes.push(...normalizeAndDiff(
+      const sessionChanges = normalizeAndDiff(
         runtime,
         tx,
         target,
@@ -824,11 +825,12 @@ export function initializeScopedArgumentSlots(
         options,
         { seen: new Map() },
         undefined,
-      ));
+      );
+      for (const change of sessionChanges) changes.push(change);
       continue;
     }
     if (present) continue;
-    changes.push(...scopedRedirectChanges(
+    const redirectChanges = scopedRedirectChanges(
       runtime,
       tx,
       childLink,
@@ -837,7 +839,8 @@ export function initializeScopedArgumentSlots(
       options,
       { seen: new Map() },
       undefined,
-    ));
+    );
+    for (const change of redirectChanges) changes.push(change);
   }
   applyChangeSet(tx, changes);
 }
@@ -868,7 +871,7 @@ function scopedRedirectChanges(
       state,
     )
     : [];
-  changes.push(...normalizeAndDiff(
+  const redirectChanges = normalizeAndDiff(
     runtime,
     tx,
     link,
@@ -879,7 +882,8 @@ function scopedRedirectChanges(
     options,
     state,
     currentValue,
-  ));
+  );
+  for (const change of redirectChanges) changes.push(change);
   return changes;
 }
 
@@ -2041,7 +2045,7 @@ export function normalizeAndDiff(
         undefined,
         true,
       );
-      changes.push(...nestedChanges);
+      for (const change of nestedChanges) changes.push(change);
     }
 
     // Handle array SHRINK (growth emitted its length change above, before
@@ -2261,7 +2265,7 @@ export function normalizeAndDiff(
         Object.hasOwn(currentRecord, key) ? currentRecord[key] : undefined,
         requiredProps === undefined ? undefined : requiredProps.has(key),
       );
-      changes.push(...nestedChanges);
+      for (const change of nestedChanges) changes.push(change);
     }
 
     // The scope-narrowing branch at the top of normalizeAndDiff only fires for
@@ -2304,7 +2308,7 @@ export function normalizeAndDiff(
           path: [...link.path, key],
           schema: childSchema,
         };
-        changes.push(...scopedRedirectChanges(
+        const redirectChanges = scopedRedirectChanges(
           runtime,
           tx,
           childLink,
@@ -2313,7 +2317,8 @@ export function normalizeAndDiff(
           options,
           state,
           currentRecord[key],
-        ));
+        );
+        for (const change of redirectChanges) changes.push(change);
         eagerScopedKeys.add(key);
       }
     }

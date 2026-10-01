@@ -653,6 +653,7 @@ export async function runSchedulerAction(
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
     tx.tx.validateReactiveReads = true;
+    tx.tx.derivedWrites = true;
     // Server-execution v2 stage F (serving-loop.md §3d): a serving
     // runtime's installed stamper attaches the wave run context here —
     // the reactive-action choke point — so every scheduler-driven

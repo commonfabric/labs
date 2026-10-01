@@ -128,7 +128,7 @@ describe("deprecated-spelling", () => {
         console.error = () => {};
         const wrapped = commandSpellingNotice("view", "source view")
           .action((...args: unknown[]) => {
-            seen.push(...args);
+            for (const arg of args) seen.push(arg);
           });
         wrapped({ json: true }, "first", "second");
       } finally {

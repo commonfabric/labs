@@ -113,7 +113,7 @@ describe("ConsumedLabelIndex", () => {
           part,
         ])
       );
-      paths.push(...level);
+      for (const path of level) paths.push(path);
     }
     for (const withWildcards of [false, true]) {
       const entries = paths.filter((path) =>

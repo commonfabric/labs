@@ -226,7 +226,7 @@ export function codeMirrorIntegratedUpdates(
           operation.cursor.version,
       );
     }
-    updates.push(...decodePayload(operation.payload));
+    for (const update of decodePayload(operation.payload)) updates.push(update);
     expectedVersion++;
   }
   if (expectedVersion - 1 !== snapshot.cursor.version) {

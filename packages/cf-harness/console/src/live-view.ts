@@ -402,8 +402,8 @@ export const consoleLiveEntries = (
       }
       case "turn_completed": {
         // Normal final answers already appear in the assistant feed. A
-        // finish_task question or reason lives in a tool result, so the
-        // closing block renders that sentence alongside any piece links.
+        // finish_task answer, question, or reason lives in a tool result, so
+        // the closing block renders that sentence alongside any piece links.
         entries.push({
           kind: "ended",
           key: named.key,
@@ -411,7 +411,9 @@ export const consoleLiveEntries = (
           status: "completed",
           outcome: event.result.outcome ?? "completed",
           ...(event.result.outcome === "question" ||
-              event.result.outcome === "gave-up"
+              event.result.outcome === "gave-up" ||
+              (event.result.outcome === "completed" &&
+                event.result.answer !== undefined)
             ? { text: event.result.finalText }
             : {}),
           pieces: event.result.pieces,
@@ -792,8 +794,7 @@ export class ConsoleLive extends LitElement {
           <span class="tool">${entry.title ?? entry.toolName}</span>
           ${elapsed === undefined ? nothing : html`
             <span class="muted">${elapsed}s elapsed</span>
-          `}
-          ${entry.status === "running" ? nothing : html`
+          `} ${entry.status === "running" ? nothing : html`
             <span class="badge ${entry.status === "completed"
               ? "ok"
               : "denied"}">${entry.status}</span>
@@ -900,8 +901,8 @@ export class ConsoleLive extends LitElement {
       `} ${this.piecesBaseRefused
         ? html`
           <p class="empty bad">
-            The address named a <code>piecesBase</code> that is not an absolute
-            http or https URL. Piece links go to the address the run recorded.
+            The address named a <code>piecesBase</code> that is not an absolute http or
+            https URL. Piece links go to the address the run recorded.
           </p>
         `
         : nothing}

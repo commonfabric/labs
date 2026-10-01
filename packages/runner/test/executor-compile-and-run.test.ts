@@ -10,6 +10,7 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { type Cell, sendEvent } from "../src/cell.ts";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
@@ -355,9 +356,11 @@ describe("executor-compile-and-run", () => {
     const engine = await server.engineForSpace(space);
     const seq = Math.max(
       0,
-      ...Engine.selectCommitsSince(engine, { fromSeq: 0 })
-        .filter((commit) => commit.class === "authored")
-        .map((commit) => commit.seq),
+      maxOf(
+        Engine.selectCommitsSince(engine, { fromSeq: 0 })
+          .filter((commit) => commit.class === "authored")
+          .map((commit) => commit.seq),
+      ),
     );
     expect(seq).toBeGreaterThan(0);
     await waitUntil(

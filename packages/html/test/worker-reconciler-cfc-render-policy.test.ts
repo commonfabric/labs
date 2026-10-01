@@ -30,7 +30,9 @@ import { normalizeRenderDeclassificationPolicy } from "../src/worker/types.ts";
 function createOpsCollector() {
   const allOps: VDomOp[] = [];
   return {
-    onOps: (ops: VDomOp[]) => allOps.push(...ops),
+    onOps: (ops: VDomOp[]) => {
+      for (const op of ops) allOps.push(op);
+    },
     clear: () => {
       allOps.length = 0;
     },

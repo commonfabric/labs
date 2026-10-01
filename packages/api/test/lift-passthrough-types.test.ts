@@ -80,7 +80,12 @@ function _passesThroughACellWrapper() {
 function _declaresItsOwnResult() {
   const lastActivity = lift((
     { createdAt, comments }: { createdAt: number; comments: { at: number }[] },
-  ): number => Math.max(createdAt, ...comments.map((comment) => comment.at)));
+  ): number =>
+    comments.reduce(
+      (latest, comment) => Math.max(latest, comment.at),
+      createdAt,
+    )
+  );
 
   const at = lastActivity({ createdAt: 0, comments: [] });
   const _resultIsTheDeclaredNumber: Same<typeof at, number> = true;
