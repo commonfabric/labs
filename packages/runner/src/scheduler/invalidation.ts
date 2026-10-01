@@ -349,13 +349,27 @@ export function takeInvalidCauses(
   return causes;
 }
 
+/**
+ * Gives a retried run back the invalid causes its failed attempt consumed, so
+ * that the retry's transaction joins their labels (§8.9.2), and leaves the
+ * node invalid.
+ *
+ * On a fanned-out node this dirties no instance. The causes dirtied the
+ * instances they cover when they arrived, and every caller dirties the retried
+ * instance itself, so a retry of one instance leaves its siblings current.
+ */
 export function restoreInvalidCauses(
   nodes: NodeRegistry,
   action: Action,
   addresses: readonly IMemorySpaceAddress[],
 ): void {
+  const record = nodes.get(action);
+  if (!record) return;
   for (const address of addresses) {
-    markInvalid(nodes, action, address);
+    addInvalidCause(record, address);
+  }
+  if (record.status === "clean" || record.status === "unavailable") {
+    nodes.setStatus(action, "invalid");
   }
 }
 
