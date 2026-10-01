@@ -202,9 +202,9 @@ one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
 
 ## Delivering notices
 
-Until a pattern can deliver end to end to a principal it shares no space with,
-delivering a notice is the client's job. A client finds the notices waiting in
-its user's manager and reports each one once it's delivered (see
+Until a pattern can deliver to a principal it shares no space with, delivering a
+notice is the client's job. A client finds the notices waiting in its user's
+manager and reports each one once it's delivered (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client MUST
 deliver only the notice: which room, and who sent it. It MUST NOT deliver any of
 the room's contents.

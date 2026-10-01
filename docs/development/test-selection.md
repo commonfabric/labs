@@ -363,15 +363,15 @@ Six things are worth knowing before reading a failure.
   the same member, which is that member's source measured by every test in
   the run: `deno task test-selection coverage` shows the set's number and
   the coverage tile shows the group's.
-- **Accept a rise in the pull request's description**, on a line of its
-  own at the left margin, naming the member and the rise:
-  `ACCEPT_COVERAGE_DEBT: packages/memory +12 lines`. The gate prints the
-  line to paste with the number already filled in. One marker covers every
-  set over that member.
-- **A marker naming anything but a workspace member fails the gate.** Nothing
-  consults it, so a marker naming a source group such as `packages/connectors`,
-  which holds members but is none, would otherwise pass for one that worked. The
-  gate lists the names it did not recognize.
+- **Any line the set's tests newly cover lowers its count.** Cover the new
+  code where possible. Where some of it cannot be covered, write tests in the
+  same suite for other uncovered lines of the same member instead.
+- **An
+  [`ACCEPT_COVERAGE_DEBT` marker](COVERAGE.md#the-measured-set-gate-and-accepting-debt)
+  naming anything but a workspace member fails the gate.** Nothing consults it, so a marker naming a source group
+  such as `packages/connectors`, which holds members but is none, would
+  otherwise pass for one that worked. The gate lists the names it did not
+  recognize.
 - **A change reaching more than `LOCAL_COVERAGE_MAX_SETS` sets forces
   none of them**, and the summary says so. The tests still run under the
   ordinary rules; it is the run-the-whole-set part that stops. A set some

@@ -1,7 +1,9 @@
 import * as FS from "@std/fs";
 
+import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
+import { experimentalOptionsFromEnv } from "@commonfabric/runner/experimental-posture";
 
 import { memoryEngineStoreUrl } from "./memory-store-url.ts";
 import env from "@/env.ts";
@@ -58,6 +60,13 @@ const authorizeSessionOpen = (
   context: Parameters<typeof verifySessionOpenAuthorization>[1],
 ): Promise<string> => verifySessionOpenAuthorization(message, context);
 
+// Under `sharedMemoryConnection` a key authenticates once for a whole
+// connection, which may then carry the sessions of several spaces. Without
+// the flag the server verifies no `connection.auth` and does not advertise
+// the capability, so its clients sign each `session.open`.
+const sharedMemoryConnection =
+  experimentalOptionsFromEnv(Deno.env.get).sharedMemoryConnection === true;
+
 // The store URL is derived in memory-store-url.ts (DB_PATH single-file mode or
 // MEMORY_DIR directory mode). Log which mode is active for this server.
 if (env.DB_PATH) {
@@ -72,6 +81,9 @@ await FS.ensureDir(memoryEngineStoreUrl);
 export const memoryServer = new MemoryServer.Server({
   store: memoryEngineStoreUrl,
   authorizeSessionOpen,
+  ...(sharedMemoryConnection
+    ? { authorizeConnection: verifyConnectionAuthorization }
+    : {}),
   sessionOpenAuth: {
     audience: memoryAudience,
   },

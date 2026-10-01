@@ -1546,17 +1546,32 @@ Result shape:
   lift-applied wrappers where needed
 - a spread of a capture, in the callback body outside any function nested in
   it, is written out as the properties it copies when the capture is a `const`
-  declared outside module scope and initialized with an object literal whose
-  properties all have static keys (identifiers or string literals; no spread,
-  method, accessor, or computed key). A `__proto__:` assignment sets the
-  prototype and contributes no key; the shorthand `{ __proto__ }` makes an own
-  property and is written back as `["__proto__"]`:
+  declared outside module scope whose keys are known where it is declared
+  (`staticKeysOfInitializer`): an object literal whose properties all have
+  static keys (identifiers, string literals, or numeric literals, a numeric
+  one read under its decimal name; no method, accessor, or computed key), a
+  spread inside that literal of another such object, or a `const` that names
+  one, at any depth, an object two spreads share being read each time. The
+  operand is read through any parentheses, `as`, `satisfies`, or `!` around
+  it. A `__proto__:` assignment
+  sets the prototype and contributes no key; the shorthand `{ __proto__ }`
+  makes an own property and is written back as `["__proto__"]`:
   `{ ...records, id: item.id }` ->
   `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
   callback reads a capture as an opaque reference, which has no keys to spread;
   those keys are exactly what the spread copies where `records` is declared
   (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
-  `closures/map-captured-object-spread.expected.jsx`)
+  `closures/map-captured-object-spread.expected.jsx`). A spread of any other
+  capture — a `const` initialized by a function call, a literal with a
+  computed key — is left as written and reported as an error,
+  `pattern-context:computation`: "Spread of the captured value `records`
+  copies nothing…" (`reportUnexpandedSpread`). The report is made once per
+  spread: the pattern-context check of §9.7 reports the same spread when the
+  capture is a tracked opaque value, and both go through `reportSpreadError`
+  (`reportDiagnosticOnce`), where the earlier report stands. Only spread
+  reports share that key, so two different computation errors on one node, a
+  non-static default and a rest element of one parameter say, are each made
+  (`test/closures/captured-object-spread.test.ts`)
 
 ### 9.5 Lift-applied strategy
 
@@ -2650,9 +2665,14 @@ A qualifying call, per `detectCallKind` (§5) — as of this writing:
   reactive values in its argument object still get property causes (test:
   "does not add root causes to pattern factory outputs" pins the absence of
   `.for("child", true)` alongside `.for(["child", "value"], true)`).
-- Variable position only, as a last resort: a call whose resolved type is
-  cell-like (`isCellLikeType` via `getTypeAtLocationWithFallback`, consulting
-  the cross-stage `typeRegistry`).
+- Variable position only, as a last resort: a call whose resolved type is a
+  cell in every arm a value can take (`isCellByType`: `isCellLikeType` of the
+  type, or of each member of a union apart from `undefined`, `null`, and
+  `void`; the type via `getTypeAtLocationWithFallback`, consulting the
+  cross-stage `typeRegistry`). A union with a plain-value arm, such as
+  `Writable<string> | string`, gets no cause: the `.for()` would throw on the
+  string (`ast-transform/handler-cell-or-value-call.expected.jsx`). A nullish
+  arm instead makes the access optional (§13.5).
 
 Suppression: if the receiver chain of the (visited) initializer already
 contains a `.for(...)` call — property access `.for` or element access
@@ -2714,10 +2734,34 @@ export default pattern((state) => ({
 
 Inside object-literal properties (only there), a *reference* to an existing
 reactive value is re-caused at its result location: after visiting, a bare
-identifier whose type is a branded cell or cell-like — or, absent type
-information, is a reactive value expression (`isReactiveValueExpression`) —
-gets `.for(<path>, true)` appended (`shouldRetargetReactiveReference`). The
-cause names the property, not the referenced binding:
+identifier whose type is a cell in every arm a value can take (`isCellByType`,
+as for the variable-position fallback in §13.2) — or, absent type information,
+is a reactive value expression (`isReactiveValueExpression`) — gets
+`.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
+identifier whose type has a plain-value arm beside a cell arm is re-rooted
+only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+a parameter of a reactive scope — the callback of a pattern builder call or
+of a reactive array method, through any parentheses or other transparent
+wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,
+`computed()`'s, or plain function's parameter is not one) — or a variable
+whose lowered initializer this stage classified as reactive
+(`isReactiveByConstruction`, recorded per run in `causedVariablesOf`), or a
+`const` initialized with a bare reference to one of those, at any depth,
+which is the same node under another name. That is the shape a hoisted `??`
+leaves:
+`const activeProfile = profile ?? profileWish.result` over a `Cell<Profile>`
+and a `Reactive<Profile>` read is typed `Profile | Cell<Profile> | undefined`
+and lowered to a lift, so `{ profile: activeProfile }` still re-roots it
+(`ast-transform/builder-arg-hoisted-nullish-selection.expected.jsx`); a
+pattern input `maybe: Writable<string> | string` is re-rooted in the pattern
+body — directly, through `const alias = maybe`, as the element of a reactive
+`.map()`, and under a parenthesized callback — and left alone in a handler
+that receives it as state and in a plain function that takes it as a
+parameter (`ast-transform/cell-or-value-parameter.expected.jsx`); and the
+same type on
+a handler-body `const` from a plain call gets no cause
+(`handler-cell-or-value-call`). The cause names the property, not the
+referenced binding:
 
 ```ts
 // Shown inside a pattern body.
@@ -2764,15 +2808,21 @@ throws in that case (`packages/runner/src/cell.ts`, `for(cause, allowIfSet?)`).
 The access is optional, `?.for(<cause>, true)`, when the tagged expression may
 be nullish when it runs (`mayBeNullish`): an optional chain, or an identifier
 (§13.4) or a call that `detectCallKind` does not classify whose type admits
-`undefined`, `null`, or `void`. The type is read both inside and outside any
-`as`, `satisfies`, or `!` around the expression, and either admitting one is
-enough unless a `!` asserts the value present. There is no cell to name in that
-case, and a plain `.for()` would throw on the absent value. A call the runtime
-provides keeps the plain access, since it returns a cell whatever type the
-value in that cell has (`ast-transform/handler-nullable-cell-const.expected.jsx`:
+`undefined`, `null`, or `void`. There is no cell to name in that case, and a
+plain `.for()` would throw on the absent value. A non-null assertion `!`
+around the expression keeps the plain access, over both the chain and the
+type. The other wrappers, `as` and `satisfies`, leave the question to the
+expression inside them: the type is read inside them, so `as unknown` does
+not hide a nullish arm (`satisfies` never changes a type, and a cast to a type
+that admits a cell is refused, §6). A call the runtime provides keeps the
+plain access, since it returns a cell whatever type the value in that cell has
+(`ast-transform/handler-nullable-cell-const.expected.jsx`:
 `const a = state.profile?.resolveAsCell()?.for("a", true)` in a handler,
-`{ profile: a?.for(["d", "profile"], true) }` re-rooting it, and
-`(maybeCell(state.profile) as unknown)?.for("e", true)`).
+`{ profile: a?.for(["d", "profile"], true) }` re-rooting it,
+`(maybeCell(state.profile) as unknown)?.for("e", true)`, and
+`maybeCell(state.profile)!.for("g", true)`;
+`ast-transform/handler-cell-or-value-call.expected.jsx`:
+`state.profile?.resolveAsCell()!.for("d", true)`).
 
 Source-map ranges are
 preserved from the original initializer (`preserveNodeSourceMap`).
@@ -3063,11 +3113,29 @@ encloses the original expression, wrappers included:
     `void`, and unions/intersections thereof (`isPrimitiveSnapshotCall`,
     `isPrimitiveLikeType`);
   - any call whose callee is a property access (`receiver.method(...)`).
-- **`new` expressions.** Only `new Map(...)` and `new Set(...)`
-  (`CF_DATA_CONSTRUCTOR_NAMES`). Notably `new Proxy(...)` is left unwrapped —
-  "Proxy snapshots stay unsupported until Proxy is re-enabled in SES
-  compartments" (`test/transform.test.ts`, "wraps top-level data candidates
-  with __cfHelpers.__cf_data").
+- **`new` expressions.** `new Map(...)` and `new Set(...)`
+  (`CF_DATA_CONSTRUCTOR_NAMES`, by name), and a construction of a
+  `FabricPrimitive` such as `new FabricDurationNsec(600n)`, which the runtime
+  freezer keeps as it is (`SES_SANDBOXING_SPEC.md` §4.2.3). The class has to
+  be one `commonfabric` declares — under any import name, as a namespace
+  member (`cf.FabricDurationNsec`), or through a `const` bound to a bare
+  reference to one (`constructorNamedBy`, `isCommonFabricSymbol`) — and its
+  instance type has to carry the
+  `FabricPrimitive` brand (`constructsFabricPrimitive`;
+  `declaresFabricPrimitiveBrand` from
+  `@commonfabric/schema-generator/fabric-primitive-brand`, which reads the
+  brand by the name of its key and so is not enough alone). A class of the
+  author's own is not wrapped, whether it shares a primitive's name, declares
+  a member under a symbol named `FABRIC_PRIMITIVE_BRAND` or under the real
+  one, or extends a primitive, nor is a `const` bound to one, so the verifier refuses it before its
+  constructor runs (tests: "wraps a top-level fabric primitive construction
+  with __cfHelpers.__cf_data", "does not wrap a construction that only looks
+  like a fabric primitive"; `packages/runner/test/engine-ses.test.ts`, "keeps
+  a fabric primitive constructed at top level as it is", "refuses a top-level
+  construction that only looks like a fabric primitive"). Notably `new Proxy(...)` is left
+  unwrapped — "Proxy snapshots stay unsupported until Proxy is re-enabled in
+  SES compartments" (`test/transform.test.ts`, "wraps top-level data
+  candidates with __cfHelpers.__cf_data").
 - **Literals.** Regular-expression literals, object literals, and array
   literals are always wrapped.
 - Everything else — identifier references, primitive literals, template
@@ -4090,9 +4158,10 @@ null when it does not apply. Current built-in behavior:
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
 7. A spread, inside a reactive collection callback, of a capture that §9.4 does
    not write out — a `const` initialized by a function call, say — copies
-   nothing, because the callback reads the capture as an opaque reference. No
-   diagnostic reports it unless the capture is a tracked reactive root, whose
-   spread §9.7 reports as not lowerable.
+   nothing, because the callback reads the capture as an opaque reference.
+   §9.4 reports it as an error rather than writing it out; the keys of such a
+   capture are not known when the code is compiled, so the spread itself
+   stays unsupported.
 
 ## 20. Test Coverage Snapshot
 

@@ -381,6 +381,18 @@ export interface ExperimentalOptions {
 
   /** Web client override; an explicit value takes precedence over the default. */
   webViewScopedReplication?: boolean | undefined;
+
+  /**
+   * The memory sessions of every space on one host share one connection,
+   * which each key authenticates on once
+   * (`docs/specs/memory-v2/connection-multiplexing.md`). When false, each
+   * space has a connection of its own, named in the connection's address,
+   * and every `session.open` is signed. A memory server under this flag
+   * verifies `connection.auth` and advertises `connectionAuth`. Defaults to
+   * off: a deployment that routes a connection by the space its address
+   * names cannot serve a connection that carries several.
+   */
+  sharedMemoryConnection?: boolean | undefined;
 }
 
 /**
@@ -1908,6 +1920,11 @@ export class Runtime {
       (this.storageManager as {
         setTelemetry?: (telemetry: RuntimeTelemetry) => void;
       }).setTelemetry?.(this.telemetry);
+      // Declared before any session opens, since the choice is made per
+      // session as it is created.
+      this.storageManager.setSharedMemoryConnection?.(
+        this.experimental.sharedMemoryConnection === true,
+      );
       this.moduleByteCache = options.moduleByteCache;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
