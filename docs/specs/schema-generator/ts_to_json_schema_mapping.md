@@ -597,7 +597,12 @@ pre-cleanup schemas.
   formats member-wise, preserving `{ type: "undefined" }` / `{ type: "null" }`,
   skipping conditional/type-parameter members, deduping identical member
   schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`).
-  Mixed unions fall to `UnionFormatter`. Primitive alternatives merge only
+  Mixed unions fall to `UnionFormatter`. A wrapper that CFC labels hold, as
+  `Confidential<Cell<T>, …>` does, is a labeled value rather than a wrapper
+  here: a union holding one falls to `UnionFormatter`, which reads it through
+  its CFC alias, so `Confidential<Cell<string>, ["b"]> | undefined` keeps
+  `ifc` on the cell's alternative (tested: cfc-authoring "a labeled cell that
+  may be missing", the runner's cfc-labeled-cell-input). Primitive alternatives merge only
   when both schemas contain exclusively `type` and `enum`; metadata-bearing
   alternatives, including Cell wrappers, remain separate even when their
   underlying primitive types match.

@@ -1,4 +1,8 @@
-import { env } from "@commonfabric/integration";
+import {
+  env,
+  type ProbeApi,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { beforeAll, describe, it } from "@std/testing/bdd";
@@ -13,6 +17,28 @@ import {
 
 const { FRONTEND_URL } = env;
 const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
+
+/**
+ * Whether the picker shows its default-profile marker as `shown` says, once
+ * the view has settled. The marker is a span reading exactly "default", which
+ * takes the place of a row's "Set default" button while home's
+ * `defaultProfile` holds that row's profile, so it shows that a "Set default"
+ * write landed. The renderer also wraps reactive regions in spans of no size,
+ * whose text holds every row's buttons, so only a rendered span counts.
+ */
+const defaultMarkerShownIs = async (
+  probe: ProbeApi,
+  shown: boolean,
+): Promise<boolean> => {
+  const settle = (globalThis as typeof globalThis & {
+    commonfabric?: { viewSettled?: () => Promise<void> };
+  }).commonfabric?.viewSettled;
+  if (!settle) return false;
+  await settle();
+  return probe.collect("#profile-picker span").some((element) =>
+    probe.isRendered(element) && probe.deepText(element).trim() === "default"
+  ) === shown;
+};
 
 // Workaround for a flaky activeTab regression (tracked in Linear CT-1666):
 // navigating to the home view with profile data already persisted sometimes
@@ -168,8 +194,13 @@ describe("home-space profile creation", () => {
     await createProfile(page, "Ada Lovelace");
     await createProfile(page, "Alan Turing");
     await waitForText(page, "#home-profile-summary", "Alan Turing");
+    await waitForCondition(page, defaultMarkerShownIs, { args: [false] });
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
+    // Home declares `defaultProfile` writable only by `setDefaultProfile`,
+    // from the picker's "Set default" action, so the write lands through that
+    // gate.
+    await waitForCondition(page, defaultMarkerShownIs, { args: [true] });
 
     await clickProfileLink(page, "Alan Turing");
     await waitForRuntimeIdle(page);

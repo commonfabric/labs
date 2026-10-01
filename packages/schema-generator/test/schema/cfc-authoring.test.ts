@@ -3270,4 +3270,72 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
   });
+
+  describe("a labeled cell that may be missing", () => {
+    /** The schema of `SchemaRoot`'s `field`, declared as `declaration`. */
+    const fieldSchema = async (declaration: string) => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Confidential<T, X extends readonly unknown[]> =
+          Cfc<T, { confidentiality: X }>;
+        interface SchemaRoot { field: ${declaration} }
+      `,
+        "SchemaRoot",
+      );
+      return asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      ).properties?.field;
+    };
+
+    const LABELED_CELL = {
+      type: "string",
+      asCell: ["cell"],
+      ifc: { confidentiality: ["b"] },
+    };
+
+    it("keeps the label of a cell beside `undefined`", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Cell<string>, readonly ["b"]> | undefined',
+        ),
+      ).toEqual({ anyOf: [{ type: "undefined" }, LABELED_CELL] });
+    });
+
+    it("keeps the label of a cell beside `null`", async () => {
+      expect(
+        await fieldSchema('Confidential<Cell<string>, readonly ["b"]> | null'),
+      ).toEqual({ anyOf: [LABELED_CELL, { type: "null" }] });
+    });
+
+    it("keeps the label of a stream beside `undefined`", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Stream<string>, readonly ["b"]> | undefined',
+        ),
+      ).toEqual({
+        anyOf: [{ type: "undefined" }, { ...LABELED_CELL, asCell: ["stream"] }],
+      });
+    });
+
+    it("keeps the label of a labeled cell beside an unlabeled one", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Cell<string>, readonly ["b"]> | Cell<number> | undefined',
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          LABELED_CELL,
+          { type: "number", asCell: ["cell"] },
+        ],
+      });
+    });
+
+    it("reads an unlabeled cell beside `undefined` with no label", async () => {
+      expect(await fieldSchema("Cell<string> | undefined")).toEqual({
+        anyOf: [{ type: "undefined" }, { type: "string", asCell: ["cell"] }],
+      });
+    });
+  });
 });
