@@ -235,15 +235,20 @@ describe("wish-result-view-labels", () => {
     return piece.withTx(undefined);
   };
 
-  /** Pins `piece` in the owner's default profile under `tag`. */
-  const pin = async (piece: Cell<unknown>, tag: string) => {
+  /** Pins `pieces` in the owner's default profile, each under `tag`. */
+  const pinAll = async (pieces: Cell<unknown>[], tag: string) => {
     const tx = runtime.edit();
     const profile = runtime.getCell(profileSpace, "profile", undefined, tx);
     profile.set({
       name: "Ada",
       initialNameApplied: "Ada",
       avatar: "",
-      elements: [{ cell: piece, tag, userTags: [], title: "pinned" }],
+      elements: pieces.map((cell) => ({
+        cell,
+        tag,
+        userTags: [],
+        title: "pinned",
+      })),
     });
     expect((await tx.commit()).error).toBeUndefined();
     const homeTx = runtime.edit();
@@ -257,6 +262,9 @@ describe("wish-result-view-labels", () => {
     runtime.getHomeSpaceCell(homeTx).key("defaultPattern").set(homeDefault);
     expect((await homeTx.commit()).error).toBeUndefined();
   };
+
+  /** Pins `piece` in the owner's default profile under `tag`. */
+  const pin = (piece: Cell<unknown>, tag: string) => pinAll([piece], tag);
 
   /** Lists `piece` among the mentionables of the pattern space. */
   const mention = async (piece: Cell<unknown>) => {
@@ -472,6 +480,28 @@ describe("wish-result-view-labels", () => {
 
       const result = await runWish("#slot", "slot-finder");
 
+      expect(holdsSealedClause(stateShape(result))).toBe(true);
+    });
+
+    it("holds a label covering the first found piece's `[UI]` slot on the wish state when several match", async () => {
+      // With several matches and no picker surface open yet, the wish shows
+      // the first match's view while the surface opens, and decides that view
+      // in its own transaction as it does for a single match.
+      const viewDoc = await seeded(profileSpace, "multi-view", emptyView, []);
+      const pieces: Cell<unknown>[] = [];
+      for (const cause of ["multi-first", "multi-second"]) {
+        const piece = await written(profileSpace, cause, {
+          title: cause,
+          [UI]: viewDoc,
+        });
+        await labelPath(piece.getAsNormalizedFullLink(), [UI], [sealedClause]);
+        pieces.push(piece);
+      }
+      await pinAll(pieces, "#multi");
+
+      const result = await runWish("#multi", "multi-finder");
+
+      expect(titleThrough(result).value).toBe("multi-first");
       expect(holdsSealedClause(stateShape(result))).toBe(true);
     });
 
