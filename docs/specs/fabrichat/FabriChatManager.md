@@ -65,11 +65,16 @@ is what labels it `authored-by` this user.
 
 ### First contact
 
-A notice has to reach a principal who may share no space with the sender.
-Nothing in this repository delivers one end to end, and the route one will take
-is not yet decided. A space's access list can admit any writer, but that is the
-`"*"` grant a room must not have.
+A notice has to reach a principal who may share no space with the sender. Its
+route is the recipient's profile share inbox: a profile's `inbox` field
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
+in a space of its own that any writer may post to and only its owner reads. The
+sender offers the room there, and the recipient's manager reads its offers, is
+readmitted to the room's space, and accepts the room. Nothing delivers one end
+to end today: no offer names a room yet, the manager reads none, and an inbox
+exists only where a host outside this repository creates one. A space's access
+list can admit any writer, but that is the `"*"` grant a room must not have.
 
 That is why step 3 hands notices to a client through `outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once a route
-delivers end to end, the manager can deliver notices itself.
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
+deliver end to end, the manager can deliver notices itself.
