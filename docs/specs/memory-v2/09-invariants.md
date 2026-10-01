@@ -491,8 +491,9 @@ principal would keep what that entry grants, and when the stored list has no
 entry for the principal. The exception is computed from the server's own
 state, never from anything the client supplies, and holds in `observe` and
 `enforce` alike; a refused one is an `AuthorizationError`, like any other
-shortfall of OWNER. A member leaving as a space's last concrete OWNER holds
-OWNER, so a mutation that also promotes a successor passes the ordinary check.
+shortfall of OWNER. A space's last concrete OWNER cannot leave this way, since
+the result must keep a concrete OWNER; it holds OWNER, so it may instead make
+another member OWNER, and then leave, through the ordinary check.
 
 On the whole-document clause specifically, one mechanical observation is
 available and no stated rationale is: the validity clause inspects
@@ -508,11 +509,12 @@ it owes the argument #4670 did not record.
 Layer: server admission (`#validateAclCommit` in
 `packages/memory/v2/server.ts`); client emission (`writeAcl()` in
 `packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
-`grantSpaceAccess()`, `revokeSpaceAccess()` and `leaveSpace()` all write
-through, and which satisfies the rule by addressing the whole document at path
-`[]` — a write through the ordinary value surface decomposes into per-key
-`op: "patch"` details and is refused). The self-removal exception to the
-capability check is `#isSelfRemoval` in `packages/memory/v2/server.ts`.
+`grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
+satisfies the rule by addressing the whole document at path `[]` — a write
+through the ordinary value surface decomposes into per-key `op: "patch"`
+details and is refused). The self-removal exception to the capability check
+is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
+the client that sends one.
 
 Soundness direction: none — an exact admission predicate, with a real cost on
 each side. Over-rejection is not merely a retry: a client that cannot produce
