@@ -35,10 +35,7 @@ import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { collectConsumedLabel } from "../src/cfc/prepare.ts";
 import { createRenderConfidentialityResolver } from "../src/cfc/render-ceiling.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
-import {
-  createSigilLinkFromParsedLink,
-  type NormalizedFullLink,
-} from "../src/link-utils.ts";
+import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { vnodeSchema } from "../src/schemas.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -165,6 +162,45 @@ describe("wish-result-view-labels", () => {
     });
     expect((await tx.commit()).error).toBeUndefined();
     return document.withTx(undefined);
+  };
+
+  /**
+   * A document in `space` holding `value` as the runtime writes it, so any
+   * cell in it is stored as a reference the runtime made.
+   */
+  const written = async (
+    space: typeof profileSpace,
+    cause: string,
+    value: Record<string, unknown>,
+  ): Promise<Cell<unknown>> => {
+    const tx = runtime.edit();
+    const document = runtime.getCell(space, cause, undefined, tx);
+    document.set(value);
+    expect((await tx.commit()).error).toBeUndefined();
+    return document.withTx(undefined);
+  };
+
+  /**
+   * Stores `entries` as the labels of the document `address` names, leaving
+   * its value as it is.
+   */
+  const labelDocument = async (
+    address: Pick<NormalizedFullLink, "space" | "scope" | "id">,
+    entries: LabelMapEntry[],
+  ) => {
+    const tx = runtime.edit();
+    writeSeedEnvelopeDoc(tx, address.space);
+    seedStoredEnvelope(tx, {
+      space: address.space,
+      scope: address.scope,
+      id: address.id,
+      path: ["cfc"],
+    }, {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: { version: 1, entries },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
   };
 
   /** Runs `piecePattern` on `argument` in the pattern space, and settles it. */
@@ -415,10 +451,13 @@ describe("wish-result-view-labels", () => {
       // label covering the slot is one the wish state carries. The slot holds
       // a link, which the wish does not follow.
       const viewDoc = await seeded(profileSpace, "slot-view", emptyView, []);
-      const piece = await seeded(profileSpace, "slot-piece", {
+      const piece = await written(profileSpace, "slot-piece", {
         title: "Slot",
-        [UI]: createSigilLinkFromParsedLink(viewDoc.getAsNormalizedFullLink()),
-      }, [{ path: [UI], label: { confidentiality: [sealedClause] } }]);
+        [UI]: viewDoc,
+      });
+      await labelDocument(piece.getAsNormalizedFullLink(), [
+        { path: [UI], label: { confidentiality: [sealedClause] } },
+      ]);
       await pin(piece, "#slot");
 
       const result = await runWish("#slot", "slot-finder");
@@ -511,12 +550,21 @@ describe("wish-result-view-labels", () => {
     });
 
     it("re-derives a clean wish state once a stamped one is deleted", async () => {
-      // A wish state stamped by a reader of the view keeps the stamp while
-      // the document stands. Deleting the document and running the wish again
-      // writes it afresh, labeled by what this run reads.
-      const piece = await pieceShowingSealedCell();
-      await pin(piece, "#sheet");
-      const finder = finderFor("#sheet");
+      // A label on the found piece's `[UI]` slot stamps the wish state. Taking
+      // the label off the piece leaves the stamp, since the state still
+      // stands; deleting the state and running the wish again writes it
+      // afresh, labeled by what that run reads.
+      const viewDoc = await seeded(profileSpace, "healed-view", emptyView, []);
+      const piece = await written(profileSpace, "healed-piece", {
+        title: "Healed",
+        [UI]: viewDoc,
+      });
+      const pieceLink = piece.getAsNormalizedFullLink();
+      await labelDocument(pieceLink, [
+        { path: [UI], label: { confidentiality: [sealedClause] } },
+      ]);
+      await pin(piece, "#healed");
+      const finder = finderFor("#healed");
       const tx = runtime.edit();
       const resultCell = runtime.getCell<Record<string, unknown>>(
         patternSpace,
@@ -530,51 +578,19 @@ describe("wish-result-view-labels", () => {
       await runtime.idle();
       const result = running.withTx(undefined);
       const state = wishState(result);
-      const document = {
-        space: state.space,
-        scope: state.scope,
-        id: state.id,
-        path: [],
-      };
-
-      // The stamps a reader of the whole view left on the state: the
-      // container's membership and existence, and the class templates of its
-      // slots, each carrying the clause.
-      const stamp = (
-        path: string[],
-        observes: "enumerate" | "shape" | "value" | "followRef",
-      ): LabelMapEntry => ({
-        path,
-        label: { confidentiality: [sealedSpellings[1]] },
-        origin: "structure",
-        observes,
-      });
-      const stampTx = runtime.edit();
-      writeSeedEnvelopeDoc(stampTx, patternSpace);
-      seedStoredEnvelope(stampTx, document, {
-        value: runtime.readTx().readValueOrThrow(document),
-        cfc: {
-          version: 1,
-          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: {
-            version: 1,
-            entries: [
-              stamp([], "enumerate"),
-              stamp([], "shape"),
-              stamp(["*"], "shape"),
-              stamp(["*"], "value"),
-              stamp(["*"], "followRef"),
-            ],
-          },
-        },
-      });
-      expect((await stampTx.commit()).error).toBeUndefined();
+      await labelDocument(pieceLink, []);
+      await runtime.idle();
       expect(holdsSealedClause(titleThrough(result).confidentiality)).toBe(
         true,
       );
 
       const deleteTx = runtime.edit();
-      seedStoredEnvelope(deleteTx, document, undefined);
+      seedStoredEnvelope(deleteTx, {
+        space: state.space,
+        scope: state.scope,
+        id: state.id,
+        path: [],
+      }, undefined);
       expect((await deleteTx.commit()).error).toBeUndefined();
       runtime.runner.stop(running);
       const rerunTx = runtime.edit();
@@ -586,7 +602,7 @@ describe("wish-result-view-labels", () => {
       const title = titleThrough(healed);
 
       expect(wishState(healed).id).toBe(state.id);
-      expect(title.value).toBe("Sheet");
+      expect(title.value).toBe("Healed");
       expect(holdsSealedClause(title.confidentiality)).toBe(false);
       expect(holdsSealedClause(stateShape(healed))).toBe(false);
     });
@@ -597,11 +613,12 @@ describe("wish-result-view-labels", () => {
       // The resolver the space shares for the query writes the state, so its
       // own transaction is the one that reads the slot.
       const viewDoc = await seeded(patternSpace, "slot-view", emptyView, []);
-      const piece = await seeded(patternSpace, "shared-slot-piece", {
+      const piece = await written(patternSpace, "shared-slot-piece", {
         [NAME]: "sharedslot",
         title: "Shared slot",
-        [UI]: createSigilLinkFromParsedLink(viewDoc.getAsNormalizedFullLink()),
-      }, [{
+        [UI]: viewDoc,
+      });
+      await labelDocument(piece.getAsNormalizedFullLink(), [{
         path: [UI],
         label: {
           confidentiality: [{
@@ -649,10 +666,10 @@ describe("wish-result-view-labels", () => {
   describe("the view the wish shows", () => {
     it("links to the found piece's `[UI]` slot when the slot links to a view not written yet", async () => {
       const pending = runtime.getCell(profileSpace, "pending-view");
-      const piece = await seeded(profileSpace, "pending-piece", {
+      const piece = await written(profileSpace, "pending-piece", {
         title: "Pending",
-        [UI]: createSigilLinkFromParsedLink(pending.getAsNormalizedFullLink()),
-      }, []);
+        [UI]: pending,
+      });
       await pin(piece, "#pending");
 
       const result = await runWish("#pending", "pending-finder");
