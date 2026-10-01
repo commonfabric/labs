@@ -8,6 +8,7 @@ import {
   readAuthoredTypeNodeOnce,
   readUnionMemberNodes,
   sameBesidesUndefined,
+  typeParameterOfType,
   unwrapTypeParentheses,
 } from "../../src/typescript/type-node.ts";
 import { createTestProgram, createTestProgramFromFiles } from "../utils.ts";
@@ -276,6 +277,37 @@ describe("type-node", () => {
           "type A = B | null; type B = A | undefined; type P = A;",
         ),
       ).toEqual(["A", "undefined", "null"]);
+    });
+  });
+
+  describe("typeParameterOfType()", () => {
+    it("returns the declaration of the type parameter a type is", async () => {
+      const { sourceFile, checker } = await createTestProgram(
+        "type Box<T> = [T];",
+      );
+      const box = sourceFile.statements.find(ts.isTypeAliasDeclaration)!;
+      const element = (box.type as ts.TupleTypeNode).elements[0]!;
+
+      expect(typeParameterOfType(checker.getTypeFromTypeNode(element)))
+        .toBe(box.typeParameters![0]);
+    });
+
+    it("returns `undefined` for a `this` type", async () => {
+      const { sourceFile, checker } = await createTestProgram(
+        "interface Self { me(): this; }",
+      );
+      const self = sourceFile.statements.find(ts.isInterfaceDeclaration)!;
+      const me = self.members[0] as ts.MethodSignature;
+      const type = checker.getTypeFromTypeNode(me.type!);
+
+      expect(type.flags & ts.TypeFlags.TypeParameter).not.toBe(0);
+      expect(typeParameterOfType(type)).toBeUndefined();
+    });
+
+    it("returns `undefined` for a type that is no type parameter", async () => {
+      const [text] = await aliasedTypes("type S = string;", "S");
+
+      expect(typeParameterOfType(text!)).toBeUndefined();
     });
   });
 });

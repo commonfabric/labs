@@ -72,7 +72,9 @@ const leafValues = (root: unknown, depth = 0): string[] => {
       : [];
   }
   const out: string[] = [];
-  for (const k of kids) out.push(...leafValues(k, depth + 1));
+  for (const k of kids) {
+    for (const value of leafValues(k, depth + 1)) out.push(value);
+  }
   return out;
 };
 

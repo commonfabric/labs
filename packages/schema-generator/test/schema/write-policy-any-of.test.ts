@@ -218,4 +218,14 @@ describe("write-policy-any-of", () => {
       ]>;
     `)).rejects.toThrow("must be a `WriteAuthorizedBy`");
   });
+
+  it("throws given a member whose writer is an alias for a binding", async () => {
+    await expect(schemaOf(`
+      type Indirect = typeof edit;
+      type SchemaRoot = WritePolicyAnyOf<string, [
+        WriteAuthorizedBy<unknown, typeof send>,
+        WriteAuthorizedBy<unknown, Indirect>,
+      ]>;
+    `)).rejects.toThrow("writer must be a direct `typeof` of a binding");
+  });
 });

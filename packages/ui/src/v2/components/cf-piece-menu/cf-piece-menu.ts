@@ -1338,7 +1338,7 @@ export class CFPieceMenu extends BaseElement {
       const range = globalThis.document?.createRange?.();
       if (range) {
         range.selectNodeContents(target);
-        targetRects.push(...Array.from(range.getClientRects()));
+        for (const rect of range.getClientRects()) targetRects.push(rect);
         range.detach();
       }
     }

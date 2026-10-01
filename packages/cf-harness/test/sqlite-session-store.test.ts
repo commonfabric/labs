@@ -11,6 +11,7 @@ import {
   type HarnessChatTurnStatus,
 } from "../src/contracts/interactive-chat.ts";
 import {
+  HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
 } from "../src/interactive-chat-service.ts";
@@ -1202,10 +1203,15 @@ Deno.test("sqlite chat resumes a canceled tool call from its checkpoint", async 
     });
     assertEquals(followUp.ok, true);
     await service.waitForTurn("session-canceled", "turn-follow-up");
-    expect(followUpInputs[0]).toEqual([...unattachedTurnContext(), {
-      role: "user",
-      content: "Continue",
-    }]);
+    // The canceled request carries over with the stop notice; its tool call
+    // never answered, so it does not.
+    expect(followUpInputs[0]).toEqual([
+      ...unattachedTurnContext(),
+      { role: "user", content: "Run the long command" },
+      { role: "user", content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE },
+      ...unattachedTurnContext(),
+      { role: "user", content: "Continue" },
+    ]);
     assertEquals(
       store.getSession("session-canceled")?.transcript,
       [

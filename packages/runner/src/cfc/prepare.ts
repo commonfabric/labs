@@ -42,6 +42,7 @@ import { STREAM_ENTRIES_DOC_PREFIX } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
+import { minOf } from "@commonfabric/utils/math";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
@@ -517,7 +518,7 @@ const indexedEntriesAt = (
   for (let depth = 0; depth <= path.length; depth++) {
     const at = index.byPath.get(pathKey(path.slice(0, depth)));
     if (at !== undefined) {
-      out.push(...at);
+      for (const entry of at) out.push(entry);
     }
   }
   return out;
@@ -743,7 +744,9 @@ const entriesResolvingAtLocation = (
       if (wildcard !== undefined) next.push(wildcard);
     }
     if (next.length === 0) break;
-    for (const node of next) found.push(...node.entries);
+    for (const node of next) {
+      for (const positioned of node.entries) found.push(positioned);
+    }
     frontier = next;
   }
   return found.sort((a, b) => a.ordinal - b.ordinal).map(({ entry }) => entry);
@@ -4513,7 +4516,7 @@ const deriveFlowJoinImpl = (
         labeledSpaces.add(space);
       }
       if (label?.confidentiality?.length) {
-        atoms.push(...label.confidentiality);
+        for (const atom of label.confidentiality) atoms.push(atom);
         let reads = confidentialReads.get(key);
         if (reads === undefined) {
           reads = [];
@@ -4559,7 +4562,7 @@ const deriveFlowJoinImpl = (
   for (const observation of tx.getCfcState().labelMetadataObservations) {
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
-    atoms.push(...observation.confidentiality);
+    for (const atom of observation.confidentiality) atoms.push(atom);
     // The input-witness meet is not the hereditary one: it quantifies over
     // every confidential input, so a confidential input that carries no
     // evidence, as label metadata does not, empties it
@@ -4576,7 +4579,7 @@ const deriveFlowJoinImpl = (
     ) {
       for (const space of observation.labeledSpaces) labeledSpaces.add(space);
     }
-    atoms.push(...(observation.flow.confidentiality ?? []));
+    for (const atom of observation.flow.confidentiality ?? []) atoms.push(atom);
     // `observation.flow` is itself a flow join, whose integrity is a meet
     // over what the content consumed, so it overstates no input.
     if ((observation.flow.confidentiality?.length ?? 0) > 0) {
@@ -4743,7 +4746,9 @@ const deriveFlowJoinImpl = (
     identity !== undefined &&
     (confidentiality.length > 0 || integrity.length > 0)
   ) {
-    integrity.push(...mintTransformedBy(identity, inputWitnesses));
+    for (const atom of mintTransformedBy(identity, inputWitnesses)) {
+      integrity.push(atom);
+    }
   }
   return {
     confidentiality,
@@ -5155,7 +5160,7 @@ const projectedSourceLabel = (
     if (!entryPathCoversPrefix(entryPath, source)) {
       continue;
     }
-    confidentiality.push(...label.confidentiality ?? []);
+    for (const atom of label.confidentiality ?? []) confidentiality.push(atom);
     const relative = source.slice(entryPath.length);
     for (const atom of label.integrity ?? []) {
       if (relative.length === 0) {
@@ -7819,13 +7824,6 @@ const derivePersistedLinkLabel = (
     );
     return { reason: sourceRootIsReadable ? verdictReason(reason) : reason };
   }
-  if (
-    sourceMetadata === undefined && pendingSourceSchema === undefined &&
-    !hasLabelValues(linkSchemaLabel) && hasCarriedLabel &&
-    pendingSourceView === undefined
-  ) {
-    return {};
-  }
   // A pending reference covering this source supplies its author. A stored
   // container's claim cannot become the reference's claim when an obsolete
   // child entry is removed from the source view.
@@ -7894,6 +7892,9 @@ const derivePersistedLinkLabel = (
       ),
     };
   }
+  // Every accepted link gets root evidence, including one whose only labels
+  // are carried descendants. This entry bounds the container's principal
+  // claims at the reference slot.
   const label: IFCLabel = {
     confidentiality: mergeLabelValues(
       sourceLabel.confidentiality,
@@ -8512,8 +8513,8 @@ const storedValuesAt = (
       // The write details keep one entry per path, so the attempt log is
       // what orders them.
       const firstAt = (at: (write: readonly string[]) => boolean) =>
-        Math.min(
-          ...attempts.filter(({ path: attempted }) => at(attempted)).map((
+        minOf(
+          attempts.filter(({ path: attempted }) => at(attempted)).map((
             { journalIndex },
           ) => journalIndex),
         );
@@ -8561,7 +8562,7 @@ const storedValuesAt = (
     for (const key of Object.keys(container)) {
       const found = expand([...prefix, key], tail);
       if (found === undefined) return undefined;
-      values.push(...found);
+      for (const value of found) values.push(value);
     }
     return values;
   };
@@ -9203,7 +9204,7 @@ const collectConsumedLabelImpl = (
             (nonRecursive !== true && isPrefix(path, entryPath)));
         if (!overlapsRead) continue;
         const contributed = entry.label.confidentiality ?? [];
-        atoms.push(...contributed);
+        for (const atom of contributed) atoms.push(atom);
         for (const atom of contributed) {
           noteSource(atom, {
             space: read.space,
@@ -9222,7 +9223,9 @@ const collectConsumedLabelImpl = (
           spaces.add(read.space);
           modulePolicySpaces.set(key, spaces);
         }
-        integrityAtoms.push(...(entry.label.integrity ?? []));
+        for (const atom of entry.label.integrity ?? []) {
+          integrityAtoms.push(atom);
+        }
       }
     };
     const toLogical = triggerReads.has(read)
@@ -9244,7 +9247,7 @@ const collectConsumedLabelImpl = (
   // evidence, so it contributes nothing to the exchange evaluator's guard
   // pool.
   for (const observation of tx.getCfcState().labelMetadataObservations) {
-    atoms.push(...observation.confidentiality);
+    for (const atom of observation.confidentiality) atoms.push(atom);
     for (const atom of observation.confidentiality) {
       noteSource(atom, observation.target, observation.target.path);
     }
@@ -9252,8 +9255,12 @@ const collectConsumedLabelImpl = (
   for (
     const observation of tx.getCfcState().externalContentObservations ?? []
   ) {
-    atoms.push(...(observation.consumed.confidentiality ?? []));
-    integrityAtoms.push(...(observation.consumed.integrity ?? []));
+    for (const atom of observation.consumed.confidentiality ?? []) {
+      atoms.push(atom);
+    }
+    for (const atom of observation.consumed.integrity ?? []) {
+      integrityAtoms.push(atom);
+    }
     for (const source of observation.sources) {
       noteSource(source.atom, source.read, source.labelPath);
       for (const reference of modulePolicyReferencesIn(source.atom)) {
@@ -10426,7 +10433,7 @@ export function* prepareBoundaryCommitSteps(
       }
       if (floorFailures.length > 0) {
         if (state.writeFloorMode === "enforce") {
-          reasons.push(...floorFailures);
+          for (const failure of floorFailures) reasons.push(failure);
           if (!isIngestTarget) continue;
           ingestVerificationFailed = true;
         } else {
@@ -10624,7 +10631,9 @@ export function* prepareBoundaryCommitSteps(
       });
       if (monotonicityViolations.length > 0) {
         if (state.declaredMonotonicityMode === "enforce") {
-          reasons.push(...monotonicityViolations.map(verdictReason));
+          for (const violation of monotonicityViolations) {
+            reasons.push(verdictReason(violation));
+          }
           if (!isIngestTarget) continue;
           // Mirror ingestVerificationFailed above: the runtime's ingest mark
           // (appended below) still persists in non-rejecting modes, but the
@@ -11005,7 +11014,7 @@ export function* prepareBoundaryCommitSteps(
     }
     for (const input of linkWriteInputs) {
       const result = yield* linkLabels.persisted(input);
-      reasons.push(...result.reasons);
+      for (const reason of result.reasons) reasons.push(reason);
       // Every attempted link is checked; only the final reference contributes
       // labels to the value this transaction stores at the slot.
       if (!currentLinkWriteInputs.has(input)) continue;
@@ -11173,7 +11182,7 @@ export function* prepareBoundaryCommitSteps(
         clearedExistence.forEach((cleared, index) => {
           if (isPrefix(path, cleared.path)) {
             attachedExistence.add(index);
-            atoms.push(...cleared.confidentiality);
+            for (const atom of cleared.confidentiality) atoms.push(atom);
           }
         });
         return foldedUnique(atoms);
@@ -11671,7 +11680,7 @@ export function* prepareBoundaryCommitSteps(
         const key = pathKey(anchor);
         const bucket = leftoverByPath.get(key) ??
           { path: anchor, atoms: [...flowConfidentiality] };
-        bucket.atoms.push(...cleared.confidentiality);
+        for (const atom of cleared.confidentiality) bucket.atoms.push(atom);
         leftoverByPath.set(key, bucket);
       });
       for (const bucket of leftoverByPath.values()) {
@@ -11844,9 +11853,10 @@ export function* prepareBoundaryCommitSteps(
     // the per-path §4.6.4.1 metadata addressing requires. No new dial: the
     // templates describe whatever payload entries the existing dials
     // persisted.
-    collapsedLabelEntries.push(
-      ...deriveLabelMetadataTemplateEntries(collapsedLabelEntries),
+    const templateEntries = deriveLabelMetadataTemplateEntries(
+      collapsedLabelEntries,
     );
+    for (const entry of templateEntries) collapsedLabelEntries.push(entry);
 
     const manifestFailures = installCarriedPolicyManifests(
       tx,
@@ -11854,7 +11864,7 @@ export function* prepareBoundaryCommitSteps(
       collapsedLabelEntries,
     );
     if (manifestFailures.length > 0) {
-      reasons.push(...manifestFailures);
+      for (const failure of manifestFailures) reasons.push(failure);
       continue;
     }
 
@@ -12062,7 +12072,7 @@ export function* prepareBoundaryCommitSteps(
     }, storedEnvelope);
     metadataResolver.didPrepare(key);
   }
-  reasons.push(...verifySinkRequestCeilings(tx));
+  for (const reason of verifySinkRequestCeilings(tx)) reasons.push(reason);
   // Single-use grant consumption (design §2.2): stage every claim the
   // consuming gates above registered — the receipt write plus its
   // create-only mark — into THIS transaction, inside this step's privileged
@@ -12073,7 +12083,7 @@ export function* prepareBoundaryCommitSteps(
   // releasing commit: consumption is atomic with the release, a failed
   // commit consumes nothing (spec §6.5.2 no-consume-on-failure), and the
   // create-only race loser dies as a permanent `receipt-exists` rejection.
-  reasons.push(...flushCfcGrantConsumptionClaims(tx));
+  for (const reason of flushCfcGrantConsumptionClaims(tx)) reasons.push(reason);
   // Stage-0 summary: at most once per prepare, and only when a protected
   // write was measured — a prepare that gated nothing has no precision to
   // report.

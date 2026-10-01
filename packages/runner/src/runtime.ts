@@ -1467,7 +1467,9 @@ export class Runtime {
       if (next === predecessor) return true;
       if (visited.has(next)) continue;
       visited.add(next);
-      pending.push(...(spaceDelegations.get(next) ?? []));
+      for (const ancestor of spaceDelegations.get(next) ?? []) {
+        pending.push(ancestor);
+      }
     }
     return false;
   }
@@ -1506,7 +1508,9 @@ export class Runtime {
           const predecessor = pending.pop()!;
           if (predecessor === identity || inherited.has(predecessor)) continue;
           inherited.add(predecessor);
-          pending.push(...(spaceDelegations.get(predecessor) ?? []));
+          for (const ancestor of spaceDelegations.get(predecessor) ?? []) {
+            pending.push(ancestor);
+          }
         }
         if (inherited.size > 0) {
           spaceSnapshot.set(identity, [...inherited].sort());

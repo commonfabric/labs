@@ -34,13 +34,13 @@ declare const gc: (() => void) | undefined;
 const benchmarkIdentity = await Identity.fromPassphrase(
   "fuse entity projection benchmark",
 );
-const benchmarkSession = createSession({
-  identity: benchmarkIdentity,
-  spaceDid: (await Identity.generate()).did(),
-});
 const benchmarkRuntime = new Runtime({
   apiUrl: new URL(import.meta.url),
   storageManager: StorageManager.emulate({ as: benchmarkIdentity }),
+});
+const benchmarkSession = createSession({
+  identity: benchmarkIdentity,
+  spaceDid: await benchmarkRuntime.createSpace(),
 });
 
 class BenchmarkPiecesController extends PiecesController {

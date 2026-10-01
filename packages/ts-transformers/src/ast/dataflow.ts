@@ -91,7 +91,7 @@ const mergeAnalyses = (...analyses: InternalAnalysis[]): InternalAnalysis => {
     if (!analysis) continue;
     contains ||= analysis.containsReactive;
     requires ||= analysis.requiresRewrite;
-    dataFlows.push(...analysis.dataFlows);
+    for (const dataFlow of analysis.dataFlows) dataFlows.push(dataFlow);
   }
   return {
     containsReactive: contains,

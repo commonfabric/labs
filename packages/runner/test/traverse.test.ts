@@ -16,6 +16,7 @@ import type {
   State,
   URI,
 } from "@commonfabric/memory/interface";
+import { maxOf } from "@commonfabric/utils/math";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
@@ -4542,7 +4543,7 @@ describe("SchemaObjectTraverser schema memo keys", () => {
     // visits.
     expect(idLength).toBeGreaterThan(10_000);
 
-    const longestKey = Math.max(...[...memo.keys()].map((key) => key.length));
+    const longestKey = maxOf([...memo.keys()].map((key) => key.length));
     expect(longestKey).toBeLessThan(1000);
   });
 

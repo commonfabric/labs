@@ -1647,7 +1647,7 @@ export class RuntimeProcessor {
     try {
       const cell = getCell(this.#runtime, request.cell) as Cell<FabricValue[]>;
       const values = request.values.map(mapCellRefsToSigilLinks);
-      cell.withTx(tx).push(...values);
+      cell.withTx(tx).pushAll(values);
     } finally {
       popFrame(frame);
     }

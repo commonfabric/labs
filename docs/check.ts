@@ -512,7 +512,7 @@ async function run(tmpDir: string): Promise<number> {
     // surrounding scope. Type-checking them would only pressure the author to
     // paraphrase, which is the one thing such a document must not do.
     if (declaresExcerpts(source)) continue;
-    blocks.push(...extractBlocks(entry.path, source));
+    for (const block of extractBlocks(entry.path, source)) blocks.push(block);
   }
 
   const jobs: Job[] = [];

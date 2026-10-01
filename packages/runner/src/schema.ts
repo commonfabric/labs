@@ -94,6 +94,7 @@ import {
   combineSchemaForLink,
   createDefaultTraversalContext,
   getJsonType,
+  type IMemorySpaceValueAttestation,
   IObjectCreator,
   isUnknownCellSchema,
   type LinkCrossingRoute,
@@ -1354,22 +1355,6 @@ export function validateAndTransform(
     return objectCreator.createObject(link, undefined);
   }
 
-  // Link paths don't include value, but doc address should
-  const address: IMemorySpaceValueAddress = toMemorySpaceAddress(
-    resolvedValueLink,
-  );
-  // Get the full value without telling the scheduler. The traverse method will
-  // notify the scheduler for shallow reads as they occur.
-  const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
-  let doc = { address, value: value };
-  const valueSelectedSchema = isObjectOrArray(effectiveSchema)
-    ? asCellCompoundSchemaForValue(effectiveSchema, value)
-    : undefined;
-  // If we have a ref with a schema, use that; otherwise, use the link's schema
-  let selector = {
-    path: doc.address.path,
-    schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
-  };
   // A marked transaction selects its materialization strategy here. Everything
   // above has run either way — link resolution, the `asCell` dispatch, schema
   // combination — so a view and an eager read start from the same link and the
@@ -1380,6 +1365,8 @@ export function validateAndTransform(
   // list while writing into it stands on, and what an eager read gives, since
   // an eager read hands back a value built before the write. Seeing its own
   // write means taking the read again.
+  let doc: IMemorySpaceValueAttestation;
+  let selector: { path: readonly string[]; schema: JSONSchema };
   if (handleMintsThroughMerge) {
     // A compound admitting a handle for the value, at a view's child. An eager
     // read reaches this position inside its parent's traversal, where the
@@ -1391,116 +1378,140 @@ export function validateAndTransform(
     // the schema alone reproduces that, and a handle outlives the read that
     // minted it, so the view hands the hop to the traverser the same way and
     // the merge mints the handle the eager read would.
+    //
+    // The traversal starts at the hop, as the eager descent does, and the value
+    // the link resolves to is not read: a handle points at that value without
+    // consuming it, so what it holds is no dependency of the reader holding it.
     const hopAddress = toMemorySpaceAddress(link);
     doc = {
       address: hopAddress,
       value: readValueAtResolvedLink(tx, link, hopAddress),
     };
     selector = { path: hopAddress.path, schema: effectiveSchema! };
-  } else if (tx.isLazyMaterialize()) {
-    // Crossing the last link is a hop the eager traverser combines schemas
-    // across (`linkHopSelector`), because a link's own schema describes the
-    // value at its target while the reader's schema describes what the reader
-    // asked for, and both apply. A view re-enters here for that hop instead of
-    // walking through it, so it has to do the same combining: the selector
-    // alone is the link's schema, and a reader asking for a property the link's
-    // schema does not name — `title` off a piece typed by its own
-    // registration — would read as a property the schema does not select.
-    const viewSchema = valueSelectedSchema ??
-      combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
-      selector.schema;
-    // The RULED unresolved-input refusal (OW51, 2026-08-21): the walk
-    // crossed a hop (or started from a data-derived handle) and
-    // dead-ended at a doc this replica cannot serve (link-resolution's
-    // `pendingHopDoc`), so nothing about the value — not even its
-    // absence — is knowable yet. When the reader's schema DECLARES a
-    // default, the view's absent-value arm stands that default in and
-    // registers the read (the existing "computed that has not produced
-    // yet" contract — schema-view.test.ts pins it); with NO default
-    // there is nothing honest to hand the body: register the dead-end
-    // doc's read FIRST (the dependency that re-triggers this reader
-    // when the doc arrives; the address-level read survives the
-    // NotFoundError `readValueOrThrow` swallows), then refuse. The
-    // action-run boundary disposes the refusal as a non-event: output
-    // `undefined`, no action failure, re-run on any registered read
-    // change — instead of handing `undefined` into a body whose schema
-    // promised a value (the OW51 splitDefinitions crash, browser and
-    // serving runtime alike). Lazy-branch only: eager reads (bindings,
-    // diffing, scheduler internals) keep today's behavior.
-    if (
-      resolvedValueLink.pendingHopDoc === true &&
-      value === undefined &&
-      defaultForAbsentValue(viewSchema) === undefined
-    ) {
-      tx.readValueOrThrow(resolvedValueLink);
-      const refusal = new UnresolvedInputError(resolvedValueLink);
-      tx.noteSchemaRefusal(refusal);
-      throw refusal;
-    }
-    // A handle branch the value selected carries the marker the dispatch above
-    // could not see under the union — `Cell<T> | undefined` generates as a
-    // union whose one branch declares `asCell`, and `hasAsCell` holds for a
-    // union only when every branch does. Hand the selected schema back
-    // through the front door rather than minting the handle here: the
-    // dispatch is where the consumed marker is unwrapped off the handle's own
-    // schema and where the follow-scope cap is applied, and it returns the
-    // handle without arriving here again.
-    if (SchemaObjectTraverser.hasAsCell(viewSchema)) {
-      return validateAndTransform(
-        runtime,
-        tx,
-        { link: { ...resolvedValueLink, schema: viewSchema }, cfcLabelView },
-        [],
-        {
-          synced: options?.synced,
-          mismatchThrows: options?.mismatchThrows,
-          viewChild: true,
-        },
-      );
-    }
-    // Combinators decide which entire branches validate before merging their
-    // results. Evaluating that boundary uses the traverser; a shallow schema
-    // union would admit values assembled from different, failing branches.
-    // That is the one shape a view hands to the traverser: a defaulted
-    // property or a nullable array item is decided by what the view can see
-    // at the container, never by evaluating a present subtree whole, since
-    // registering every read below it is the cost a view exists to avoid.
-    //
-    // The union is the reader's, so it is classified off `viewSchema` and
-    // not off the selector alone: a link that carries a schema of its own
-    // puts that schema on the selector, and the union the reader asked for
-    // survives only in `viewSchema`. The traverser is handed the same
-    // schema, for the same reason.
-    let compound = hasCombinator(viewSchema) || hasCombinator(selector.schema);
-    let lazySchema = viewSchema;
-    // Where the value's type alone tells the branches apart — an array under
-    // `Row[] | null` — exactly one branch can match, and nothing below the
-    // value decides which. The view is built over that branch and stays lazy;
-    // evaluating the union whole would materialize every row to answer
-    // `rows.length`. A union the type does not settle still goes to the
-    // traverser.
-    if (compound && value !== undefined && isObjectOrArray(viewSchema)) {
-      const narrowed = narrowUnionByValueType(viewSchema, value);
-      if (narrowed !== undefined && !hasCombinator(narrowed)) {
-        lazySchema = narrowed;
-        compound = false;
+  } else {
+    // Link paths don't include value, but doc address should
+    const address: IMemorySpaceValueAddress = toMemorySpaceAddress(
+      resolvedValueLink,
+    );
+    // Get the full value without telling the scheduler. The traverse method
+    // will notify the scheduler for shallow reads as they occur.
+    const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
+    doc = { address, value: value };
+    const valueSelectedSchema = isObjectOrArray(effectiveSchema)
+      ? asCellCompoundSchemaForValue(effectiveSchema, value)
+      : undefined;
+    // If we have a ref with a schema, use that; otherwise, use the link's
+    // schema
+    selector = {
+      path: doc.address.path,
+      schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
+    };
+    if (tx.isLazyMaterialize()) {
+      // Crossing the last link is a hop the eager traverser combines schemas
+      // across (`linkHopSelector`), because a link's own schema describes the
+      // value at its target while the reader's schema describes what the reader
+      // asked for, and both apply. A view re-enters here for that hop instead of
+      // walking through it, so it has to do the same combining: the selector
+      // alone is the link's schema, and a reader asking for a property the link's
+      // schema does not name — `title` off a piece typed by its own
+      // registration — would read as a property the schema does not select.
+      const viewSchema = valueSelectedSchema ??
+        combineOptionalSchema(effectiveSchema, resolvedValueLink.schema) ??
+        selector.schema;
+      // The RULED unresolved-input refusal (OW51, 2026-08-21): the walk
+      // crossed a hop (or started from a data-derived handle) and
+      // dead-ended at a doc this replica cannot serve (link-resolution's
+      // `pendingHopDoc`), so nothing about the value — not even its
+      // absence — is knowable yet. When the reader's schema DECLARES a
+      // default, the view's absent-value arm stands that default in and
+      // registers the read (the existing "computed that has not produced
+      // yet" contract — schema-view.test.ts pins it); with NO default
+      // there is nothing honest to hand the body: register the dead-end
+      // doc's read FIRST (the dependency that re-triggers this reader
+      // when the doc arrives; the address-level read survives the
+      // NotFoundError `readValueOrThrow` swallows), then refuse. The
+      // action-run boundary disposes the refusal as a non-event: output
+      // `undefined`, no action failure, re-run on any registered read
+      // change — instead of handing `undefined` into a body whose schema
+      // promised a value (the OW51 splitDefinitions crash, browser and
+      // serving runtime alike). Lazy-branch only: eager reads (bindings,
+      // diffing, scheduler internals) keep today's behavior.
+      if (
+        resolvedValueLink.pendingHopDoc === true &&
+        value === undefined &&
+        defaultForAbsentValue(viewSchema) === undefined
+      ) {
+        tx.readValueOrThrow(resolvedValueLink);
+        const refusal = new UnresolvedInputError(resolvedValueLink);
+        tx.noteSchemaRefusal(refusal);
+        throw refusal;
       }
+      // A handle branch the value selected carries the marker the dispatch above
+      // could not see under the union — `Cell<T> | undefined` generates as a
+      // union whose one branch declares `asCell`, and `hasAsCell` holds for a
+      // union only when every branch does. Hand the selected schema back
+      // through the front door rather than minting the handle here: the
+      // dispatch is where the consumed marker is unwrapped off the handle's own
+      // schema and where the follow-scope cap is applied, and it returns the
+      // handle without arriving here again.
+      if (SchemaObjectTraverser.hasAsCell(viewSchema)) {
+        return validateAndTransform(
+          runtime,
+          tx,
+          { link: { ...resolvedValueLink, schema: viewSchema }, cfcLabelView },
+          [],
+          {
+            synced: options?.synced,
+            mismatchThrows: options?.mismatchThrows,
+            viewChild: true,
+          },
+        );
+      }
+      // Combinators decide which entire branches validate before merging their
+      // results. Evaluating that boundary uses the traverser; a shallow schema
+      // union would admit values assembled from different, failing branches.
+      // That is the one shape a view hands to the traverser: a defaulted
+      // property or a nullable array item is decided by what the view can see
+      // at the container, never by evaluating a present subtree whole, since
+      // registering every read below it is the cost a view exists to avoid.
+      //
+      // The union is the reader's, so it is classified off `viewSchema` and
+      // not off the selector alone: a link that carries a schema of its own
+      // puts that schema on the selector, and the union the reader asked for
+      // survives only in `viewSchema`. The traverser is handed the same
+      // schema, for the same reason.
+      let compound = hasCombinator(viewSchema) ||
+        hasCombinator(selector.schema);
+      let lazySchema = viewSchema;
+      // Where the value's type alone tells the branches apart — an array under
+      // `Row[] | null` — exactly one branch can match, and nothing below the
+      // value decides which. The view is built over that branch and stays lazy;
+      // evaluating the union whole would materialize every row to answer
+      // `rows.length`. A union the type does not settle still goes to the
+      // traverser.
+      if (compound && value !== undefined && isObjectOrArray(viewSchema)) {
+        const narrowed = narrowUnionByValueType(viewSchema, value);
+        if (narrowed !== undefined && !hasCombinator(narrowed)) {
+          lazySchema = narrowed;
+          compound = false;
+        }
+      }
+      if (
+        !compound ||
+        (value === undefined && defaultForAbsentValue(viewSchema) !== undefined)
+      ) {
+        return materializeSchemaView(
+          runtime,
+          tx,
+          { ...resolvedValueLink, schema: lazySchema },
+          value,
+          cfcLabelView,
+          options?.synced ?? false,
+          options?.mismatchThrows !== true,
+        );
+      }
+      selector.schema = viewSchema;
     }
-    if (
-      !compound ||
-      (value === undefined && defaultForAbsentValue(viewSchema) !== undefined)
-    ) {
-      return materializeSchemaView(
-        runtime,
-        tx,
-        { ...resolvedValueLink, schema: lazySchema },
-        value,
-        cfcLabelView,
-        options?.synced ?? false,
-        options?.mismatchThrows !== true,
-      );
-    }
-    selector.schema = viewSchema;
   }
 
   // TODO(@ubik2): these constructor parameters are complex enough that we should
@@ -1551,7 +1562,17 @@ export function validateAndTransform(
     context,
     objectCreator,
   );
-  const { ok: val, error } = traverser.traverse(doc, link);
+  // Minting a handle through the merge resolves a reference and consumes no
+  // value, so where every branch declares a handle the traversal reads outside
+  // the conflict set, as the eager descent reaching the same position does
+  // (`#traverseObjectWithSchema`, `#traverseArrayWithSchema`). A branch read
+  // as a value decides what the reader holds, so a union with one keeps its
+  // reads.
+  const traverse = () => traverser.traverse(doc, link);
+  const { ok: val, error } =
+    handleMintsThroughMerge && SchemaObjectTraverser.hasAsCell(effectiveSchema)
+      ? tx.runWithAmbientReadMeta(excludeReadFromConflict, traverse)
+      : traverse();
   // A traversal a view asked for may cross such a hop and still succeed. Where
   // a branch admits the `undefined` the hop reads as, the success stands, as an
   // eager read's does, and the registered read runs the reader again when the

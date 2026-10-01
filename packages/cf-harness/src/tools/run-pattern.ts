@@ -1780,11 +1780,12 @@ export const runPatternTool: HarnessToolDefinition<
           // the pull, because it decides what to relax by reading what the
           // cell holds, and before the pull it holds nothing.
           const materialized = cellWithScopedLinkRequiredsRelaxed(instance);
-          found.push(...observedOutputsIn(
+          const outputs = observedOutputsIn(
             asSerializableValue(materialized.get()),
             record.link.schema,
             record.cell === ownCellHash ? undefined : record.identity,
-          ));
+          );
+          for (const output of outputs) found.push(output);
         } catch {
           // One instance that will not read back says nothing about the
           // others, and this report is a disclosure: what a failed read

@@ -718,6 +718,35 @@ The client provider fires three notification types:
   notifications MUST reflect the visible state transitions, not hidden
   intermediate states.
 
+### 3.8.3 A Derived Write the Space Refuses
+
+A principal may read a space it cannot write, and a reactive computation it
+runs there still writes its outputs. Those writes are derived: running the
+computation again reproduces them. When the server refuses such a commit with
+an `AuthorizationError` it has not marked retriable, the client keeps each
+written document's new value instead of reverting it, as a _local fold_: the
+confirmed value at the same `seq`, with the refused write applied, held by
+that replica alone.
+
+- A document is folded only where the refused write sits directly on the
+  confirmed version it was made over. Where a newer confirmed version arrived
+  underneath it, or an earlier pending write lies beneath it, the write is
+  reverted as any other rejection's is.
+- A frame at the same `seq` leaves a fold in place, since it carries the value
+  the fold was made over. A frame at a later `seq` replaces it.
+- A later write over a folded document goes to the server as a whole-document
+  `set`, never as a patch, because the server holds a different value than the
+  one the patch was computed against. That matters once the principal is
+  granted WRITE. The commit also reads the whole document at the fold's `seq`,
+  so that a change the server took to any part of it since conflicts, rather
+  than being overwritten by the whole-document `set`.
+- The re-run the scheduler makes after the refusal reads the folded value and
+  so has nothing to write. Its computation settles instead of re-running
+  against the same refusal.
+
+Event handlers are not folded. Their writes are acts rather than derivations,
+and a refusal of one is reverted and reported.
+
 ## 3.9 Commit Ordering
 
 Commits are ordered by canonical `seq`.

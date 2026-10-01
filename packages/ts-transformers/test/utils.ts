@@ -604,11 +604,13 @@ export async function transformFiles(
     out[fileName] = output;
   }
   if (options.pipelineDiagnostics) {
-    options.pipelineDiagnostics.push(...pipeline.getDiagnostics());
+    for (const diagnostic of pipeline.getDiagnostics()) {
+      options.pipelineDiagnostics.push(diagnostic);
+    }
   }
   if (options.policyManifests) {
     for (const manifests of pipeline.getPolicyManifests().values()) {
-      options.policyManifests.push(...manifests);
+      for (const manifest of manifests) options.policyManifests.push(manifest);
     }
   }
   return out;

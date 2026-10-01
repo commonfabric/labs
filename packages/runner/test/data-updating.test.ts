@@ -2134,6 +2134,27 @@ describe("data-updating", () => {
     });
   });
 
+  it("diffs an array longer than one call's arguments can hold", () => {
+    const testCell = runtime.getCell<{ items: number[] }>(
+      space,
+      "normalizeAndDiff long array",
+      undefined,
+      tx,
+    );
+    testCell.set({ items: [] });
+    const items = Array.from({ length: 200_000 }, (_, i) => i);
+    const changes = normalizeAndDiff(
+      runtime,
+      tx,
+      testCell.getAsNormalizedFullLink(),
+      { items },
+    );
+
+    // One change per element, plus the array's new length.
+    expect(changes.length).toBe(200_001);
+    expect(changes.at(-1)?.value).toBe(199_999);
+  });
+
   describe("sparse array handling in normalizeAndDiff", () => {
     it("hole→hole: no changes emitted", () => {
       const testCell = runtime.getCell<{ arr: number[] }>(

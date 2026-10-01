@@ -21,6 +21,8 @@ import { dirname, isAbsolute, join, relative } from "@std/path";
 
 import { spawnSync } from "@node/child_process";
 
+import { spliceAll } from "@commonfabric/utils/arrays";
+
 import { cpLen } from "./ansi.ts";
 import { type DiffFile, type DiffHunk, type DiffModel } from "./diff.ts";
 import type { Language } from "./languages/language.ts";
@@ -715,7 +717,7 @@ function reconstructOldFile(
       oldSide = hunkSideLines(hunk, "old", rawLines, modelLines, true);
     }
     const touchesEnd = start + newSide.length === lines.length;
-    lines.splice(start, newSide.length, ...oldSide);
+    spliceAll(lines, start, newSide.length, oldSide);
     if (touchesEnd) {
       trailingNewline = !noTrailingNewline(
         hunk,
@@ -1500,7 +1502,7 @@ function buildHunk(hunk: DiffHunk, ctx: HunkCtx): StructureNode {
     };
   }
   if (source) {
-    children.push(...ctx.newLanguage.hunkStructure({
+    const structure = ctx.newLanguage.hunkStructure({
       doc: source.doc,
       lineToDiff: source.lineToDiff,
       sourceOmitsUtf8Bom: source.omitsUtf8Bom,
@@ -1509,7 +1511,8 @@ function buildHunk(hunk: DiffHunk, ctx: HunkCtx): StructureNode {
       diffLineStarts,
       rawLines,
       definitions: ctx.definitions,
-    }));
+    });
+    for (const node of structure) children.push(node);
   }
 
   // Tell the user when the workspace could not vouch for this hunk (and the

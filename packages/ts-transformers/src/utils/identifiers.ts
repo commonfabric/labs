@@ -334,14 +334,14 @@ export function extractBindingNames(binding: ts.BindingName): string[] {
 
   if (ts.isObjectBindingPattern(binding)) {
     for (const element of binding.elements) {
-      names.push(...extractBindingNames(element.name));
+      for (const name of extractBindingNames(element.name)) names.push(name);
     }
   } else if (ts.isArrayBindingPattern(binding)) {
     for (const element of binding.elements) {
       if (ts.isOmittedExpression(element)) {
         continue;
       }
-      names.push(...extractBindingNames(element.name));
+      for (const name of extractBindingNames(element.name)) names.push(name);
     }
   }
 
