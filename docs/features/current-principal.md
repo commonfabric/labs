@@ -59,10 +59,16 @@ own sees the user that pattern runs as, and any pattern a user runs can reach a
 handler that way.
 
 Where a handler has to know that the person made a request — a message they
-sent, a setting they changed — what shows it is a trusted gesture, or a value
-labeled `AuthoredByCurrentUser`, whose write the runtime admits only from a
-reviewed writer handling a trusted UI event. `currentPrincipal()` is the right
-tool for keying and for refusing, not for proving consent.
+sent, a setting they changed — what shows it is a trusted gesture: a write to a
+position declaring a UI contract, which the runtime admits only under a trusted
+UI event matching it. `currentPrincipal()` is the right tool for keying and for
+refusing, not for proving consent.
+
+An `authored-by` claim is authority in the same sense. It says that a run
+acting for the principal wrote the value, through the writer its position
+declares, or initialized it in one of their handler runs. It does not say that
+the person asked for it, unless the position also declares a UI contract,
+whose gesture then admitted the write.
 
 ## How far the value can be trusted
 
@@ -87,9 +93,12 @@ writes names the principal `currentPrincipal()` returned.
 
 They part in two places.
 
-- A served run with no actor keeps the ambient trust snapshot, so a placeholder
-  there resolves to the serving runtime's identity, where `currentPrincipal()`
-  returns `undefined`.
+- A served run with no actor keeps the ambient trust snapshot, whose principal
+  is the serving runtime's identity, where `currentPrincipal()` returns
+  `undefined`. A write of such a run that would mint a placeholder claim, on a
+  position that declares no `ownerPrincipal`, is refused rather than labeled
+  with that identity. A value it initializes on nobody's behalf mints no claim
+  and is admitted.
 - A host embedding the runtime can supply its own trust snapshot naming a
   different acting principal. The placeholder then resolves to that principal,
   and `currentPrincipal()` still returns the identity the runtime authenticates
@@ -119,3 +128,7 @@ frame, in a compiled pattern, and against an `authored-by` claim written in the
 same handler. The `currentPrincipal()` case in
 `packages/runner/test/executor-trust-attribution.test.ts` drives a handler
 through the live serving loop, with a payload naming someone else.
+`packages/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a
+position that declares a writer and no gesture: on a client, on a served run
+with an actor and with none, reached through another handler's `send()`, and
+against claims naming someone other than the acting principal.

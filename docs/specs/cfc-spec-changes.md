@@ -1584,3 +1584,33 @@ not depend on the disjunct; building the model confirms it. Implemented in
 `packages/memory/v2/server.ts` (`#resolveCapability`),
 `packages/runner/src/cfc/space-membership.ts` (`spaceReaderRole`), and
 `packages/runner/src/cfc/custody-seal.ts` (`roomReaders`).
+
+## From authored-by without a gesture (2026-10-01)
+
+**SC-53 [normative] What a current-principal claim attests, and what admits
+one — the audit-3.5 principal-resolution chain (§6/§8.15), beside SC-38.**
+`open`. The spec's label-metadata classification already reads an
+`authored-by` subject as attribution "minted under the acting principal's own
+authority", and the runtime holds that reading. A claim the
+`__ctCurrentPrincipal` placeholder resolves to (`authored-by`, or
+`represents-principal` without an `ownerPrincipal`) attests that a run acting
+for the principal wrote the value, through a writer the position declares, or
+initialized it in one of their handler runs. It does not attest that the
+principal asked for it. A position admits the claim when it declares its
+writer, as a lone `writeAuthorizedBy` or a `writePolicyAnyOf` whose every
+member names one; it need not declare a UI contract. A position that does
+declare one keeps requiring its gesture, and only there does the claim come
+with a trusted gesture for the write. A served run with no actor, which keeps
+the ambient service snapshot (SC-38), is refused a write whose persisted label
+would mint the claim on a position without an `ownerPrincipal`, so such a
+claim never names the service; a value it initializes on nobody's behalf
+mints no claim and is admitted. The `ownerPrincipal` arm is unchanged by this
+entry. What the claim
+never permits is unchanged: its subject is the run's acting principal, never a
+literal a pattern supplies, so no principal's runtime mints a claim naming
+another. Proposed edit: state the authority reading, the declared-writer
+precondition, and the actor-less refusal where the chain is written, and name
+a separate intent atom (the registered and unminted `UserSurfaceInput`) as
+what a reader would consult for a gesture. Implemented in
+`packages/runner/src/cfc/prepare.ts` (`currentPrincipalIntegrityReason`);
+described in [`current-principal.md`](../features/current-principal.md).

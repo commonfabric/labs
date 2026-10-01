@@ -919,6 +919,11 @@ export type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, {
 /** Runtime-resolved placeholder for the principal executing the pattern. */
 export type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
 
+/**
+ * `T`, labeled `represents-principal` the principal each write acts for, as a
+ * profile's fields are. The position must name its writer, as for
+ * `AuthoredByCurrentUser`.
+ */
 export type RepresentsCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{
     readonly kind: "represents-principal";
@@ -926,6 +931,16 @@ export type RepresentsCurrentUser<T> = Cfc<T, {
   }];
 }>;
 
+/**
+ * `T`, labeled `authored-by` the principal each write acts for: the runtime
+ * resolves the subject, and refuses one a pattern supplies. The position must
+ * name its writer, through `WriteAuthorizedBy`, `TrustedActionWrite` or
+ * `WritePolicyAnyOf`, and refuses a write by any other. A new value of the
+ * type that a handler run creates is labeled for that run's principal too. The
+ * label is authority, not intent: it shows that a run acting for the principal
+ * wrote the value, and that they asked for it only where the position also
+ * requires a gesture, as `TrustedActionWrite` does.
+ */
 export type AuthoredByCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{
     readonly kind: "authored-by";

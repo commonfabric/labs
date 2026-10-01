@@ -63,7 +63,8 @@ const HANDLER_ONLY_MESSAGE = "available only in a handler";
 
 /**
  * A document whose `body` carries an `authored-by` claim on the current
- * principal, with the writer and gesture such a claim needs to commit.
+ * principal, with the writer such a claim needs and a gesture its contract
+ * needs to commit.
  */
 const authoredSchema = {
   type: "object",

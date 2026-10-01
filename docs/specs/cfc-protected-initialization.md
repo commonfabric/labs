@@ -177,7 +177,11 @@ runtime's authorization); the piece a handler creates, its cross-space
 children included, is initialized in the handler's own transaction, and a
 served creation carries the requester's trust snapshot. A builtin that
 instantiates a pattern from a continuation of its action declines the mark
-(`attributeInitialization: false`): the piece is nobody's act.
+(`attributeInitialization: false`): the piece is nobody's act. A served run
+that acts for no one keeps the serving runtime's own trust snapshot, so where
+it would attribute an initialization to a field with no `ownerPrincipal`, the
+write is refused rather than claimed for the service, as any of its writes
+carrying such a claim is.
 
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source

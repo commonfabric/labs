@@ -3360,8 +3360,9 @@ export declare function isWellFormedDID(value: unknown): value is DID;
  *
  * The value is _authority_, not _intent_: a handler that another pattern
  * invokes sees the user that pattern runs as, so it does not show that the
- * person asked for the action. A trusted gesture, or a value labeled
- * `AuthoredByCurrentUser`, is what shows that.
+ * person asked for the action. A trusted gesture is what shows that. A value
+ * labeled `AuthoredByCurrentUser` is authority too, unless its position also
+ * requires a gesture.
  *
  * Available only in a handler for now, and throws anywhere else. A pattern body
  * builds one graph for every viewer, and reading the viewer in a `computed()`

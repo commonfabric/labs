@@ -109,8 +109,9 @@ const NOTES_PATTERN = [
 // The authored vocabulary, in the explicit-schema form the compiled
 // `AuthoredByCurrentUser` / `RepresentsCurrentUser` wrappers lower to
 // (packages/api/cfc.ts): a current-principal placeholder subject under
-// `addIntegrity`, gated by `writeAuthorizedBy` + a `uiContract` that a
-// renderer-trusted event must match (cfc/prepare.ts's non-owner arm).
+// `addIntegrity`, gated by the `writeAuthorizedBy` that cfc/prepare.ts's
+// non-owner arm requires, and by a `uiContract` that a renderer-trusted event
+// must match.
 const TRUSTED_WRITER = "test.ow34-trusted-writer";
 const UI_CONTRACT = {
   helper: "UiAction",

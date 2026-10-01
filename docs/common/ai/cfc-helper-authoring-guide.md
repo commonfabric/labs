@@ -237,8 +237,8 @@ place, not through an alias of its own. Once stored, the list is fixed, so a
 later version of the pattern cannot add a writer to it, drop one, or change
 one's action, and a record whose policy names one writer cannot move to a list
 or back. Settle the writers before the record holds data that matters.
-`AuthoredByCurrentUser` combines with it only when every member names an
-action, so that every admitted write carries a reviewed gesture.
+`AuthoredByCurrentUser` combines with it as with a lone writer: every member
+names a writer, and a member that names an action still requires its gesture.
 
 ## Authoring Trusted Surfaces
 
