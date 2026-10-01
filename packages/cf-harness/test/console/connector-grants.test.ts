@@ -534,12 +534,6 @@ describe("connector-grants", () => {
           },
         },
       }],
-      ["has a rule whose confidentiality is not valid", {
-        rows: {
-          properties: { subject: { type: "string" } },
-          rowLabel: { version: 1, confidentiality: [] },
-        },
-      }],
     ];
     for (const [shape, tables] of NOT_CONFIDENTIAL) {
       it(`reports a handle whose contract ${shape} rather than granting it`, () => {
@@ -558,6 +552,65 @@ describe("connector-grants", () => {
           connection: "gmail-work",
           reason: "its declared table contract declares no confidentiality",
         }]);
+      });
+    }
+
+    for (
+      const [shape, table, reason] of [
+        [
+          "a rule whose confidentiality is malformed",
+          {
+            properties: { subject: { type: "string" } },
+            rowLabel: { version: 1, confidentiality: [] },
+          },
+          "malformed",
+        ],
+        [
+          "a rule that reads a column its own schema declares REAL",
+          {
+            properties: { amount: { type: "number", sqlType: "REAL" } },
+            rowLabel: {
+              version: 1,
+              confidentiality: {
+                anyOf: [{
+                  principal: {
+                    protocol: "mailto",
+                    of: {
+                      match: { field: "amount", source: "\\S+", flags: "g" },
+                    },
+                  },
+                }, { dbOwner: true }],
+              },
+            },
+          },
+          "amount",
+        ],
+      ] as const
+    ) {
+      it(`reports a handle whose contract has ${shape}, with the validator's reason`, () => {
+        // The runner refuses every read of a database whose rule is invalid,
+        // so the console refuses the grant too, and says why. Beside the rule
+        // the table also carries a labeled column: the refusal must not be
+        // skipped because something else is labeled.
+        const ruled = {
+          name: "cf-gmail-messages--gmail-work",
+          sqlite_sources: [{
+            ...source("gmail-work", {}),
+            tables: {
+              rows: table,
+              other: { properties: { subject: labeledColumn("email") } },
+            },
+          }],
+        };
+        const result = resolveConnectorGrants(
+          records({ piecesJson: piecesJson([ruled, BANK_PIECE]) }),
+        );
+        expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
+        expect(result.unnamed).toHaveLength(1);
+        expect(result.unnamed[0]!.reason).toMatch(
+          /^its declared rowLabel is invalid \(table `rows`: /,
+        );
+        expect(result.unnamed[0]!.reason).toContain(reason);
       });
     }
 

@@ -309,12 +309,12 @@ writes it to `packages/cf-harness/local-dev-console.log` under the labs checkout
 it vendors.
 
 A task over a connector needs the console to hold that connector's grant: the
-printout carries a line such as `grant gmail-work (email)` or
-`grant plaid-sim (finance)`, naming both connection and class. A line reading
-`(none: …)` is a handle the instance injected that the console could not name,
-for the reason it prints; a connector the instance has not injected has no line
-at all. Either way a task over that connector authors against nothing. Each task
-below names the grants it reads.
+printout carries a line such as `grant gmail-work (email)` or `grant plaid-sim`,
+naming the connection, with its class in parentheses when the store's contract
+declares one. A line reading `(none: …)` is a handle the instance injected that
+the console could not name, for the reason it prints; a connector the instance
+has not injected has no line at all. Either way a task over that connector
+authors against nothing. Each task below names the grants it reads.
 
 ### Bills this month, from mail and bank together
 

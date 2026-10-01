@@ -130,6 +130,7 @@ export const declaredClasses = (source: Record<string, unknown>): string[] => {
 export const declaresConfidentiality = (
   source: Record<string, unknown>,
 ): boolean => {
+  // An invalid rule is refused separately (`invalidRowLabel`), before this.
   const tables = asRecord(source.tables) ?? {};
   for (const table of Object.values(tables)) {
     const properties = asRecord(asRecord(table)?.properties) ?? {};
@@ -150,6 +151,31 @@ export const declaresConfidentiality = (
     }
   }
   return false;
+};
+
+/**
+ * Why a table's `rowLabel` in one `sqlite_sources` entry is invalid, judged
+ * with the runner's own validator and arguments, or undefined when every rule
+ * is valid. The runner refuses every read of a database whose rule fails this
+ * (`row-label-read.ts`), so granting it would hand sessions a store no query
+ * can read.
+ */
+export const invalidRowLabel = (
+  source: Record<string, unknown>,
+): string | undefined => {
+  const tables = asRecord(source.tables) ?? {};
+  for (const [name, table] of Object.entries(tables)) {
+    const record = asRecord(table);
+    if (record?.rowLabel === undefined) continue;
+    const properties = asRecord(record.properties) ?? {};
+    const reason = validateRowLabelSpec(
+      record.rowLabel,
+      Object.keys(properties),
+      properties,
+    );
+    if (reason !== undefined) return `table \`${name}\`: ${reason}`;
+  }
+  return undefined;
 };
 
 /**
@@ -455,6 +481,14 @@ export const resolveConnectorGrants = (
       skip(
         "its piece declares multiple sources for the same connection and companion key",
         "Give each store a distinct companion_key in pieces.json, reconcile, and restart the console.",
+      );
+      continue;
+    }
+    const badRule = invalidRowLabel(matchingSources[0]!);
+    if (badRule !== undefined) {
+      skip(
+        `its declared rowLabel is invalid (${badRule})`,
+        "Correct the rowLabel in this connector's sqlite_sources, then restart the console.",
       );
       continue;
     }
