@@ -2187,4 +2187,100 @@ export default pattern<
       await servingManager.close();
     }
   });
+
+  it("settles a served event whose declared argument reaches a foreign scoped document without a budgeted connection deferral, and runs the later event behind it", async () => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    // The sibling of the pass-through test above, with one difference: the
+    // handle's declared schema has a shape, so the dependency preflight
+    // follows the link into the target. The handler body never reads it.
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Writable, type Stream } from "commonfabric";
+export default pattern<
+  { links: Writable<Writable<{ label?: string }>[]> },
+  { add: Stream<{ piece: Writable<{ label?: string }> }> }
+>(({ links }) => ({
+  add: action(({ piece }: { piece: Writable<{ label?: string }> }) => {
+    links.push(piece);
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ links: unknown[] }>(
+      homeSpace,
+      "declared-foreign-scoped-argument",
+    );
+    const result = clientRuntime.getCell<{ add: unknown }>(
+      homeSpace,
+      "declared-foreign-scoped-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ links: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit()).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    const engine = await server.engineForSpace(homeSpace);
+    const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+      (engine.database.prepare(
+        "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+      ).all() as { id: string }[]).flatMap(({ id }) =>
+        (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ?? []
+      );
+    const target = clientRuntime.getCell(
+      foreignSpace,
+      "declared-foreign-scoped-target",
+      undefined,
+      undefined,
+      "user",
+    );
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().some((entry) =>
+          entry.consequenced || entry.deliveryDeferral !== undefined
+        ),
+    );
+    // The serving runtime refuses every foreign scoped read, so the load can
+    // never succeed here. Either the event runs or its failure is recorded
+    // as permanent; a deferral without permanent evidence waits out the whole
+    // delivery-failure budget, and holds the space's later events with it.
+    const [first] = entries();
+    expect(
+      first.consequenced === true ||
+        first.deliveryDeferral?.permanentEvidence === true,
+      `entry: ${JSON.stringify(first.deliveryDeferral)}`,
+    ).toBe(true);
+
+    const later = clientRuntime.getCell(homeSpace, "declared-local-reference");
+    result.key("add").send({ piece: later });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 2 &&
+        entries().every((entry) => entry.consequenced),
+    );
+    const stored = readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { links: unknown[] };
+    expect(parseLink(stored.links.at(-1))).toMatchObject({
+      id: later.getAsNormalizedFullLink().id,
+    });
+  });
 });
