@@ -11,7 +11,7 @@ import { expect } from "@std/expect";
 import type { ACL } from "@commonfabric/memory/acl";
 import type { PiecesController } from "@commonfabric/piece/ops";
 
-import { getAcl, removeAclEntry, setAclEntry } from "../lib/acl.ts";
+import { getAcl, leaveAcl, removeAclEntry, setAclEntry } from "../lib/acl.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
 import { captureStderr } from "./utils.ts";
@@ -45,12 +45,15 @@ interface Connection {
 
 /**
  * A connection over `acl`, or over a space with no ACL document where that is
- * `undefined`. `authorizationError` is what the space reports once the ACL
- * access has pulled it.
+ * `undefined`, acting as `principal`. `authorizationError` is what the space
+ * reports once the ACL access has pulled it, or, when `afterWrite` is set,
+ * only once an ACL document has been written, as a session revoked by its own
+ * write would.
  */
 function connection(
   acl: ACL | undefined,
   authorizationError?: Error,
+  { principal = OWNER, afterWrite = false } = {},
 ): Connection {
   const result: Connection = {
     written: [],
@@ -62,9 +65,13 @@ function connection(
       sync: () => Promise.resolve(),
       get: () => acl,
     }),
+    userIdentityDID: principal,
     storageManager: {
       synced: () => Promise.resolve(),
-      authorizationError: () => authorizationError,
+      authorizationError: () =>
+        afterWrite && result.written.length === 0
+          ? undefined
+          : authorizationError,
     },
     editWithRetry: (body: (tx: unknown) => ACL) => {
       const tx = {
@@ -189,6 +196,89 @@ describe("acl", () => {
     it("throws for a space with no ACL document", async () => {
       const held = connection(undefined);
       await expect(removeAclEntry(config, GUEST, over(held)))
+        .rejects.toThrow("No ACL initialized for space.");
+      expect(held.written).toEqual([]);
+    });
+  });
+
+  describe("leaveAcl()", () => {
+    it('writes the ACL without the identity\'s own entry, and returns `"left"`', async () => {
+      resetWriteReceipts();
+      const held = connection({ ...stored, [GUEST]: "WRITE" }, undefined, {
+        principal: GUEST,
+      });
+      let outcome: unknown;
+      const lines = await captureStderr(async () => {
+        outcome = await leaveAcl(config, over(held));
+      });
+      expect(outcome).toBe("left");
+      expect(held.written).toEqual([{ [OWNER]: "OWNER" }]);
+      expect(lines).toContain(`wrote to space ${SPACE}`);
+    });
+
+    it('returns `"left"` past the denial the space records after the identity\'s own removal', async () => {
+      // The memory server revokes the session of a principal that has lost
+      // access, and the session records that as a denial.
+
+      const held = connection(
+        { ...stored, [GUEST]: "WRITE" },
+        new Error("memory session revoked: unauthorized"),
+        { principal: GUEST, afterWrite: true },
+      );
+      let outcome: unknown;
+      await captureStderr(async () => {
+        outcome = await leaveAcl(config, over(held));
+      });
+      expect(outcome).toBe("left");
+    });
+
+    it("throws the denial the space recorded during the read, writing nothing", async () => {
+      const denied = new Error("not authorized for this space");
+      const held = connection({ ...stored, [GUEST]: "WRITE" }, denied, {
+        principal: GUEST,
+      });
+      await expect(leaveAcl(config, over(held))).rejects.toThrow(denied);
+      expect(held.written).toEqual([]);
+    });
+
+    it('returns `"absent"`, writing nothing, for an identity the ACL holds no entry for', async () => {
+      const held = connection(stored, undefined, { principal: GUEST });
+      expect(await leaveAcl(config, over(held))).toBe("absent");
+      expect(held.written).toEqual([]);
+    });
+
+    it("throws, writing nothing, for an ACL with a `*` entry", async () => {
+      const held = connection(
+        { ...stored, [GUEST]: "WRITE", "*": "READ" },
+        undefined,
+        {
+          principal: GUEST,
+        },
+      );
+      await expect(leaveAcl(config, over(held))).rejects.toThrow(
+        'has a "*" entry, which would go on granting',
+      );
+      expect(held.written).toEqual([]);
+    });
+
+    for (
+      const [description, acl] of [
+        ["beside other members", { [OWNER]: "OWNER", [GUEST]: "WRITE" }],
+        ["as the ACL's only entry", { [OWNER]: "OWNER" }],
+      ] as const
+    ) {
+      it(`throws, writing nothing, for the last concrete \`OWNER\` ${description}`, async () => {
+        const held = connection(acl, undefined, { principal: OWNER });
+        await expect(leaveAcl(config, over(held))).rejects.toThrow(
+          "is the last concrete OWNER",
+        );
+        expect(held.written).toEqual([]);
+      });
+    }
+
+    it("throws for a space with no ACL document", async () => {
+      const held = connection(undefined, undefined, { principal: GUEST });
+      await expect(leaveAcl(config, over(held)))
         .rejects.toThrow("No ACL initialized for space.");
       expect(held.written).toEqual([]);
     });
