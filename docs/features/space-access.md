@@ -117,8 +117,7 @@ granted access sees a level only from then on.
 ## Changing the level
 
 `spaceAccess(target)` only reads. A handler changes a principal's entry with
-`grantSpaceAccess()` and `revokeSpaceAccess()`, and removes its own actor's
-entry with `leaveSpace()`, which
+`grantSpaceAccess()` and `revokeSpaceAccess()`, which
 [`space-access-changes.md`](space-access-changes.md) describes.
 
 ## What it discloses

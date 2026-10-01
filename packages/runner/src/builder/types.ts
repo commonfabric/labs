@@ -382,13 +382,6 @@ export type Frame = {
    * handler's transaction commits (see `commitSpaceAccessChanges()`).
    */
   pendingSpaceAccessChanges?: Map<MemorySpace, SpaceAccessChange[]>;
-
-  /**
-   * The spaces `leaveSpace()` staged leaving during this handler frame, each
-   * with the latest call's leave. Each commits as a commit of its own after
-   * the handler's transaction commits (see `commitSpaceLeave()`).
-   */
-  pendingSpaceLeaves?: Map<MemorySpace, SpaceLeave>;
 };
 
 /**
@@ -405,23 +398,6 @@ export type SpaceAccessChange = {
 
   /** The principal the handler acted for. */
   readonly actor: DID;
-};
-
-/**
- * A leave a handler staged: `actor`, the principal the handler acted for,
- * removes its own entry, and when it is the last concrete `OWNER`, the first
- * of `successors` holding an entry becomes `OWNER`, provided the event was a
- * trusted gesture.
- */
-export type SpaceLeave = {
-  /** The principal the handler acted for, whose entry is removed. */
-  readonly actor: DID;
-
-  /** Whom to make `OWNER`, in order of preference, if the actor is the last. */
-  readonly successors: readonly DID[];
-
-  /** Whether the handler's event was a trusted gesture. */
-  readonly trustedGesture: boolean;
 };
 
 /**

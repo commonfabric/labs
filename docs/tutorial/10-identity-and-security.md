@@ -95,19 +95,18 @@ A space can carry an ACL document (addressed by the wire entity id
 `of:<space DID>`; types in `packages/memory/acl.ts`, managed by the runner's
 `ACLManager` and surfaced as `cf acl`) granting READ/WRITE/OWNER capabilities.
 A pattern's handler changes it with `grantSpaceAccess()` and
-`revokeSpaceAccess()`, and gives up its own actor's access with
-`leaveSpace()`.
+`revokeSpaceAccess()`.
 The server evaluates them per message — session-open, queries, and watches need
-READ; `transact` needs WRITE; writing the ACL itself needs OWNER, except that
-any member may remove their own entry from a list with no `"*"` entry. A fresh
-space is read-only until its space identity (or a configured service DID) writes
-a valid ACL with at least one concrete OWNER, and that genesis is the only thing
-the space identity may do as the space. Creating a space (`cf space create`, the
-Home pattern's Spaces tab, or `Runtime.createSpace()`) generates a random key,
-uses it once to write the genesis ACL — the creator as the only OWNER, plus any
-grants the creator chose — and drops it. Opening a space never creates one,
-except a user's Home space: it uses the user's own identity for both roles and
-is born private on its first open by claiming `{ [space]: "OWNER" }`.
+READ; `transact` needs WRITE; writing the ACL itself needs OWNER. A fresh space
+is read-only until its space identity (or a configured service DID) writes a
+valid ACL with at least one concrete OWNER, and that genesis is the only thing
+the space identity may do as the space. Creating a space (`cf space create`,
+the Home pattern's Spaces tab, or `Runtime.createSpace()`) generates a random
+key, uses it once to write the genesis ACL — the creator as the only OWNER,
+plus any grants the creator chose — and drops it. Opening a space never
+creates one, except a user's Home space: it uses the user's own identity for
+both roles and is born private on its first open by claiming
+`{ [space]: "OWNER" }`.
 
 As a temporary pre-launch compatibility rule, a populated space that has never
 had an ACL is authenticated-public READ/WRITE but never OWNER. A malformed,

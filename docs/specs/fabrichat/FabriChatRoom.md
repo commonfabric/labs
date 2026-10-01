@@ -210,8 +210,9 @@ the room is created from the same settings the handlers read.
   ([changing a space's access list](../../features/space-access-changes.md));
   a serving runtime refuses both.
 - **Leaving without OWNER.** `commitLeave` removes the sender's own access list
-  entry with `leaveSpace()`, which a WRITE member may do: the memory server
-  admits a member's removal of its own entry without OWNER.
+  entry even when the sender is only a WRITE member. Whether the memory layer
+  lets a non-OWNER remove their own entry, or the host has to do it on their
+  behalf, is part of pattern-facing access control.
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).
 - **Per-session state written by a handler.** `windows` is a `PerSession` cell

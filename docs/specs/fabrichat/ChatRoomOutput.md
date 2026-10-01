@@ -554,10 +554,7 @@ Gives up the sender's own access to a group room of its own.
 
 - **Admitted:** without a reviewed gesture, from any member. It acts on no one
   but the sender, and it has to work from any client acting as them, including
-  one that can't issue trusted gestures. The exception is a leave that grants
-  OWNER to someone else, below: that is a grant, and is admitted only as a
-  trusted gesture
-  ([changing a space's access list](../../features/space-access-changes.md#leaving-a-space)).
+  one that can't issue trusted gestures.
 - **Effect:** removes the sender from the room space's access list, and removes
   their roster entry. Their messages and reactions stay in the history. If the
   sender is the room's last OWNER and other members remain, the room first
