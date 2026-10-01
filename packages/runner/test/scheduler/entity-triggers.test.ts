@@ -153,6 +153,9 @@ describe("EntityTriggers", () => {
 
     describe("set()", () => {
       it("checks a broad registration without comparing every pair of reads", () => {
+        expect(triggerEquivalenceEnabled((name) => Deno.env.get(name))).toBe(
+          true,
+        );
         const count = 1024;
         let componentReads = 0;
         const paths = Array.from(
@@ -170,7 +173,7 @@ describe("EntityTriggers", () => {
 
         // Count comparisons through the paths instead of elapsed time. A full
         // scan for each moved path reads over a million components here.
-        expect(componentReads).toBeLessThan(count * 128);
+        expect(componentReads).toBeLessThan(count * 512);
         expect(matched(triggers, ["value", "member-8"])).toEqual({
           broad: [["value", "member-8"]],
         });

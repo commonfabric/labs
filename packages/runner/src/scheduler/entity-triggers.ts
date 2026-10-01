@@ -84,11 +84,11 @@ function pathKey(path: readonly MemoryAddressPathComponent[]): string {
 /**
  * Builds an independent reference for the reads a write overlaps.
  *
- * Exact prefixes are looked up by their component-preserving keys. Extensions
- * form a contiguous range in path order, starting at the write's insertion
- * point. Sorting once lets every moved path be checked without scanning all
- * registered reads for each probe; the reference shares no nodes with the
- * trigger trie.
+ * Proper prefixes are found by binary search. The written path and its
+ * extensions form a contiguous range in path order, starting at the write's
+ * insertion point. Sorting once lets every moved path be checked without
+ * scanning all registered reads for each probe; the reference shares no nodes
+ * with the trigger trie.
  */
 export function createTriggerReference(
   registered: readonly (readonly MemoryAddressPathComponent[])[],
@@ -96,22 +96,31 @@ export function createTriggerReference(
   writePath: readonly MemoryAddressPathComponent[],
 ) => Iterable<readonly MemoryAddressPathComponent[]> {
   const sorted = [...registered].sort(comparePaths);
-  const byPath = new Map<string, readonly MemoryAddressPathComponent[]>();
-  for (const path of sorted) byPath.set(pathKey(path), path);
 
-  return function* (writePath) {
-    for (let depth = 0; depth < writePath.length; depth++) {
-      const prefix = byPath.get(pathKey(writePath.slice(0, depth)));
-      if (prefix !== undefined) yield prefix;
-    }
-
+  /** Returns the first sorted path at or after `target`, or the list's end. */
+  const lowerBound = (
+    target: readonly MemoryAddressPathComponent[],
+  ): number => {
     let lower = 0;
     let upper = sorted.length;
     while (lower < upper) {
       const middle = Math.floor((lower + upper) / 2);
-      if (comparePaths(sorted[middle]!, writePath) < 0) lower = middle + 1;
+      if (comparePaths(sorted[middle]!, target) < 0) lower = middle + 1;
       else upper = middle;
     }
+    return lower;
+  };
+
+  return function* (writePath) {
+    for (let depth = 0; depth < writePath.length; depth++) {
+      const prefix = writePath.slice(0, depth);
+      const index = lowerBound(prefix);
+      if (index < sorted.length && comparePaths(sorted[index]!, prefix) === 0) {
+        yield sorted[index]!;
+      }
+    }
+
+    const lower = lowerBound(writePath);
     for (let index = lower; index < sorted.length; index++) {
       const path = sorted[index]!;
       if (!arraysOverlap(path, writePath)) break;
@@ -294,7 +303,11 @@ export class EntityTriggers {
     for (const paths of this.#pathsByAction.values()) {
       for (const path of paths) registered.push(path);
     }
-    const reference = createTriggerReference(registered);
+    // A few probes cost less as full scans than as a sort of the readership.
+    // Broad mutations share one sorted reference across all of their probes.
+    const reference = moved.length <= 4
+      ? () => registered
+      : createTriggerReference(registered);
     const scans = triggerScanWork.scans;
     const pathsVisited = triggerScanWork.pathsVisited;
     const pathsMatched = triggerScanWork.pathsMatched;
