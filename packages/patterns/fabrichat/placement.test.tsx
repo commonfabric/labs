@@ -13,7 +13,12 @@ import {
   VIEWS,
   Writable,
 } from "commonfabric";
-import { findNodeById, propValue, readValue } from "../test/vnode-helpers.ts";
+import {
+  cfRenderHasUI,
+  findNodeById,
+  propValue,
+  readValue,
+} from "../test/vnode-helpers.ts";
 import FabriChatAdapter from "./adapter.tsx";
 import FabriChatPlacement, {
   type PlacedRoom,
@@ -151,7 +156,8 @@ export default pattern(() => {
         assertion: assert(() =>
           adapter[VIEWS].chat.state === "member" &&
           adapter[NAME] === "Team" &&
-          shownPart(adapter[UI]) === "room:block unavailable:none"
+          shownPart(adapter[UI]) === "room:block unavailable:none" &&
+          cfRenderHasUI(findNodeById(adapter[UI], "fabrichat-adapter-room"))
         ),
       },
       // A room the viewer can't read offers nothing of itself.

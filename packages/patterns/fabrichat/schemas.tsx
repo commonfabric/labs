@@ -14,7 +14,9 @@ import {
   equals,
   FabricDurationNsec,
   FabricEpochNsec,
+  UI,
   VIEWS,
+  type VNode,
 } from "commonfabric";
 
 //
@@ -356,6 +358,9 @@ export const reactionTalliesOf = (
 export interface ChatRoomLink {
   /** What the room says about itself. */
   about?: ChatRoomAbout;
+
+  /** The room's rendering, which `cf-render` reads through the link. */
+  [UI]?: VNode;
 
   /** The room's data face. */
   [VIEWS]?: { room: object };

@@ -14,7 +14,9 @@ import {
   NAME,
   pattern,
   spaceAccess,
+  UI,
   VIEWS,
+  type VNode,
   wish,
 } from "commonfabric";
 import {
@@ -60,6 +62,9 @@ export interface PlacedMessageList {
 export interface PlacedRoom {
   /** What the room says about itself. */
   about?: ChatRoomAbout;
+
+  /** The room's rendering, which `cf-render` reads through the link. */
+  [UI]?: VNode;
 
   /** What the room recorded recently. */
   recentActivity?: ChatRoomActivity[];
