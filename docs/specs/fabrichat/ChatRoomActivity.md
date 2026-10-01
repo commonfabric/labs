@@ -1,7 +1,5 @@
 # ChatRoomActivity
 
-Status: proposed design (see [`README.md`](README.md)).
-
 One entry in a room's log of recent activity: something the room recorded, and
 when. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers its recent activity,
 in `seq` order, as `recentActivity`.
@@ -18,8 +16,8 @@ interface ChatRoomActivity {
   /** The `requestId` of the event it records. */
   requestId: string;
 
-  /** The thing the event changed or added. */
-  what: Cell<ChatMessage> | Cell<Cell<ChatProfile>[]>;
+  /** The message the event changed or added. */
+  what: Cell<ChatMessage>;
 }
 ```
 
@@ -45,17 +43,13 @@ can't find its message by its proposal among the messages. It can in
   times](ChatMessage.md#unique-times)), so it identifies its entry. Entries
   expire by `at`, but are ordered by `seq` (see [catching up](#catching-up)).
 - **`requestId`** is the `requestId` of the event the entry records.
-- **`what`** links the thing the event changed or added:
+- **`what`** links the message the event changed or added:
 
   | Event | `what` |
   | --- | --- |
   | `sendMessage` | the new message |
   | `editMessage`, `deleteMessage`, `obliterateMessage` | the message |
   | `sendReaction`, `deleteReaction` | the message the reaction is on |
-  | `showProfile`, `leave`, `add`, `remove` | the room's membership, as the room offers it |
-
-  The room's membership, as the room offers it, is its `roster`, until the
-  room's space has a member set, and the member set after that.
 
 Each entry is labeled `authored-by` the principal whose event it records, as the
 record it describes is. So a sender finds the entry for a request of its own by

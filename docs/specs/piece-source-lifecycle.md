@@ -281,6 +281,18 @@ module's name is a route only for a program compiled over HTTP, and an author
 controls it either way, so a filename that looks like a route is not a claim
 about anything a host serves.
 
+An existing piece following a `system:` origin retains the attached source roots
+from its verified stored program. The identity request names each one with a
+repeated `sourceRoot` query parameter containing its full `/api/patterns/`
+pathname. The host computes the identity over the entry and those roots, and the
+runtime resolves that same set before adoption. Invalid or unavailable roots
+leave the piece on its stored program. A host that advertises only the entry
+cannot authorize replacing a complete program: the resolved identity must match
+the advertised identity. A deployment that removes an attached root requires an
+explicit complete-program replacement. If the stored program itself is missing,
+the existing origin-recovery path rebuilds the entry and records its displaced
+identity; it cannot retain roots whose verified manifest is no longer available.
+
 Opening a missing runtime-supplied piece revalidates the deployment's advertised
 identity. Resolved source may be shared within a reconciler for the same
 destination space, full source URL, and advertised identity. Retention is bounded

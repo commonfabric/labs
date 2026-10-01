@@ -648,7 +648,9 @@ export class SourceReconciler {
   /**
    * A pattern this deployment's toolshed serves. Its `?identity` route reports
    * the identity the current source compiles to, so one conditional request
-   * settles whether anything moved before any source is downloaded.
+   * settles whether anything moved before any source is downloaded. Attached
+   * source entries belong to that program's identity, so both the identity
+   * request and resolution carry the retained source roots.
    */
   async #followSystem(
     resultCell: Cell<unknown>,
@@ -659,7 +661,22 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
-    const answer = await this.#advertisedIdentity(target, fetch, signal);
+    const stored = await this.#runtime.patternManager
+      .getPatternSourceProgramByIdentity(
+        state.running.identity,
+        state.space,
+      );
+    signal.throwIfAborted();
+    // Missing stored source retains the existing origin-recovery policy:
+    // rebuild the entry and record the displaced identity. Retained roots
+    // can only be protected when the verified program still names them.
+    const sourceRoots = stored?.sourceRoots ?? [];
+    const answer = await this.#advertisedIdentity(
+      target,
+      fetch,
+      signal,
+      sourceRoots,
+    );
     if ("detail" in answer) {
       state.detail = answer.detail;
       return "unavailable";
@@ -678,6 +695,7 @@ export class SourceReconciler {
 
     const resolved = await this.#runtime.harness.resolve(
       new HttpProgramResolver(target.href, fetch),
+      { sourceRoots },
     );
     return await this.#adopt(
       resultCell,
@@ -713,9 +731,13 @@ export class SourceReconciler {
     target: URL,
     fetch: typeof globalThis.fetch,
     signal: AbortSignal,
+    sourceRoots: readonly string[] = [],
   ): Promise<{ identity: string } | { detail: string }> {
     const identityUrl = new URL(target);
     identityUrl.searchParams.set("identity", "");
+    for (const root of sourceRoots) {
+      identityUrl.searchParams.append("sourceRoot", root);
+    }
     let response: Response;
     try {
       response = await fetch(identityUrl);

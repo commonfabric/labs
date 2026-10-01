@@ -1,7 +1,5 @@
 # ChatMessage
 
-Status: proposed design (see [`README.md`](README.md)).
-
 One message in a room ([`ChatRoomOutput`](ChatRoomOutput.md)), with its
 reactions and its edit history. A client reads a room's newest messages from its
 [`ChatMessageList`](ChatMessageList.md), and the rest through its session's
@@ -100,11 +98,11 @@ message's writer can set.
 
 A message can be removed entirely, with its history, using the room's
 `obliterateMessage` (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)): by an
-OWNER curating a group room or a space's own chat, or by either person in a
-direct room, for their own messages. A sender's `deleteMessage` does the same to
-their own message where the implementation makes deletion obliteration. Whether
-a sender deleting their own message obliterates it, and whether a room allows
-OWNERs to obliterate at all, are left to the implementation
+OWNER curating a group room, or by either person in a direct room, for their own
+messages. A sender's `deleteMessage` does the same to their own message where
+the implementation makes deletion obliteration. Whether a sender deleting their
+own message obliterates it, and whether a room allows OWNERs to obliterate at
+all, are left to the implementation
 ([`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior)). What is
 left is a tombstone, kept so that replies to the message and a thread rooted at
 it aren't orphaned:

@@ -41,7 +41,10 @@ import type { PatternIndexClient } from "../pattern-index/client.ts";
 import type { PatternIndexLedger } from "../pattern-index/ledger.ts";
 import type { SkillsShAcquisitionClient } from "../skills-sh/acquisition.ts";
 import type { SkillsShSearchClient } from "../skills-sh/search-client.ts";
-import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import type {
+  HarnessToolDescriptor,
+  HarnessToolEffectClass,
+} from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
 import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
@@ -357,6 +360,15 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
     runtime: SandboxRuntimeDescription,
     run: { cfcEnforcementMode: CfcEnforcementMode },
   ): HarnessToolDescriptor;
+
+  /**
+   * The effect class of one call, for a tool whose effect depends on its
+   * input. Policy gates and records the call under this class instead of
+   * `descriptor.effectClass`, so a call that reaches outside the run is
+   * authorized as one even when the tool's ordinary calls are reads. A tool
+   * without it has the descriptor's class for every call.
+   */
+  effectClassOf?(input: Record<string, unknown>): HarnessToolEffectClass;
 
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }
