@@ -681,7 +681,17 @@ Diagnostics emitted in all modes:
     pattern's result (`child[SELF]`), or a local bound to `input[SELF]`
     (`self[SELF]`). The input parameter is the first parameter, bound to a
     plain name and not a rest parameter, of a `pattern(...)` callback or of a
-    standalone function definition
+    standalone function definition. The receiver must be that parameter
+    itself: a local holding the input (`const i = input; i[SELF]`) is not
+    followed back to it, and the message says so rather than calling the read
+    `undefined`
+  - in pattern context, a well-known key other than `SELF` (`NAME`, `UI`,
+    `FS`) read through `input[SELF]` on the input parameter, as in
+    `input[SELF][NAME]`: the data-flow analyzer
+    counts only `SELF` among those keys as static, so the read is lifted and
+    is `undefined` against the plain value the lift sees. The message suggests
+    `const me = input[SELF]` and reading the key off `me`, which lowers in
+    place
   - `SELF` names the pattern's own result only on the reactive proxy a
     `pattern(...)` body receives as its input. A compute callback sees plain
     values, a reactive collection callback sees a captured reference to the
@@ -1700,8 +1710,9 @@ Primary behaviors:
   lifts with the authored `input[SELF].title` as its capture, read off the
   reactive input when the lift is applied (golden
   `closures/pattern-input-self-index`). Other well-known keys (`UI`, `NAME`,
-  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` lifts and
-  reads `undefined`, where a destructured `self[NAME]` does not
+  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` would lift
+  and read `undefined`; §6.5 reports it instead, and a local bound to
+  `input[SELF]`, or a destructured `[SELF]: self`, reads `[NAME]` in place
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for

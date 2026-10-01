@@ -309,6 +309,73 @@ describe("pattern-input-self", () => {
       ).toEqual(["pattern-context:self-access"]);
     });
 
+    it("reports an alias of the input as not the input parameter itself", async () => {
+      const { diagnostics } = await compile(`
+        export default pattern<Input, Output>((input) => {
+          const alias = input;
+          return {
+            [NAME]: "n",
+            [UI]: <div />,
+            title: input.title,
+            other: alias[SELF],
+          };
+        });
+      `);
+
+      expect(
+        diagnostics
+          .filter((d) => d.type === "pattern-context:self-access")
+          .map((d) =>
+            d.message.includes("the pattern's input parameter itself") &&
+            d.message.includes("not followed back to the parameter") &&
+            !d.message.includes("`undefined`")
+          ),
+      ).toEqual([true]);
+    });
+
+    describe("a well-known key read through `input[SELF]`", () => {
+      for (const key of ["NAME", "UI", "FS"]) {
+        it(`reports \`pattern-context:self-access\` for \`input[SELF][${key}]\``, async () => {
+          const { diagnostics } = await compile(`
+            import { FS } from "commonfabric";
+
+            export default pattern<Input, Output>((input) => ({
+              [NAME]: "n",
+              [UI]: <div />,
+              title: input.title,
+              other: input[SELF][${key}],
+            }));
+          `);
+
+          expect(
+            diagnostics
+              .filter((d) => d.severity === "error")
+              .map((
+                d,
+              ) => [d.type, d.message.includes("`const me = input[SELF];`")]),
+          ).toEqual([["pattern-context:self-access", true]]);
+        });
+
+        it(`reports no error for \`me[${key}]\` off \`const me = input[SELF]\``, async () => {
+          expect(
+            await errorsOf(`
+              import { FS } from "commonfabric";
+
+              export default pattern<Input, Output>((input) => {
+                const me = input[SELF];
+                return {
+                  [NAME]: "n",
+                  [UI]: <div />,
+                  title: input.title,
+                  other: me[${key}],
+                };
+              });
+            `),
+          ).toEqual([]);
+        });
+      }
+    });
+
     it("reports `pattern-context:self-access` for `[SELF]` read off another pattern's result", async () => {
       expect(
         await errorsOf(`

@@ -269,6 +269,7 @@ export class PatternContextValidationTransformer
 
       if (ts.isElementAccessExpression(node)) {
         this.#validateSelfAccess(node, context);
+        this.#validateWellKnownKeyThroughSelf(node, context);
       }
 
       // Check for .get() calls and lift/handler placement in reactive context
@@ -427,12 +428,72 @@ export class PatternContextValidationTransformer
         severity: "error",
         type: "pattern-context:self-access",
         message: `\`${getNodeText(node)}\` reads \`SELF\` off something ` +
-          `other than the pattern's input, where it is \`undefined\`. ` +
-          `\`SELF\` names a pattern's own result only on that pattern's ` +
-          `input parameter. Read \`input[SELF]\` first and the rest of the ` +
-          `path off it, as in \`input[SELF].items\`.`,
+          `other than the pattern's input parameter itself. \`SELF\` names ` +
+          `the pattern's own result only when read directly off that ` +
+          `parameter: not off a value read from it (\`input.items[SELF]\`), ` +
+          `not off another pattern's result, and not off a local that holds ` +
+          `the input, which is not followed back to the parameter. Write ` +
+          `\`input[SELF]\`, or destructure \`[SELF]: self\` in the ` +
+          `pattern's parameter, and read the rest of the path off that, as ` +
+          `in \`input[SELF].items\`.`,
         node,
       });
+    }
+  }
+
+  /**
+   * Validates that a well-known key other than `SELF` (`NAME`, `UI`, `FS`) is
+   * not read through `input[SELF]` in a pattern body, as in
+   * `input[SELF][NAME]`. That read is lifted and runs against a plain value,
+   * where it is `undefined`; the same key read off a local bound to
+   * `input[SELF]` lowers in place.
+   */
+  #validateWellKnownKeyThroughSelf(
+    node: ts.ElementAccessExpression,
+    context: TransformationContext,
+  ): void {
+    const keyName = getCommonFabricKeyName(
+      node.argumentExpression,
+      context.checker,
+    );
+    if (keyName === undefined || keyName === "SELF") {
+      return;
+    }
+    const reactiveContext = context.getReactiveContext(node);
+    if (
+      reactiveContext.kind !== "pattern" ||
+      isArrayMethodOwnedExpressionSite(node, context)
+    ) {
+      return;
+    }
+
+    let current = unwrapExpression(node.expression);
+    while (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      if (
+        ts.isElementAccessExpression(current) &&
+        getCommonFabricKeyName(current.argumentExpression, context.checker) ===
+          "SELF" &&
+        this.#isPatternInputParameter(
+          unwrapExpression(current.expression),
+          context,
+        )
+      ) {
+        context.reportDiagnostic({
+          severity: "error",
+          type: "pattern-context:self-access",
+          message: `\`${getNodeText(node)}\` reads \`${keyName}\` through ` +
+            `\`input[SELF]\`, where it is \`undefined\`: that read is not ` +
+            `lowered in place. Bind the pattern's result to a local in the ` +
+            `pattern body first, as in \`const me = input[SELF];\`, and ` +
+            `read the rest of the path off that, as in \`me[${keyName}]\`.`,
+          node,
+        });
+        return;
+      }
+      current = unwrapExpression(current.expression);
     }
   }
 

@@ -11,6 +11,7 @@ import {
   computed,
   type Default,
   handler,
+  NAME,
   pattern,
   SELF,
   type Stream,
@@ -109,6 +110,19 @@ export const CapturedAlias = pattern<
     computedTitle: computed(() => self.title),
     mappedTitles: input.items.map(() => self.title),
   };
+});
+
+/** What a pattern publishes about its own name. */
+export interface NamedOut {
+  [NAME]: string;
+  title: string;
+  myName: string;
+}
+
+/** Reads `[NAME]` off a local bound to `input[SELF]`. */
+export const NamedThroughAlias = pattern<In, NamedOut>((input) => {
+  const me = input[SELF];
+  return { [NAME]: input.title, title: input.title, myName: me[NAME] };
 });
 
 /** A child that republishes the title of the `room` it is handed. */
