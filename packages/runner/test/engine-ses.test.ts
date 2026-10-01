@@ -389,6 +389,33 @@ describe("Engine in SES mode", () => {
     expect(main?.default?.value).toBe(1n);
   });
 
+  it("refuses a top-level construction that only looks like a fabric primitive", async () => {
+    // The class declares a member under a symbol that shares the brand's
+    // name. It is not wrapped, so the verifier refuses the module before the
+    // constructor can run.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            "declare const FABRIC_PRIMITIVE_BRAND: unique symbol;",
+            "export default new (class Imposter {",
+            "  declare readonly [FABRIC_PRIMITIVE_BRAND]: true;",
+            "  constructor() {",
+            '    throw new Error("IMPOSTER CONSTRUCTOR EXECUTED");',
+            "  }",
+            "})();",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
+      "Mutable top-level data must be wrapped in __cf_data() in SES mode",
+    );
+  });
+
   it("allows top-level template literal snapshots", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",

@@ -853,6 +853,56 @@ export default new FabricDurationNsec(1n);
     );
   });
 
+  it("does not wrap a construction that only looks like a fabric primitive", async () => {
+    // Each class below carries something of a `FabricPrimitive` without being
+    // one `commonfabric` declares. Wrapping one would let its constructor run
+    // at top level, for the freezer to refuse what it made afterwards.
+    const wrappedIn = async (source: string): Promise<Set<string>> => {
+      const output = await transformFiles(
+        { "/main.ts": source },
+        { types: COMMONFABRIC_TYPES },
+      );
+      return new Set(
+        collect(parseModule(output["/main.ts"]!), ts.isVariableDeclaration)
+          .filter((d) =>
+            d.initializer && ts.isCallExpression(d.initializer) &&
+            ts.isPropertyAccessExpression(d.initializer.expression) &&
+            d.initializer.expression.name.text === "__cf_data"
+          ).map((d) => ts.isIdentifier(d.name) ? d.name.text : ""),
+      );
+    };
+
+    // A member under a local symbol that only shares the brand's name.
+    const localSymbol = await wrappedIn(`
+declare const FABRIC_PRIMITIVE_BRAND: unique symbol;
+
+const imposter = new (class Imposter {
+  declare readonly [FABRIC_PRIMITIVE_BRAND]: true;
+})();
+
+export { imposter };
+`);
+    assert(!localSymbol.has("imposter"));
+
+    // A member under the real symbol, and a subclass of a real primitive.
+    const realSymbol = await wrappedIn(`
+import { FABRIC_PRIMITIVE_BRAND, FabricDurationNsec } from "commonfabric";
+
+class Longer extends FabricDurationNsec {}
+
+const branded = new (class Branded {
+  declare readonly [FABRIC_PRIMITIVE_BRAND]: true;
+})();
+const subclass = new Longer(1n);
+const genuine = new FabricDurationNsec(1n);
+
+export { branded, subclass, genuine };
+`);
+    assert(!realSymbol.has("branded"));
+    assert(!realSymbol.has("subclass"));
+    assert(realSymbol.has("genuine"));
+  });
+
   it("hardens direct top-level functions with a canonical helper", async () => {
     const source = `
 const step = (value: number) => value + 1;

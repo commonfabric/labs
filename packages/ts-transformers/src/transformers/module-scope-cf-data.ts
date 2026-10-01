@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { declaresFabricPrimitiveBrand } from "@commonfabric/schema-generator/fabric-primitive-brand";
 import {
   isTrustedBuilder,
@@ -182,17 +183,31 @@ function shouldWrapTopLevelExpression(
 /**
  * Whether `expression` constructs a `FabricPrimitive`, such as
  * `new FabricDurationNsec(600n)`. The runtime freezer keeps one as it is
- * (`SES_SANDBOXING_SPEC.md` §4.2.3), so the construction is data to wrap. The
- * class is recognized by the brand its instance type carries, not by name, so
- * a user class that shares a name is not wrapped and a renamed import is.
+ * (`SES_SANDBOXING_SPEC.md` §4.2.3), so the construction is data to wrap.
+ *
+ * The class has to be one `commonfabric` declares, and its instance type has
+ * to carry the `FabricPrimitive` brand. Neither is a matter of name: a renamed
+ * import is wrapped, and a user class that shares a primitive's name is not.
+ * The brand alone is not enough, since it is read by the name of its key
+ * (`declaresFabricPrimitiveBrand`): a class of the author's own, whether it
+ * declares a member under a symbol of that name or under the real one, or
+ * extends a primitive, is not wrapped, so its constructor does not get to run
+ * at top level on the strength of a wrap the freezer would then refuse.
  */
 function constructsFabricPrimitive(
   expression: ts.NewExpression,
   context: TransformationContext,
 ): boolean {
-  return declaresFabricPrimitiveBrand(
-    context.checker.getTypeAtLocation(expression),
+  const { checker } = context;
+  const named = checker.getSymbolAtLocation(
+    unwrapExpression(expression.expression),
   );
+  const constructor = named && named.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(named)
+    : named;
+  return constructor !== undefined &&
+    isCommonFabricSymbol(constructor) &&
+    declaresFabricPrimitiveBrand(checker.getTypeAtLocation(expression));
 }
 
 function isTrustedBuilderCall(expression: ts.CallExpression): boolean {
