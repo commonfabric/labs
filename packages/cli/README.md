@@ -1603,6 +1603,20 @@ The source cell's schema remains authoritative for Common Fabric metadata. A
 caller cannot introduce or override `ifc`, `asCell`, `scope`, or `default`
 through `--schema`.
 
+A selection only reads its source. What it writes are cells of its own: an
+argument linking to the source, and results holding a copy of what it read. The
+schemas on those cells are derived from the source's, and they keep the part of
+`ifc` that restricts a reader — `confidentiality`, and the `observes` class
+beside it — so a selected value stays under the label of the field it came from.
+They leave out the keys that bind or vouch for the writer of the source field:
+`writeAuthorizedBy`, `writePolicyAnyOf`, `uiContract`, `ownerPrincipal`,
+`requiredIntegrity`, `maxConfidentiality`, `integrity`, `addIntegrity`,
+`exactCopyOf`, `projection`, `collection` and `flowPrecisionClaim`. The
+selection is not that writer, so selecting a field that only its owner's handler
+may write, as every owner-protected field of a profile is, is not refused on
+that account, and the copy asserts none of the integrity the source's writer
+vouched for.
+
 #### Which keywords a `--schema` projection may contain
 
 **The reader constructs the schema it applies rather than forwarding the one a
