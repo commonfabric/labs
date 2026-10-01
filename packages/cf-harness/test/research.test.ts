@@ -46,12 +46,17 @@ type ModelStep = (
 ) => HarnessModelTurnResult | Promise<HarnessModelTurnResult>;
 
 class ScriptedModelClient implements HarnessModelClient {
-  readonly providerId = "test-provider";
   readonly requests: HarnessModelTurnRequest[] = [];
   readonly #steps: ModelStep[];
+  readonly #providerId: string;
 
-  constructor(steps: readonly ModelStep[]) {
+  constructor(steps: readonly ModelStep[], providerId = "test-provider") {
     this.#steps = [...steps];
+    this.#providerId = providerId;
+  }
+
+  get providerId(): string {
+    return this.#providerId;
   }
 
   async complete(request: HarnessModelTurnRequest) {
@@ -143,6 +148,28 @@ const requestFor = (
 });
 
 describe("research", () => {
+  it("uses Luna 6 for owner-authenticated Codex research", async () => {
+    const model = new ScriptedModelClient([
+      () =>
+        assistant(JSON.stringify({
+          status: "incomplete",
+          summary: "Inspect the relevant input and action path.",
+          inputs: [],
+          selectedPatternIds: [],
+          rules: [],
+          sourceIds: [],
+          missing: ["source description"],
+          leads: [],
+          questions: [],
+        })),
+    ], "openai-codex");
+    await createResearchRunner({ modelClient: model })(
+      requestFor({ purpose: "orient" }),
+    );
+    expect(model.requests).toHaveLength(1);
+    expect(model.requests[0].model).toBe("gpt-6-luna");
+  });
+
   describe("the public descriptor", () => {
     it("takes one whole task through a read-effect capability", () => {
       expect(researchToolDescriptor.toolId).toBe("research");

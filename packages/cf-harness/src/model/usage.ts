@@ -147,6 +147,11 @@ const OPENAI_MODEL_TOKEN_PRICES: Record<string, OpenAIModelTokenPrices> = {
     cachedInputPerMillionUsd: 0.1,
     outputPerMillionUsd: 10,
   },
+  "gpt-6-luna": {
+    inputPerMillionUsd: 0.1,
+    cachedInputPerMillionUsd: 0.01,
+    outputPerMillionUsd: 0.5,
+  },
   "gpt-5.6": {
     inputPerMillionUsd: 5,
     cachedInputPerMillionUsd: 0.5,
@@ -241,9 +246,9 @@ const estimateOpenAIModelUsageCost = (
 };
 
 /**
- * Estimates GPT-5.6 token cost from the public OpenAI price schedule.
+ * Estimates token cost for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models.
  *
- * Source: https://developers.openai.com/api/docs/models (verified 2026-07-30).
+ * Source: https://developers.openai.com/api/docs/pricing (verified 2026-10-01).
  *
  * Cache writes are priced at 1.25x uncached input. An estimate is withheld
  * unless the response reports both cache reads and writes, since treating
