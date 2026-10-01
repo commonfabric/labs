@@ -2708,19 +2708,26 @@ as for the variable-position fallback in §13.2) — or, absent type information
 is a reactive value expression (`isReactiveValueExpression`) — gets
 `.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
 identifier whose type has a plain-value arm beside a cell arm is re-rooted
-only when it is a reactive node by provenance: a parameter of a reactive
-scope — the callback of a pattern builder call or of a reactive array method
-(`isReactiveScopeParameter`; a handler's, lift's, or `computed()`'s parameter
-is not one) — or a variable whose lowered initializer this stage classified
-as reactive (`isReactiveByConstruction`, recorded per run in
-`causedVariablesOf`). That is the shape a hoisted `??` leaves:
+only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+a parameter of a reactive scope — the callback of a pattern builder call or
+of a reactive array method, through any parentheses or other transparent
+wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,
+`computed()`'s, or plain function's parameter is not one) — or a variable
+whose lowered initializer this stage classified as reactive
+(`isReactiveByConstruction`, recorded per run in `causedVariablesOf`), or a
+`const` initialized with a bare reference to one of those, at any depth,
+which is the same node under another name. That is the shape a hoisted `??`
+leaves:
 `const activeProfile = profile ?? profileWish.result` over a `Cell<Profile>`
 and a `Reactive<Profile>` read is typed `Profile | Cell<Profile> | undefined`
 and lowered to a lift, so `{ profile: activeProfile }` still re-roots it
 (`ast-transform/builder-arg-hoisted-nullish-selection.expected.jsx`); a
 pattern input `maybe: Writable<string> | string` is re-rooted in the pattern
-body and left alone in a handler that receives it as state
-(`ast-transform/cell-or-value-parameter.expected.jsx`); and the same type on
+body — directly, through `const alias = maybe`, as the element of a reactive
+`.map()`, and under a parenthesized callback — and left alone in a handler
+that receives it as state and in a plain function that takes it as a
+parameter (`ast-transform/cell-or-value-parameter.expected.jsx`); and the
+same type on
 a handler-body `const` from a plain call gets no cause
 (`handler-cell-or-value-call`). The cause names the property, not the
 referenced binding:

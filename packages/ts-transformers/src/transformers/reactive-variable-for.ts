@@ -17,6 +17,7 @@ import {
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import {
   isTransparentWrapper,
+  outermostTransparentWrapper,
   unwrapExpression,
   unwrapParentheses,
 } from "../utils/expression.ts";
@@ -959,9 +960,9 @@ function assertsNonNull(expression: ts.Expression): boolean {
  * and `void` (those arms make the access optional, `mayBeNullish()`). A type
  * with a plain-value arm beside a cell arm, such as `Writable<string> |
  * string`, qualifies only for an identifier that is a reactive node by
- * provenance: a parameter of a reactive scope (`isReactiveScopeParameter`),
- * or a variable whose lowered initializer this stage classified as reactive
- * (`causedVariablesOf`). In a pattern body, a `??` over a cell and a
+ * provenance (`isReactiveNodeByProvenance`): a parameter of a reactive scope,
+ * a variable whose lowered initializer this stage classified as reactive, or
+ * a `const` alias of either. In a pattern body, a `??` over a cell and a
  * `Reactive<T>` read hoists to a lift whose result is typed `Cell<T> | T` yet
  * is a reactive node, and a pattern input of that type is one too; in a
  * handler the same type, on a plain call or on a state member, is a value
@@ -989,16 +990,62 @@ function isCellByType(
   }
   const symbol = context.checker.getSymbolAtLocation(expression);
   return symbol !== undefined &&
-    (causedVariablesOf(context).has(symbol) ||
-      isReactiveScopeParameter(symbol, context.checker));
+    isReactiveNodeByProvenance(symbol, context, new Set());
 }
 
 /**
- * Helper for `isCellByType()`, which reports whether `symbol` is declared as
- * a parameter of a reactive scope, where every value is a reactive node: the
- * callback of a pattern builder call, or of a reactive array method such as a
- * `.map()` over a reactive collection. A handler's, lift's, or `computed()`'s
- * parameter is not one: its values are real.
+ * Helper for `isCellByType()`, which reports whether `symbol` names a
+ * reactive node by where it comes from: a parameter of a reactive scope
+ * (`isReactiveScopeParameter()`), a variable whose lowered initializer this
+ * stage classified as reactive (`causedVariablesOf()`), or a `const`
+ * initialized with a bare reference to one of those, at any depth, which is
+ * the same node under another name. `seen` holds the symbols already asked,
+ * so a `const` that names itself ends the walk.
+ */
+function isReactiveNodeByProvenance(
+  symbol: ts.Symbol,
+  context: TransformationContext,
+  seen: Set<ts.Symbol>,
+): boolean {
+  if (seen.has(symbol)) {
+    return false;
+  }
+  seen.add(symbol);
+
+  if (
+    causedVariablesOf(context).has(symbol) ||
+    isReactiveScopeParameter(symbol, context.checker)
+  ) {
+    return true;
+  }
+
+  const declaration = symbol.valueDeclaration;
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    !declaration.initializer ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0
+  ) {
+    return false;
+  }
+
+  const aliased = unwrapExpression(declaration.initializer);
+  if (!ts.isIdentifier(aliased)) {
+    return false;
+  }
+  const target = context.checker.getSymbolAtLocation(aliased);
+  return target !== undefined &&
+    isReactiveNodeByProvenance(target, context, seen);
+}
+
+/**
+ * Helper for `isReactiveNodeByProvenance()`, which reports whether `symbol`
+ * is declared as a parameter of a reactive scope, where every value is a
+ * reactive node: the callback of a pattern builder call, or of a reactive
+ * array method such as a `.map()` over a reactive collection. The callback
+ * may sit inside parentheses or another transparent wrapper,
+ * `pattern(((input) => …))`. A handler's, lift's, or `computed()`'s parameter
+ * is not one: its values are real.
  */
 function isReactiveScopeParameter(
   symbol: ts.Symbol,
@@ -1013,17 +1060,21 @@ function isReactiveScopeParameter(
     ) {
       node = node.parent;
     }
-    if (!ts.isParameter(node) || !ts.isFunctionLike(node.parent)) {
+    if (!ts.isParameter(node)) {
       return false;
     }
     const callback = node.parent;
-    const call = callback.parent;
-    if (!call || !ts.isCallExpression(call)) {
+    if (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) {
+      return false;
+    }
+    const argument = outermostTransparentWrapper(callback);
+    const call = argument.parent;
+    if (!ts.isCallExpression(call)) {
       return false;
     }
     return getPatternBuilderCallbackArgument(call, checker) === callback ||
       (classifyArrayMethodCallSite(call, checker)?.ownership === "reactive" &&
-        call.arguments.includes(callback as ts.Expression));
+        call.arguments.includes(argument));
   });
 }
 

@@ -319,6 +319,34 @@ export default pattern(() => {
     );
   });
 
+  it("does not follow a `const` that names itself when re-rooting", async () => {
+    // The declaration reads `loop` before it is initialized. The code does
+    // not run, and a type-check refuses it, but the stage still compiles it,
+    // and the walk through `const` aliases must end on it rather than loop.
+    const source = `
+import { pattern, type Writable } from "commonfabric";
+
+export default pattern(() => {
+  const loop: Writable<string> | string = loop;
+  return { q: { p: loop } };
+});
+`;
+
+    const output = await transformFiles({
+      "/main.tsx": source,
+    }, {
+      types: COMMONFABRIC_TYPES,
+    });
+    const main = output["/main.tsx"]!;
+
+    const rerooted = callsNamed(parseModule(main), "for").filter((call) => {
+      const callee = call.expression;
+      return ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) && callee.expression.text === "loop";
+    });
+    assertEquals(rerooted.length, 0);
+  });
+
   it("adds stable nested causes to constructed variable values", async () => {
     const source = `
 import { computed, Writable } from "commonfabric";
