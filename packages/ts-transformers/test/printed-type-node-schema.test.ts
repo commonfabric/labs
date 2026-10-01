@@ -524,6 +524,45 @@ ${body}`,
       expect(diagnostics[0]!.message).toContain("fields `u`, `us[]` have");
     });
 
+    for (
+      const [shape, result, fields] of [
+        ["the result itself", "makeHolding()", "field `u` has"],
+        ["a field of the result", "({ a: makeHolding() })", "field `a.u` has"],
+        [
+          "each of two fields of the result",
+          "({ a: makeHolding(), b: makeHolding() })",
+          "fields `a.u`, `b.u` have",
+        ],
+      ] as const
+    ) {
+      it(`reports \`pattern-result:unknown-type\` for the \`unknown\` field of an anonymous class instance that is ${shape}`, async () => {
+        const { diagnostics } = await transformWithMake(
+          `function makeHolding() { return new (class { v = 1; u: unknown = "u"; })(); }
+export default pattern<Record<string, never>>(() => ${result});`,
+        );
+
+        expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+          .toEqual([{
+            severity: "error",
+            type: "pattern-result:unknown-type",
+          }]);
+        expect(diagnostics[0]!.message).toContain(fields);
+      });
+    }
+
+    it("reads a pattern's inferred result holding a type that refers to itself through `typeof`", async () => {
+      // The type of `tree` has no name, and holds itself through `typeof`.
+      const { root, diagnostics } = await transformWithMake(
+        `const tree: { children: (typeof tree)[] } = { children: [] };
+export default pattern<Record<string, never>>(() => ({ a: make(), tree }));`,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(Object.keys(
+        (patternSchemas(root).output.properties ?? {}) as Schema,
+      )).toEqual(["a", "tree"]);
+    });
+
     it("reports `pattern:any-result-schema` for a pattern whose result is its callback's type parameter", async () => {
       // A result typed by a bare type parameter has neither a print nor a
       // type to read, so it is read as permissive.

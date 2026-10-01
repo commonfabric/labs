@@ -780,12 +780,15 @@ This inference runs through `collectFunctionSchemaTypeNodes` via
 inferred return type is printed under the flags §10.1 names, so a result type
 holding `[]` anywhere is printed whole. A result type the checker prints no node
 for, such as the instance type of an anonymous class expression, and that no
-recovery reads, stands as the placeholder `typeToTypeNodeWithRegistry()` prints
-for it, which schema generation reads as that type (§12). Both checks above
-read such a placeholder by its type: whether the type is `any` or `unknown`,
-and which of its fields are `unknown`, descending each object type with no
-name and each array element, as the node walk descends a printed type literal
-and array.
+recovery reads, stands as an `unknown` placeholder recorded as printed from it,
+as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
+as that type (§12). Both checks above read such a placeholder by its type:
+whether the type is `any` or `unknown`, and which of its fields are `unknown`.
+The field walk descends each object type with no name, each instance of a class
+expression with no name, and each array element, as the node walk descends a
+printed type literal and array. It stops at a type it is already inside, since
+a type with no name can hold itself through `typeof`, and walks a type reached
+again by another path under that path.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1795,8 +1798,8 @@ If schemas are not already present via type args:
 - direct projection recovery can reuse result types recovered from local
   `lift(...)` initializer aliases registered in `typeRegistry`
 - a result type the checker prints no node for, and that no recovery reads, is
-  carried as the placeholder `typeToTypeNodeWithRegistry()` prints for it, so
-  the result schema is generated from the type (§6.6)
+  carried as an `unknown` placeholder recorded as printed from it, so the
+  result schema is generated from the type (§6.6)
 - unresolved generic helper-definition-site type parameters degrade to
   `{ type: "unknown" }` when schemas are injected from explicit builder type
   arguments

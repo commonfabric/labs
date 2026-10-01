@@ -778,15 +778,15 @@ function collectFunctionSchemaTypeNodes(
     }
   }
 
-  // A result type the checker prints no node for, and that no recovery above
-  // read, stands as a placeholder printed from it, which schema generation
-  // reads as that type.
+  // A result type the checker printed no node for above, and that no recovery
+  // read, stands as an `unknown` placeholder recorded as printed from it, as
+  // `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
+  // as that type. The print is not tried again: one that threw would throw
+  // again.
   if (!resultNode && resultType && context) {
-    resultNode = typeToTypeNodeWithRegistry(
-      resultType,
-      { checker, factory, sourceFile, state: context.state },
-      typeRegistry,
-    );
+    resultNode = createUnknownSchemaTypeNode(factory);
+    typeRegistry?.set(resultNode, resultType);
+    context.state.recordPrintedFrom(resultNode, resultType);
   }
 
   // Build result object with only defined properties
@@ -2910,30 +2910,30 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
 /**
  * Like `collectUnknownResultPaths()`, except that it reads `type`, for a
  * result that stands as a placeholder printed from a type the checker prints
- * no node for. It descends what a print writes out as structure: an object
- * type with no name, and an array's element.
+ * no node for. It descends an object type with no name, which a print writes
+ * out as structure; an instance of a class expression with no name, which is
+ * what leaves a type with no print; and an array's element.
  */
 function collectUnknownResultTypePaths(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): string[] {
   const paths: string[] = [];
-  // A type refers to itself only through a name, which ends the descent, so
-  // the walk ends where the print's own structure would.
+  // The types the walk is inside. A type with no name can hold itself, as one
+  // written with `typeof` does, and reaching one of these again ends that
+  // descent; a type reached again by another path is walked under that path.
+  const enclosing = new Set<ts.Type>();
   const walk = (current: ts.Type, path: string): void => {
     if (current.flags & ts.TypeFlags.Unknown) {
       paths.push(path || "(result)");
       return;
     }
+    if (enclosing.has(current)) return;
+    enclosing.add(current);
     if (checker.isArrayType(current)) {
       const [element] = checker.getTypeArguments(current as ts.TypeReference);
       if (element) walk(element, `${path}[]`);
-    } else if (
-      (current.flags & ts.TypeFlags.Object) !== 0 &&
-      ((current as ts.ObjectType).objectFlags & ts.ObjectFlags.Anonymous) !==
-        0 &&
-      !current.aliasSymbol
-    ) {
+    } else if (hasNoNameToPrint(current)) {
       for (const property of checker.getPropertiesOfType(current)) {
         walk(
           checker.getTypeOfSymbol(property),
@@ -2941,9 +2941,24 @@ function collectUnknownResultTypePaths(
         );
       }
     }
+    enclosing.delete(current);
   };
   walk(type, "");
   return paths;
+}
+
+/**
+ * Whether `type` is an object type with no name to print it by: an anonymous
+ * object type no alias names, or an instance of a class expression with no
+ * name.
+ */
+function hasNoNameToPrint(type: ts.Type): boolean {
+  if ((type.flags & ts.TypeFlags.Object) === 0 || type.aliasSymbol) {
+    return false;
+  }
+  return ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Anonymous) !==
+      0 ||
+    type.getSymbol()?.escapedName === ts.InternalSymbolName.Class;
 }
 
 function isMapWithPatternCallbackPatternCall(node: ts.CallExpression): boolean {
