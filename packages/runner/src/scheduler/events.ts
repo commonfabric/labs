@@ -24,6 +24,7 @@ import {
   type NormalizedFullLink,
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
+import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
@@ -2509,10 +2510,17 @@ export async function dispatchQueuedEvent(state: {
       // requeue only once its readiness resolves. Register the handled chain
       // too, so the pending-commit barrier cannot release in the gap between
       // a rejection settling and its retry being requeued.
-      state.runtime.storageManager.trackPendingCommit(handled, () => ({
-        kind: "event-disposition",
-        spaces: [queuedEvent.eventLink.space],
-      }));
+      state.runtime.storageManager.trackPendingCommit(handled, () => {
+        const allSpaces = new Set(
+          txToReactivityLog(tx).writes.map((write) => write.space),
+        );
+        const spaces = diagnosticPrefix(allSpaces);
+        return {
+          kind: "event-disposition",
+          spaces,
+          spacesOmitted: allSpaces.size - spaces.length,
+        };
+      });
     };
 
     try {

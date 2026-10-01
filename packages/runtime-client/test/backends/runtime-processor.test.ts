@@ -200,6 +200,56 @@ describe("runtime-processor", () => {
   });
 
   describe("render-readiness pulls", () => {
+    for (const bytes of [new Uint8Array(), new Uint8Array([1, 2, 3])]) {
+      it(`returns ${bytes.length} readable bytes while an unrelated commit is pending`, async () => {
+        const { runtime, storageManager } = createRuntime();
+        const release = Promise.withResolvers<void>();
+        const barrierEntered = Promise.withResolvers<void>();
+        let pull: ReturnType<RuntimeProcessor["handleCellPull"]> | undefined;
+        const originalBarrier = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        try {
+          const cell = runtime.getCell<FabricBytes>(
+            cfcSigner.did(),
+            "render-readable-bytes",
+          );
+          const tx = runtime.edit();
+          cell.withTx(tx).set(new FabricBytes(bytes));
+          expect((await tx.commit()).error).toBeUndefined();
+          await runtime.scheduler.idleWithPendingCommits();
+
+          storageManager.trackPendingCommit(release.promise);
+          using _barrier = stub(storageManager, "pendingCommitsSettled", () => {
+            barrierEntered.resolve();
+            return originalBarrier();
+          });
+          pull = buildProcessor({ runtime }).handleCellPull({
+            type: RequestType.CellPull,
+            cell: createCellRef(cell),
+            awaitDurability: false,
+          });
+          expect(
+            await Promise.race([
+              pull.then(() => "read"),
+              barrierEntered.promise.then(() => "commit-barrier"),
+            ]),
+          ).toBe("read");
+          const value = (await pull).value;
+          if (!(value instanceof FabricBytes)) {
+            throw new Error("Expected a byte value from the pull");
+          }
+          expect(value.slice()).toEqual(bytes);
+          expect(storageManager.hasPendingCommits()).toBe(true);
+        } finally {
+          release.resolve();
+          await pull;
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
     it("demands a stale lazy producer while unrelated writes remain pending", async () => {
       const { runtime, storageManager } = createRuntime();
       const release = Promise.withResolvers<void>();
@@ -237,7 +287,7 @@ describe("runtime-processor", () => {
         const result = await buildProcessor({ runtime }).handleCellPull({
           type: RequestType.CellPull,
           cell: createCellRef(output),
-          awaitCommit: false,
+          awaitDurability: false,
         });
         expect(result).toMatchObject({ value: 6 });
         expect(runs).toBeGreaterThan(beforePull);
@@ -249,11 +299,11 @@ describe("runtime-processor", () => {
       }
     });
 
-    for (const awaitCommit of [false, true, undefined]) {
+    for (const awaitDurability of [false, true, undefined]) {
       it(
-        awaitCommit === undefined
+        awaitDurability === undefined
           ? "waits for pending commits by default"
-          : awaitCommit
+          : awaitDurability
           ? "holds a durable pull until pending commits settle"
           : "returns readable state while an unrelated commit is pending",
         async () => {
@@ -289,14 +339,14 @@ describe("runtime-processor", () => {
             pull = processor.handleCellPull({
               type: RequestType.CellPull,
               cell: createCellRef(cell),
-              awaitCommit,
+              awaitDurability,
             });
             const first = await Promise.race([
               pull.then(() => "read"),
               barrierEntered.promise.then(() => "commit-barrier"),
             ]);
             expect(first).toBe(
-              awaitCommit === false ? "read" : "commit-barrier",
+              awaitDurability === false ? "read" : "commit-barrier",
             );
             expect(storageManager.hasPendingCommits()).toBe(true);
             releaseCommit.resolve();
@@ -342,7 +392,7 @@ describe("runtime-processor", () => {
         pull = buildProcessor({ runtime }).handleCellPull({
           type: RequestType.CellPull,
           cell: createCellRef(cell),
-          awaitCommit: false,
+          awaitDurability: false,
         });
         const first = await Promise.race([
           pull.then(() => "read"),

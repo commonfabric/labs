@@ -30,11 +30,11 @@ import {
 import { cellRefToIdentityKey, cellRefToKey } from "@/shared/utils.ts";
 
 describe("cell-handle", () => {
-  for (const awaitCommit of [undefined, false, true]) {
+  for (const awaitDurability of [undefined, false, true]) {
     it(
-      awaitCommit === undefined
+      awaitDurability === undefined
         ? "pulls lazy producers before caching the returned value"
-        : `caches a pulled value with awaitCommit=${awaitCommit}`,
+        : `caches a pulled value with awaitDurability=${awaitDurability}`,
       async () => {
         const requests: unknown[] = [];
         const ref: CellRef = {
@@ -53,9 +53,9 @@ describe("cell-handle", () => {
         } as unknown as RuntimeClient;
         const cell = new CellHandle<{ ready: boolean }>(runtime, ref);
 
-        const pull = awaitCommit === undefined
+        const pull = awaitDurability === undefined
           ? cell.pull()
-          : cell.pull({ awaitCommit });
+          : cell.pull({ awaitDurability });
         await expect(pull).resolves.toEqual({
           ready: true,
         });
@@ -63,7 +63,7 @@ describe("cell-handle", () => {
         expect(requests).toEqual([{
           type: RequestType.CellPull,
           cell: ref,
-          ...(awaitCommit === undefined ? {} : { awaitCommit }),
+          ...(awaitDurability === undefined ? {} : { awaitDurability }),
         }]);
       },
     );

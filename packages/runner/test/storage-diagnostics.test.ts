@@ -9,6 +9,56 @@ import { STORAGE_DIAGNOSTICS_LIMIT } from "../src/storage/diagnostics.ts";
 const signer = await Identity.fromPassphrase("storage diagnostics");
 
 describe("pending storage diagnostics", () => {
+  it("attributes an event disposition to every space its handler writes", async () => {
+    const storage = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+    });
+    const otherSpace = (await Identity.fromPassphrase("diagnostic destination"))
+      .did();
+    const stream = runtime.getCell(signer.did(), "diagnostic-event");
+    const local = runtime.getCell(signer.did(), "diagnostic-local");
+    const remote = runtime.getCell(otherSpace, "diagnostic-remote");
+    const release = Promise.withResolvers<void>();
+    const accepted = Promise.withResolvers<void>();
+    const replica = storage.open(otherSpace).replica;
+    const commitNative = replica.commitNative;
+    if (!commitNative) throw new Error("fixture needs native commits");
+    try {
+      replica.commitNative = async (...args) => {
+        const result = await commitNative.apply(replica, args);
+        accepted.resolve();
+        await release.promise;
+        return result;
+      };
+      runtime.scheduler.addEventHandler((tx) => {
+        tx.tx.enableMultiSpaceWrites!();
+        local.withTx(tx).set(1);
+        remote.withTx(tx).set(2);
+      }, stream.getAsNormalizedFullLink());
+      runtime.scheduler.queueEvent(stream.getAsNormalizedFullLink(), {});
+      await accepted.promise;
+
+      const disposition = storage.getDiagnostics().pendingCommits.find(
+        (entry) => entry.kind === "event-disposition",
+      );
+      expect(disposition).toBeDefined();
+      expect(new Set(disposition?.spaces)).toEqual(
+        new Set([signer.did(), otherSpace]),
+      );
+      release.resolve();
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(storage.getDiagnostics().pendingCommitCount).toBe(0);
+    } finally {
+      release.resolve();
+      await runtime.scheduler.idleWithPendingCommits();
+      replica.commitNative = commitNative;
+      await runtime.dispose();
+      await storage.close();
+    }
+  });
+
   it("correlates a pending transaction with its space and server commit without exporting values", async () => {
     const storage = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({

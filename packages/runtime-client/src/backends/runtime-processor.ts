@@ -459,14 +459,14 @@ function cellValueForClient(value: unknown): FabricValue {
 }
 
 /**
- * Whether `cell` holds no value: nothing at all, or an empty object. A pull can
- * find a scoped target in either state while the write that creates its value
- * is still committing, which the commit-aware barrier waits for.
+ * Whether `cell` holds no value: nothing at all, or an empty plain object. A
+ * pull can find a scoped target in either state while the write that creates
+ * its value is still committing, which the commit-aware barrier waits for.
  */
 function holdsNoValue(cell: Cell<unknown>): boolean {
   const raw = cell.getRaw({ lastNode: "value" });
   return raw === undefined ||
-    (isObjectNotArray(raw) && Object.keys(raw).length === 0);
+    (isPlainObject(raw) && Object.keys(raw).length === 0);
 }
 
 function sqliteParamsForRuntime(
@@ -1583,7 +1583,7 @@ export class RuntimeProcessor {
     // reactive state while the host continues to report unconfirmed writes,
     // once there is a value to read. A cell holding none may be waiting on the
     // very write that creates it, so that pull crosses the barrier too.
-    if (request.awaitCommit !== false || holdsNoValue(cell)) {
+    if (request.awaitDurability !== false || holdsNoValue(cell)) {
       await this.#runtime.scheduler.idleWithPendingCommits();
     }
     return this.handleCellGet({
