@@ -720,7 +720,20 @@ export interface FabriChatRoomInput {
  * read the conversation, and is offered the form that creates one.
  */
 const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
-  (input) => {
+  ({
+    about,
+    messages,
+    reactionLists,
+    requests,
+    usedTimes,
+    activity,
+    counters,
+    // The room itself, the link another member's manager lists it by. It is
+    // destructured here so that it is the room's result. `input[SELF]`
+    // written inside the rendering compiles to a computation over the input,
+    // and that computation's output is a cell holding nothing.
+    [SELF]: self,
+  }) => {
     const profileWish = wish<ChatProfile>({ query: "#profile" });
     // The viewer's manager, which starts a direct chat with a participant,
     // and lists this room when asked to.
@@ -737,13 +750,13 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     const room = FabriChatRoomCore(
       {
         myProfile: profileWish.result,
-        about: input.about,
-        messages: input.messages,
-        reactionLists: input.reactionLists,
-        requests: input.requests,
-        usedTimes: input.usedTimes,
-        activity: input.activity,
-        counters: input.counters,
+        about,
+        messages,
+        reactionLists,
+        requests,
+        usedTimes,
+        activity,
+        counters,
         startsDirect,
         startDirect: managerWish.result?.openDirect,
       },
@@ -767,7 +780,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       [UI]: (
         <cf-screen>
           <AddToChats
-            room={input[SELF]}
+            room={self}
             listed={managerWish.result?.rooms}
             accept={managerWish.result?.accept}
           />
