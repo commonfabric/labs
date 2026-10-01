@@ -7,6 +7,7 @@ import ts from "typescript";
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
+  asObjectSchema,
   createTestProgram,
   getTypeFromCode,
   getTypeFromFiles,
@@ -26,6 +27,53 @@ interface SchemaRoot {
 
     expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
       .toThrow("Nested scope wrappers require a cell boundary between scopes.");
+  });
+
+  for (
+    const [form, declarations, declared] of [
+      ["written out", "", "PerSession<PerUser<Cell<string>>>"],
+      [
+        "through an alias",
+        "type Draft = PerUser<Cell<string>>;",
+        "PerSession<Draft>",
+      ],
+    ] as const
+  ) {
+    it(`rejects scope wrappers of two scopes around one cell ${form}`, async () => {
+      // The cell's own scope caps its handle, which the outer wrapper's would
+      // replace.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${declarations}
+interface SchemaRoot {
+  invalid: ${declared};
+}
+`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
+    });
+  }
+
+  it("caps a cell that two wrappers of one scope hold with that scope", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `
+interface SchemaRoot {
+  draft: PerUser<PerUser<Cell<string>>>;
+}
+`,
+      "SchemaRoot",
+    );
+
+    expect(
+      asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      ).properties?.draft,
+    ).toEqual({ type: "string", asCell: [{ kind: "cell", scope: "user" }] });
   });
 
   it("throws for a scope wrapper that is a union member", async () => {

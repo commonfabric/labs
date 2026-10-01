@@ -930,8 +930,10 @@ scope: "space" }] }`). Tested end to end in the runtime:
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
 scopes.`; tested, scope-wrappers.test.ts), and so does a type carrying two
 scopes' brands on one value, as an inferred `PerUser<PerSession<T>>` resolves
-to. Two brands of one scope fold into one, so a wrapper nested in one of its
-own scope is that wrapper alone. With a cell boundary
+to. Around a cell, the outer wrapper's scope would replace the cap the inner
+one puts on the handle, so `PerSession<PerUser<Cell<T>>>` throws too, written
+out or through an alias. Two brands of one scope fold into one, so a wrapper
+nested in one of its own scope is that wrapper alone. With a cell boundary
 both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).

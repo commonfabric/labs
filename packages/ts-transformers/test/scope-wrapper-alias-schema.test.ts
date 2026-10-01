@@ -402,6 +402,25 @@ export default pattern(() => {
       );
     });
 
+    for (
+      const [use, body] of [
+        ["read by a computed", "({ out: computed(() => draft.get()) })"],
+        ["returned unread", "({ draft })"],
+      ] as const
+    ) {
+      it(`refuses an input cell in two scopes' wrappers ${use}`, async () => {
+        // The declaration's schema and the capture's type both name the two
+        // scopes, the cell's own and the one around it.
+        await expect(transformed(
+          `import { computed, pattern, Writable, type PerSession, type PerUser } from "commonfabric";
+type Draft = PerUser<Writable<string>>;
+export default pattern<{ draft: PerSession<Draft> }>(({ draft }) => ${body});`,
+        )).rejects.toThrow(
+          "Nested scope wrappers require a cell boundary between scopes.",
+        );
+      });
+    }
+
     for (const nullish of ["null", "undefined"]) {
       it(`declares a scoped cell's scope for the slot and as its handle's cap beside \`${nullish}\``, async () => {
         const [schema] = emittedSchemas(

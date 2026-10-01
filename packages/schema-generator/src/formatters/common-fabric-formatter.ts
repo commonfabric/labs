@@ -249,6 +249,11 @@ const applyScopeToAsCellEntry = (
     return { kind: entry, scope };
   }
   if (isObjectOrArray(entry)) {
+    // A cell another scope's wrapper caps is a wrapper nested in another with
+    // no cell between them, whose scope would replace the cap.
+    if (entry.scope !== undefined && entry.scope !== scope) {
+      throw nestedScopeError();
+    }
     return { ...entry, scope };
   }
   return entry;
