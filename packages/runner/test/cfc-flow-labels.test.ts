@@ -991,6 +991,90 @@ describe("CFC flow labels (default transition)", () => {
     }
   });
 
+  it("joins only the labels of the read whose change scheduled the rerun", async () => {
+    // Run 1 reads `pub` of a document that does not exist yet. The write
+    // that schedules the rerun creates the whole document, `secret`
+    // included, but a change to `secret` alone would schedule nothing, so
+    // its label does not reach the rerun's write. `pub` is labeled too, so a
+    // rerun that joined no trigger at all would fail this case as well.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+      cfcFlowLabels: "persist",
+    });
+    try {
+      const setup = runtime.edit();
+      const source = runtime.getCell<{ pub: string; secret: string }>(
+        signer.did(),
+        "cfc-trigger-narrow-source",
+        undefined,
+        setup,
+      );
+      const flag = runtime.getCell(
+        signer.did(),
+        "cfc-trigger-narrow-flag",
+        undefined,
+        setup,
+      );
+      setup.abort();
+
+      let runs = 0;
+      const action: Action = (atx) => {
+        runs++;
+        if (runs === 1) {
+          source.withTx(atx).key("pub").getRaw();
+        } else {
+          flag.withTx(atx).set({ ran: runs });
+        }
+      };
+      runtime.scheduler.subscribe(
+        action,
+        { reads: [], shallowReads: [], writes: [] },
+        { isEffect: true },
+      );
+      await runtime.idle();
+      expect(runs).toBe(1);
+
+      const create = runtime.edit();
+      writeSeedEnvelopeDoc(create, signer.did());
+      seedStoredEnvelope(create, {
+        space: signer.did(),
+        scope: "space",
+        id: source.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: { pub: "p1", secret: "v1" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [
+              { path: ["pub"], label: { confidentiality: ["pub-label"] } },
+              { path: ["secret"], label: { confidentiality: ["secret"] } },
+            ],
+          },
+        },
+      });
+      expect((await create.commit()).ok).toBeDefined();
+      await runtime.idle();
+      expect(runs).toBeGreaterThan(1);
+
+      const flagId = flag.getAsNormalizedFullLink().id;
+      const entry = replicaEntries(storageManager, flagId).find((e) =>
+        e.origin === "derived"
+      );
+      expect(entry?.label.confidentiality).toContainEqual("pub-label");
+      expect(entry?.label.confidentiality).not.toContainEqual("secret");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("keeps trigger-read labels across a RetryImmediately rerun", async () => {
     // A2 + retry: the triggered rerun aborts with RetryImmediately, so its
     // consumed trigger reads must be restored for the retry run — otherwise

@@ -5,6 +5,7 @@ import type {
   ChangeGroup,
   IMemoryChange,
   IMemorySpaceAddress,
+  MemoryAddressPathComponent,
   StorageNotification,
 } from "../storage/interface.ts";
 import { summarizeTriggerTraceValue } from "./diagnostics.ts";
@@ -110,6 +111,7 @@ export function processStorageNotification(
       entity: spaceAndURI,
       hasMatchingTriggerPaths,
       triggeredActions,
+      triggerPaths,
     } = collectTriggeredActionsForChange(
       state.triggerIndex,
       space,
@@ -136,7 +138,7 @@ export function processStorageNotification(
       })
       : null;
 
-    for (const action of triggeredActions) {
+    for (const [action, triggerPath] of triggerPaths) {
       if (
         diagnosisEnabled && hasSourceChangeGroup &&
         sourceChangeGroup !== undefined
@@ -177,7 +179,14 @@ export function processStorageNotification(
         actionChangeGroup,
         sourceChangeGroup,
       });
-      const cause: IMemorySpaceAddress = { ...change.address, space };
+      // The read whose value changed is what scheduled the action; the rest
+      // of what the same write changed did not, and joins no labels to the
+      // run (§8.9.2 trigger reads).
+      const cause: IMemorySpaceAddress = {
+        ...change.address,
+        space,
+        path: triggerPath,
+      };
       const shapeGroupKey = plan.operation !== "none"
         ? shapableWakeGroupKey(state, notification, action)
         : undefined;
@@ -233,6 +242,7 @@ export function collectTriggeredActionsForChange(
   entity: SpaceScopeAndURI;
   hasMatchingTriggerPaths: boolean;
   triggeredActions: Action[];
+  triggerPaths: ReadonlyMap<Action, readonly MemoryAddressPathComponent[]>;
 } {
   return state.collectTriggeredActionsForChange(space, change);
 }
