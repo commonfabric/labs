@@ -8,10 +8,14 @@
  * one behave as they would against the real service. What a run sent is then
  * readable without a network or a server.
  *
- * This has its own entry in the package's export map and no place in any
- * barrel. It is Deno-only, which the file name says: the store is SQLite,
- * which `@db/sqlite` opens through FFI as it loads, so loading this module
- * takes `--allow-ffi` and a Deno runtime.
+ * This package offers it because it is built from this package's request
+ * verifier and the inbox store this package's client sends to, so the fake
+ * answers exactly what the client asks. It has its own entry in the package's
+ * export map, `./for-testing-only`, and no place in any barrel, so that a
+ * consumer of the package's general surface loads none of it. It is
+ * Deno-only, which the file name says: the store is SQLite, which
+ * `@db/sqlite` opens through FFI as it loads, so loading this module takes
+ * `--allow-ffi` and a Deno runtime.
  */
 
 import type { DIDKey } from "@commonfabric/identity";
