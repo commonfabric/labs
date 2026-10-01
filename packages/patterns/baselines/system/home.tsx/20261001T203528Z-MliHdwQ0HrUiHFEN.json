@@ -745,23 +745,6 @@
       },
       "ChatRoomLink": {
         "properties": {
-          "$UI": {
-            "$ref": "https://commonfabric.org/schemas/vnode.json",
-            "description": "The room's rendering, which `cf-render` reads through the link."
-          },
-          "$VIEWS": {
-            "description": "The room's data face.",
-            "properties": {
-              "room": {
-                "additionalProperties": true,
-                "type": "object"
-              }
-            },
-            "required": [
-              "room"
-            ],
-            "type": "object"
-          },
           "about": {
             "$ref": "#/$defs/ChatRoomAbout",
             "description": "What the room says about itself."
