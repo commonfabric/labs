@@ -25,14 +25,13 @@
 
 import { toFileUrl } from "@std/path/to-file-url";
 
-import { decodeDataFile } from "@commonfabric/js-compiler/program";
 import {
   compareETags,
   createCacheHeaders,
   generateETag,
 } from "@commonfabric/static/etag";
 import { LRUCache } from "@commonfabric/utils/cache";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode, decodeDataFile } from "@commonfabric/utils/encoding";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
 import { PATTERNS_ROUTE_PREFIX } from "../pattern-source-scheme.ts";
@@ -153,19 +152,17 @@ export class PatternsRoute {
     let cached = this.#identityCache.get(key);
     if (!cached) {
       // Name modules by their URL pathname so the identity equals the one the
-      // worker computes when it compiles the same source over HTTP. A data
-      // file is decoded as a program stores one, byte order mark included,
-      // rather than as source text.
+      // worker computes when it compiles the same source over HTTP. Each file
+      // is read as a `GET` of that pathname would serve it, and a data file is
+      // decoded as a program stores one, byte order mark included, rather than
+      // as source text.
       cached = resolveEntryIdentity(
         `${PATTERNS_ROUTE_PREFIX}${filename}`,
-        (name) => this.getText(name.slice(PATTERNS_ROUTE_PREFIX.length)),
+        async (name) => decode(await this.#readServed(name)),
         {
           sourceRoots: roots,
           readDataFile: async (name) =>
-            decodeDataFile(
-              await this.get(name.slice(PATTERNS_ROUTE_PREFIX.length)),
-              name,
-            ),
+            decodeDataFile(await this.#readServed(name), name),
         },
       );
       this.#identityCache.put(key, cached);
@@ -212,12 +209,7 @@ export class PatternsRoute {
    * A host whose own router has already picked the path apart calls this
    * instead of {@link serve}.
    *
-   * The path is checked before it is resolved. A `..` sequence would escape
-   * the directory, a leading `/` would make the name absolute in URL
-   * resolution, and a `:` would introduce a URL scheme
-   * (`file:///etc/passwd`). An internal `/` is allowed, because patterns are
-   * served from subdirectories. The check decodes first, so an encoded
-   * sequence is caught as the sequence it denotes.
+   * The path is checked before it is resolved, by {@link servesFilename}.
    */
   async serveFile(
     filename: string,
@@ -225,13 +217,7 @@ export class PatternsRoute {
   ): Promise<Response> {
     const ifNoneMatch = options.ifNoneMatch ?? null;
     try {
-      const decoded = decodeURIComponent(filename);
-      if (
-        decoded.includes("..") || decoded.startsWith("/") ||
-        decoded.includes(":")
-      ) {
-        return invalidPatternPath();
-      }
+      if (!servesFilename(filename)) return invalidPatternPath();
 
       if (options.identity) {
         const identity = await this.identity(filename, options.sourceRoots);
@@ -257,6 +243,18 @@ export class PatternsRoute {
       if (status === 500) console.error("Error serving pattern file:", error);
       return Response.json(body, { status });
     }
+  }
+
+  /**
+   * Helper for `identity()`, which reads one file of a program by the URL
+   * pathname the program names it by, exactly as a `GET` of that pathname is
+   * served. A file the route would refuse to serve is refused here too: no
+   * worker can fetch it, so no worker could compile the program it belongs to.
+   */
+  async #readServed(pathname: string): Promise<Uint8Array> {
+    const filename = servedFilename(pathname);
+    if (filename === undefined) throw new UnservedPatternFileError(pathname);
+    return await this.get(filename);
   }
 
   #resolve(filename: string): URL {
@@ -293,8 +291,9 @@ export function patternResponseHeaders(
 
 /**
  * Map a pattern-serving error to an HTTP status and body: a missing file →
- * 404; a structurally invalid entry (incomplete import closure, or a `cf:`
- * fabric import the light `?identity` path does not model) → 400 with the
+ * 404; a structurally invalid entry (incomplete import closure, a `cf:`
+ * fabric import the light `?identity` path does not model, a file the route
+ * would not serve, or a data file that is not valid UTF-8) → 400 with the
  * reason; an invalid retained root path or excessive root count → 400;
  * anything else → 500.
  */
@@ -305,10 +304,12 @@ export function classifyPatternError(
     return { status: 404, body: { error: "File not found" } };
   }
   if (
+    error instanceof UnservedPatternFileError ||
     error instanceof Error &&
-    (error.message.includes("Invalid source root path") ||
-      error.message.includes("incomplete closure") ||
-      error.message.includes("fabric import"))
+      (error.message.includes("Invalid source root path") ||
+        error.message.includes("incomplete closure") ||
+        error.message.includes("fabric import") ||
+        error.message.includes("is not valid UTF-8 text"))
   ) {
     return { status: 400, body: { error: error.message } };
   }
@@ -330,6 +331,58 @@ function patternResponse(
 
 function invalidPatternPath(): Response {
   return Response.json({ error: "Invalid file path" }, { status: 400 });
+}
+
+/**
+ * Whether the route serves a file under `filename`, its path below the route
+ * prefix as a request names it once the router has decoded it. A `..`
+ * sequence would escape the directory, a leading `/` would make the name
+ * absolute in URL resolution, and a `:` would introduce a URL scheme
+ * (`file:///etc/passwd`). An internal `/` is allowed, because patterns are
+ * served from subdirectories. The check decodes first, so an encoded sequence
+ * is caught as the sequence it denotes, and a name that does not decode is
+ * refused.
+ */
+function servesFilename(filename: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(filename);
+  } catch {
+    return false;
+  }
+  return !decoded.includes("..") && !decoded.startsWith("/") &&
+    !decoded.includes(":");
+}
+
+/**
+ * The path below the route prefix that a `GET` of the URL pathname `pathname`
+ * reads, or `undefined` when the route would not serve it: a pathname outside
+ * the prefix, one that is not valid percent-encoding, or one
+ * {@link servesFilename} refuses. Decodes once, as {@link PatternsRoute.serve}
+ * does.
+ */
+function servedFilename(pathname: string): string | undefined {
+  if (!pathname.startsWith(PATTERNS_ROUTE_PREFIX)) return undefined;
+  let filename: string;
+  try {
+    filename = decodeURIComponent(pathname.slice(PATTERNS_ROUTE_PREFIX.length));
+  } catch {
+    return undefined;
+  }
+  return servesFilename(filename) ? filename : undefined;
+}
+
+/**
+ * A file a program names that the route would not serve, by the URL pathname
+ * the program names it by. A program reaching one is one no worker can fetch,
+ * so its identity is refused rather than computed.
+ */
+class UnservedPatternFileError extends Error {
+  /** Constructs an instance naming the pathname that was refused. */
+  constructor(pathname: string) {
+    super(`the patterns route does not serve \`${pathname}\``);
+    this.name = "UnservedPatternFileError";
+  }
 }
 
 function directoryUrl(directory: string): URL {

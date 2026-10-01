@@ -198,6 +198,77 @@ describe("PatternsRoute", () => {
     });
   });
 
+  it("answers 400 for an identity whose closure reads a data file outside the route", async () => {
+    // A rooted `dataFile()` path names a file at the host's root, which this
+    // route does not serve. The file named `son` is what a read that dropped
+    // the route prefix without checking for it would land on.
+
+    await withRoute(
+      {
+        "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile("/data/cities.json");\n',
+        "data/cities.json": "[]\n",
+        "son": "an unrelated file\n",
+      },
+      async (route) => {
+        const response = await route.serve(
+          get("/api/patterns/speller.tsx?identity"),
+        );
+        expect(response?.status).toBe(400);
+        expect((await response?.json()).error).toContain("/data/cities.json");
+      },
+    );
+  });
+
+  it("answers 400 for an identity whose closure reads a file the route refuses to serve", async () => {
+    // A worker assembles the program by fetching each file from this route, so
+    // a file the route will not serve is one no worker can fetch.
+
+    await withRoute(
+      {
+        "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile("./data/cities..json");\n',
+        "data/cities..json": "[]\n",
+        "importer.tsx": 'import "./lib..x.ts";\nexport default 1;\n',
+        "lib..x.ts": ENTRY,
+      },
+      async (route) => {
+        for (const file of ["data/cities..json", "lib..x.ts"]) {
+          const response = await route.serve(get(`/api/patterns/${file}`));
+          expect(response?.status).toBe(400);
+        }
+        for (const entry of ["speller.tsx", "importer.tsx"]) {
+          const response = await route.serve(
+            get(`/api/patterns/${entry}?identity`),
+          );
+          expect(response?.status).toBe(400);
+        }
+      },
+    );
+  });
+
+  it("answers 400 naming the data file for one that is not valid UTF-8", async () => {
+    await withRoute(
+      {
+        "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile("./words.txt");\n',
+      },
+      async (route, root) => {
+        await Deno.writeFile(
+          join(root, "words.txt"),
+          new Uint8Array([0x61, 0xff, 0x62]),
+        );
+        const response = await route.serve(
+          get("/api/patterns/speller.tsx?identity"),
+        );
+        expect(response?.status).toBe(400);
+        expect((await response?.json()).error).toContain(
+          "/api/patterns/words.txt",
+        );
+      },
+    );
+  });
+
   it("answers 304 when the request already holds the ETag", async () => {
     await withRoute({ "main.tsx": ENTRY }, async (route) => {
       const first = await route.serve(get("/api/patterns/main.tsx"));
