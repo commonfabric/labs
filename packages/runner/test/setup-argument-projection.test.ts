@@ -234,6 +234,27 @@ describe("setup-argument-projection", () => {
       expect(await commit(tx)).toContain(`${refusal} at /list`);
     });
 
+    it("accepts a write redirect to the list whose address omits the space it shares with the slot", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      const argument = await setUpChild(tx, binding(tx));
+      const slot = argument.getAsNormalizedFullLink();
+      const list = runtime.getCell(space, "board", undefined, tx).key("items")
+        .getAsNormalizedFullLink();
+      // Relative to the slot's document, the link keeps the list's document
+      // and omits the space the two share.
+      const sameSpace = createSigilLinkFromParsedLink(list, {
+        base: slot,
+        overwrite: "redirect",
+      });
+      tx.writeValueOrThrow(
+        { ...slot, path: [...slot.path, "list"] },
+        sameSpace,
+      );
+
+      expect(await commit(tx)).toBeUndefined();
+    });
+
     it("refuses a value staged in its place", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
