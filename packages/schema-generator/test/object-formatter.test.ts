@@ -28,6 +28,8 @@ describe("object-formatter", () => {
 type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
 type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
 declare const h: () => Stream<void>;
+declare const cellFactory: () => Cell<string>;
+declare const sqliteFactory: () => SqliteDb;
 declare const plainFn: () => number;
 declare const subPattern: () => { value: string };
 type H = typeof h;
@@ -36,16 +38,25 @@ type Guarded<H> = { action: H; value: WriteAuthorizedBy<string, H> };
 interface SchemaRoot {
   handler: Box<typeof h>;
   aliasedHandler: Box<H>;
+  cell: Box<typeof cellFactory>;
+  sqlite: Box<typeof sqliteFactory>;
   plain: Box<typeof plainFn>;
   subPattern: Box<typeof subPattern>;
   guarded: Guarded<typeof h>;
 }
 `);
 
-    for (const name of ["handler", "aliasedHandler"]) {
+    for (
+      const [name, kind] of [
+        ["handler", "stream"],
+        ["aliasedHandler", "stream"],
+        ["cell", "cell"],
+        ["sqlite", "sqlite"],
+      ] as const
+    ) {
       const member = asObjectSchema(schema.properties![name]!);
       expect(member.properties).toEqual({
-        value: { asCell: ["stream"] },
+        value: { asCell: [kind] },
         n: { type: "number" },
       });
       expect(member.required).toHaveLength(2);
@@ -62,6 +73,30 @@ interface SchemaRoot {
       .toEqual({
         __ctWriterIdentityOf: { file: "test.ts", path: ["h"] },
       });
+  });
+
+  it("retains collapsed writer alternatives through a generic member", async () => {
+    const schema = await schemaFor(`
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
+declare const f: (event: string) => void;
+declare const g: typeof f;
+interface Box<T> { value: T }
+interface SchemaRoot {
+  value: Box<WriteAuthorizedBy<string, typeof f> | WriteAuthorizedBy<string, typeof g>>;
+}
+`);
+    const box = asObjectSchema(schema.properties!.value!);
+    const value = asObjectSchema(box.properties!.value!);
+    expect(value.anyOf).toHaveLength(2);
+    expect(value.anyOf!.map((branch) => {
+      const alternative = asObjectSchema(branch);
+      expect(alternative.type).toBe("string");
+      return alternative.ifc?.writeAuthorizedBy;
+    })).toEqual([
+      { __ctWriterIdentityOf: { file: "test.ts", path: ["f"] } },
+      { __ctWriterIdentityOf: { file: "test.ts", path: ["g"] } },
+    ]);
   });
 
   it("emits an open object schema for the bare `object` type", async () => {
