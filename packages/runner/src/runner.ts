@@ -254,6 +254,7 @@ import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
   asPatternIdentityRef,
+  META_LINK_FIELDS,
   rawMetaWriteAuthorization,
 } from "./meta-seam.ts";
 export {
@@ -11320,7 +11321,7 @@ export class Runner {
       ...staticRedirectWriteTargets,
     ]);
     const structuralMetaLinks = module.completeSchedulerScopeSummary === true
-      ? (["pattern", "argument", "result"] as const)
+      ? META_LINK_FIELDS
         .map((field) => getMetaLink(resultCell, field))
         .filter((link): link is NormalizedFullLink => link !== undefined)
       : [];
