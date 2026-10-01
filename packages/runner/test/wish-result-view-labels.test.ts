@@ -249,6 +249,43 @@ describe("wish-result-view-labels", () => {
     expect(holdsSealedClause(storedClauses(state))).toBe(false);
   });
 
+  it("stamps no clause when the found piece is a pattern rendering a sealed argument raw", async () => {
+    const { pattern } = builder;
+    const sheetView = pattern<{ sheet: { secret: string } }>(({ sheet }) => ({
+      title: "Sheet view",
+      [UI]: vnode("cf-cfc-render-boundary", [vnode("div", [sheet])]),
+    }));
+    const tx = runtime.edit();
+    const pieceCell = runtime.getCell<Record<string, unknown>>(
+      patternSpace.did(),
+      "sheet-view-piece",
+      undefined,
+      tx,
+    );
+    const piece = runtime.run(tx, sheetView, { sheet: sealed }, pieceCell);
+    expect((await tx.commit()).error).toBeUndefined();
+    await piece.pull();
+    await runtime.idle();
+    await pin(piece.withTx(undefined), "#sheetview");
+
+    const result = await runWish("#sheetview", "sheet-view-finder");
+    const title = consumedBy((tx) =>
+      result.withTx(tx).key("found").key("result").key("title").get()
+    );
+    const secret = consumedBy((tx) =>
+      result.withTx(tx).key("found").key("result").key(UI).key("children")
+        .key(0).key("children").key(0).key("secret").get()
+    );
+
+    expect(title.value).toBe("Sheet view");
+    expect(holdsSealedClause(title.confidentiality)).toBe(false);
+    expect(refusedForOwner(title.confidentiality)).toEqual([]);
+    // The render boundary's contents are the sealed cell, read through the
+    // wish result.
+    expect(secret.value).toBe("sealed content");
+    expect(holdsSealedClause(secret.confidentiality)).toBe(true);
+  });
+
   it("stamps no flow label from a sealed value held inline in the found piece's view", async () => {
     // The piece's own document holds the sealed value inside its view, with
     // the clause on that path, so nothing on the way to the view is labeled.
