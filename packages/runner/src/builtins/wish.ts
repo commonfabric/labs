@@ -648,7 +648,7 @@ function searchFavoritesForHashtag(
     queryKey,
     () =>
       matches.flatMap((match) => {
-        const cell = resolvePath(match.cell, [], ctx);
+        const cell = match.cell.resolveAsCell();
         return ctx.readiness.requireDocument(cell, ctx.tx)
           ? [{ cell, pathPrefix }]
           : [];

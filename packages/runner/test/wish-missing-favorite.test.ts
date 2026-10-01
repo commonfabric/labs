@@ -70,15 +70,12 @@ describe("wish favorite discovery", () => {
 
       const restore = runtime.edit();
       missing.withTx(restore).set({ version: 1, name: "Restored provider" });
-      const rediscovered = runtime.run(
-        restore,
-        pattern,
-        {},
-        runtime.getCell(space, "fresh discovery consumer", undefined, restore),
-      );
       expect((await restore.commit()).error).toBeUndefined();
-      await rediscovered.pull();
-      expect(rediscovered.key("found").key("candidates").get()).toHaveLength(2);
+      // The wish builtin is debounced; move logical time past the window.
+      await clock.tick(100);
+      await runtime.idle();
+      expect(found.key("candidates").get()).toHaveLength(2);
+      expect(selected.key("name").get()).toBe("Restored provider");
     } finally {
       cancel?.();
       await runtime.dispose({ closeStorage: false });
