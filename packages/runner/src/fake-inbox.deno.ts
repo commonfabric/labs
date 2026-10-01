@@ -22,9 +22,9 @@ export type FakeInboxFetch = (
 
 /**
  * The origin a {@link FakeInbox} answers at unless given another: a loopback
- * `http:` origin, which is what an inbox client accepts, at port 0, which
- * nothing can listen on, so a request that reached the network instead of the
- * fake could not find a service by accident.
+ * `http:` origin, which is what an inbox client accepts, at port 0, which no
+ * connection can be made to, so a request that reached the network instead of
+ * the fake could not find a service by accident.
  */
 export const FAKE_INBOX_API_URL = new URL("http://127.0.0.1:0/");
 
@@ -49,9 +49,8 @@ export interface FakeInboxOptions {
 
 /**
  * An inbox service over an in-memory store, answering the inbox `send`
- * operation for a runtime's `fetch`. It verifies each request's signature the
- * way the toolshed routes do, so a message's sender is the identity that
- * signed it.
+ * operation as a runtime's `fetch`, at one origin. A request to any other
+ * origin goes to the fallback the instance was given, or is answered `404`.
  */
 export class FakeInbox {
   #store = new InboxStore(":memory:");

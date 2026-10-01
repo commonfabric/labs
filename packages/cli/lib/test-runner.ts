@@ -2380,13 +2380,17 @@ export async function runTestPattern(
       () =>
         runtime.dispose({ closeStorage: options.storageHost === undefined }),
     );
-    await teardown.catch((error) => {
-      console.error(
-        `[cf test] teardown failed for ${testPath}: ${formatError(error)}`,
-      );
-      throw error;
-    });
-    inbox.close();
+    try {
+      await teardown.catch((error) => {
+        console.error(
+          `[cf test] teardown failed for ${testPath}: ${formatError(error)}`,
+        );
+        throw error;
+      });
+    } finally {
+      // After the runtime, which could still have been sending to it.
+      inbox.close();
+    }
   }
 }
 

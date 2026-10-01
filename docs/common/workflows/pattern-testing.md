@@ -160,12 +160,20 @@ one `SentSpaceAccessNotice` per notice the inbox accepted: its `sender`,
 is brought up to date at each `{ settle: true }` step and nowhere else; put one
 between the action and the assertion.
 
+In a multi-user test the shared space's list is the one above, so the first
+participant's user, its OWNER, can tell any other listed user about a cell
+there. The recipient's DID is learned the way any fact about another
+participant is: that participant writes `currentPrincipal()` into the setup
+from a handler, and a marker carries it across.
+
 ```tsx
 // Shown at module scope.
 import {
   assert,
+  currentPrincipal,
   type DID,
   handler,
+  multiUserTest,
   noticeSpaceAccess,
   pattern,
   type SentSpaceAccessNotice,
@@ -173,38 +181,63 @@ import {
   Writable,
 } from "commonfabric";
 
-const GUEST: DID = "did:key:z6MkfXnSkGc27B8ahD4GEgW7egL6kYfu7kpNiUV9ESpMRHAk";
+interface Setup {
+  room: Writable<{ title: string }>;
+  guest: Writable<DID | "">;
+}
 
-const tell = handler<unknown, { room: Writable<{ title: string }> }>(
-  (_event, { room }) => {
-    noticeSpaceAccess(GUEST, room);
+export const setup = pattern<Record<string, never>, Setup>(() => ({
+  room: Writable.of({ title: "Donut committee" }),
+  guest: Writable.of<DID | "">(""),
+}));
+
+const introduce = handler<unknown, { me: Writable<DID | ""> }>(
+  (_event, { me }) => {
+    me.set(currentPrincipal() ?? "");
   },
 );
 
-export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>(
-  ({ spaceAccessNotices }) => {
-    const room = Writable.of({ title: "Donut committee" });
-    return {
-      [TESTS]: [
-        { action: tell({ room }), event: {} },
-        { settle: true },
-        { assertion: assert(() => spaceAccessNotices.length === 1) },
-        {
-          assertion: assert(() => spaceAccessNotices[0]?.recipient === GUEST),
-        },
-      ],
-    };
-  },
-);
+const tell = handler<unknown, Setup>((_event, { room, guest }) => {
+  const recipient = guest.get();
+  if (recipient !== "") noticeSpaceAccess(recipient, room);
+});
+
+interface Inputs {
+  setup: Setup;
+  spaceAccessNotices: SentSpaceAccessNotice[];
+}
+
+export const host = pattern<Inputs>(({ setup, spaceAccessNotices }) => ({
+  [TESTS]: [
+    { await: "guest-introduced" },
+    { action: tell({ room: setup.room, guest: setup.guest }), event: {} },
+    { settle: true },
+    { assertion: assert(() => spaceAccessNotices.length === 1) },
+    {
+      assertion: assert(() =>
+        spaceAccessNotices[0]?.recipient === setup.guest.get()
+      ),
+    },
+  ],
+}));
+
+export const guest = pattern<Inputs>(({ setup }) => ({
+  [TESTS]: [
+    { action: introduce({ me: setup.guest }), event: {} },
+    { label: "guest-introduced" },
+  ],
+}));
+
+export default multiUserTest({ setup, participants: { host, guest } });
 ```
 
-A single-user test's space is its identity's home space, whose list names
-that identity alone, so a handler there tells someone about a space it creates
-with `inSpace()`, whose `grants` give the recipient an entry. In a multi-user
-test the shared space's list is the one above, and each participant is handed
-the notices its own runtime sent: a participant whose handler sent none reads
-an empty list, whatever another participant sent it.
-[Space-access notices](../../features/space-access-notices.md#in-a-pattern-test)
+Each participant is handed the notices its own runtime sent: `guest` above
+reads an empty list, whatever `host` sent it. A single-user test's space is its
+identity's home space, whose list names that identity alone, so a handler
+there tells someone about a space it creates with `inSpace()`, whose `grants`
+give the recipient an entry;
+`packages/cli/test/fixtures/space-access-notices/single-user.test.tsx` is that
+shape. [Space-access notices](../../features/space-access-notices.md#in-a-pattern-test)
 describes the inbox the lane answers with.
 
 ## Test Step Format
