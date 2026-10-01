@@ -43,6 +43,11 @@ const INVALID_REQUEST_ID: ControlResult<never> = {
   body: { error: "Invalid or missing requestId" },
 };
 
+const TOO_MANY_REQUESTS: ControlResult<never> = {
+  status: 429,
+  body: { error: "Too many recent requests — retry in a few minutes" },
+};
+
 /** Helper for both verbs, which builds the 409 for a request id already used. */
 const replayed = (channel: string): ControlResult<never> => ({
   status: 409,
@@ -114,12 +119,7 @@ export async function processGmailBind(
     if (error instanceof RequestAlreadyClaimedError) {
       return replayed(error.channel);
     }
-    if (error instanceof ClaimStoreFullError) {
-      return {
-        status: 429,
-        body: { error: "Too many recent requests — retry in a few minutes" },
-      };
-    }
+    if (error instanceof ClaimStoreFullError) return TOO_MANY_REQUESTS;
     if (error instanceof MailboxBindingFullError) {
       return {
         status: 409,
@@ -151,10 +151,10 @@ export async function processGmailBind(
  * can still be cleared. `unbound` says whether it was bound to anything.
  *
  * `input.requestId` makes the unbind at most once, so that a late duplicate
- * cannot clear a binding made after the first one landed. When the caller has
- * too many recent claims for another to be recorded, the unbind goes ahead
- * without one: refusing it would leave notifications flowing to a channel the
- * caller is trying to cut off.
+ * cannot clear a binding made after the first one landed. An unbind whose id
+ * cannot be recorded is refused for that reason: nothing else ties it to the
+ * binding the caller saw. A caller refused here can still stop delivery by
+ * revoking the channel.
  */
 export async function processGmailUnbind(
   deps: ControlDeps,
@@ -172,25 +172,17 @@ export async function processGmailUnbind(
   };
   let unbound: boolean;
   try {
-    try {
-      unbound = await unbindChannel(
-        deps.runtime,
-        deps.serviceSpace,
-        input.id,
-        claim,
-      );
-    } catch (error) {
-      if (!(error instanceof ClaimStoreFullError)) throw error;
-      deps.logger?.warn(
-        { id: input.id, owner: callerDid },
-        "gmail-unbind: claim store full; unbinding without idempotency",
-      );
-      unbound = await unbindChannel(deps.runtime, deps.serviceSpace, input.id);
-    }
+    unbound = await unbindChannel(
+      deps.runtime,
+      deps.serviceSpace,
+      input.id,
+      claim,
+    );
   } catch (error) {
     if (error instanceof RequestAlreadyClaimedError) {
       return replayed(error.channel);
     }
+    if (error instanceof ClaimStoreFullError) return TOO_MANY_REQUESTS;
     if (error instanceof BindingConflictError) {
       return {
         status: 409,

@@ -111,11 +111,10 @@ a request that failed leaves its id free to retry with.
 `gmail-unbind` takes `{ id, requestId }` and returns `{ id, unbound }`, where
 `unbound` says whether the channel was bound to anything. It needs only
 ownership, and works on a revoked channel, so a retired channel can still be
-cleared. It answers with the same statuses as `gmail-bind`, with two
-differences: its 400 is only for a malformed `requestId`, and it never answers
-429 for too many recent request ids. In that case the unbind goes ahead
-without recording its id, because refusing it would leave notifications
-flowing to a channel the caller is trying to cut off.
+cleared. It answers with the same statuses as `gmail-bind`, except that its
+400 is only for a malformed `requestId`. A caller answered 429 for too many
+recent request ids can still stop delivery at once by revoking the channel,
+since a revoked channel is skipped.
 
 `gmail-bind` shares the mint and rotate rate-limit bucket, because each call
 costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it

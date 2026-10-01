@@ -333,15 +333,18 @@ describe("gmail-binding.utils", () => {
       expect(await bound()).toEqual([id]);
     });
 
-    it("unbinds even when the caller's claim store is full", async () => {
+    it("returns 429 and leaves the binding in place when the caller's claim store is full", async () => {
+      // An unbind that went ahead here would leave its request id unrecorded,
+      // and a replay of it could then clear a binding made afterwards.
+
       const id = await mintChannel();
       ok(await bind(id, "req-1"));
       await fillClaimStore();
 
       const result = await unbind(id, "req-u");
 
-      expect(ok(result)).toEqual({ id, unbound: true });
-      expect(await bound()).toEqual([]);
+      expect(result.status).toBe(429);
+      expect(await bound()).toEqual([id]);
     });
   });
 });
