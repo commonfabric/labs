@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
   JSONSchema,
@@ -9,6 +10,7 @@ import type {
   Pattern,
 } from "../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
@@ -17,6 +19,7 @@ import {
 import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("setup-argument-projection-owner");
@@ -119,24 +122,29 @@ describe("setup-argument-projection", () => {
   /**
    * Sets up a sub-pattern on the result cell `child` with `list` at its
    * argument's `list`, as setup stages a binding a pattern passes to a
-   * sub-pattern it composes. Returns the sub-pattern's argument cell.
+   * sub-pattern it composes. A setup that declines `attributeInitialization`
+   * is nobody's act, as one a builtin starts from a continuation is. Returns
+   * the sub-pattern's argument cell.
    */
   async function setUpChild(
     tx: IExtendedStorageTransaction,
     list: unknown,
-    child = "child",
+    { argumentSchema = childArgumentSchema, attributeInitialization }: {
+      argumentSchema?: JSONSchema;
+      attributeInitialization?: boolean;
+    } = {},
   ) {
-    const resultCell = runtime.getCell(space, child, undefined, tx);
+    const resultCell = runtime.getCell(space, "child", undefined, tx);
     const pattern = {
-      argumentSchema: childArgumentSchema,
+      argumentSchema,
       resultSchema: { type: "object", properties: {} },
       result: {},
       nodes: [],
     } satisfies Pattern;
-    await runtime.runner.setup(tx, pattern, { list }, resultCell);
-    return resultCell.getArgumentCell<{ list: string[] }>(
-      childArgumentSchema,
-    )!;
+    await runtime.runner.setup(tx, pattern, { list }, resultCell, {
+      ...(attributeInitialization !== undefined && { attributeInitialization }),
+    });
+    return resultCell.getArgumentCell<{ list: string[] }>(argumentSchema)!;
   }
 
   /** Prepares and commits `tx`, and returns the refusal, if any. */
@@ -295,6 +303,70 @@ describe("setup-argument-projection", () => {
 
       expect(await commit(tx)).toContain(`${refusal} at /items`);
       expect(ownersList()).toEqual([]);
+    });
+
+    it("attributes a write to the passed list in the transaction staging it to the principal making it", async () => {
+      // An owner-protected list, seeded on nobody's behalf and then written
+      // through its writer as a module's reviewed binding writes it. The slot
+      // is the setup's unattributed initialization; the list is not, so the
+      // write binds its principal as the list's owner.
+      const notesList: JSONSchemaObj = {
+        ...ownedList,
+        ifc: {
+          ...ownedList.ifc,
+          writeAuthorizedBy: {
+            __ctWriterIdentityOf: {
+              file: "/main.tsx",
+              path: ["send"],
+              moduleIdentity: "notes-module",
+            },
+          },
+        },
+      };
+      const notesSchema: JSONSchema = {
+        type: "object",
+        properties: { items: notesList },
+      };
+      const seed = runtime.edit();
+      const seeded = runtime.getCell(space, "notes", notesSchema, seed);
+      seeded.set({ items: [] });
+      seed.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "seed",
+        target: seeded.key("items").getAsNormalizedFullLink(),
+        value: [],
+      }, runtimeWritePolicyAuthorization);
+      expect(await commit(seed)).toBeUndefined();
+
+      const tx = runtime.edit();
+      await setUpChild(tx, binding(tx, "notes"), {
+        argumentSchema: {
+          type: "object",
+          properties: { list: { ...notesList, asCell: ["cell"] } },
+        },
+        attributeInitialization: false,
+      });
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: "notes-module",
+        sourceFile: "/main.tsx",
+        bindingPath: ["send"],
+      });
+      const notes = runtime.getCell(space, "notes", notesSchema, tx);
+      notes.key("items").set(["a"]);
+      expect(await commit(tx)).toBeUndefined();
+
+      const represented = (readStoredCfcMetadata(
+        runtime.edit(),
+        notes.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [])
+        .filter((entry) => entry.path.join("/") === "items")
+        .flatMap((entry) => entry.label.integrity ?? [])
+        .filter((atom) =>
+          isObjectOrArray(atom) && atom.kind === "represents-principal"
+        )
+        .map((atom) => (atom as { subject: unknown }).subject);
+      expect(represented).toEqual([signer.did()]);
     });
 
     it("refuses a write through the slot by a principal other than the list's owner in the transaction staging it", async () => {
