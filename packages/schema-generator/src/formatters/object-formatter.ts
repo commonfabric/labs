@@ -23,10 +23,8 @@ import {
   isFunctionLike,
   safeGetPropertyType,
 } from "../type-utils.ts";
-import {
-  getCellWrapperInfo,
-  isCellInternalMarkerName,
-} from "../typescript/cell-brand.ts";
+import { getCellWrapperInfo } from "../typescript/cell-brand.ts";
+import { isInternalMemberName } from "../typescript/property-name.ts";
 import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
@@ -185,11 +183,7 @@ function shouldSkipInternalProperty(
   propDecl: ts.Declaration | undefined,
   context: GenerationContext,
 ): boolean {
-  if (propName.startsWith("__@")) {
-    return true;
-  }
-
-  if (isCellInternalMarkerName(propName)) {
+  if (isInternalMemberName(propName)) {
     return true;
   }
 

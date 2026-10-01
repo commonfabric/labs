@@ -786,9 +786,12 @@ as that type (§12). Both checks above read such a placeholder by its type:
 whether the type is `any` or `unknown`, and which of its fields are `unknown`.
 The field walk descends each object type with no name, each instance of a class
 expression with no name, and each array element, as the node walk descends a
-printed type literal and array. It stops at a type it is already inside, since
-a type with no name can hold itself through `typeof`, and walks a type reached
-again by another path under that path.
+printed type literal and array. It skips a member schema generation leaves out
+of an object's schema, a symbol-keyed member or a cell's internal marker
+(`isInternalMemberName()` in the schema generator), since no consumer receives
+it as a field. It stops at a type it is already inside, since a type with no
+name can hold itself through `typeof`, and walks a type reached again by
+another path under that path.
 
 ### 6.7 Lowerable Expression-Site Categories
 

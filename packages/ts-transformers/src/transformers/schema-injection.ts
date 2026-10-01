@@ -1,3 +1,4 @@
+import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
 import ts from "typescript";
@@ -2935,6 +2936,9 @@ function collectUnknownResultTypePaths(
       if (element) walk(element, `${path}[]`);
     } else if (hasNoNameToPrint(current)) {
       for (const property of checker.getPropertiesOfType(current)) {
+        // Schema generation leaves this member out, so no consumer receives
+        // it as a field.
+        if (isInternalMemberName(property.name)) continue;
         walk(
           checker.getTypeOfSymbol(property),
           path ? `${path}.${property.name}` : property.name,

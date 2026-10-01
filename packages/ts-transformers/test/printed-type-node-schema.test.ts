@@ -550,6 +550,27 @@ export default pattern<Record<string, never>>(() => ${result});`,
       });
     }
 
+    for (
+      const [holder, result] of [
+        ["an anonymous class instance that is the result", "makeBranded()"],
+        [
+          "an anonymous class instance that is a field of the result",
+          "({ a: makeBranded() })",
+        ],
+        ["the result itself", "({ a: make(), [brand]: u })"],
+      ] as const
+    ) {
+      it(`reports nothing for an \`unknown\` symbol-keyed member of ${holder}, which the schema leaves out`, async () => {
+        const { diagnostics } = await transformWithMake(
+          `const brand = Symbol("brand");
+function makeBranded() { return new (class { v = 1; [brand]: unknown = "b"; })(); }
+export default pattern<{ u: unknown }>(({ u }) => ${result});`,
+        );
+
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
     it("reads a pattern's inferred result holding a type that refers to itself through `typeof`", async () => {
       // The type of `tree` has no name, and holds itself through `typeof`.
       const { root, diagnostics } = await transformWithMake(
