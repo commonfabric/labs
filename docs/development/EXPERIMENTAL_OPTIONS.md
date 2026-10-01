@@ -1604,7 +1604,10 @@ wrong. The `FabricInstance` checks in the runner's binding walks are the
 recurring example: such a value is a container reached by its codec contents
 rather than by property name, and a walk that cannot yet descend one would
 otherwise hand it back whole, leaving a binding nested inside it silently
-unresolved.
+unresolved. A walk hands one back whole only when it can tell there is nothing
+inside to resolve: the instance is deep-frozen and holds nothing but fabric
+data, none of it a link (`canCarryFabricInstanceWhole()`). Any other instance
+reaches the throw.
 
 These throws are **discovery instruments**. Each one that fires names a site
 that owes work — for a flag-gated site, work the flag needs before it can
@@ -1625,8 +1628,9 @@ site has:
   something a flag was deliberately turned on to reach.
 - **De facto**, where the value is shipped and ungated and simply has no
   production caller yet. A `FabricError` is exposed to pattern authors
-  (`builder/factory.ts`) and reaches these throws with every flag off; the same
-  value written from the client holding a link, or not yet deep-frozen, reaches
+  (`builder/factory.ts`). A deep-frozen one holding only fabric data is carried
+  whole, but one holding a link, or not yet deep-frozen, reaches these throws
+  with every flag off, and the same value written from the client reaches
   `CellHandle.serialize()`'s refusal of a `FabricInstance` the same way. Nothing
   stops such a call being written tomorrow. What makes the tripwire safe today
   is that none exists.

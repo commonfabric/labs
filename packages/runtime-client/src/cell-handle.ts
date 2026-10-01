@@ -18,7 +18,6 @@ import {
   rebaseCfcLabelView,
 } from "@commonfabric/runner/cfc/label-view-core";
 import {
-  canCarryFabricInstanceWhole,
   type Cancel,
   isSigilLink,
   type JSONSchema,
@@ -28,6 +27,7 @@ import {
   refuseFabricInstance,
   type SigilLink,
 } from "@commonfabric/runner/shared";
+import { canCarryFabricInstanceWhole } from "@commonfabric/runner/whole-instance";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -76,10 +76,10 @@ export const $onCellUpdate = Symbol("$onCellUpdate");
  *
  * The connection's encoding carries this whole domain. The conversion walk
  * that feeds it is narrower: `CellHandle.serialize()` carries a
- * `FabricInstance` whole only when nothing inside it would need converting,
- * being a container it cannot descend to find a handle inside, and refuses
- * one that holds anything else. So a value admitted here can still be refused
- * on the way out, and the refusal names which.
+ * `FabricInstance` whole only when it is deep-frozen and nothing inside it
+ * would need converting, being a container it cannot descend to find a handle
+ * inside, and refuses any other. So a value admitted here can still be
+ * refused on the way out, and the refusal names which.
  */
 export type ClientCellValue = FabricValuePlus<CellHandle<unknown>>;
 
@@ -876,7 +876,8 @@ export class CellHandle<T = unknown> {
    * CellHandle instances. `$alias` records are plain data — they are only
    * meaningful as bindings inside Pattern objects, which the client never
    * interprets. A `FabricPrimitive` comes back as itself, and so does a
-   * `FabricInstance` holding nothing this walk would hydrate.
+   * deep-frozen `FabricInstance` holding nothing this walk would hydrate
+   * (`canCarryFabricInstanceWhole()`).
    *
    * @throws If the value holds a `FabricInstance` that may hold a link -- one
    *   that does, or one not deep-frozen -- which is a container this walk
@@ -906,9 +907,9 @@ export class CellHandle<T = unknown> {
     // An instance is a container, reached by its codec contents rather than by
     // property name, so a sigil link can sit inside one where this walk cannot
     // see it -- and a value handed back unhydrated would carry that link where
-    // a `CellHandle` belongs. One holding nothing but fabric data comes back
-    // whole, as the envelope's encoding delivered it, class and all, and
-    // anything else is refused.
+    // a `CellHandle` belongs. One deep-frozen and holding nothing but fabric
+    // data comes back whole, as the envelope's encoding delivered it, class
+    // and all, and anything else is refused.
     if (value instanceof FabricInstance) {
       if (canCarryFabricInstanceWhole(value)) return value;
       refuseFabricInstance(value, "when hydrating a value off the connection");
@@ -981,11 +982,12 @@ export class CellHandle<T = unknown> {
    *
    * `CellHandle.deserialize()` is the inverse.
    *
-   * A `FabricInstance` crosses whole when it holds nothing this walk would
-   * convert.
+   * A `FabricInstance` crosses whole when it is deep-frozen and holds nothing
+   * this walk would convert (`canCarryFabricInstanceWhole()`), so an instance
+   * holding only data is still refused until it is deep-frozen.
    *
-   * @throws If the value holds a `FabricInstance` holding anything else, which
-   *   is a container this walk cannot descend and so cannot convert a handle
+   * @throws If the value holds any other `FabricInstance`, which is a
+   *   container this walk cannot descend and so cannot convert a handle
    *   inside.
    */
   static serialize(value: ClientCellValue): FabricValue {
@@ -1021,14 +1023,15 @@ export class CellHandle<T = unknown> {
 
     // An instance is a container whose contents this walk cannot reach, so a
     // `CellHandle` inside one would cross unconverted -- as a handle, which
-    // the wire has no representation for. One holding nothing but fabric data
-    // crosses whole, as long as none of it is a `CellRef` record, which the
-    // worker's `mapCellRefsToSigilLinks()` would map and cannot reach inside
-    // an instance. Anything else is refused here rather than downstream: that
-    // walk refuses one as well, and a refusal there arrives as an error reply,
-    // after this handle has already cached the value and told its
-    // subscribers. Refused through the shared helper, as `deserialize()` above
-    // already does, so the two walks say the same thing about the same value.
+    // the wire has no representation for. One deep-frozen and holding nothing
+    // but fabric data crosses whole, as long as none of it is a `CellRef`
+    // record, which the worker's `mapCellRefsToSigilLinks()` would map and
+    // cannot reach inside an instance. Anything else is refused here rather
+    // than downstream: that walk refuses one as well, and a refusal there
+    // arrives as an error reply, after this handle has already cached the
+    // value and told its subscribers. Refused through the shared helper, as
+    // `deserialize()` above already does, so the two walks say the same thing
+    // about the same value.
     if (value instanceof FabricInstance) {
       if (canCarryFabricInstanceWhole(value, isCellRef)) return value;
       refuseFabricInstance(value, "when sending a value over this connection");
@@ -1106,8 +1109,8 @@ function applyValue<T>(
 
   // A container this walk cannot descend, so it cannot preserve a handle
   // inside one against the incoming value the way it does for a record. One
-  // holding no link has no handle inside to preserve, and is carried whole,
-  // as `deserialize()` carries it.
+  // deep-frozen and holding no link has no handle inside to preserve, and is
+  // carried whole, as `deserialize()` carries it.
   if (current instanceof FabricInstance) {
     if (canCarryFabricInstanceWhole(current)) return current;
     refuseFabricInstance(current, "when applying a delivered value");

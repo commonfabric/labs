@@ -20,11 +20,11 @@ import {
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import {
-  canCarryFabricInstanceWhole,
   isSigilLink,
   linkRefFrom,
   refuseFabricInstance,
 } from "@commonfabric/runner/shared";
+import { canCarryFabricInstanceWhole } from "@commonfabric/runner/whole-instance";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import type { LoggerFlagsBreakdown } from "@commonfabric/utils/logger";
 
@@ -43,12 +43,15 @@ import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
  * closes. A subtree reachable from two positions is shared rather than
  * cyclic, and is walked at each.
  *
- * A `FabricInstance` is carried whole when nothing inside it needs mapping --
- * no link, and no `CellRef` (`canCarryFabricInstanceWhole()`) -- and refused
- * otherwise.
+ * A `FabricInstance` is carried whole when it is deep-frozen and nothing
+ * inside it needs mapping -- its codec contents are fabric data, none of it a
+ * link or a `CellRef` (`canCarryFabricInstanceWhole()`) -- and refused
+ * otherwise, so an instance holding only data is still refused until it is
+ * deep-frozen.
  *
- * @throws If the value contains a cycle, or a `FabricInstance` that holds
- *   something this walk would map.
+ * @throws If the value contains a cycle, or a `FabricInstance` that is not
+ *   carried whole. An instance of a class whose freeze or codec is not yet
+ *   implemented throws that class's own error from the check instead.
  */
 export function mapCellRefsToSigilLinks(value: FabricValue): FabricValue {
   return mapOne(value, [], new IndexTrackingStack<object>());
@@ -95,9 +98,9 @@ function mapOne(
     // A container reached by its codec contents rather than by property name,
     // which this walk cannot descend: the record branch below would rebuild
     // one from enumerable own properties it does not have, yielding `{}`. It
-    // crosses whole when it holds nothing this walk would map -- no link, and
-    // no `CellRef` record -- and is refused otherwise, since either would
-    // cross unmapped.
+    // crosses whole when it is deep-frozen and holds nothing this walk would
+    // map -- no link, and no `CellRef` record -- and is refused otherwise,
+    // since either would cross unmapped.
     //
     // The same rule holds at each end of the crossing -- `CellHandle`'s
     // `serialize()`, `deserialize()` and `applyValue()` in `../cell-handle.ts`,
