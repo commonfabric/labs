@@ -308,7 +308,7 @@ type SharedHashtagState = {
   result?: Cell<unknown>;
   candidates: Cell<unknown>[];
   error?: unknown;
-  [UI]?: VNode;
+  [UI]?: VNode | Cell<unknown>;
 };
 
 type SharedHashtagResolver = {
@@ -1556,13 +1556,13 @@ function createSharedHashtagResolver(
       const resultUI = measureWishPhase(
         "shared-result-ui-get",
         queryKey,
-        () => uniqueResultCells[0].key(UI).get(),
-      ) as VNode | undefined;
+        () => foundPieceUI(uniqueResultCells[0]),
+      );
 
       stateCell.set({
         result: uniqueResultCells[0],
         candidates: uniqueResultCells,
-        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+        [UI]: resultUI,
       });
     } catch (error) {
       if (error instanceof DocumentPending) return;
@@ -1824,14 +1824,35 @@ function cellLinkUI(cell: Cell<unknown>): VNode {
   return h("cf-cell-link", { $cell: cell });
 }
 
+/**
+ * The view a wish shows for the piece it found: a reference to the piece's own
+ * `[UI]`, or a `cf-cell-link` to the piece when it has none.
+ *
+ * A wish result is a reference to what it found (CFC spec §8.2), and its view
+ * is one too. Whether the piece has a view is all that decides which of the
+ * two is written, so that is all this reads: a shape read at the position the
+ * piece's `[UI]` resolves to. It consumes the references followed to get
+ * there and the presence of a view, and nothing inside the view. The view's
+ * contents are read where they are rendered, and their labels are consumed
+ * there. Read here, every label in them would join the flow labels the wish
+ * state is stamped with, and so reach every value read through the wish
+ * result, a cell that a render boundary in the view refuses included.
+ */
+function foundPieceUI(resultCell: Cell<unknown>): VNode | Cell<unknown> {
+  const ui = resultCell.asSchema(undefined).key(UI);
+  return ui.getRaw({ lastNode: "value", nonRecursive: true }) === undefined
+    ? cellLinkUI(resultCell)
+    : ui;
+}
+
 function wishResultUI(
   parsed: ParsedWishTarget,
   resultCell: Cell<unknown>,
-): VNode | undefined {
+): VNode | Cell<unknown> {
   if (isProfilePersonaTarget(parsed)) {
     return cellLinkUI(resultCell);
   }
-  return resultCell.key(UI).get() as VNode | undefined;
+  return foundPieceUI(resultCell);
 }
 
 function projectWishCellValue(
@@ -3127,7 +3148,6 @@ export function wish(
               profileHasValidDefault
             ) {
               // Single result or headless mode - fast path with unified shape
-              // Prefer the result cell's own [UI]; fall back to cf-cell-link
               const resultUI = measureWishPhase(
                 "result-ui-get",
                 queryKey,
@@ -3145,7 +3165,7 @@ export function wish(
                         schema,
                       ),
                       candidates: candidatesCell,
-                      [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                      [UI]: resultUI,
                     },
                     outputScope,
                     schema,
@@ -3193,7 +3213,7 @@ export function wish(
                           schema,
                         ),
                         candidates: candidatesCell,
-                        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                        [UI]: resultUI,
                       },
                       outputScope,
                       schema,
