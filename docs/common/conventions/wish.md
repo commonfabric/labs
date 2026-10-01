@@ -20,12 +20,12 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 
 `wish()` returns a `WishState<T>` with the following properties:
 
-| Property     | Type    | Description                                                                                                   |
-|--------------|---------|---------------------------------------------------------------------------------------------------------------|
-| `result`     | `T`     | The resolved piece (auto-confirmed or user-selected)                                                          |
-| `candidates` | `T[]`   | All matching pieces                                                                                           |
-| `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, or a `cf-cell-link` to it |
-| `error`      | `any`   | Error message if resolution failed                                                                            |
+| Property     | Type    | Description                                                                                                                                             |
+|--------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `result`     | `T`     | The resolved piece (auto-confirmed or user-selected)                                                                                                    |
+| `candidates` | `T[]`   | All matching pieces                                                                                                                                     |
+| `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
+| `error`      | `any`   | Error message if resolution failed                                                                                                                      |
 
 Access the resolved piece via `wishResult.result`:
 
