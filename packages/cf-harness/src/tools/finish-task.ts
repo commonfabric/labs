@@ -9,6 +9,7 @@ import {
   HARNESS_CLIENT_ACTION_LIMIT,
   HARNESS_CLIENT_COMMAND_LINE_PATTERN,
   HARNESS_CLIENT_COMMAND_MAX_LENGTH,
+  HARNESS_CLIENT_URL_MAX_LENGTH,
   readHarnessClientActions,
 } from "../contracts/client-action.ts";
 import type { HarnessTaskOutcome } from "../contracts/task-outcome.ts";
@@ -40,7 +41,7 @@ const MALFORMED_CALL =
 
 /** The diagnostic for actions the client could not perform. */
 const MALFORMED_ACTIONS =
-  `finish_task actions are allowed only with outcome completed, at most ${HARNESS_CLIENT_ACTION_LIMIT}, each one of: open_loom with a loomId like loom-0123456789abcdef; command with a single line starting with "/" of at most ${HARNESS_CLIENT_COMMAND_MAX_LENGTH} characters; open_url with an http or https url.`;
+  `finish_task actions are allowed only with outcome completed, at most ${HARNESS_CLIENT_ACTION_LIMIT}, each one of: open_loom with a loomId like loom-0123456789abcdef; command with a single line starting with "/" of at most ${HARNESS_CLIENT_COMMAND_MAX_LENGTH} characters; open_url with an http or https url of at most ${HARNESS_CLIENT_URL_MAX_LENGTH} characters.`;
 
 /** Parent-only terminal response through the ordinary tool policy boundary. */
 export const finishTaskTool: HarnessToolDefinition<
@@ -94,7 +95,11 @@ export const finishTaskTool: HarnessToolDefinition<
                 type: "object",
                 properties: {
                   kind: { type: "string", enum: ["open_url"] },
-                  url: { type: "string", pattern: "^https?://" },
+                  url: {
+                    type: "string",
+                    pattern: "^https?://",
+                    maxLength: HARNESS_CLIENT_URL_MAX_LENGTH,
+                  },
                 },
                 required: ["kind", "url"],
                 additionalProperties: false,

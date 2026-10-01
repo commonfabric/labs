@@ -838,11 +838,12 @@ its `actionId`.
 `{ "sessionId", "actionId", "outcome", "result" }` settles one. `outcome` is
 `done`, `declined`, or `failed`; `result` is a string of at most 500 characters,
 the receipt line or the failure text. It answers 200 `{ "ok": true }`, 404
-`{ "error": { "code": "unknown_action" } }` for an id with nothing pending
-(pending actions live in memory, so this includes a request replayed after a
-restart), 409 `{ "error": { "code": "action_resolved" } }` for one already
-settled, and 400 for a bad body. The tool returns the outcomes to the model in
-input order.
+`{ "error": { "code": "unknown_action" } }` for an id the session never issued,
+409 `{ "error": { "code": "action_resolved" } }` for one already settled
+(including a request a restart left open: startup settles it `failed` with
+`result: "interrupted"`, so a late answer to a replayed request is refused here,
+not as `unknown_action`), and 400 for a bad body. The tool returns the outcomes
+to the model in input order.
 
 The wait has an idle clock of five minutes, reset whenever any action of the
 call settles; on expiry every unsettled action fails with `result: "timeout"`.

@@ -1775,6 +1775,12 @@ export class HarnessInteractiveChatService {
     }));
     const outcomes = new Map<string, HarnessClientActionOutcome>();
     const emits: Promise<void>[] = [];
+    // Ids whose `client_action_requested` is in the log. Only these get a
+    // `client_action_resolved`: a resolution for a request nobody wrote, or
+    // one that precedes its request, would leave the log disagreeing with
+    // what the client was shown.
+    const requested = new Set<string>();
+    let emitting = true;
     let remaining = entries.length;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let finish!: () => void;
@@ -1805,18 +1811,27 @@ export class HarnessInteractiveChatService {
       remaining -= 1;
       if (remaining > 0) armTimer();
       else if (timer !== undefined) clearTimeout(timer);
-      const emitted = this.#emit(sessionId, turnId, {
-        kind: "client_action_resolved",
-        turnId,
-        actionId: entry.actionId,
-        outcome,
-        ...(result !== undefined ? { result } : {}),
-      });
-      emits.push(emitted.catch(() => undefined));
+      const emitted = requested.has(entry.actionId)
+        ? this.#emit(sessionId, turnId, {
+          kind: "client_action_resolved",
+          turnId,
+          actionId: entry.actionId,
+          outcome,
+          ...(result !== undefined ? { result } : {}),
+        })
+        : Promise.resolve();
+      // A failed write is not swallowed: it fails the tool call through
+      // `emits`, and the no-op handler only keeps a rejection that lands
+      // before the call awaits `emits` from surfacing as unhandled.
+      emitted.catch(() => undefined);
+      emits.push(emitted);
       if (remaining === 0) finish();
       return emitted;
     };
     const onAbort = () => {
+      // While requests are still being written the abort is applied once
+      // they stop, so no resolution is queued ahead of a later request.
+      if (emitting) return;
       for (const entry of entries) {
         void pendingMap.get(entry.actionId)?.settle("declined", "canceled");
       }
@@ -1831,19 +1846,37 @@ export class HarnessInteractiveChatService {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       for (const { actionId, action } of entries) {
-        await this.#emit(sessionId, turnId, {
-          kind: "client_action_requested",
-          turnId,
-          actionId,
-          action,
-        });
+        // A cancel stops the writing: the rest are never requested, and
+        // settle below as canceled without an event.
+        if (signal?.aborted) break;
+        try {
+          await this.#emit(sessionId, turnId, {
+            kind: "client_action_requested",
+            turnId,
+            actionId,
+            action,
+          });
+        } finally {
+          // A delivery hook can throw after the event is committed.
+          if (this.#requestWasWritten(actionId)) requested.add(actionId);
+        }
       }
     } catch (error) {
-      // A request the person never saw must not stay answerable.
+      // A request that is in the log is settled (the person may already
+      // hold it); one never written is dropped so it cannot be answered.
+      emitting = false;
+      const written = entries.filter(({ actionId }) => requested.has(actionId));
+      await Promise.allSettled(
+        written.map(({ actionId }) =>
+          pendingMap.get(actionId)?.settle("failed", "not delivered")
+        ),
+      );
       for (const { actionId } of entries) pendingMap.delete(actionId);
+      if (timer !== undefined) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       throw error;
     }
+    emitting = false;
     // The signal may have fired while the requests were being written.
     if (signal?.aborted) onAbort();
     else if (remaining > 0) armTimer();
@@ -1855,6 +1888,13 @@ export class HarnessInteractiveChatService {
       signal?.removeEventListener("abort", onAbort);
     }
     return entries.map((entry) => outcomes.get(entry.actionId)!);
+  }
+
+  /** Whether the log already holds this action's `client_action_requested`. */
+  #requestWasWritten(actionId: string): boolean {
+    return this.#events.some(({ event }) =>
+      event.kind === "client_action_requested" && event.actionId === actionId
+    );
   }
 
   async #disposeFabricRuntimes(

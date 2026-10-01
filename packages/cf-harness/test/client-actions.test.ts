@@ -76,10 +76,16 @@ Deno.test("a url longer than the client accepts is not a client action", () => {
 
 /** A host loop that calls the real tool, through the service's door. */
 const harness = (
-  options: { idleMs?: number; calls?: unknown[] } = {},
+  options: {
+    idleMs?: number;
+    calls?: unknown[];
+    /** Runs inside the service's event delivery; a throw is a delivery failure. */
+    deliver?: (event: HarnessChatEventEnvelope["event"]) => void;
+  } = {},
 ) => {
   const events: HarnessChatEventEnvelope[] = [];
   const toolResults: unknown[] = [];
+  const toolErrors: unknown[] = [];
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const loopOptions: Record<string, unknown>[] = [];
@@ -98,9 +104,13 @@ const harness = (
         } as unknown as HarnessToolContext;
         started.resolve();
         for (const input of options.calls ?? [{ actions: [open] }]) {
-          toolResults.push(
-            await weaverActionTool.invoke(context, input as never),
-          );
+          try {
+            toolResults.push(
+              await weaverActionTool.invoke(context, input as never),
+            );
+          } catch (error) {
+            toolErrors.push(error);
+          }
         }
         await release.promise;
         return {
@@ -117,7 +127,11 @@ const harness = (
   const service = new HarnessInteractiveChatService({
     createPromptLoop,
     randomUUID: () => `id-${++ids}`,
-    onEvent: (event) => void events.push(event),
+    onEvent: (event) => {
+      events.push(event);
+      options.deliver?.(event.event);
+    },
+    onEventDeliveryError: () => {},
     ...(options.idleMs !== undefined
       ? { clientActionIdleTimeoutMs: options.idleMs }
       : {}),
@@ -158,6 +172,7 @@ const harness = (
     start,
     kinds,
     toolResults,
+    toolErrors,
     release,
     loopOptions,
     events,
@@ -599,6 +614,90 @@ Deno.test("a call made after the turn was canceled declines at once and shows th
   ]);
   assertEquals(h.kinds("client_action_requested"), []);
   assertEquals(h.kinds("client_action_resolved"), []);
+  h.release.resolve();
+  await h.service.waitForIdle();
+});
+
+const requestedIds = (h: ReturnType<typeof harness>) =>
+  h.kinds("client_action_requested").map((e) => e.actionId);
+const resolvedIds = (h: ReturnType<typeof harness>) =>
+  h.kinds("client_action_resolved").map((e) => [e.actionId, e.result]);
+
+Deno.test("a request that cannot be delivered settles the ones already written and drops the rest", async () => {
+  // The second request's delivery fails (committed, then the client hook
+  // throws); the third was never written.
+  const h = harness({
+    calls: [{ actions: [open, command, url] }],
+    deliver: (e) => {
+      if (e.kind === "client_action_requested" && e.actionId === "id-2") {
+        throw new Error("sink down");
+      }
+    },
+  });
+  await h.start();
+  await settle();
+  assertEquals(requestedIds(h), ["id-1", "id-2"]);
+  assertEquals(resolvedIds(h), [
+    ["id-1", "not delivered"],
+    ["id-2", "not delivered"],
+  ]);
+  expect(h.toolErrors.length).toBe(1);
+  // Neither the settled nor the never-written id is answerable.
+  for (
+    const [actionId, code] of [["id-1", "action_resolved"], [
+      "id-3",
+      "unknown_action",
+    ]]
+  ) {
+    const r = await h.request("resolve_client_action", {
+      sessionId: "s",
+      actionId,
+      outcome: "done",
+    });
+    expect((r as { error?: { code: string } }).error?.code).toBe(code);
+  }
+  h.release.resolve();
+  await h.service.waitForIdle();
+});
+
+Deno.test("an idle timeout whose resolved event cannot be written fails the call", async () => {
+  const h = harness({
+    idleMs: 10,
+    deliver: (e) => {
+      if (e.kind === "client_action_resolved") throw new Error("sink down");
+    },
+  });
+  await h.start();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  expect(h.toolErrors.length).toBe(1);
+  expect(h.toolResults.length).toBe(0);
+  h.release.resolve();
+  await h.service.waitForIdle();
+});
+
+Deno.test("a cancel while requests are being written stops writing and settles only the written", async () => {
+  const h: ReturnType<typeof harness> = harness({
+    calls: [{ actions: [open, command, url] }],
+    deliver: (e) => {
+      if (e.kind === "client_action_requested" && e.actionId === "id-1") {
+        void h.request("cancel_turn", { sessionId: "s", turnId: "t" });
+      }
+    },
+  });
+  await h.start();
+  await settle();
+  await settle();
+  assertEquals(requestedIds(h), ["id-1"]);
+  assertEquals(resolvedIds(h), [["id-1", "canceled"]]);
+  assertEquals(h.toolResults, [{
+    outputId: "out-1",
+    status: "ok",
+    outcomes: [
+      { action: open, outcome: "declined", result: "canceled" },
+      { action: command, outcome: "declined", result: "canceled" },
+      { action: url, outcome: "declined", result: "canceled" },
+    ],
+  }]);
   h.release.resolve();
   await h.service.waitForIdle();
 });
