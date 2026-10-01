@@ -1589,26 +1589,27 @@ not depend on the disjunct; building the model confirms it. Implemented in
 
 **SC-53 [normative] What a current-principal claim attests, and what admits
 one — the audit-3.5 principal-resolution chain (§6/§8.15), beside SC-38.**
-`open`. The spec's label-metadata classification already reads an
-`authored-by` subject as attribution "minted under the acting principal's own
-authority", and the runtime holds that reading. A claim the
-`__ctCurrentPrincipal` placeholder resolves to (`authored-by`, or
+`open`. [The label-metadata classification](./cfc-label-metadata-confidentiality.md)
+§2 already reads an `authored-by` subject as attribution "minted under the
+acting principal's own authority", and the runtime holds that reading. A claim
+the `__ctCurrentPrincipal` placeholder resolves to (`authored-by`, or
 `represents-principal` without an `ownerPrincipal`) attests that a run acting
 for the principal wrote the value, through a writer the position declares, or
 initialized it in one of their handler runs. It does not attest that the
 principal asked for it. A position admits the claim when it declares its
 writer, as a lone `writeAuthorizedBy` or a `writePolicyAnyOf` whose every
 member names one; it need not declare a UI contract. A position that does
-declare one keeps requiring its gesture, and only there does the claim come
-with a trusted gesture for the write. A served run with no actor, which keeps
-the ambient service snapshot (SC-38), is refused a write whose persisted label
-would mint the claim on a position without an `ownerPrincipal`, so such a
-claim never names the service; a value it initializes on nobody's behalf
-mints no claim and is admitted. The `ownerPrincipal` arm is unchanged by this
-entry. What the claim
-never permits is unchanged: its subject is the run's acting principal, never a
-literal a pattern supplies, so no principal's runtime mints a claim naming
-another. Proposed edit: state the authority reading, the declared-writer
+declare one keeps requiring its gesture for a write, which is then the only
+case where the claim comes with a trusted gesture; an initialization waives
+it, as [protected initialization](./cfc-protected-initialization.md) states. A
+served run with no actor, which keeps the ambient service snapshot (SC-38), is
+refused a write whose persisted label would mint the claim on a position
+without an `ownerPrincipal`, so such a claim never names the service; a value
+it initializes on nobody's behalf mints no claim and is admitted. This entry
+leaves the `ownerPrincipal` arm as it is. What the claim never permits is
+unchanged: its subject is the run's acting principal, never a literal a
+pattern supplies, so no principal's runtime mints a claim naming another.
+Proposed edit: state the authority reading, the declared-writer
 precondition, and the actor-less refusal where the chain is written, and name
 a separate intent atom (the registered and unminted `UserSurfaceInput`) as
 what a reader would consult for a gesture. Implemented in

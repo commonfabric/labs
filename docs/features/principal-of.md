@@ -128,10 +128,9 @@ committed it, so a modified client can store a claim naming anyone, just as it
 can write any record its access allows. A claim binds honest runtimes, and does
 not hold against a modified client.
 
-An `authored-by` claim says whose authority the write ran under, and through
-the writer its position declares. Whether the person asked for it is shown
-only by a gesture, where the position declares one;
-[`current-principal.md`](current-principal.md) covers authority and intent.
+An `authored-by` claim says whose authority the write ran under, not that the
+person asked for it; [`current-principal.md`](current-principal.md) covers
+authority and intent.
 
 ## Tests
 

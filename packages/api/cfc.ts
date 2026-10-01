@@ -938,8 +938,9 @@ export type RepresentsCurrentUser<T> = Cfc<T, {
  * `WritePolicyAnyOf`, and refuses a write by any other. A new value of the
  * type that a handler run creates is labeled for that run's principal too. The
  * label is authority, not intent: it shows that a run acting for the principal
- * wrote the value, and that they asked for it only where the position also
- * requires a gesture, as `TrustedActionWrite` does.
+ * wrote or created the value, not that they asked for it. Where the position
+ * also requires a gesture, as `TrustedActionWrite` does, a write to it came
+ * under one.
  */
 export type AuthoredByCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{

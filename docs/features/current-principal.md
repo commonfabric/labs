@@ -67,8 +67,9 @@ refusing, not for proving consent.
 An `authored-by` claim is authority in the same sense. It says that a run
 acting for the principal wrote the value, through the writer its position
 declares, or initialized it in one of their handler runs. It does not say that
-the person asked for it, unless the position also declares a UI contract,
-whose gesture then admitted the write.
+the person asked for it. Where the position also declares a UI contract, a
+write to it came under their trusted gesture, though a value initialized there
+did not.
 
 ## How far the value can be trusted
 
