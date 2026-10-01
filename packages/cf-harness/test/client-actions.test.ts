@@ -1,7 +1,11 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
 
-import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
+import {
+  type HarnessClientActionRequester,
+  readHarnessClientAction,
+} from "../src/contracts/client-action.ts";
 import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,
@@ -21,6 +25,7 @@ import {
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
+import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 import { weaverActionTool } from "../src/tools/weaver-action.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
 
@@ -28,6 +33,30 @@ const LOOM = "loom-0123456789abcdef";
 const open = { kind: "open_loom", loomId: LOOM } as const;
 const command = { kind: "command", line: "/weave notes" } as const;
 const url = { kind: "open_url", url: "https://example.com/a" } as const;
+
+Deno.test("a command or url that spans lines is not a client action", () => {
+  // The person approves the one line the client shows; a second line
+  // hidden behind it must never reach their client's command router.
+  for (
+    const line of [
+      "/weave notes\n/share invite eve",
+      "/weave notes\r/x",
+      "/weave notes\u2028/x",
+      "/weave notes\u2029/x",
+      "/weave notes\u0085/x",
+    ]
+  ) {
+    assertEquals(readHarnessClientAction({ kind: "command", line }), undefined);
+  }
+  assertEquals(
+    readHarnessClientAction({
+      kind: "open_url",
+      url: "https://example.com/a\n/x",
+    }),
+    undefined,
+  );
+  assertEquals(readHarnessClientAction(command), command);
+});
 
 /** A host loop that calls the real tool, through the service's door. */
 const harness = (
@@ -418,4 +447,91 @@ Deno.test("weaver_action is gated by backing, absent from defaults, and nameable
   expect(withheldToolIds(backed).has("weaver_action")).toBe(false);
   expect(parentToolIdsForBacking(backed)).toContain("weaver_action");
   expect(SUPPORTED_POLICY_TOOL_IDS.has("weaver_action")).toBe(true);
+});
+
+Deno.test("a request left open by a restart is settled as interrupted, so a replay never offers it again", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const store = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(path),
+  });
+  const requested = Promise.withResolvers<void>();
+  const never = Promise.withResolvers<never>();
+  try {
+    let ids = 0;
+    const service = new HarnessInteractiveChatService({
+      sessionStore: store,
+      randomUUID: () => `id-${++ids}`,
+      onEvent: (event) => {
+        if (event.event.kind === "client_action_requested") {
+          requested.resolve();
+        }
+      },
+      createPromptLoop: (opts) => ({
+        runTranscript: async (run) => {
+          const context = {
+            nextOutputId: () => "out-1",
+            signal: run.signal,
+            requestClientActions: (opts as {
+              requestClientActions?: HarnessClientActionRequester;
+            }).requestClientActions,
+          } as unknown as HarnessToolContext;
+          await weaverActionTool.invoke(
+            context,
+            { actions: [command] } as never,
+          );
+          return await never.promise;
+        },
+      }),
+    });
+    await service.startSession("r1", {
+      sessionId: "s",
+      workspace: { hostPath: "/w" },
+      model: "m",
+      clientActions: true,
+    });
+    await service.startTurn("r2", {
+      sessionId: "s",
+      turnId: "t",
+      input: { text: "go" },
+    });
+    await requested.promise;
+    // The process dies here: the person never answered, and nothing in the
+    // stored log says the request closed.
+
+    const restored = new HarnessInteractiveChatService({
+      sessionStore: store,
+      createPromptLoop: () => ({ runTranscript: () => never.promise }),
+    });
+    await restored.initializeFromStore();
+    const kinds = (await store.listEvents({ sessionId: "s" }))
+      .map((e) => e.event)
+      .filter((e) => e.kind.startsWith("client_action_"));
+    assertEquals(kinds, [
+      {
+        kind: "client_action_requested",
+        turnId: "t",
+        actionId: "id-1",
+        action: command,
+      },
+      {
+        kind: "client_action_resolved",
+        turnId: "t",
+        actionId: "id-1",
+        outcome: "failed",
+        result: "interrupted",
+      },
+    ]);
+    const late = await restored.resolveClientAction("r3", {
+      sessionId: "s",
+      actionId: "id-1",
+      outcome: "done",
+    });
+    assertEquals(
+      (late as { error?: { code: string } }).error?.code,
+      "action_resolved",
+    );
+  } finally {
+    await store.close?.();
+    await Deno.remove(path).catch(() => undefined);
+  }
 });

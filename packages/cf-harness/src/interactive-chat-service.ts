@@ -1055,8 +1055,45 @@ export class HarnessInteractiveChatService {
     }
   }
 
+  /**
+   * Settles, as `failed`/"interrupted", every client action the stored log
+   * requested and never resolved. Pending actions live in memory, so after a
+   * restart nothing can answer them; without a resolved event a client
+   * replaying the log would offer the person a request that can only run
+   * and then be refused.
+   */
+  async #settleInterruptedClientActions(
+    record: HarnessInteractiveChatSessionRecord,
+  ): Promise<void> {
+    const sessionId = record.status.sessionId;
+    const stored = this.#sessionStore === undefined
+      ? this.events(sessionId)
+      : await this.#sessionStore.listEvents({ sessionId });
+    const open = new Map<string, string>();
+    for (const { event } of stored) {
+      if (event.kind === "client_action_requested") {
+        open.set(event.actionId, event.turnId);
+      } else if (event.kind === "client_action_resolved") {
+        open.delete(event.actionId);
+      }
+    }
+    if (open.size === 0) return;
+    const settledIds = record.settledClientActionIds ??= new Set<string>();
+    for (const [actionId, turnId] of open) {
+      settledIds.add(actionId);
+      await this.#emit(sessionId, turnId, {
+        kind: "client_action_resolved",
+        turnId,
+        actionId,
+        outcome: "failed",
+        result: "interrupted",
+      });
+    }
+  }
+
   async #terminalizeInterruptedTurnsFromStore(): Promise<void> {
     for (const record of [...this.#sessions.values()]) {
+      await this.#settleInterruptedClientActions(record);
       let normalized: NormalizedHarnessChatTranscript | undefined;
       let malformation: MalformedHarnessChatTranscriptError | undefined;
       try {
