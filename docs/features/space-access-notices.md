@@ -140,37 +140,3 @@ Under server execution a client's run of a handler is speculative, and its
 post-commit effects that send anything outside the runtime are dropped in
 favor of the serving runtime's run, which throws. So a notice is sent only
 where handlers run on the client.
-
-## In a pattern test
-
-A runtime `cf test` builds, for a single-user test and for each participant
-of a multi-user one, has an inbox of its own: `FakeInbox`, from
-`@commonfabric/runner/for-testing-only`, answers the inbox `send` operation
-over an in-memory `InboxStore` as the runtime's `fetch`, at the origin the
-runtime's `apiUrl` names. It verifies each request's signature as the toolshed
-does, so a message's sender is the identity that signed it, and it refuses what
-the store refuses, so two runs of one event still send one message. A notice
-is therefore delivered in-process, with no server and nothing logged.
-
-Every recipient counts as having enabled their inbox there. Whether a person
-has opened their inbox is a fact about the person, which the pattern under
-test cannot know and the test has no way to arrange, so the lane assumes the
-answer that lets the pattern's own behavior be checked. The checks on the
-access list are not relaxed: a notice to a principal without an entry of their
-own, or from an actor without `OWNER`, is refused at the send and logged at
-error level, and `cf test` fails a file on an error-level log.
-
-What a run sent is reported to the test pattern as an input,
-`spaceAccessNotices: SentSpaceAccessNotice[]`, one record per notice the
-inbox accepted, holding `sender`, `recipient`, `space` and `entry`. A send is a
-post-commit effect, which only full settlement waits for, so the list is
-brought up to date at each `{ settle: true }` step and nowhere else: an
-assertion on it follows one. Each participant of a multi-user test is handed
-what its own runtime sent, which is a list of notices from that participant's
-user. [Pattern testing](../common/workflows/pattern-testing.md#notices-a-handler-sends)
-shows a test reading it.
-
-A run against a caller-supplied storage host, which names its own `apiUrl`,
-sends its notices to the inbox at that host, as a deployed runtime would, and
-its `spaceAccessNotices` stays empty: that host's inbox is not the one the
-lane reads.
