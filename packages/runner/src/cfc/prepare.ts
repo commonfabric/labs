@@ -293,6 +293,27 @@ const nativeLengthParent = (
   return Array.isArray(parent) ? parentPath : undefined;
 };
 
+/**
+ * Returns the logical path of the array whose native `length` a trigger read
+ * names, or `undefined` when it names none. A trigger read (§8.9.2) holds the
+ * logical path of the read whose change scheduled the run, and is charged as
+ * that read is in the journal: {@link nativeLengthParent} decides, at the
+ * same path rooted at the stored document.
+ */
+const triggerReadLengthParent = (
+  tx: IExtendedStorageTransaction,
+  trigger: Pick<IMemorySpaceAddress, "space" | "id" | "scope" | "path">,
+): readonly string[] | undefined => {
+  const parent = nativeLengthParent(tx, {
+    space: trigger.space,
+    id: trigger.id,
+    scope: trigger.scope,
+    type: "application/json",
+    path: ["value", ...trigger.path],
+  });
+  return parent === undefined ? undefined : canonicalizeDocumentPath(parent);
+};
+
 const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
@@ -4035,16 +4056,46 @@ const forEachFlowObservation = (
     if (trigger.id.startsWith("cid:")) {
       continue;
     }
+    const id = trigger.id as URI;
+    const scope = normalizeCellScope(trigger.scope);
     if (
       consume(
         trigger.space,
-        trigger.id as URI,
-        normalizeCellScope(trigger.scope),
+        id,
+        scope,
         "application/json",
         trigger.path,
         {
           shape: "value",
           nonRecursive: false,
+          coveredByTrace: false,
+          machinery: false,
+          writeDestination: false,
+          followedSlot: false,
+        },
+      )
+    ) {
+      return true;
+    }
+    // A trigger read of an array's `length` observes the array's membership,
+    // as the same read in the journal does above.
+    const lengthOf = triggerReadLengthParent(tx, {
+      space: trigger.space,
+      id,
+      scope,
+      path: trigger.path,
+    });
+    if (
+      lengthOf !== undefined &&
+      consume(
+        trigger.space,
+        id,
+        scope,
+        "application/json",
+        lengthOf,
+        {
+          shape: "shape",
+          nonRecursive: true,
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
@@ -9249,12 +9300,15 @@ const collectConsumedLabelImpl = (
         }
       }
     };
-    const toLogical = triggerReads.has(read)
+    const isTriggerRead = triggerReads.has(read);
+    const toLogical = isTriggerRead
       ? canonicalizeLogicalPath
       : canonicalizeDocumentPath;
     collectAt(toLogical(read.path), read.nonRecursive);
     const lengthOf = isLinkResolutionProbe(read.meta)
       ? undefined
+      : isTriggerRead
+      ? triggerReadLengthParent(tx, read)
       : nativeLengthParent(tx, read);
     if (lengthOf !== undefined) {
       collectAt(toLogical(lengthOf), true);

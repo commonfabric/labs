@@ -153,7 +153,10 @@ changed: the scheduler compares the value at each path the run read, and a
 change at one of them is what schedules the run. A write that creates or
 replaces a whole document schedules a reader of one field through that field,
 so the labels of the document's other fields, which a change to them alone
-would not have scheduled the run, do not join it.
+would not have scheduled the run, do not join it. A trigger read is charged as
+the same read in the journal is: one that names an array's `length` observes
+the array's membership, so it also joins the labels that apply at the array
+itself, such as an `observes: "enumerate"` or `structure` entry.
 
 ## 5. Consequences for the two payoffs
 
