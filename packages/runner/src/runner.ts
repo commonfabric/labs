@@ -4710,8 +4710,9 @@ export class Runner {
             logger.warn("piece-start-commit-recovering", () => [
               `piece-start commit ${instantiateActionId} ` + (refusal ===
                   "manifest"
-                ? "lost a policy manifest install to another participant; " +
-                  "re-instantiating once the manifest has loaded"
+                ? "was refused over a policy manifest another participant " +
+                  "installed; loading the manifest, and instantiating once " +
+                  "more if it loads"
                 : "lost its basis to the serving side; re-instantiating once " +
                   "from the caught-up view"),
               error,
