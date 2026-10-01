@@ -398,6 +398,22 @@ const gridView = GridView({ items });
 
 See [composition](../patterns/composition.md) for more on pattern composition.
 
+A piece bound to `cf-render` with `$cell` passes the same confidentiality gates
+as when it is opened by its address, so what the viewer may not see renders as
+the policy placeholder in the same places. The exceptions:
+
+- A piece whose own document the viewer may not see shows nothing at all, where
+  opening it shows the placeholder.
+- Inside a `cf-cfc-render-boundary` that lowers the ceiling, or a
+  `cf-cfc-authorship` that verifies text integrity, `cf-render` shows a piece
+  only when the boundary's ceiling admits everything the piece reaches, and
+  nothing otherwise. A nested render does not verify text integrity, so under
+  an authorship boundary the piece's own text shows whether or not it carries
+  the required endorsement.
+
+[Render-boundary composition](../../specs/cfc-render-boundary-composition.md)
+holds the rules.
+
 ### UI variants (CT-1321)
 
 A piece can expose a **size spectrum** of renderings as optional sibling output
