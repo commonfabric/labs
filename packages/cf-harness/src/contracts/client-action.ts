@@ -67,6 +67,12 @@ const hasExactlyKeys = (
 const HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
 /** Whether `text` is an IPv6 address literal (no zone), as `ipaddress` reads. */
+const isIpv4 = (labels: readonly string[]): boolean =>
+  labels.length === 4 &&
+  labels.every((octet) =>
+    /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255
+  );
+
 const isIpv6 = (text: string): boolean => {
   const halves = text.split("::");
   if (halves.length > 2) return false;
@@ -116,7 +122,11 @@ const authorityIsWellFormed = (value: string): boolean => {
     const colon = hostinfo.indexOf(":");
     host = colon < 0 ? hostinfo : hostinfo.slice(0, colon);
     port = colon < 0 ? "" : hostinfo.slice(colon + 1);
-    if (!host.split(".").every((label) => HOST_LABEL.test(label))) {
+    const labels = host.split(".");
+    if (!labels.every((label) => HOST_LABEL.test(label))) return false;
+    // A host ending in an all-digit label must be an IPv4 address, as
+    // Loom's `ipaddress.IPv4Address` reads one (four octets, no leading zero).
+    if (/^[0-9]+$/.test(labels[labels.length - 1]) && !isIpv4(labels)) {
       return false;
     }
   }

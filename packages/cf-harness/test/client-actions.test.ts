@@ -115,6 +115,12 @@ Deno.test("a url's authority must be well-formed, as Loom's final validator hold
       "https://u%40@example.com",
       "ftp://example.com",
       "HTTP://example.com",
+      "https://999.999.999.999",
+      "https://1.2.3",
+      "https://1.2.3.4.5",
+      "https://example.123",
+      "https://01.2.3.4",
+      "https://u@[::1]evil",
     ]
   ) {
     assertEquals(
@@ -136,6 +142,8 @@ Deno.test("a url's authority must be well-formed, as Loom's final validator hold
       "https://example.com#frag%20x",
       "https://user:pw@example.com:8080/x",
       "http://127.0.0.1:65535/",
+      "https://127.0.0.1",
+      "https://192.168.1.10:8080",
       "https://" + "a".repeat(63) + ".com",
     ]
   ) {
