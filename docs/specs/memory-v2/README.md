@@ -111,10 +111,12 @@ session-scoped catch-up sync.
 | 6       | [06-branching.md](./06-branching.md)                               | Branch lifecycle, isolation, merging, conflict resolution, point-in-time reads on branches, and branch diffs                      |
 | 7       | [07-op-views-and-annotations.md](./07-op-views-and-annotations.md) | Live contract for atomic collaborative operations, submitted/integrated/materialized projections, cursors, and anchors           |
 | 8       | [08-conflict-granularity.md](./08-conflict-granularity.md)         | How commit-time conflict detection decides read/write overlap, and the granularity refinements                                    |
-| 9       | [09-invariants.md](./09-invariants.md)                             | Normative catalog of end-to-end consistency invariants (INV-1..INV-11), soundness directions, and the checkers that guard them    |
+| 9       | [09-invariants.md](./09-invariants.md)                             | Normative catalog of end-to-end consistency invariants (INV-1..INV-14), soundness directions, and the checkers that guard them    |
 
-The invariant catalog is backed by a model-checked TLA+ specification of the
-pending-stack commit protocol in [tla/](./tla/README.md).
+The invariant catalog is backed by bounded TLA+ models of pending-stack
+commits, local folds, and session delivery in [tla/](./tla/README.md). Each
+model states the behavior it checks and the composition it leaves outside
+its bounds.
 
 ## Implementation Materials
 
