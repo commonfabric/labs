@@ -29,6 +29,9 @@
 // - INV-G: `trustSnapshotForPrincipal` composes the same revision as the
 //   default provider, config digest included, so a trust-config change
 //   invalidates per-run served digests exactly as ambient ones.
+// - a declared writer's claim: a served handler whose position declares a
+//   writer and no gesture, reached by another handler's `send()` from a plain
+//   fire, mints the entry's actor.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -75,6 +78,32 @@ const BUMP_PATTERN = [
   "  { value: Writable<number> },",
   "  { value: number; bump: Stream<unknown> }",
   ">(({ value }) => ({ value, bump: bump({ value }) }));",
+].join("\n");
+
+// `post` is the declared writer of each note it appends, with no gesture,
+// and `relay` reaches it with a `send()`.
+const NOTES_PATTERN = [
+  "import {",
+  "  AuthoredByCurrentUser, handler, pattern, Stream, Writable,",
+  "  WriteAuthorizedBy,",
+  "} from 'commonfabric';",
+  "type Note = AuthoredByCurrentUser<",
+  "  WriteAuthorizedBy<{ text: string }, typeof post>",
+  ">;",
+  "type Posted = { text: string };",
+  "interface Notes {",
+  "  notes: Writable<Note[]>;",
+  "}",
+  "const post = handler<Posted, Notes>(",
+  "  (event, { notes }) => { notes.push({ text: event.text }); },",
+  ");",
+  "const relay = handler<Posted, { next: Stream<Posted> }>(",
+  "  (event, { next }) => { next.send({ text: event.text }); },",
+  ");",
+  "export default pattern<",
+  "  { notes: Writable<Note[]> },",
+  "  { notes: Note[]; relay: Stream<Posted> }",
+  ">(({ notes }) => ({ notes, relay: relay({ next: post({ notes }) }) }));",
 ].join("\n");
 
 // The authored vocabulary, in the explicit-schema form the compiled
@@ -258,16 +287,21 @@ describe("executor-trust-attribution", () => {
     return { manager, runtime };
   };
 
-  /** Compile + run the bump pattern on `runtime`, returning its cells. */
+  /**
+   * Compile + run `source` (the bump pattern unless given) on `runtime`, with
+   * `initial` as its argument, returning its cells.
+   */
   const standUp = async (
     runtime: Runtime,
     names: { arg: string; result: string },
+    source: string = BUMP_PATTERN,
+    initial: Record<string, unknown> = { value: 0 },
   ) => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
-      files: [{ name: "/main.tsx", contents: BUMP_PATTERN }],
+      files: [{ name: "/main.tsx", contents: source }],
     }, { space });
-    const argument = runtime.getCell<{ value: number }>(
+    const argument = runtime.getCell<Record<string, unknown>>(
       space,
       names.arg,
       undefined,
@@ -281,7 +315,7 @@ describe("executor-trust-attribution", () => {
     await result.sync();
     {
       const seed = runtime.edit();
-      argument.withTx(seed).set({ value: 0 });
+      argument.withTx(seed).set(initial);
       expect((await seed.commit()).error).toBeUndefined();
     }
     {
@@ -1115,6 +1149,42 @@ describe("executor-trust-attribution", () => {
         ).toEqual([seen]);
       } finally {
         cancelProbe();
+        cancelDemand();
+      }
+    });
+  });
+  describe("a declared writer's `authored-by` claim", () => {
+    it("names the entry's firedAt.user on a note a served handler writes with no gesture, reached by a `send()` from a plain fire", async () => {
+      ({ manager: clientManager, runtime: clientRuntime } = openClient());
+      const engine = await server.engineForSpace(space);
+      const { argument, result } = await standUp(
+        clientRuntime,
+        { arg: "notes-arg", result: "notes-result" },
+        NOTES_PATTERN,
+        { notes: [] },
+      );
+      const cancelDemand = result.sink(() => {});
+      try {
+        await clientRuntime.idle();
+        await clientRuntime.storageManager.synced();
+        host = newHost();
+        result.key("relay").send({ text: "hello" });
+        await clientRuntime.idle();
+        await clientRuntime.storageManager.synced();
+        // `push()` stores each note as a document of its own, linked from
+        // the list, and the claim is on that document.
+        const argumentId = argument.getAsNormalizedFullLink().id;
+        const noteIds = () =>
+          ((Engine.read(engine, { id: argumentId })?.value as
+            | { notes?: { "/": { "link@1": { id: string } } }[] }
+            | undefined)?.notes ?? []).map((note) => note["/"]["link@1"].id);
+        await awaitAdmitted(server, () => noteIds().length === 1);
+        const note = Engine.read(engine, { id: noteIds()[0] });
+        expect(note?.value).toEqual({ text: "hello" });
+        expect(principalSubjects(note, "authored-by")).toEqual([
+          aliceSigner.did(),
+        ]);
+      } finally {
         cancelDemand();
       }
     });

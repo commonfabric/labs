@@ -106,7 +106,11 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { type DelegatedCarriage, waveRunContextOf } from "./executor/wave.ts";
+import {
+  type DelegatedCarriage,
+  waveRunActorOf,
+  waveRunContextOf,
+} from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -4209,10 +4213,7 @@ export class Runtime {
    */
   actingPrincipalFor(tx?: IExtendedStorageTransaction): DID | undefined {
     if (!this.servingPosture) return this.userIdentityDID;
-    const user = tx === undefined
-      ? undefined
-      : waveRunContextOf(tx)?.acting?.user;
-    return isDID(user) ? user : undefined;
+    return tx === undefined ? undefined : waveRunActorOf(tx);
   }
 
   getHomeSpaceCell(

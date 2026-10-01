@@ -55,6 +55,7 @@ import {
   type ForeignPositions,
 } from "./claim-preservation.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
+import { waveRunActorOf, waveRunContextOf } from "../executor/wave.ts";
 import {
   decomposeSchema,
   recomposeSchema,
@@ -1826,6 +1827,24 @@ const labelMintOptionsAt = (
     path,
   ),
 });
+
+/**
+ * Whether the label persisted at `path` mints the claims its schema makes
+ * about the current principal, as `labelMintOptionsAt()` decides.
+ */
+const claimsCurrentPrincipalAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const mint = labelMintOptionsAt(tx, target, path);
+  return mint.mintSchemaIntegrity !== false &&
+    mint.attributeCurrentPrincipal !== false;
+};
 
 /** A single runtime output attempt may preserve an existing root reference. */
 const writePreservesRuntimeOutput = (
@@ -5356,22 +5375,24 @@ const currentPrincipalIntegrityReason = (
       path.join("/")
     }`;
   }
-  // Every write the position admits has to carry a reviewed gesture: a lone
-  // writer with a contract beside it, or alternatives that each name one.
-  const alternatives = writePolicyAlternatives(ifc);
-  if (alternatives !== undefined) {
-    return alternatives.every((alternative) => alternative.namesGesture)
-      ? undefined
-      : `current-principal integrity requires uiContract on every ` +
-        `writePolicyAnyOf alternative at /${path.join("/")}`;
-  }
-  if (ifc.writeAuthorizedBy === undefined) {
-    return `current-principal integrity requires writeAuthorizedBy at /${
+  // A served run with no actor keeps the serving runtime's own trust
+  // snapshot, so a claim it minted would name the service.
+  if (
+    waveRunContextOf(tx) !== undefined && waveRunActorOf(tx) === undefined &&
+    claimsCurrentPrincipalAt(tx, target, path)
+  ) {
+    return `current-principal integrity requires the run's actor at /${
       path.join("/")
     }`;
   }
-  if (ifc.uiContract === undefined) {
-    return `current-principal integrity requires uiContract at /${
+  // Every write the position admits has to come from a writer it declares:
+  // a lone writer, or alternatives that each name one. A gesture is required
+  // only where the position declares one, and its own gate enforces it.
+  if (
+    writePolicyAlternatives(ifc) === undefined &&
+    ifc.writeAuthorizedBy === undefined
+  ) {
+    return `current-principal integrity requires writeAuthorizedBy at /${
       path.join("/")
     }`;
   }
