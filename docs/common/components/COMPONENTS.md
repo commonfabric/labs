@@ -422,12 +422,23 @@ Pick a variant with the `variant` attribute (default `"full"`):
 export the requested variant key, `cf-render` substitutes a per-variant platform
 default:
 
-- `chip` → a `cf-cell-link` bound to the piece (renders it by its `[NAME]`).
+- `chip` → a chip showing the piece's `[NAME]` and the short form of its id,
+  which navigates to the piece when clicked and drags it as a `cf-cell-link`
+  does. The name is a render of its own, so a name the viewer may not see shows
+  as the policy placeholder.
 - `tile` → the full `[UI]` rendered small at ~0.5 scale, clipped to a static
   preview and clickable to navigate to the piece (like `cf-cell-link`).
 
 Because `full`/`[UI]` is the universal floor, a piece that exports only `[UI]`
 still renders correctly at `chip` and `tile`.
+
+A piece exports a variant when its own document holds any value at the key,
+`null` included: `cf-render` decides by whether the key holds something, not by
+what it holds, so a key holding `null` renders as an empty variant rather than
+the default. Leave the key out to get the default.
+
+A `cf-render` with no cell shows nothing; it shows its loading state only while
+the cell it holds is rendering.
 
 A pattern exports the spectrum by returning the sibling keys:
 
