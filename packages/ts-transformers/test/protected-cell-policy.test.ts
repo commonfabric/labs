@@ -949,6 +949,32 @@ export default pattern(() => {
       });
     });
 
+    it("keeps the writer of a cell whose value may be missing on its value member", async () => {
+      const root = await transform(
+        `{ count: computed(() => items.get()?.length ?? 0) }`,
+        `const items = new Writable<Owned<Item[], typeof removeItem> | undefined>(undefined).for("items");`,
+      );
+      expect(callSchemas(root, "lift")[0]).toMatchObject({
+        properties: {
+          items: {
+            anyOf: expect.arrayContaining([
+              expect.objectContaining({
+                ifc: {
+                  ...ownerPolicy,
+                  writeAuthorizedBy: {
+                    __ctWriterIdentityOf: {
+                      file: "/test.tsx",
+                      path: ["removeItem"],
+                    },
+                  },
+                },
+              }),
+            ]),
+          },
+        },
+      });
+    });
+
     it("keeps the writer of a cell destructured straight out of an object literal", async () => {
       computedKeepsPolicy(
         await transform(

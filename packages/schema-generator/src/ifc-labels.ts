@@ -185,6 +185,39 @@ export const declaredIfcLabels = (
   return labels;
 };
 
+/** Whether `schema` accepts only `null`, `undefined`, or both. */
+const isNullishSchema = (schema: MutableJSONSchema): boolean =>
+  isObjectOrArray(schema) && Object.keys(schema).length === 1 &&
+  (Array.isArray(schema.type) ? schema.type : [schema.type]).every((type) =>
+    type === "null" || type === "undefined"
+  );
+
+/**
+ * The value member of `position`, a union of one value with `null` or
+ * `undefined`, where the member declares labels, as the labels in
+ * `definitions` its references reach count, and the union declares none of
+ * its own: a value that may be missing, whose labels formatting put on its
+ * value member. `undefined` for any other position.
+ */
+export const labeledValueMember = (
+  position: MutableJSONSchema,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): MutableJSONSchemaObj | undefined => {
+  if (
+    !isObjectOrArray(position) || !Array.isArray(position.anyOf) ||
+    isObjectOrArray(position.ifc)
+  ) {
+    return undefined;
+  }
+  const values = position.anyOf.filter((member) => !isNullishSchema(member));
+  const [member] = values;
+  return values.length === 1 && values.length < position.anyOf.length &&
+      isObjectOrArray(member) &&
+      declaredIfcLabels(member, definitions) !== undefined
+    ? member
+    : undefined;
+};
+
 /**
  * Writes beside each local `$ref` that carries `ifc` the labels of the
  * definitions it reaches, combined with its own, so that resolving the

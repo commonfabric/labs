@@ -47,6 +47,7 @@ import {
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import { resolveWriterBinding } from "./typescript/writer-binding.ts";
+import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -55,6 +56,7 @@ import {
   instantiatedPropertyType,
   instantiatedValueType,
   isFunctionLike,
+  resolveWrapperNode,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
   soleNonNullishMember,
@@ -72,6 +74,7 @@ import {
   declaredIfcLabels,
   holdsIfcLabels,
   joinMemberIfcLabels,
+  labeledValueMember,
   stateReferencedIfcLabels,
   withIfcLabels,
 } from "./ifc-labels.ts";
@@ -2397,11 +2400,24 @@ export class SchemaGenerator {
   ): MutableJSONSchema {
     // A value keeps its labels however little of it is read, and a schema
     // that reaches them already, through its own reference, keeps them as is.
+    // A value that may be missing has its labels on its value member, where
+    // formatting put the part of them it could read.
     const labels = this.#narrowedFromLabels(context);
-    const held = labels && declaredIfcLabels(schema, context.definitions);
-    const labeled = labels && !(held && holdsIfcLabels(held, labels))
-      ? withIfcLabels(schema, labels)
-      : schema;
+    const labelPosition = (position: MutableJSONSchema) => {
+      const held = labels && declaredIfcLabels(position, context.definitions);
+      return labels && !(held && holdsIfcLabels(held, labels))
+        ? withIfcLabels(position, labels)
+        : position;
+    };
+    const member = labels && labeledValueMember(schema, context.definitions);
+    const labeled = member && typeof schema !== "boolean" && schema.anyOf
+      ? {
+        ...schema,
+        anyOf: schema.anyOf.map((alternative) =>
+          alternative === member ? labelPosition(alternative) : alternative
+        ),
+      }
+      : labelPosition(schema);
     const hint = getUiContractHint(context);
     return hint ? attachUiContract(labeled, hint) : labeled;
   }
@@ -2486,6 +2502,16 @@ export class SchemaGenerator {
     context: GenerationContext,
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
+    // A cell's labels are its value's, read at the value's own node.
+    const cell = resolveWrapperNode(typeNode, checker);
+    const wrapper = cell && cell.kind !== "Default" &&
+      getCellWrapperInfo(type, checker);
+    const valueType = wrapper &&
+      (wrapper.typeRef.typeArguments ??
+        checker.getTypeArguments(wrapper.typeRef))[0];
+    if (cell && valueType) {
+      return this.#labelsOf(valueType, cell.node.typeArguments?.[0], context);
+    }
     const written = typeNode && readAuthoredTypeNode(typeNode, checker);
     const paired = written && ts.isUnionTypeNode(written)
       ? pairUnionMemberNodes(
