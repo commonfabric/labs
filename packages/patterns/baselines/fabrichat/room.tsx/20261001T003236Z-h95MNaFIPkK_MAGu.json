@@ -242,23 +242,6 @@
           "direct"
         ]
       },
-      "ChatRoomNotice": {
-        "properties": {
-          "id": {
-            "description": "The notice's id, unique in the room.",
-            "type": "string"
-          },
-          "recipient": {
-            "description": "The DID of the person admitted.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "recipient"
-        ],
-        "type": "object"
-      },
       "MessageRecord": {
         "properties": {
           "authorProfile": {
@@ -344,58 +327,6 @@
         ],
         "type": "object"
       },
-      "RosterValue": {
-        "properties": {
-          "items": {
-            "description": "The profiles, in the order they were shown.",
-            "ifc": {
-              "writePolicyAnyOf": [
-                {
-                  "writeAuthorizedBy": {
-                    "__ctWriterIdentityOf": {
-                      "file": "/packages/patterns/fabrichat/room.tsx",
-                      "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                      "path": [
-                        "commitShowProfile"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "writeAuthorizedBy": {
-                    "__ctWriterIdentityOf": {
-                      "file": "/packages/patterns/fabrichat/room.tsx",
-                      "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                      "path": [
-                        "commitLeave"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "writeAuthorizedBy": {
-                    "__ctWriterIdentityOf": {
-                      "file": "/packages/patterns/fabrichat/room.tsx",
-                      "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                      "path": [
-                        "commitAdd"
-                      ]
-                    }
-                  }
-                }
-              ]
-            },
-            "items": {
-              "$ref": "#/$defs/ChatProfile",
-              "asCell": [
-                "cell"
-              ]
-            },
-            "type": "array"
-          }
-        },
-        "type": "object"
-      },
       "SentActivity": {
         "$ref": "#/$defs/ChatRoomActivity",
         "ifc": {
@@ -404,7 +335,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSend"
                   ]
@@ -415,7 +346,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitEdit"
                   ]
@@ -426,7 +357,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -437,7 +368,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -448,7 +379,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -459,53 +390,9 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDeleteReaction"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitShowProfile"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitLeave"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitAdd"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitRemove"
                   ]
                 }
               }
@@ -537,7 +424,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSend"
                   ]
@@ -556,7 +443,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitEdit"
                   ]
@@ -575,7 +462,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -594,7 +481,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -628,7 +515,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -647,7 +534,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -666,7 +553,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -685,7 +572,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -710,7 +597,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSend"
                   ]
@@ -721,7 +608,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitEdit"
                   ]
@@ -732,7 +619,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -743,7 +630,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -754,7 +641,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -765,82 +652,9 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDeleteReaction"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitShowProfile"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitLeave"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitAdd"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitRemove"
-                  ]
-                }
-              }
-            }
-          ]
-        }
-      },
-      "StoredNotice": {
-        "$ref": "#/$defs/ChatRoomNotice",
-        "ifc": {
-          "writePolicyAnyOf": [
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitAdd"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitDelivered"
                   ]
                 }
               }
@@ -876,7 +690,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSend"
                   ]
@@ -887,7 +701,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitEdit"
                   ]
@@ -898,7 +712,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -909,7 +723,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -920,7 +734,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -931,64 +745,9 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDeleteReaction"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitShowProfile"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitLeave"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitAdd"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitRemove"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitDelivered"
                   ]
                 }
               }
@@ -1004,7 +763,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSend"
                   ]
@@ -1015,7 +774,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitEdit"
                   ]
@@ -1026,7 +785,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -1037,7 +796,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -1048,7 +807,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -1059,53 +818,9 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDeleteReaction"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitShowProfile"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitLeave"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitAdd"
-                  ]
-                }
-              }
-            },
-            {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                  "path": [
-                    "commitRemove"
                   ]
                 }
               }
@@ -1157,50 +872,12 @@
         },
         "type": "array"
       },
-      "left": {
-        "asCell": [
-          "cell"
-        ],
-        "default": [],
-        "description": "The principals of members who have left.",
-        "items": {
-          "ifc": {
-            "writeAuthorizedBy": {
-              "__ctWriterIdentityOf": {
-                "file": "/packages/patterns/fabrichat/room.tsx",
-                "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
-                "path": [
-                  "commitLeave"
-                ]
-              }
-            }
-          },
-          "type": "string"
-        },
-        "type": "array"
-      },
       "messages": {
         "$ref": "#/$defs/MessagesValue",
         "asCell": [
           "cell"
         ],
         "description": "The room's messages."
-      },
-      "notices": {
-        "asCell": [
-          "cell"
-        ],
-        "default": [],
-        "description": "Notices from `add`, waiting for a client to deliver them.",
-        "items": {
-          "$ref": "#/$defs/StoredNotice"
-        },
-        "type": "array"
-      },
-      "ownSpace": {
-        "default": false,
-        "description": "Whether the room lives in a space of its own.",
-        "type": "boolean"
       },
       "reactionLists": {
         "asCell": [
@@ -1223,14 +900,6 @@
           "$ref": "#/$defs/StoredRequestMemo"
         },
         "type": "array"
-      },
-      "roster": {
-        "$ref": "#/$defs/RosterValue",
-        "asCell": [
-          "cell"
-        ],
-        "default": {},
-        "description": "The members' profiles, as claims."
       },
       "usedTimes": {
         "asCell": [
@@ -1564,23 +1233,6 @@
           "direct"
         ]
       },
-      "ChatRoomNotice": {
-        "properties": {
-          "id": {
-            "description": "The notice's id, unique in the room.",
-            "type": "string"
-          },
-          "recipient": {
-            "description": "The DID of the person admitted.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "recipient"
-        ],
-        "type": "object"
-      },
       "ChatRoomPolicy": {
         "properties": {
           "deletionIsObliteration": {
@@ -1634,15 +1286,8 @@
             "$ref": "#/$defs/ChatRoomAbout",
             "description": "What the room says about itself."
           },
-          "add": {
-            "$ref": "#/$defs/RoomStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Admits a person to a group room of its own, granting them access from an\nOWNER's trusted gesture on a client runtime, and adds a notice for a\nclient to deliver."
-          },
           "canSend": {
-            "description": "Whether this reader can send, edit, delete, react, and show a profile.",
+            "description": "Whether this reader can send, edit, delete, and react.",
             "type": "boolean"
           },
           "deleteMessage": {
@@ -1659,26 +1304,12 @@
             ],
             "description": "Removes the sender's reaction to a message."
           },
-          "delivered": {
-            "$ref": "#/$defs/RoomStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Reports a notice from `add` delivered."
-          },
           "editMessage": {
             "$ref": "#/$defs/RoomStreamEvent",
             "asCell": [
               "stream"
             ],
             "description": "Records a new version of one of the sender's messages."
-          },
-          "leave": {
-            "$ref": "#/$defs/RoomStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Leaves a group room of its own: removes the sender's roster entry and\nrecords them as having left. It gives up no access, which no pattern can\nyet do."
           },
           "messages": {
             "$ref": "#/$defs/ChatMessageList",
@@ -1691,18 +1322,14 @@
             ],
             "description": "Reduces a message to a tombstone."
           },
-          "outgoingNotices": {
-            "description": "Notices from `add` that no one has delivered yet.",
-            "items": {
-              "$ref": "#/$defs/ChatRoomNotice"
-            },
-            "type": "array"
-          },
           "participants": {
-            "description": "`roster`, plus any author with no roster entry.",
+            "description": "The participants of the room's space, as its default pattern lists them\n(`wish(\"#default\")`), plus any author it doesn't list.",
             "items": {
               "$ref": "#/$defs/ChatProfile"
             },
+            "tags": [
+              "default"
+            ],
             "type": "array"
           },
           "recentActivity": {
@@ -1715,20 +1342,6 @@
           "recentActivityExpiredThrough": {
             "description": "The highest `seq` dropped from `recentActivity` for age; 0 for none.",
             "type": "number"
-          },
-          "remove": {
-            "$ref": "#/$defs/RoomStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Removes a person from a group room of its own, revoking their access, from\nan OWNER's trusted gesture on a client runtime."
-          },
-          "roster": {
-            "description": "Members' profiles, as claims.",
-            "items": {
-              "$ref": "#/$defs/ChatProfile"
-            },
-            "type": "array"
           },
           "sendMessage": {
             "$ref": "#/$defs/RoomStreamEvent",
@@ -1743,20 +1356,12 @@
               "stream"
             ],
             "description": "Adds the sender's reaction to a message."
-          },
-          "showProfile": {
-            "$ref": "#/$defs/RoomStreamEvent",
-            "asCell": [
-              "stream"
-            ],
-            "description": "Adds the sender's profile to `roster`."
           }
         },
         "required": [
           "about",
           "recentActivity",
           "recentActivityExpiredThrough",
-          "roster",
           "participants",
           "messages",
           "canSend",
@@ -1765,13 +1370,7 @@
           "deleteMessage",
           "obliterateMessage",
           "sendReaction",
-          "deleteReaction",
-          "showProfile",
-          "leave",
-          "add",
-          "remove",
-          "delivered",
-          "outgoingNotices"
+          "deleteReaction"
         ],
         "type": "object"
       },
@@ -1832,28 +1431,13 @@
       },
       "RoomStreamEvent": {
         "properties": {
-          "access": {
-            "description": "The access requested for the person added. A pattern can't grant it: the\nhost that serves the room's space has to.",
-            "enum": [
-              "WRITE",
-              "OWNER"
-            ]
-          },
           "emoji": {
             "description": "A single emoji.",
-            "type": "string"
-          },
-          "id": {
-            "description": "The id of a notice delivered.",
             "type": "string"
           },
           "message": {
             "$ref": "#/$defs/MessageRecord",
             "description": "The message acted on."
-          },
-          "principal": {
-            "description": "The DID of the person to add or remove.",
-            "type": "string"
           },
           "replyTo": {
             "$ref": "#/$defs/StoredReply",
@@ -1989,7 +1573,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -2008,7 +1592,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -2027,7 +1611,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitDelete"
                   ]
@@ -2046,7 +1630,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+                  "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
                   "path": [
                     "commitObliterate"
                   ]
@@ -2086,7 +1670,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "ZGxHQHkUZrc0dFw4qpj3Ftj5sgPwDot9alK4WGGJBu0",
+              "moduleIdentity": "ePzuVOFkvkYBw75xMXu_cNTbuMdICH-vJEtokAdeiqo",
               "path": [
                 "commitWindow"
               ]
@@ -2121,15 +1705,8 @@
         "$ref": "#/$defs/ChatRoomAbout",
         "description": "What the room says about itself."
       },
-      "add": {
-        "$ref": "#/$defs/RoomStreamEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Admits a person to a group room of its own, granting them access from an\nOWNER's trusted gesture on a client runtime, and adds a notice for a\nclient to deliver."
-      },
       "canSend": {
-        "description": "Whether this reader can send, edit, delete, react, and show a profile.",
+        "description": "Whether this reader can send, edit, delete, and react.",
         "type": "boolean"
       },
       "deleteMessage": {
@@ -2146,26 +1723,12 @@
         ],
         "description": "Removes the sender's reaction to a message."
       },
-      "delivered": {
-        "$ref": "#/$defs/RoomStreamEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Reports a notice from `add` delivered."
-      },
       "editMessage": {
         "$ref": "#/$defs/RoomStreamEvent",
         "asCell": [
           "stream"
         ],
         "description": "Records a new version of one of the sender's messages."
-      },
-      "leave": {
-        "$ref": "#/$defs/RoomStreamEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Leaves a group room of its own: removes the sender's roster entry and\nrecords them as having left. It gives up no access, which no pattern can\nyet do."
       },
       "messages": {
         "$ref": "#/$defs/ChatMessageList",
@@ -2178,18 +1741,14 @@
         ],
         "description": "Reduces a message to a tombstone."
       },
-      "outgoingNotices": {
-        "description": "Notices from `add` that no one has delivered yet.",
-        "items": {
-          "$ref": "#/$defs/ChatRoomNotice"
-        },
-        "type": "array"
-      },
       "participants": {
-        "description": "`roster`, plus any author with no roster entry.",
+        "description": "The participants of the room's space, as its default pattern lists them\n(`wish(\"#default\")`), plus any author it doesn't list.",
         "items": {
           "$ref": "#/$defs/ChatProfile"
         },
+        "tags": [
+          "default"
+        ],
         "type": "array"
       },
       "recentActivity": {
@@ -2202,20 +1761,6 @@
       "recentActivityExpiredThrough": {
         "description": "The highest `seq` dropped from `recentActivity` for age; 0 for none.",
         "type": "number"
-      },
-      "remove": {
-        "$ref": "#/$defs/RoomStreamEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Removes a person from a group room of its own, revoking their access, from\nan OWNER's trusted gesture on a client runtime."
-      },
-      "roster": {
-        "description": "Members' profiles, as claims.",
-        "items": {
-          "$ref": "#/$defs/ChatProfile"
-        },
-        "type": "array"
       },
       "sendMessage": {
         "$ref": "#/$defs/RoomStreamEvent",
@@ -2230,13 +1775,6 @@
           "stream"
         ],
         "description": "Adds the sender's reaction to a message."
-      },
-      "showProfile": {
-        "$ref": "#/$defs/RoomStreamEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Adds the sender's profile to `roster`."
       }
     },
     "required": [
@@ -2246,7 +1784,6 @@
       "about",
       "recentActivity",
       "recentActivityExpiredThrough",
-      "roster",
       "participants",
       "messages",
       "canSend",
@@ -2255,13 +1792,7 @@
       "deleteMessage",
       "obliterateMessage",
       "sendReaction",
-      "deleteReaction",
-      "showProfile",
-      "leave",
-      "add",
-      "remove",
-      "delivered",
-      "outgoingNotices"
+      "deleteReaction"
     ],
     "type": "object"
   }

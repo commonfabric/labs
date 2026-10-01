@@ -55,7 +55,7 @@ The policy document is labeled `authored-by` the principal who wrote it (see
 ## Keys
 
 - **`ownersMayObliterate`**: whether an OWNER may obliterate messages in a group
-  room or a space's own chat. A room under a retention requirement may say no.
+  room. A room under a retention requirement may say no.
 - **`keepsHistory`**: whether an edit, or a deletion that isn't obliteration,
   keeps the version it replaces in `earlierVersions`
   ([`ChatMessage`](ChatMessage.md)). A room under a retention requirement says
@@ -64,8 +64,7 @@ The policy document is labeled `authored-by` the principal who wrote it (see
   message obliterates it, removing its history and its author, as
   `obliterateMessage` does (see [obliterated
   messages](ChatMessage.md#obliterated-messages)). This is the only way a member
-  of a group room, or of a space's own chat, takes back what they said
-  completely. It governs `deleteMessage` only: a direct room MUST let either
+  of a group room takes back what they said completely. It governs `deleteMessage` only: a direct room MUST let either
   person obliterate their own messages with `obliterateMessage`, whatever its
   policy.
 - **`proposedTimeMaxAgeNsec`**: how far before the room's handler clock a

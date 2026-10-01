@@ -98,7 +98,7 @@ message's writer can set.
 
 A message can be removed entirely, with its history, using the room's
 `obliterateMessage` (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)): by an
-OWNER curating a group room or a space's own chat, or by either person in a
+OWNER curating a group room, or by either person in a
 direct room, for their own messages. A sender's `deleteMessage` does the same to
 their own message where the implementation makes deletion obliteration. Whether
 a sender deleting their own message obliterates it, and whether a room allows

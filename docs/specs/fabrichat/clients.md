@@ -26,7 +26,8 @@ a room to anyone its space doesn't admit.
   each linking to a placement of one room, plus the container's own chat when it
   is a shared space that has one.
 - **The people a client offers** when starting a conversation from a shared
-  space are that space's member set.
+  space are that space's participants, as claims, until it offers a member set
+  (see [shared spaces](README.md#shared-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about` is labeled `authored-by`
@@ -63,9 +64,9 @@ A client that draws natively MUST:
   [`ChatProfile.md`](ChatProfile.md#when-a-profile-cant-be-read)).
 - **Identify people by their profile links**, compared with `equals()`, and
   never by display name.
-- **Show members from the member set.** Members are the room space's member set.
-  Where a room still keeps its own roster, a roster entry is a claim, not proof
-  that someone can read the room.
+- **Show members from the room's space.** A room's `participants` are its
+  space's participants, as claims, plus its authors. None of them is proof that
+  someone can read the room.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
@@ -86,9 +87,6 @@ A client that draws natively MUST:
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads.
-- **Offer leaving wherever it shows a group room of its own**, with no more
-  steps than the room requires. Leaving has to be reliably within reach, since a
-  room someone can't leave is a way to hold them there.
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -109,8 +107,6 @@ gesture on the reviewed surface its policy names:
 | obliterate a message | room | `obliterateMessage` | `ChatObliterateSurface` |
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
-| add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |
-| leave a room | room | `leave` | none |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
 A client sends to the room's own streams, never through a placement or an
@@ -209,20 +205,19 @@ one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
 Until a pattern can deliver to a principal it shares no space with, delivering a
 notice is the client's job. A client finds the notices waiting in its user's
 manager and reports each one once it's delivered (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client that
-sends a room's `add` delivers that notice itself. A client MUST deliver only the
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client MUST deliver only the
 notice: which room, and who sent it. It MUST NOT deliver any of the room's
 contents.
 
 ## What a client must not do, in one place
 
 - Create a direct room except through `openDirect`.
-- Relay a send, a reaction, or a membership change through a placement, an
-  adapter, or any other piece.
+- Relay a send or a reaction through a placement, an adapter, or any other
+  piece.
 - Issue a trusted gesture from anything but a person's own act on the matching
   control.
 - Copy a room's contents into another space.
-- Identify a person by name, or treat a roster entry as access.
+- Identify a person by name, or treat a participant entry as access.
 - Trust a notice's claim of who sent it.
 - Show a room's title, members, or history to someone its space doesn't admit.
 - Place a direct room in a container that admits anyone besides the room's two

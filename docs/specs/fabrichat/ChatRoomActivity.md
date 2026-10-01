@@ -50,10 +50,6 @@ can't find its message by its proposal among the messages. It can in
   | `sendMessage` | the new message |
   | `editMessage`, `deleteMessage`, `obliterateMessage` | the message |
   | `sendReaction`, `deleteReaction` | the message the reaction is on |
-  | `showProfile`, `leave`, `add`, `remove` | the room's membership, as the room offers it |
-
-  The room's membership, as the room offers it, is its `roster`, until the
-  room's space has a member set, and the member set after that.
 
 Each entry is labeled `authored-by` the principal whose event it records, as the
 record it describes is. So a sender finds the entry for a request of its own by
