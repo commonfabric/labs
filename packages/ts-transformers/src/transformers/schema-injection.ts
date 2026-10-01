@@ -2879,8 +2879,10 @@ function reportUnknownPatternResult(
 
 /**
  * Collects dotted paths to `unknown`-typed leaves within a result type node,
- * descending object literals and array element types. A top-level `unknown` is
- * handled by the error path above, so this only sees nested occurrences.
+ * descending object literals, array element types, and tuple elements. A
+ * tuple element's path is its index, written `[i...]` for a rest element,
+ * whose own element is the one walked. A top-level `unknown` is handled by
+ * the error path above, so this only sees nested occurrences.
  */
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
   const paths: string[] = [];
@@ -2902,6 +2904,22 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
       }
     } else if (ts.isArrayTypeNode(unwrapped)) {
       walk(unwrapped.elementType, `${path}[]`);
+    } else if (ts.isTupleTypeNode(unwrapped)) {
+      unwrapped.elements.forEach((element, index) => {
+        const named = ts.isNamedTupleMember(element) ? element : undefined;
+        let elementType = named?.type ?? element;
+        const rest = !!named?.dotDotDotToken || ts.isRestTypeNode(elementType);
+        if (
+          ts.isRestTypeNode(elementType) || ts.isOptionalTypeNode(elementType)
+        ) {
+          elementType = elementType.type;
+        }
+        const spread = rest ? unwrapTypeParentheses(elementType) : undefined;
+        if (spread && ts.isArrayTypeNode(spread)) {
+          elementType = spread.elementType;
+        }
+        walk(elementType, `${path}[${index}${rest ? "..." : ""}]`);
+      });
     }
   };
   walk(resultNode, "");
@@ -2913,7 +2931,8 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
  * result that stands as a placeholder printed from a type the checker prints
  * no node for. It descends an object type with no name, which a print writes
  * out as structure; an instance of a class expression with no name, which is
- * what leaves a type with no print; and an array's element.
+ * what leaves a type with no print; an array's element; and a tuple's
+ * elements, along the paths the node walk gives them.
  */
 function collectUnknownResultTypePaths(
   type: ts.Type,
@@ -2931,7 +2950,15 @@ function collectUnknownResultTypePaths(
     }
     if (enclosing.has(current)) return;
     enclosing.add(current);
-    if (checker.isArrayType(current)) {
+    if (checker.isTupleType(current)) {
+      const tuple = current as ts.TypeReference;
+      const { elementFlags } = tuple.target as ts.TupleType;
+      checker.getTypeArguments(tuple).forEach((element, index) => {
+        const flags = elementFlags[index] ?? ts.ElementFlags.Required;
+        const rest = (flags & ts.ElementFlags.Variable) !== 0;
+        walk(element, `${path}[${index}${rest ? "..." : ""}]`);
+      });
+    } else if (checker.isArrayType(current)) {
       const [element] = checker.getTypeArguments(current as ts.TypeReference);
       if (element) walk(element, `${path}[]`);
     } else if (hasNoNameToPrint(current)) {
