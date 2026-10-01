@@ -1,0 +1,1 @@
+{"date": "2026-10-01", "from": {"k": "unit", "s": "cf-harness", "n": "parseCfHarnessCliArgs rejects malformed max-model-turns values"}, "to": {"k": "unit", "s": "cf-harness", "n": "CLI model turn budgets > rejects a turn budget of 2.5"}}

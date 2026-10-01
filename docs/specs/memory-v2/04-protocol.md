@@ -195,12 +195,13 @@ toolshed memory endpoint must advertise the same audience. Otherwise a client
 can sign for one instance and fail when routing sends it to another instance.
 
 Changing the toolshed service DID is an audience rotation. During rotation,
-clients must discover the new value from `hello.ok` and sign new `session.open`
-requests for it. Existing open sessions can continue only while their
-connection remains alive and keeps using challenges issued by the server that
-accepted them. Reconnects and new sessions must use the new audience. Operators
-should coordinate rotation with deployment routing and client reconnect
-behavior.
+clients must discover the new value from `hello.ok` and sign new
+`session.open` or `connection.auth` requests for it, according to the
+negotiated authentication mode. Existing open sessions can continue only
+while their connection remains alive and keeps using challenges issued by the
+server that accepted them. Reconnects and new sessions must use the new
+audience. Operators should coordinate rotation with deployment routing and
+client reconnect behavior.
 
 Standalone and test memory hosts may use a deterministic local DID, but they
 still need to advertise an audience. The public client treats a missing audience
@@ -209,11 +210,13 @@ as a protocol error.
 The challenge is scoped to this WebSocket connection. The current
 implementation generates 32 cryptographically random bytes and encodes them as
 64 hexadecimal characters. The challenge expires at `expiresAt`, in unix
-seconds. The client signs the challenge and audience into the next
-`session.open` invocation. The server accepts the current challenge only once.
-After a successful `session.open`, the response includes a new
-`sessionOpen.challenge`. The client uses that new challenge for the next
-`session.open` on the same connection.
+seconds. A client using signed `session.open` signs the challenge and audience
+into its next invocation. The server accepts that signed-open challenge only
+once. After a successful `session.open`, the response includes a new
+`sessionOpen.challenge`, which a signed-open client uses for its next open on
+the same connection. With `connectionAuth`, the client keeps the audience and
+initial challenge from `hello.ok` across session opens, and asks for a fresh
+challenge with `connection.challenge` when a key must sign again.
 
 `persistentSchedulerState` was RETIRED 2026-08-04 (server-execution v2
 Phase 1 stage C: the persisted observation form was deleted and reduced
@@ -420,8 +423,9 @@ Rules:
 - a successful resume transfers ownership to the new connection, invalidates the
   old owner for that session, and MAY emit `session/revoked` to the previous
   owner with reason `"taken-over"`
-- a successful `session.open` rotates the one-time connection challenge and
-  returns the next challenge in `sessionOpen`
+- a successful `session.open` returns a new challenge in `sessionOpen` for
+  signed-open clients; a connection-auth client does not replace its audience
+  or held challenge from that response
 - a stale `sessionToken` MUST fail with `SessionRevokedError`
 - when a resumed session already has watches installed, `sync` carries the
   catch-up delta the client missed while offline
@@ -1086,7 +1090,8 @@ two ways. A signed `session.open` carries its own authorization:
 
 A `session.open` naming a `principal` rests on the connection's
 authentication of that principal, where the server advertises
-`connectionAuth`. A key authenticates once per connection:
+`connectionAuth`. A key authenticates at connection level and renews before
+its lease expires:
 
 ```typescript
 // Shown at module scope.
@@ -1173,8 +1178,8 @@ spaces. Its session descriptor is not signed; the connection is what
 authenticates the sender.
 
 A signed `connection.auth` authorizes more than a signed `session.open`
-does: every space its key can reach through this server, for as long as the
-connection stays open, where a signed open is good for one space. The
+does: every space its key can reach through this server while its lease and
+connection remain valid, where a signed open is good for one space. The
 challenge binds it to one connection.
 
 Opening a previously unused space may initialize empty backing storage, but

@@ -1003,8 +1003,9 @@ mode.
   that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
   consumed when the agent result writer links or observes a retrieved row; there
   is no general-purpose value-handle dereference or release mechanism.
-- `estimatedCostUsd` is available for known GPT-5.6 and GPT-6.1 Sol models when
-  the response includes cache reads and writes. It uses public OpenAI pricing;
+- `estimatedCostUsd` is available for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6
+  gateway models when the response includes cache reads and writes. It uses
+  [public OpenAI pricing](https://developers.openai.com/api/docs/pricing);
   gateway markup, subscription quota accounting, and provider invoices remain
   outside the harness. `estimateWithheldReason` distinguishes missing provider
   detail, unknown models, invalid counters, subscription pricing, and incomplete

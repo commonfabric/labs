@@ -681,7 +681,6 @@ export class Client {
           session,
           ...(holdings !== undefined ? { holdings } : {}),
         }, { whileConnected });
-        this.#updateSessionOpenAuthContext(result.sessionOpen);
         return result;
       }
       const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;

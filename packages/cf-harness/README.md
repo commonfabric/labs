@@ -231,9 +231,9 @@ What works today:
 - provider-reported per-turn token usage in run reports, with aggregate input,
   cached-input, cache-write, output, reasoning, and total tokens surfaced in
   operator and batch results
-- GPT-5.6 and GPT-6.1 Sol gateway cost estimates with complete cache usage
-  detail; estimates use the public OpenAI token schedule and are kept distinct
-  from provider-reported cost
+- GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
+  cache usage detail; estimates use the public OpenAI token schedule and are
+  kept distinct from provider-reported cost
 - stable prompt-cache affinity across an interactive session, plus opt-in
   reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
@@ -421,10 +421,13 @@ one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
 
 New runs default to `gpt-6.1-sol`. `--model` or `CF_HARNESS_MODEL` selects a
-different model; a resumed run keeps its recorded model unless `--model`
-explicitly changes it. The console uses the same new-run default. GPT-6.1 Sol
+different model for a new run. Gateway resumes keep their recorded model unless
+`--model` explicitly changes it; Codex resumes require the recorded model and
+reject model changes. The console uses the same new-run default. GPT-6.1 Sol
 supports reasoning efforts `low`, `medium` (provider default), `high`, `xhigh`,
-and `max`; it does not support `none` or `minimal`.
+and `max`; it does not support `none` or `minimal`. Both the gateway and Codex
+adapters reject unsupported known-model efforts before dispatch; Codex validates
+them before resolving credentials.
 
 A flag the CLI does not declare is refused, never ignored, because an ignored
 restriction is a run without it: `--allowed-tools read_file` stops before any
@@ -494,8 +497,10 @@ including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
 that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the public OpenAI model price
-schedule and is not an invoice or a subscription quota conversion.
+`estimatedCostUsd` is an estimate based on the
+[public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
+for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
+subscription quota conversion.
 
 GPT-6.1 Sol estimates use $2 input, $0.10 cached input, $2.50 cache writes, and
 $10 output per million tokens. Above 272,000 input tokens, the full request uses
@@ -1690,7 +1695,7 @@ limits; the question determines how much research is useful:
 
 The tool is available to the parent and `pattern-author` whenever the run can
 supply a documentation corpus or pattern index. The gateway transport uses
-`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-5.6-luna`.
+`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-6-luna`.
 Research is a private tool loop, not web search or a delegable child profile.
 Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
 `cf:pattern:<id>`; index lookups and retained evidence use the bare id.

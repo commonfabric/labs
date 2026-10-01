@@ -39,6 +39,10 @@ import type {
   HarnessModelTurnResult,
 } from "./client.ts";
 import {
+  assertOpenAIReasoningEffortSupported,
+  supportedOpenAIReasoningEfforts,
+} from "./openai-reasoning.ts";
+import {
   normalizeOpenAIUsage,
   withEstimatedOpenAIModelUsageCost,
 } from "./usage.ts";
@@ -224,31 +228,7 @@ const assertSupportedToolCombination = (
   }
 };
 
-const GPT_5_6_REASONING_EFFORTS = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-const GPT_6_1_SOL_REASONING_EFFORTS = [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-/** Returns the supported efforts for models with a known OpenAI vocabulary. */
-const reasoningEffortsForModel = (model: string): readonly string[] =>
-  model === "gpt-6.1-sol"
-    ? GPT_6_1_SOL_REASONING_EFFORTS
-    : model.startsWith("gpt-5.6")
-    ? GPT_5_6_REASONING_EFFORTS
-    : [];
-
+/** Requires Responses routing and a supported model effort before dispatch. */
 const assertReasoningEffortSupported = (
   model: string,
   nativeModelToolIds: readonly HarnessNativeModelToolId[],
@@ -260,12 +240,7 @@ const assertReasoningEffortSupported = (
       `reasoning effort ${effort} requires a model routed through the Responses API; received ${model}`,
     );
   }
-  const supported = reasoningEffortsForModel(model);
-  if (supported.length > 0 && !supported.includes(effort)) {
-    throw new Error(
-      `reasoning effort ${effort} is not supported by ${model}`,
-    );
-  }
+  assertOpenAIReasoningEffortSupported(model, effort);
 };
 
 /**
@@ -611,7 +586,7 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
         inputModalities: item.capabilities?.images === true
           ? ["text", "image"]
           : ["text"],
-        supportedReasoningEfforts: reasoningEffortsForModel(item.id),
+        supportedReasoningEfforts: supportedOpenAIReasoningEfforts(item.id),
         supportsParallelToolCalls: false,
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

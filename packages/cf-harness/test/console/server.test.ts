@@ -2823,6 +2823,22 @@ describe("console/server", () => {
   });
 
   describe("resolveConsoleConfig()", () => {
+    it("defaults to Sol 6.1 and preserves explicit model choices", async () => {
+      const flags = ["--fabric-identity", "k", "--fabric-space", "s"];
+      expect((await resolveConsoleConfig(flags, {}, "/console")).model)
+        .toBe("gpt-6.1-sol");
+      expect(
+        (await resolveConsoleConfig(flags, {
+          CF_HARNESS_MODEL: "gpt-5.6-sol",
+        }, "/console")).model,
+      ).toBe("gpt-5.6-sol");
+      expect(
+        (await resolveConsoleConfig([...flags, "--model", "gpt-6-luna"], {
+          CF_HARNESS_MODEL: "gpt-5.6-sol",
+        }, "/console")).model,
+      ).toBe("gpt-6-luna");
+    });
+
     it("throws naming both ways to supply a fabric session when neither is given", async () => {
       await expect(resolveConsoleConfig([], {}, "/console")).rejects.toThrow(
         "a fabric session is required",

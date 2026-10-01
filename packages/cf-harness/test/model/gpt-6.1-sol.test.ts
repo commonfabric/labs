@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { OpenAICompatibleGatewayClient } from "../../src/gateway/openai-client.ts";
 import type { HarnessModelTurnRequest } from "../../src/model/client.ts";
+import { OpenAICodexResponsesClient } from "../../src/model/openai-codex-responses.ts";
 import { OpenAICompatibleGatewayModelClient } from "../../src/model/openai-compatible-gateway.ts";
 import { withEstimatedOpenAIModelUsageCost } from "../../src/model/usage.ts";
 
@@ -117,9 +118,81 @@ describe("GPT-6.1 Sol", () => {
       );
       await expect(client.complete(turn({ reasoningEffort: effort })))
         .rejects.toThrow(
-          `reasoning effort ${effort} is not supported by ${MODEL}`,
+          new RegExp(
+            `reasoning effort .*${effort}.* is not supported by .*gpt-6\\.1-sol`,
+          ),
         );
       expect(dispatched).toBe(false);
+    });
+
+    it(`rejects Codex effort \`${effort}\` before credentials or dispatch`, async () => {
+      let resolvedCredentials = false;
+      let dispatched = false;
+      const client = new OpenAICodexResponsesClient({
+        transportRetries: 0,
+        credentialResolver: {
+          resolve: () => {
+            resolvedCredentials = true;
+            return Promise.resolve({
+              type: "oauth",
+              providerId: "openai-codex",
+              accessToken: "synthetic-access",
+              refreshToken: "synthetic-refresh",
+              expiresAt: 4_000_000_000_000,
+              accountId: "synthetic-account",
+            });
+          },
+        },
+        fetchFn: () => {
+          dispatched = true;
+          return Promise.resolve(completedCodexResponse());
+        },
+      });
+      await expect(client.complete(turn({ reasoningEffort: effort })))
+        .rejects.toThrow(
+          new RegExp(
+            `reasoning effort .*${effort}.* is not supported by .*gpt-6\\.1-sol`,
+          ),
+        );
+      expect(resolvedCredentials).toBe(false);
+      expect(dispatched).toBe(false);
+    });
+  }
+
+  for (const effort of [...EFFORTS, undefined]) {
+    it(`sends Codex effort \`${effort ?? "provider default"}\` without cache controls`, async () => {
+      const requests: Array<Record<string, unknown>> = [];
+      const client = new OpenAICodexResponsesClient({
+        transportRetries: 0,
+        credentialResolver: {
+          resolve: () =>
+            Promise.resolve({
+              type: "oauth",
+              providerId: "openai-codex",
+              accessToken: "synthetic-access",
+              refreshToken: "synthetic-refresh",
+              expiresAt: 4_000_000_000_000,
+              accountId: "synthetic-account",
+            }),
+        },
+        fetchFn: (_input, init) => {
+          requests.push(JSON.parse(String(init?.body)));
+          return Promise.resolve(completedCodexResponse());
+        },
+      });
+      await client.complete(turn({ reasoningEffort: effort }));
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        model: MODEL,
+        stream: true,
+        store: false,
+      });
+      if (effort === undefined) {
+        expect(requests[0]).not.toHaveProperty("reasoning");
+      } else {
+        expect(requests[0].reasoning).toEqual({ effort });
+      }
+      expect(requests[0]).not.toHaveProperty("prompt_cache_options");
     });
   }
 
@@ -163,6 +236,19 @@ describe("GPT-6.1 Sol", () => {
     });
   });
 });
+
+/** Constructs a terminal Codex event for the synthetic transport. */
+function completedCodexResponse(): Response {
+  return new Response(
+    `data: ${
+      JSON.stringify({
+        type: "response.completed",
+        response: { id: "resp-sol", status: "completed", output: [] },
+      })
+    }\n\n`,
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
 
 /** Constructs a synthetic tool-calling turn without external I/O. */
 function turn(
