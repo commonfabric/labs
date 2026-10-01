@@ -264,11 +264,13 @@ names the ones it needs, and they are gathered here:
 
 The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
 `manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
-in `schemas.tsx`. The home pattern holds a manager, and `#chatManager` resolves
-to it (see [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)).
-Home's **Chats** tab renders the manager: the user's rooms, the room chosen
-among them, and the controls that start a direct or a group chat. Where the
-runtime lacks a prerequisite, the patterns depart from this design, as below.
+in `schemas.tsx`. The room's stored records and the handlers that write them are
+in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
+home pattern holds a manager, and `#chatManager` resolves to it (see
+[`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)). Home's
+**Chats** tab renders the manager: the user's rooms, the room chosen among them,
+and the controls that start a direct or a group chat. Where the runtime lacks a
+prerequisite, the patterns depart from this design, as below.
 
 ### Access and principals
 

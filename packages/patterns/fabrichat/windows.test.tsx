@@ -15,13 +15,13 @@ import {
   type ActivityCounters,
   type ChatMessageWindow,
   type ChatMessageWindows,
-  FabriChatRoomCore,
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
   type SentActivity,
   type UsedTime,
-} from "./room.tsx";
+} from "./room-records.tsx";
+import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,

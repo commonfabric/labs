@@ -14,18 +14,18 @@ import {
   Writable,
 } from "commonfabric";
 import { findNodeByProp, propValue } from "../test/vnode-helpers.ts";
+import { FabriChatMessageRow } from "./message-row.tsx";
 import {
   type ActivityCounters,
   type ComposerState,
-  FabriChatMessageRow,
-  FabriChatRoomCore,
   type MessageRecord,
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
   type SentActivity,
   type UsedTime,
-} from "./room.tsx";
+} from "./room-records.tsx";
+import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_DELETE_ACTION,
   CHAT_DELETE_SURFACE,

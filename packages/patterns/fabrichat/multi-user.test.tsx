@@ -11,17 +11,19 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import FabriChatRoom, {
+import { FabriChatMessageRow } from "./message-row.tsx";
+import {
   type ActivityCounters,
-  type ChatRoomOutput,
-  FabriChatMessageRow,
-  FabriChatRoomCore,
   type MessageRecord,
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
   type SentActivity,
   type UsedTime,
+} from "./room-records.tsx";
+import FabriChatRoom, {
+  type ChatRoomOutput,
+  FabriChatRoomCore,
 } from "./room.tsx";
 import {
   CHAT_REACT_ACTION,

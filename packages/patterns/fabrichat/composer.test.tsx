@@ -14,14 +14,14 @@ import {
 import { clickButton, hasText } from "../test/vnode-helpers.ts";
 import {
   type ActivityCounters,
-  FabriChatRoomCore,
   type MessageRecord,
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
   type SentActivity,
   type UsedTime,
-} from "./room.tsx";
+} from "./room-records.tsx";
+import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
