@@ -265,7 +265,12 @@ describe("wish-result-view-labels", () => {
     }, {
       value: {
         title: "Inline",
-        [UI]: vnode("div", ["sealed inline"]),
+        [UI]: {
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: ["sealed inline"],
+        },
       },
       cfc: {
         version: 1,
