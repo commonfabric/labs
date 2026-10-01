@@ -189,6 +189,17 @@ describe("wish-result-view-labels", () => {
     (readStoredCfcMetadata(runtime.readTx(), link)?.labelMap.entries ?? [])
       .flatMap((entry) => entry.label.confidentiality ?? []);
 
+  /**
+   * The confidentiality clauses of the flow stamps in the stored label map
+   * `link` reaches: what the reads of the transactions that wrote it left.
+   */
+  const flowStampClauses = (link: NormalizedFullLink): unknown[] =>
+    (readStoredCfcMetadata(runtime.readTx(), link)?.labelMap.entries ?? [])
+      .filter((entry) =>
+        entry.origin === "structure" || entry.origin === "derived"
+      )
+      .flatMap((entry) => entry.label.confidentiality ?? []);
+
   /** What `read` returns, and the confidentiality it consumed doing so. */
   const consumedBy = (
     read: (tx: IExtendedStorageTransaction) => unknown,
@@ -236,6 +247,52 @@ describe("wish-result-view-labels", () => {
     expect(holdsSealedClause(storedClauses(sealed.getAsNormalizedFullLink())))
       .toBe(true);
     expect(holdsSealedClause(storedClauses(state))).toBe(false);
+  });
+
+  it("stamps no flow label from a sealed value held inline in the found piece's view", async () => {
+    // The piece's own document holds the sealed value inside its view, with
+    // the clause on that path, so nothing on the way to the view is labeled.
+    // The links the wish writes to the piece carry the piece's labels with
+    // them, so what is asserted here is the flow labels the wish's own reads
+    // stamp.
+    const tx = runtime.edit();
+    const piece = runtime.getCell(profileSpace, "inline-piece", undefined, tx);
+    seedStoredEnvelope(tx, {
+      space: profileSpace,
+      scope: "space",
+      id: piece.getAsNormalizedFullLink().id,
+      path: [],
+    }, {
+      value: {
+        title: "Inline",
+        [UI]: vnode("div", ["sealed inline"]),
+      },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [UI, "children", "0"],
+            label: { confidentiality: [sealedClause] },
+          }],
+        },
+      },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+    await pin(piece.withTx(undefined), "#inline");
+
+    const result = await runWish("#inline", "inline-finder");
+    const state = wishStateLink(result);
+
+    expect(result.key("found").key("result").key("title").get()).toBe(
+      "Inline",
+    );
+    expect(holdsSealedClause(storedClauses(piece.getAsNormalizedFullLink())))
+      .toBe(true);
+    // The state's label map is there: the links it holds carry entries.
+    expect(storedClauses(state).length).toBeGreaterThan(0);
+    expect(holdsSealedClause(flowStampClauses(state))).toBe(false);
   });
 
   it("returns a value read through the wish result that the owner's display ceiling admits", async () => {
