@@ -38,6 +38,7 @@
     "./v2/server": "./v2/server.ts",
     "./v2/server-execution-default": "./v2/server-execution-default.ts",
     "./v2/standalone": "./v2/standalone.ts",
+    "./v2/connection-auth": "./v2/connection-auth.ts",
     "./v2/session-open-auth": "./v2/session-open-auth.ts",
     "./v2/storage-path": "./v2/storage-path.ts",
     "./v2/schema-table-links": "./v2/schema-table-links.ts",

@@ -215,6 +215,28 @@ describe("ExperimentalOptions", () => {
       expect(getReaderSchemaPrecedenceConfig()).toBe(false);
     });
 
+    it("constructing Runtime declares sharedMemoryConnection to the storage manager", async () => {
+      // The choice is per session as it is created, so a manager hears it
+      // before any session opens: at construction, on and off alike.
+      for (const enabled of [true, false]) {
+        const sm = StorageManager.emulate({ as: signer });
+        const declared: boolean[] = [];
+        const manager = Object.assign(sm, {
+          setSharedMemoryConnection: (value: boolean) => {
+            declared.push(value);
+          },
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { sharedMemoryConnection: enabled },
+        });
+        expect(declared).toEqual([enabled]);
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
     it("disposing Runtime resets global config to the default", async () => {
       const initial = getModernCellRepConfig();
       const sm = StorageManager.emulate({ as: signer });
