@@ -503,19 +503,16 @@ The strict-only delta is:
   other gate — at `disabled` and `observe` it records nothing that
   withholds.
 
-  The exemption is not a hole. A path counts as meta only while no payload
-  write landed on it too, so a transaction writing both leaves the path
-  measured. The collapse of a deeper path against a covering ancestor runs
-  over the measured paths only, so an exempt meta path cannot shadow a value
-  write beneath it. Meta paths remain flow stamp targets, so the join still
-  persists there and the egress, display, and observation gates read the
-  unchanged label. And the seam sits in the same document, space, and
-  replica set as the value surface beside it, so it reaches no reader that
-  surface did not. One residual comes with it: where a payload field carries
-  a `MetaField` name, an exempt meta write can raise the stored derived
-  label at their shared logical path past what that field declares. The
-  direction is over-taint, so reads stay protected; giving the envelope seam
-  a path space of its own is what removes the collision.
+  The exemption is not a hole. The seam is the runtime's to read and write,
+  and no pattern compiles against it. A meta read consumes no payload label
+  just as a meta write stamps none, so no payload label is dropped on the
+  way through the seam, and a payload field that carries a `MetaField` name
+  is measured and labeled like any other. The seam sits in the same
+  document, space, and replica set as the value surface beside it, so it
+  reaches no reader that surface did not. One residual comes with it, which
+  the CFC owner accepted: until a stored entry can name a document's own
+  member, a runtime write of label-derived data into a meta field arrives
+  unlabeled ([`cfc-spec-changes.md`](./cfc-spec-changes.md) SC-55).
 
   What the check measures is bounded on the read side as well, and not only
   at this rung: the write machinery's own reads of the region it is writing

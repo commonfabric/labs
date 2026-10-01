@@ -1684,6 +1684,14 @@ it would take a `root` entry for a payload label. The first such entry
 therefore needs a new label-map version, which today's readers refuse. §4.6.5
 is unchanged: an envelope member's path is never matched as a payload path.
 
+The `root` entry is deferred (owner decision 2026-10-01). Until it exists, an
+envelope member carries no label: a write to one stamps nothing, and a read of
+one consumes nothing. The residual is that a runtime write of label-derived
+data into a member would arrive unlabeled. No pattern reaches the meta seam,
+and every runtime write there is a link, a pattern identity or definition, a
+schema, a source origin or reconciliation record, or a slug an operator
+chooses.
+
 ## From the render-time remote-load gate (2026-10-01)
 
 **SC-56 [normative] A render that loads a remote resource is network egress,
