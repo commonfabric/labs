@@ -349,7 +349,8 @@ describe("coverage-gate", () => {
       expect(report.verdicts[0]?.outcome).toBe("rose");
       const lines = formatGateReport(report).join("\n");
       expect(lines).toContain("coverage failure rather than a test failure");
-      expect(lines).toContain("ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines");
+      expect(lines).toContain("other uncovered lines of the same package");
+      expect(lines).not.toContain("ACCEPT_COVERAGE_DEBT");
     });
 
     it("accepts a rise the description allows", async () => {
@@ -375,6 +376,8 @@ describe("coverage-gate", () => {
       }));
       expect(report.ok).toBe(true);
       expect(report.verdicts[0]?.outcome).toBe("accepted");
+      expect(formatGateReport(report).join("\n"))
+        .not.toContain("coverage failure");
     });
 
     it("fails a rise larger than the description allows", async () => {
@@ -1108,7 +1111,7 @@ describe("coverage-gate", () => {
       expect(said).toContain("no rise");
     });
 
-    it("fails a rise, and prints the marker that accepts it", async () => {
+    it("fails a rise, and asks for tests", async () => {
       const { root, commit, reports, suites } = await job(10, 6);
       const lines: string[] = [];
       const log = console.log;
@@ -1135,7 +1138,8 @@ describe("coverage-gate", () => {
       }
       expect(status).toBe(1);
       expect(lines.join("\n"))
-        .toContain("ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines");
+        .toContain("coverage failure rather than a test failure");
+      expect(lines.join("\n")).not.toContain("ACCEPT_COVERAGE_DEBT");
     });
 
     it("takes the acceptance from the description", async () => {
@@ -1300,8 +1304,9 @@ describe("coverage-gate", () => {
         )
           .toBe(true);
         expect(body).toContain(
-          "ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines",
+          "| workspace-unit/packages/bakery | 1 | 4 | +3 | rose |",
         );
+        expect(body).toContain("other uncovered lines of the same package");
       });
 
       it("writes a collapsed resolved comment when the gate passes", async () => {
@@ -1457,64 +1462,7 @@ describe("coverage-gate", () => {
     });
   });
 
-  describe("what the summary offers to paste", () => {
-    it("offers one acceptance per member, at the larger of its rises", async () => {
-      // The marker names the member, so two sets over one member that both
-      // rose take one line, and the line has to cover the larger rise.
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
-      const member = "packages/bakery";
-      const suites = [
-        suite("workspace-unit", [{
-          member,
-          reachedBy: [`${member}/`],
-          units: [`${member}/one.test.ts`],
-        }]),
-        suite("bakery-e2e", [{
-          member,
-          reachedBy: [`${member}/`],
-          units: [`${member}/two.test.ts`],
-        }]),
-      ];
-      const { reports } = await reportsFor([
-        [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
-          lcov,
-        ],
-        [
-          "lane-1/coverage/lcov/sets/bakery-e2e/packages__bakery/coverage.lcov",
-          lcov,
-        ],
-      ]);
-      const report = await runGate(gateInput({
-        root,
-        gate: coverageGateFor(suites, new Set([`${member}/src/main.ts`])),
-        reports,
-        members: [member],
-        baselines: [
-          {
-            suite: "workspace-unit",
-            member,
-            commit: "abc",
-            createdAt: "2026-09-01T00:00:00.000Z",
-            uncoveredLines: 3,
-          },
-          {
-            suite: "bakery-e2e",
-            member,
-            commit: "abc",
-            createdAt: "2026-09-01T00:00:00.000Z",
-            uncoveredLines: 1,
-          },
-        ],
-      }));
-      expect(report.ok).toBe(false);
-      const offered = formatGateReport(report)
-        .filter((line) => line.startsWith("ACCEPT_COVERAGE_DEBT:"));
-      expect(offered).toEqual([
-        "ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines",
-      ]);
-    });
-
+  describe("two sets over one member", () => {
     it("accepts both sets over one member from one marker", async () => {
       const { root, lcov } = await workspace("packages/bakery", 10, 6);
       const member = "packages/bakery";
