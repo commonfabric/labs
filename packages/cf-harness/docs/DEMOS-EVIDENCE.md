@@ -558,10 +558,12 @@ re-checks.
 ## 3. This month's bank transactions as a table
 
 **Preflight:** common, **plus a finance grant**. The launch printout must carry
-a `grant <your-plaid-connection>` line for the runner's own Plaid connection,
-followed by `(finance)` when its contract still declares that class. There is no
-simulated finance store: the runner supplies their own Plaid connection, and the
-connection name is theirs, so they recognize the line by that name.
+a granted `grant <your-plaid-connection>` line for the runner's own Plaid
+connection: bare, or followed by its classes such as `(finance)` when its
+contract still declares them, but never `(none: <reason>)`, which is a handle
+the console refused. There is no simulated finance store: the runner supplies
+their own Plaid connection, and the connection name is theirs, so they recognize
+the line by that name.
 
 **Prompt:**
 
@@ -660,8 +662,9 @@ affected.
 The [WEAVER §7](WEAVER.md) task, unchanged but for the slug sentence.
 
 **Preflight:** common, **plus both an email and a finance grant** —
-`grant <your-mail-connection>` and `grant <your-plaid-connection>`, each
-followed by its class in parentheses when its contract declares one.
+`grant <your-mail-connection>` and `grant <your-plaid-connection>`, each bare or
+followed by its classes in parentheses when its contract declares them, and
+neither marked `(none: <reason>)`, which is a refused handle.
 
 **Prompt:**
 

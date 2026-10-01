@@ -1272,13 +1272,17 @@ trusted-side, `describe_handle` answers shape from the cell, and reading
 anything behind the token means running a pattern over it, where CFC rules as it
 does for every other flow.
 
-Three cases the launch printout states rather than resolving silently:
+Four cases the launch printout states rather than resolving silently:
 
 - A handle whose declared contract declares no confidentiality (no per-column
   `ifc.confidentiality` and no `rowLabel` confidentiality; integrity alone does
   not count) is printed as `grant <connection>  (none: <reason>)` and is not
   granted. A contract that declares confidentiality but names no `Resource`
   class is granted under its connection, described with no class.
+- A handle whose declared contract carries an invalid `rowLabel` (one the
+  runner's `validateRowLabelSpec` rejects) is printed the same way, with the
+  validator's reason, and is not granted, even when another table declares
+  confidentiality: the runner refuses every read of such a database.
 - An ambiguous store identity or invalid connection name, companion key, or
   class is reported with the deciding record and a remedy.
 - A receipt that does not parse refuses the launch. A console that came up
