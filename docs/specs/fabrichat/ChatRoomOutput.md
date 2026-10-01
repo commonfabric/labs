@@ -520,4 +520,4 @@ person obliterate their own messages.
 
 - **Membership's open questions belong to the space.** Returning after leaving,
   and being added without consent, are questions about a space's access list
-  and its tools, which a room no longer changes.
+  and its tools, and a room changes neither.
