@@ -21,8 +21,11 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import {
+  CLICK_TARGET_ATTR,
   clickTrustedAction,
   fillCfInput,
+  markTargetsArgs,
+  settleAndMarkTargets,
   waitForRuntimeIdle,
   waitForText,
 } from "./cfc-browser-helpers.ts";
@@ -189,32 +192,55 @@ describe("fabrichat integration test", () => {
 });
 
 /**
- * Focuses the first reaction count and waits for its card to show, naming each
- * of `names`.
+ * Waits for a rendered reaction card naming each of `names`, then focuses its
+ * settled count once and checks that the card opens.
  */
 async function waitForReactorCard(
   page: Page,
   names: readonly string[],
 ): Promise<void> {
-  await waitForRuntimeIdle(page);
-  await page.evaluate(() => {
-    function collect(root: Document | ShadowRoot, found: Element[]) {
-      for (const element of root.querySelectorAll("*")) {
-        if (element.tagName.toLowerCase() === "cf-hover-card") {
-          found.push(element);
+  const token = `fabrichat-reactor-focus-${crypto.randomUUID()}`;
+  await waitForCondition(page, settleAndMarkTargets, {
+    args: markTargetsArgs(
+      (probe, expected: readonly string[]) => {
+        const card = probe.collect("cf-hover-card").find((element) =>
+          expected.every((name) => probe.deepText(element).includes(name))
+        );
+        const count = card?.querySelector<HTMLElement>("cf-button");
+        return count ? [count] : undefined;
+      },
+      [names],
+      [token],
+    ),
+  });
+  await page.evaluate((targetToken, attr) => {
+    function find(root: Document | ShadowRoot): HTMLElement | undefined {
+      for (const element of root.querySelectorAll<HTMLElement>("*")) {
+        if (element.getAttribute(attr)?.split(/\s+/).includes(targetToken)) {
+          return element;
         }
-        if (element.shadowRoot) collect(element.shadowRoot, found);
+        if (element.shadowRoot) {
+          const found = find(element.shadowRoot);
+          if (found) return found;
+        }
       }
     }
-    const found: Element[] = [];
-    collect(document, found);
-    // The `cf-button` host is what takes focus from a keyboard.
-    const count = found[0]?.querySelector<HTMLElement>("cf-button");
-    if (!count) {
-      throw new Error("There is no reaction count to focus.");
-    }
+    const count = find(document);
+    if (!count) throw new Error("The settled reaction count was replaced.");
+    count.removeAttribute(attr);
+    // Focus is outside the wait predicate so a failed attempt is not retried.
     count.focus();
-  });
+    const root = count.getRootNode() as Document | ShadowRoot;
+    const card = count.closest("cf-hover-card") as
+      | (HTMLElement & { open: boolean })
+      | null;
+    if (root.activeElement !== count || card?.open !== true) {
+      throw new Error(
+        `Reaction count focus failed: connected=${count.isConnected}, ` +
+          `active=${root.activeElement?.tagName}, open=${card?.open}`,
+      );
+    }
+  }, { args: [token, CLICK_TARGET_ATTR] });
   await waitForCondition(
     page,
     (probe, expected: readonly string[]) =>
