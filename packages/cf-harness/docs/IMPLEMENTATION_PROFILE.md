@@ -376,8 +376,11 @@ placeholders resolve only at the SQLite query boundary.
 6. **Side effects gated on authority rather than on flow.** Every side-effecting
    tool except `run_pattern` — and `submit_result`, which has no effect outside
    the run's own record and is admitted by its configuration — is admitted by a
-   check on the descriptor's static effect class and on whether the run carries
-   a direct-command binding. The decision is recorded before the tool runs, so
+   check on its effect class and on whether the run carries a direct-command
+   binding. The class is the descriptor's static one unless the tool classes
+   each call (`effectClassOf`): `finish_task` is `side-effect` when it carries
+   client actions and `read` otherwise, so an answer, question or give-up keeps
+   the read path while actions need a direct-command binding. The decision is recorded before the tool runs, so
    it is not a commit point, and it consults no sink and no label. `run_pattern`
    is the exception and shows the shape the rest want: a named sink, an explicit
    ceiling, and the runner's commit boundary deciding. Owner: `cf-harness` and
