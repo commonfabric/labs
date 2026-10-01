@@ -72,6 +72,7 @@ import {
   assertStoredPrincipalConfidentialityBound,
   bindCurrentPrincipalConfidentiality,
   bindCurrentPrincipalToStoredClauses,
+  bindCurrentPrincipalToStoredConfidentiality,
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import {
@@ -7607,6 +7608,151 @@ const linkDocument = (address: LinkWritePolicyInput["source"]) => ({
 });
 
 /**
+ * The ids of the documents this transaction created in `space`, by writing
+ * each at or directly beneath its root where no value stood before.
+ */
+const documentsCreatedIn = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): Set<string> => {
+  const created = new Set<string>();
+  for (const detail of tx.getWriteDetails?.(space) ?? []) {
+    if (
+      detail.address.path.length <= 1 && detail.previousValue === undefined
+    ) {
+      created.add(detail.address.id);
+    }
+  }
+  return created;
+};
+
+/** Whether this transaction created the document `address` names. */
+const createdInTransaction = (
+  tx: IExtendedStorageTransaction,
+  address: { space: MemorySpace; id: string },
+): boolean => documentsCreatedIn(tx, address.space).has(address.id);
+
+/**
+ * Whether `entry` is store policy a value read consumes: a declared or legacy
+ * entry, rather than a per-value link, derived or structure component, and
+ * one whose label a value reader of its path is tainted with.
+ */
+const isDeclaredValuePolicyEntry = (entry: LabelMapEntry): boolean =>
+  (entry.origin === undefined || entry.origin === "declared") &&
+  readConsumesEntry("value", entry);
+
+/**
+ * Binds the `CurrentPrincipal` confidentiality declarations in `schema`, which
+ * describes values of the document `key` names, to concrete readers.
+ */
+type CreatorBinding = (schema: JSONSchema, key: string) => JSONSchema;
+
+/**
+ * The `CreatorBinding` for one preparation of `tx`. A declaration binds to the
+ * acting principal, except in a new document: one this transaction creates
+ * and that holds no envelope yet. A link write in `linkWrites` that places a
+ * new document beneath a document stored before this transaction makes that
+ * one its parent, and a declaration in the new document binds to the concrete
+ * `User` readers the parent's declared policy names at the path the link
+ * lands on. A new document placed beneath another new document takes what
+ * that one takes, so a chain of them reaches the stored ancestor they all
+ * descend from. Readers are gathered across every parent, and a declaration
+ * falls to the acting principal only where the parents name none. A writer
+ * creating a document under its own private parent therefore binds it to
+ * itself, as an acting-principal binding would.
+ *
+ * The parents are read once, before any target of the transaction is
+ * prepared, so a parent's envelope as this preparation rewrites it never
+ * decides a binding.
+ *
+ * @throws as `bindCurrentPrincipalConfidentiality()` does, from the binding.
+ */
+const creatorBinding = (
+  tx: IExtendedStorageTransaction,
+  linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
+): CreatorBinding => {
+  const created = new Map<MemorySpace, Set<string>>();
+  const envelopes = new Map<string, StoredCfcEnvelope>();
+  const envelopeOf = (address: LinkWritePolicyInput["source"]) => {
+    const key = targetKey(address);
+    let envelope = envelopes.get(key);
+    if (envelope === undefined) {
+      envelope = loadStoredCfcEnvelope(tx, linkDocument(address));
+      envelopes.set(key, envelope);
+    }
+    return envelope;
+  };
+  const isNew = (address: LinkWritePolicyInput["source"]): boolean => {
+    let ids = created.get(address.space);
+    if (ids === undefined) {
+      ids = documentsCreatedIn(tx, address.space);
+      created.set(address.space, ids);
+    }
+    return ids.has(address.id) && envelopeOf(address).status === "none";
+  };
+  // Each new document's placements: the new documents it sits beneath, and
+  // the stored policy it finds beneath each stored parent.
+  const placements = new Map<
+    string,
+    { parents: string[]; declared: CfcConfClause[] }
+  >();
+  const placementsOf = (key: string) => {
+    let found = placements.get(key);
+    if (found === undefined) {
+      found = { parents: [], declared: [] };
+      placements.set(key, found);
+    }
+    return found;
+  };
+  for (const inputs of linkWrites.values()) {
+    for (const input of inputs) {
+      if (!isNew(input.source)) continue;
+      const found = placementsOf(targetKey(input.source));
+      if (isNew(input.target)) {
+        found.parents.push(targetKey(input.target));
+        continue;
+      }
+      const parent = envelopeOf(input.target);
+      if (parent.status !== "loaded") continue;
+      const declared = labelForEntriesAtPath(
+        parent.metadata.labelMap.entries.filter(isDeclaredValuePolicyEntry),
+        canonicalizeLogicalPath(input.target.path),
+      )?.confidentiality ?? [];
+      for (const clause of declared) {
+        found.declared.push(clause as CfcConfClause);
+      }
+    }
+  }
+  const inherited = new Map<string, readonly CfcConfClause[]>();
+  for (const key of placements.keys()) {
+    const clauses: CfcConfClause[] = [];
+    const seen = new Set([key]);
+    const pending = [key];
+    while (pending.length > 0) {
+      const found = placements.get(pending.pop()!);
+      if (found === undefined) continue;
+      for (const clause of found.declared) clauses.push(clause);
+      for (const parent of found.parents) {
+        if (seen.has(parent)) continue;
+        seen.add(parent);
+        pending.push(parent);
+      }
+    }
+    if (clauses.length > 0) inherited.set(key, clauses);
+  }
+  const actingPrincipal = tx.getCfcState().trustSnapshot?.actingPrincipal;
+  return (schema, key) => {
+    const fromParents = inherited.get(key);
+    return bindCurrentPrincipalConfidentiality(
+      fromParents === undefined
+        ? schema
+        : bindCurrentPrincipalToStoredConfidentiality(schema, fromParents),
+      actingPrincipal,
+    );
+  };
+};
+
+/**
  * The principal claims a link may take from `schema`, a schema this
  * transaction holds for a document it has not persisted yet: the claims the
  * deepest schema entry covering `path` declares itself, resolved against the
@@ -7702,6 +7848,7 @@ const derivePersistedLinkLabel = (
   metadataResolver: VerifierMetadataResolver,
   valueTargets: ReadonlyMap<string, ValueWriteTarget>,
   linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
+  bindCreator: CreatorBinding,
   pendingSourceView?: CfcLabelView,
 ): { label?: IFCLabel; reason?: string; sourceView?: CfcLabelView } => {
   metadataResolver.refresh();
@@ -7737,14 +7884,14 @@ const derivePersistedLinkLabel = (
       entry.label.confidentiality?.some(isCurrentPrincipalUserClause)
     )
   ) {
-    pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+    pendingSourceSchema = bindCreator(
       sourceMetadata === undefined
         ? pendingSourceSchema
         : mergeCfcSchemaEnvelopes(
           loadSchemaDocument(tx, input.source.space, sourceMetadata.schemaHash),
           pendingSourceSchema,
         ),
-      tx.getCfcState().trustSnapshot?.actingPrincipal,
+      targetKey(input.source),
     );
   }
   // Only a schema this transaction's writes to the source are checked
@@ -7769,19 +7916,12 @@ const derivePersistedLinkLabel = (
     // a pre-existing doc with persisted labels resolves through its stored
     // CFC metadata above, and one without stored metadata stays fail-closed
     // even when this tx touched one of its fields.
-    const sourceCreatedInThisTx = [
-      ...(tx.getWriteDetails?.(input.source.space) ?? []),
-    ].some((detail) =>
-      detail.address.id === input.source.id &&
-      detail.address.path.length <= 1 &&
-      detail.previousValue === undefined
-    );
-    if (sourceCreatedInThisTx) {
+    if (createdInTransaction(tx, input.source)) {
       const targetCandidate = candidateSchemas.get(targetKey(input.target));
       if (targetCandidate !== undefined) {
-        pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+        pendingSourceSchema = bindCreator(
           targetCandidate,
-          tx.getCfcState().trustSnapshot?.actingPrincipal,
+          targetKey(input.source),
         );
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
@@ -8102,6 +8242,7 @@ const createLinkLabelDeriver = (
   ) => ImplementationIdentity | undefined,
   metadataResolver: VerifierMetadataResolver,
   valueTargets: ReadonlyMap<string, ValueWriteTarget>,
+  bindCreator: CreatorBinding,
 ): LinkLabelDeriver => {
   /** A finite projection and the source values waiting for it to resolve. */
   type RequestedPath = {
@@ -8290,6 +8431,7 @@ const createLinkLabelDeriver = (
       metadataResolver,
       valueTargets,
       linkWrites,
+      bindCreator,
       pending.view,
     );
     if (result.reason !== undefined) {
@@ -8367,6 +8509,7 @@ const createLinkLabelDeriver = (
       metadataResolver,
       valueTargets,
       linkWrites,
+      bindCreator,
       pending.view,
     ).label;
   };
@@ -10146,6 +10289,7 @@ export function* prepareBoundaryCommitSteps(
       targetKeys.add(key);
     }
   }
+  const bindCreator = creatorBinding(tx, currentLinkWrites);
   const metadataResolver = new VerifierMetadataResolver(tx);
   const linkLabels = createLinkLabelDeriver(
     tx,
@@ -10154,6 +10298,7 @@ export function* prepareBoundaryCommitSteps(
     identityForInput,
     metadataResolver,
     valueTargets,
+    bindCreator,
   );
   for (const key of targetKeys) {
     yield;
@@ -10266,10 +10411,7 @@ export function* prepareBoundaryCommitSteps(
     }
 
     try {
-      mergedSchema = bindCurrentPrincipalConfidentiality(
-        mergedSchema,
-        state.trustSnapshot?.actingPrincipal,
-      );
+      mergedSchema = bindCreator(mergedSchema, key);
     } catch (error) {
       reasons.push(verdictReason(
         error instanceof Error ? error.message : String(error),
@@ -11154,10 +11296,7 @@ export function* prepareBoundaryCommitSteps(
         return false;
       };
       const declaredPolicyEntries = flowConfidentiality.length > 0
-        ? persistedLabelEntries.filter((entry) =>
-          (entry.origin === undefined || entry.origin === "declared") &&
-          readConsumesEntry("value", entry)
-        )
+        ? persistedLabelEntries.filter(isDeclaredValuePolicyEntry)
         : [];
       // Whether a misfit below is answered by declaring a covering policy
       // (§8.12.5 route 2) instead of refusing: this document is a store the
