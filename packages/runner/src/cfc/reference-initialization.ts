@@ -7,6 +7,7 @@ import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
   type NormalizedFullLink,
+  type PrimitiveCellLink,
 } from "../link-utils.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -34,18 +35,84 @@ export function recordReferencedArgumentFields(
     });
     // A redirect sends writes on to its target, so it is no plain reference.
     if (!isPrimitiveCellLink(staged) || isWriteRedirectLink(staged)) continue;
-    tx.recordCfcWritePolicyInput({
-      kind: "initialization",
-      mode: "reference",
-      target: {
-        space: argument.space,
-        id: argument.id,
-        scope: argument.scope,
-        path,
-      },
-      value: staged,
-    }, runtimeWritePolicyAuthorization);
+    recordStagedLink(tx, argument, path, "reference", staged);
   }
+}
+
+/**
+ * Records the bindings a collection builtin staged into the argument of a
+ * sub-pattern from the closure of its callback. Each of `fields` holds those
+ * captures as a record, and every link found in it, at any depth of records
+ * and lists, is recorded at its own path; a captured cell arrives as a write
+ * redirect to it. Values in the record are not recorded. The commit verifier
+ * independently checks that each slot was absent before the transaction or
+ * held a link to the same cell, and that it ends holding a link to the cell
+ * recorded. It covers the slot alone: a write through a staged redirect lands
+ * at the cell it names, under that cell's own policy.
+ */
+export function recordCapturedArgumentFields(
+  tx: IExtendedStorageTransaction,
+  argument: NormalizedFullLink,
+  fields: readonly string[],
+): void {
+  for (const field of fields) {
+    const path = [...argument.path, field];
+    recordCapturedLinks(
+      tx,
+      argument,
+      path,
+      tx.readValueOrThrow({ ...argument, path }, {
+        meta: ignoreReadForScheduling,
+      }),
+    );
+  }
+}
+
+/**
+ * Helper for `recordCapturedArgumentFields()`, which records every link in
+ * `staged`, the value staged at `path` of `argument`.
+ */
+function recordCapturedLinks(
+  tx: IExtendedStorageTransaction,
+  argument: NormalizedFullLink,
+  path: readonly string[],
+  staged: FabricValue,
+): void {
+  if (isPrimitiveCellLink(staged)) {
+    recordStagedLink(tx, argument, path, "capture", staged);
+  } else if (Array.isArray(staged)) {
+    staged.forEach((child, index) =>
+      recordCapturedLinks(tx, argument, [...path, String(index)], child)
+    );
+  } else if (isFabricPlainObject(staged)) {
+    for (const [key, child] of Object.entries(staged)) {
+      recordCapturedLinks(tx, argument, [...path, key], child);
+    }
+  }
+}
+
+/**
+ * Helper for the recorders above, which records `link`, staged at `path` of
+ * `argument`, as an initialization of the given `mode`.
+ */
+function recordStagedLink(
+  tx: IExtendedStorageTransaction,
+  argument: NormalizedFullLink,
+  path: readonly string[],
+  mode: "reference" | "capture",
+  link: PrimitiveCellLink,
+): void {
+  tx.recordCfcWritePolicyInput({
+    kind: "initialization",
+    mode,
+    target: {
+      space: argument.space,
+      id: argument.id,
+      scope: argument.scope,
+      path: [...path],
+    },
+    value: link,
+  }, runtimeWritePolicyAuthorization);
 }
 
 /**

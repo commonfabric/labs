@@ -80,7 +80,8 @@ the transaction, and the final value must be the recorded link. A link to
 another cell staged over a field that holds one is a modification and requires
 the field's ordinary writer. The same link staged again, as a runtime starting a
 piece it finds set up stages its argument, lands no write at the slot and is
-permitted: the slot keeps its link, and no policy stored on it is disturbed.
+permitted whatever the slot's stored policy: the slot keeps its link, and no
+policy stored on it is disturbed.
 
 The receiving slot's schema is the entry's own, so it can declare integrity the
 entry's writer adds, such as authorship by the current principal. Staging a
@@ -153,6 +154,36 @@ against the current snapshot. Graphs with document cycles retain their
 branch-local expansion rules. Ordinary chains need no shared-result cache.
 The persisted view still contains every distinct labeled path; sharing work
 does not reduce the size of a flat label map for a branching graph.
+
+### Captured bindings
+
+The builtin also stages the bindings its callback captures from the enclosing
+pattern, as a record in the argument's `params` field. A captured cell arrives
+there as a write redirect to it, whose payload carries the binding's schema
+beside the cell's address; the record may hold values too. The runtime records
+each link in the record, at any depth of records and lists, as a capture at the
+link's own path. A value in the record receives no record. A record covers the
+link's slot and nothing above it, so a protected record in `params` that holds a
+value beside a link is refused as any write of that value is.
+
+A capture is matched by the cell its link names and by whether that link is a
+write redirect, not by its bytes, because a later version of the pattern can
+stage the same binding under a different schema. Preparation permits it on
+these terms: the slot ends holding a link to the recorded cell, and before the
+transaction it was absent, or it held a link to that same cell. In the first
+case the capture installs the link, and a declaration the stored envelope makes
+on the slot keeps its requirement as for any initialization. In the second it
+repoints nothing, whatever schema either link carries. A link to another cell
+over a slot that held one before the transaction is a modification, even when
+the transaction empties the slot first, and requires the slot's ordinary writer.
+
+A capture covers the slot that holds the link, never the cell the link names. A
+write through a staged redirect lands at that cell and is checked against that
+cell's stored policy, its writer and owner binding included, as any other write
+to it is, in the staging transaction and after it. As for a reference, staging a
+capture mints none of the integrity the slot's schema adds for the principal
+staging it, so the slot names no owner, and an owner's runtime and a visitor's
+stage the same row alike.
 
 ## Bindings a setup stages
 
@@ -255,7 +286,8 @@ transaction interface has no initialization authority.
 
 Overlapping writes can record different intermediate snapshots. Every covering
 write snapshot must support absence: a snapshot showing an existing value, an
-unreadable path, a redirect, or unknown presence prevents initialization. A
+unreadable path, a write redirect standing on the path above the slot, or
+unknown presence prevents initialization. A
 whole-object deletion followed by a child write cannot turn an existing field
 into a new field. The exact-value check reads the transaction's final value,
 rather than reconstructing it from overlapping write details.

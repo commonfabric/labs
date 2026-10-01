@@ -85,6 +85,7 @@ import {
 } from "./cfc/default-initialization.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./cfc/policy.ts";
 import {
+  recordCapturedArgumentFields,
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
@@ -1274,6 +1275,9 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.referencedArgumentFields`. */
   referencedArgumentFields?: readonly string[];
 
+  /** See `RunnerRunOptions.capturedArgumentFields`. */
+  capturedArgumentFields?: readonly string[];
+
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
 
@@ -1617,10 +1621,18 @@ export type RunnerRunOptions = {
   parentPieceRootId?: string;
   // Argument fields a collection builtin fills with a link to a cell that
   // exists already: a list's entry, the list itself. Each one whose staged
-  // value is such a link is recorded as a protected initialization
-  // (docs/specs/cfc-protected-initialization.md), so handing a new piece a
-  // reference to an owner-protected cell does not pass for modifying it.
+  // value is a link that is not a write redirect is recorded as a protected
+  // initialization (docs/specs/cfc-protected-initialization.md), so handing a
+  // new piece a reference to an owner-protected cell does not pass for
+  // modifying it.
   referencedArgumentFields?: readonly string[];
+  // Argument fields a collection builtin fills with the bindings its callback
+  // captures: a record holding a write redirect to each captured cell, and
+  // values beside them. Each link in the record is recorded as a captured
+  // binding (docs/specs/cfc-protected-initialization.md), so handing a new
+  // piece a binding to an owner-protected cell does not pass for modifying
+  // it; a value in the record is not recorded.
+  capturedArgumentFields?: readonly string[];
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
   // alone: what a piece records after it exists is decided by a source
@@ -2991,6 +3003,7 @@ export class Runner {
     patternRef: { identity: string; symbol: string },
     setupState: SetupStateReuse,
     referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): SetupResult<R> | undefined {
     const key = this.#getDocKey(resultCell);
     if (!this.#cancels.has(key)) return undefined;
@@ -3054,6 +3067,7 @@ export class Runner {
         argumentLink,
         referencedArgumentFields,
       );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
       return { resultCell, patternRef, needsStart: false };
     }
 
@@ -3284,6 +3298,7 @@ export class Runner {
     argument: T,
     resultCell: Cell<R>,
     referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): void {
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
@@ -3467,6 +3482,7 @@ export class Runner {
         argumentLink,
         referencedArgumentFields,
       );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
     }
 
     // Record the content-addressed {identity, symbol} reference — the ONLY
@@ -3822,6 +3838,7 @@ export class Runner {
       entryRef,
       setupState,
       validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
     if (runningSetup) {
       return runningSetup;
@@ -3844,6 +3861,7 @@ export class Runner {
       argument,
       resultCell,
       validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
 
     if (validationOptions.validateArgumentLinks !== undefined) {
@@ -7279,6 +7297,7 @@ export class Runner {
       resultCell,
       {
         referencedArgumentFields: options.referencedArgumentFields,
+        capturedArgumentFields: options.capturedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         ...(creatingPiece
           ? {

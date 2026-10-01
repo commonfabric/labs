@@ -622,15 +622,24 @@ export type WritePolicyInput =
      * Authority is carried by the runtime's private mark, never this record
      * alone. A `"reference"` initialization stages a link to a cell that exists
      * already and none of what the cell holds, so its `value` is that link.
-     * A `"replay"` record names an argument slot a runtime replaying a
-     * piece's setup carries over from the stored argument document, with
-     * the bytes it holds; it permits nothing but leaving those bytes as they
-     * are.
+     * A `"capture"` initialization stages a binding a callback captures: a
+     * link, usually a write redirect, to a cell that exists already. It is
+     * matched by the cell the link names and not by the link's bytes, which
+     * carry the binding's schema beside the address. A `"replay"` record
+     * names an argument slot a runtime replaying a piece's setup carries over
+     * from the stored argument document, with the bytes it holds; it permits
+     * nothing but leaving those bytes as they are.
      */
     readonly kind: "initialization";
     readonly target: CfcAddress;
     readonly value: FabricValue;
-    readonly mode: "seed" | "default" | "projection" | "reference" | "replay";
+    readonly mode:
+      | "seed"
+      | "default"
+      | "projection"
+      | "reference"
+      | "capture"
+      | "replay";
   }
   | {
     readonly kind: "schema";

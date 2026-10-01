@@ -78,6 +78,7 @@ import {
   areLinksSame,
   isPrimitiveCellLink,
   isWriteRedirectLink,
+  type NormalizedLink,
   parseLink,
 } from "../link-utils.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
@@ -1560,14 +1561,58 @@ const writeIsPatternSetupInitialization = (
 };
 
 /**
- * A runtime initialization covers one absent slot and its exact final value;
- * a reference initialization also covers a slot that holds that link already
- * and receives no write. `waived` names the declaration the calling gate
- * would waive for it: one the stored envelope already makes on the slot keeps
- * its requirement, so the initialization waives only a declaration the
- * candidate schema introduces. A stored `writePolicyAnyOf` makes both
- * declarations, since each of its alternatives names a writer and may name a
- * gesture.
+ * Whether `value` is a link naming the same cell as `recorded`, with the same
+ * write behavior: a write redirect for a write redirect, a plain link for a
+ * plain one. What else a link's payload carries, its schema among it, says how
+ * the cell is read, and is no part of which cell it names. `base` resolves a
+ * relative link.
+ */
+const linksNameSameCell = (
+  value: FabricValue,
+  recorded: FabricValue,
+  base: NormalizedLink,
+): boolean =>
+  isPrimitiveCellLink(value) && isPrimitiveCellLink(recorded) &&
+  isWriteRedirectLink(value) === isWriteRedirectLink(recorded) &&
+  areLinksSame(value, recorded, base);
+
+/**
+ * Whether the slot an initialization names ends the transaction holding what
+ * it recorded: the same bytes, or for a capture, a link to the same cell.
+ */
+const slotHoldsInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  input: Extract<WritePolicyInput, { kind: "initialization" }>,
+): boolean => {
+  const document = {
+    space: target.space,
+    id: target.id as URI,
+    scope: target.scope,
+  };
+  const final = tx.readValueOrThrow({
+    ...document,
+    path: [...input.target.path],
+  }, { meta: INTERNAL_VERIFIER_META });
+  return input.mode === "capture"
+    ? linksNameSameCell(final, input.value, { ...document, path: [] })
+    : valueEqual(final, input.value);
+};
+
+/**
+ * A runtime initialization covers one absent slot and its exact final value.
+ * A reference initialization also covers a slot that holds that link already
+ * and receives no write. A capture covers a slot that was absent or held a
+ * link to the same cell, and ends holding a link to it, whatever schema each
+ * link carries. `waived` names the declaration the calling gate would waive
+ * for it: one the stored envelope already makes on an absent slot keeps its
+ * requirement, so installing a link waives only a declaration the candidate
+ * schema introduces. A stored `writePolicyAnyOf` makes both declarations,
+ * since each of its alternatives names a writer and may name a gesture.
  */
 const writeIsRuntimeInitialization = (
   tx: IExtendedStorageTransaction,
@@ -1587,12 +1632,19 @@ const writeIsRuntimeInitialization = (
     concretePathHasPrefix(path, input.target.path)
   );
   if (input?.kind !== "initialization") return false;
-  // A reference initialization covers a link to a cell and nothing the cell
-  // holds, so a recorded value that is anything else receives no permission.
+  // A reference covers a link to a cell and nothing the cell holds. A write
+  // redirect is no such link, since a write at its slot lands at the cell.
   if (
     input.mode === "reference" &&
     (!isPrimitiveCellLink(input.value) || isWriteRedirectLink(input.value))
   ) return false;
+  // A capture covers a link to a cell, redirect or not. The slot is what the
+  // capture installs; a write through a redirect there lands at the cell it
+  // names, and that cell's own policy decides it.
+  if (input.mode === "capture" && !isPrimitiveCellLink(input.value)) {
+    return false;
+  }
+  if (!slotHoldsInitialization(tx, target, input)) return false;
   const addressPath = ["value", ...input.target.path];
   const details = tx.getWriteDetailsForTarget?.(target) ??
     tx.getWriteDetails?.(target.space) ?? [];
@@ -1601,19 +1653,44 @@ const writeIsRuntimeInitialization = (
     normalizeCellScope(detail.address.scope) === target.scope &&
     concretePathHasPrefix(addressPath, detail.address.path.map(String))
   );
-  const finalValueIsRecorded = () =>
-    valueEqual(
-      tx.readValueOrThrow({ ...target, path: [...input.target.path] }, {
-        meta: INTERNAL_VERIFIER_META,
-      }),
-      input.value,
-    );
-  // A reference staged over the link the slot holds already lands no write
-  // there: the slot keeps its link, so nothing is repointed and no policy
-  // stored on it is disturbed.
-  if (input.mode === "reference" && covering.length === 0) {
-    return finalValueIsRecorded();
-  }
+  // A link staged over the link the slot holds already lands no write there:
+  // the slot keeps its link, so nothing is repointed.
+  if (
+    (input.mode === "reference" || input.mode === "capture") &&
+    covering.length === 0
+  ) return true;
+  // What one covering write's snapshot held at the slot, if it can tell.
+  // Overlapping write paths can capture different intermediate states, so
+  // every covering snapshot is consulted; the deepest alone is insufficient.
+  const previousAtSlot = (
+    detail: (typeof covering)[number],
+  ): { present: false } | { present: true; value: FabricValue } | undefined => {
+    if (detail.previousPresent === undefined) return undefined;
+    if (!detail.previousPresent) return { present: false };
+    let previous = detail.previousValue;
+    for (const segment of addressPath.slice(detail.address.path.length)) {
+      if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
+        return undefined;
+      }
+      if (!Object.hasOwn(previous, segment)) return { present: false };
+      previous = (previous as Record<string, FabricValue>)[segment];
+    }
+    return { present: true, value: previous };
+  };
+  const previous = covering.map(previousAtSlot);
+  // A capture staged again, under whatever schema its link now carries, over
+  // a slot that held a link to the same cell repoints nothing. Every snapshot
+  // has to show that link or absence, so a slot emptied and refilled within
+  // the transaction is judged by what it held before.
+  if (
+    input.mode === "capture" &&
+    previous.every((state) =>
+      state !== undefined &&
+      (!state.present ||
+        linksNameSameCell(state.value, input.value, { ...target, path: [] }))
+    ) &&
+    previous.some((state) => state?.present === true)
+  ) return true;
   // A declaration the stored envelope already makes on the slot keeps its own
   // requirement, whatever the candidate schema introduces beside it.
   const stored = loadStoredCfcEnvelope(tx, target);
@@ -1627,30 +1704,16 @@ const writeIsRuntimeInitialization = (
         entry.schema.ifc?.writePolicyAnyOf !== undefined)
     )
   ) return false;
-  // Overlapping write paths can capture different intermediate states. Every
-  // covering snapshot must agree on absence; the deepest alone is insufficient.
-  const absent = covering.length > 0 && covering.every((detail) => {
-    if (detail.previousPresent === undefined) return false;
-    if (!detail.previousPresent) return true;
-    let previous = detail.previousValue;
-    const remaining = addressPath.slice(detail.address.path.length);
-    for (const segment of remaining) {
-      if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
-        return false;
-      }
-      if (!Object.hasOwn(previous, segment)) return true;
-      previous = (previous as Record<string, FabricValue>)[segment];
-    }
-    return false;
-  });
-  return absent && finalValueIsRecorded();
+  return previous.length > 0 &&
+    previous.every((state) => state?.present === false);
 };
 
 /**
- * Whether `path` lies at or under a reference the runtime staged in this
- * transaction, with the slot still holding it. Staging writes nothing the
- * referenced value holds, so the integrity the receiving slot's schema would
- * add describes content the stager did not write and is not minted for it.
+ * Whether `path` lies at or under a reference or capture the runtime staged
+ * in this transaction, with the slot still holding it. Staging writes nothing
+ * the referenced value holds, so the integrity the receiving slot's schema
+ * would add describes content the stager did not write and is not minted for
+ * it.
  */
 const pathHoldsStagedReference = (
   tx: IExtendedStorageTransaction,
@@ -1662,22 +1725,15 @@ const pathHoldsStagedReference = (
   path: readonly string[],
 ): boolean => {
   const logicalPath = canonicalizeLogicalPath(path);
+  const scope = normalizeCellScope(target.scope);
   return tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "initialization" && input.mode === "reference" &&
+    input.kind === "initialization" &&
+    (input.mode === "reference" || input.mode === "capture") &&
     tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
-    normalizeCellScope(input.target.scope) ===
-      normalizeCellScope(target.scope) &&
+    normalizeCellScope(input.target.scope) === scope &&
     concretePathHasPrefix(logicalPath, input.target.path) &&
-    valueEqual(
-      tx.readValueOrThrow({
-        space: target.space,
-        id: target.id as URI,
-        scope: target.scope,
-        path: [...input.target.path],
-      }, { meta: INTERNAL_VERIFIER_META }),
-      input.value,
-    )
+    slotHoldsInitialization(tx, { ...target, scope }, input)
   );
 };
 
