@@ -9,6 +9,10 @@ import type {
   JSONSchemaObj,
   Pattern,
 } from "../src/builder/types.ts";
+import {
+  LIST_OP_CAPTURED_ARGUMENT_FIELDS,
+  LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+} from "../src/builtins/list-op-argument-usage.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
@@ -398,6 +402,96 @@ describe("setup-argument-projection", () => {
       argument.key("list").set(["forged"]);
 
       expect(await commit(tx)).toContain("ownerPrincipal mismatch at /items");
+      expect(ownersList()).toEqual([]);
+    });
+  });
+  describe("beside a binding a list builtin captures", () => {
+    // A list builtin stages its callback's captured bindings at `params` as a
+    // link to a record holding a write redirect to each captured cell, and
+    // records each link as a capture. The walk recording argument projections
+    // stops at that link, so the slot holds a capture alone.
+
+    // The argument of a row whose callback captures the owner's list.
+    const rowArgumentSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        params: {
+          type: "object",
+          properties: { items: { ...ownedList, asCell: ["readonly"] } },
+        },
+      },
+    };
+
+    /** Sets up a row capturing `list`, as a list builtin stages it. */
+    async function setUpRow(tx: IExtendedStorageTransaction, list: unknown) {
+      const resultCell = runtime.getCell(space, "row", undefined, tx);
+      const pattern = {
+        argumentSchema: rowArgumentSchema,
+        resultSchema: { type: "object", properties: {} },
+        result: {},
+        nodes: [],
+      } satisfies Pattern;
+      const params = runtime.getImmutableCell(
+        space,
+        { params: { items: list } },
+        undefined,
+        tx,
+      ).key("params");
+      await runtime.runner.setup(tx, pattern, { params }, resultCell, {
+        referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+        capturedArgumentFields: LIST_OP_CAPTURED_ARGUMENT_FIELDS,
+      });
+      return resultCell.getAsNormalizedFullLink();
+    }
+
+    it("records a capture of the slot and no projection of it", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      await setUpRow(tx, binding(tx));
+      const row = runtime.getCell(space, "row", undefined, tx)
+        .getArgumentCell()!.getAsNormalizedFullLink();
+
+      const records = tx.getCfcState().writePolicyInputs.flatMap((input) =>
+        input.target.id !== row.id
+          ? []
+          : input.kind === "initialization"
+          ? [{ record: input.mode, path: input.target.path }]
+          : input.kind === "structural-provenance" &&
+              (input.claim === CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION ||
+                input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION)
+          ? [{ record: input.claim, path: input.target.path }]
+          : []
+      );
+
+      expect(records).toEqual([{
+        record: "capture",
+        path: ["params", "items"],
+      }]);
+      tx.abort();
+    });
+
+    it("refuses a later setup staging a redirect to another cell over the captured one", async () => {
+      await initializeOwnersList();
+      await initializeOwnersList("other-board");
+      const first = runtime.edit();
+      await setUpRow(first, binding(first));
+      expect(await commit(first)).toBeUndefined();
+
+      const second = runtime.edit();
+      await setUpRow(second, binding(second, "other-board"));
+
+      expect(await commit(second)).toContain(`${refusal} at /params/items`);
+    });
+
+    it("refuses a write through the captured slot without the list's writer in the transaction staging it", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      await setUpRow(tx, binding(tx));
+      runtime.getCell(space, "row", undefined, tx)
+        .getArgumentCell<{ params: { items: string[] } }>(rowArgumentSchema)!
+        .key("params").key("items").set(["forged"]);
+
+      expect(await commit(tx)).toContain(`${refusal} at /items`);
       expect(ownersList()).toEqual([]);
     });
   });
