@@ -40,6 +40,11 @@ const uses = {
       "{ count: computed(() => items.get().length), add: edit({ items }) }",
     counter: (result: Cell<Result>): Cell<Counter> => result,
   },
+  "returns": {
+    returned:
+      "{ items, count: computed(() => items.get().length), add: edit({ items }) }",
+    counter: (result: Cell<Result>): Cell<Counter> => result,
+  },
 };
 
 describe("argument-default-seed", () => {
@@ -136,22 +141,21 @@ describe("argument-default-seed", () => {
     }
   }
 
-  it("refuses a value the caller supplies in place of the default", async () => {
-    const compiled = await compile(
-      protections["its writer"],
-      uses["keeps to itself"].returned,
-    );
-    const tx = runtime.edit();
-    runtime.run(
-      tx,
-      compiled,
-      { items: ["forged"] },
-      runtime.getCell<Result>(space, "result", compiled.resultSchema, tx),
-    );
-    runtime.prepareTxForCommit(tx);
+  for (const [use, { returned }] of Object.entries(uses)) {
+    it(`refuses a value the caller supplies in place of the default of a list the pattern ${use}`, async () => {
+      const compiled = await compile(protections["its writer"], returned);
+      const tx = runtime.edit();
+      runtime.run(
+        tx,
+        compiled,
+        { items: ["forged"] },
+        runtime.getCell<Result>(space, "result", compiled.resultSchema, tx),
+      );
+      runtime.prepareTxForCommit(tx);
 
-    expect((await tx.commit()).error?.message).toContain(
-      "writeAuthorizedBy requires a trusted verified binding identity at /items",
-    );
-  });
+      expect((await tx.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /items",
+      );
+    });
+  }
 });
