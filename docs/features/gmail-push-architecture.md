@@ -75,7 +75,10 @@ needs one topic for each client's project.
 
 ## Setting up
 
-Each step happens once for a mailbox, apart from the last.
+Minting and binding happen once for each channel, and a mailbox can have up
+to eight channels bound to it, one for each install of a syncer. The watch is
+set once for the mailbox, whatever the number of channels, and is renewed
+daily.
 
 ```mermaid
 sequenceDiagram
@@ -127,9 +130,14 @@ how the syncer watches for the change is the syncer's own business.
 
 ## What each crossing proves
 
-- **Pub/Sub to toolshed (2, 3).** The OIDC token proves Google sent the message
-  on behalf of a subscription this deployment accepts: toolshed checks the
-  signature, the issuer, the audience, and the service account.
+- **Pub/Sub to toolshed (2, 3).** The OIDC token proves the request comes from
+  something able to act as a service account this deployment accepts, for
+  this deployment's audience: toolshed checks the signature, the issuer, the
+  audience, and the service account. The token does not cover the body, and
+  names no subscription. So the trust boundary is the service account: anyone
+  who can mint a token as it can post a notification for any bound mailbox.
+  The most that buys is a spurious wake-up, since a record carries no mail and
+  the syncer fetches changes from Gmail itself.
 - **Syncer to control plane (a).** The signed request proves the caller's
   identity key, and the channel's space must list that identity as OWNER.
 - **Toolshed to Gmail (b).** The access token proves the caller can read the
