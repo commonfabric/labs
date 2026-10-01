@@ -7,7 +7,7 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { Runtime } from "@commonfabric/runner";
+import { ACLManager, Runtime } from "@commonfabric/runner";
 import type { SessionFactory } from "@commonfabric/runner/storage/v2";
 
 import { TestStorageManager } from "../../runner/test/memory-v2-test-utils.ts";
@@ -95,9 +95,28 @@ describe("acl, against an `enforce` memory server", () => {
     return await runtimeAs(alice).storageManager.createSpace!(acl);
   }
 
-  /** Runs `leaveAcl()` for `space` as `user`. */
-  async function leaveAs(user: Identity, space: MemorySpace) {
+  /**
+   * Runs `leaveAcl()` for `space` as `user`. `beforeWrite`, when given, runs
+   * once after `leaveAcl()` has read the ACL and before its write, as another
+   * client's concurrent change would.
+   */
+  async function leaveAs(
+    user: Identity,
+    space: MemorySpace,
+    beforeWrite?: () => Promise<void>,
+  ) {
     const runtime = runtimeAs(user);
+    if (beforeWrite !== undefined) {
+      const editWithRetry = runtime.editWithRetry.bind(runtime);
+      let pending: (() => Promise<void>) | undefined = beforeWrite;
+      (runtime as { editWithRetry: typeof editWithRetry }).editWithRetry =
+        async (...args) => {
+          const before = pending;
+          pending = undefined;
+          await before?.();
+          return await editWithRetry(...args);
+        };
+    }
     resetWriteReceipts();
     let outcome: unknown;
     await captureStderr(async () => {
@@ -124,6 +143,43 @@ describe("acl, against an `enforce` memory server", () => {
 
         expect((await server.readDocument(space, `of:${space}`))?.value)
           .toEqual({ [alice.did()]: "OWNER" });
+      });
+    }
+
+    for (
+      const [description, initial, change, message] of [
+        [
+          'gains a `"*"` entry',
+          { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+          { [alice.did()]: "OWNER", [bob.did()]: "WRITE", "*": "READ" },
+          "lacks OWNER",
+        ],
+        [
+          "comes to hold no concrete `OWNER` but the member",
+          { [alice.did()]: "OWNER", [bob.did()]: "OWNER" },
+          { [alice.did()]: "WRITE", [bob.did()]: "OWNER" },
+          "retain at least one concrete OWNER",
+        ],
+      ] as const
+    ) {
+      it(`throws the memory server's refusal, keeping the entry, when the ACL ${description} after it was read`, async () => {
+        // The refusal comes from the server, past checks that passed on the
+        // ACL as first read, and it is reported as one rather than as a leave.
+
+        const space = await createSpace(initial);
+        const owner = runtimeAs(alice);
+
+        await expect(
+          leaveAs(bob, space, async () => {
+            const acl = new ACLManager(owner, space);
+            for (const [principal, level] of Object.entries(change)) {
+              await acl.set(principal as `did:${string}:${string}`, level);
+            }
+          }),
+        ).rejects.toThrow(message);
+
+        expect((await server.readDocument(space, `of:${space}`))?.value)
+          .toEqual(change);
       });
     }
 
