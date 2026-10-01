@@ -784,6 +784,39 @@ describe("asCell scope cap, on a compiled handle beside `null` or `undefined`", 
     }, { space })).argumentSchema;
 
   /**
+   * The input schema the compiler writes for a lift capturing `handle`, a
+   * local declared as `declaration` that is a space-scoped cell or `nullish`.
+   */
+  const compiledCaptureSchema = async (
+    declaration: string,
+    nullish: string,
+  ): Promise<JSONSchema> => {
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { computed, pattern, Writable, type Confidential, type PerSpace } from 'commonfabric';",
+          "interface Inner { field: string }",
+          "export default pattern<{ enabled: boolean }>(({ enabled }) => {",
+          `  const handle: ${declaration} = enabled`,
+          "    ? Writable.perSpace.of<Inner>({ field: '' })",
+          `    : ${nullish};`,
+          "  return { out: computed(() => handle?.get().field) };",
+          "});",
+        ].join("\n"),
+      }],
+    }, { space });
+    const nodes = (compiled as unknown as {
+      nodes: { module: { argumentSchema?: JSONSchema } }[];
+    }).nodes;
+    return nodes.map((node) => node.module.argumentSchema).find((schema) =>
+      typeof schema === "object" &&
+      "handle" in ((schema as { properties?: object }).properties ?? {})
+    )!;
+  };
+
+  /**
    * The handle, stored as a link to a cell in `targetScope`, read as a value
    * projection, by a key() chain past it, and as a property of a whole-object
    * read.
@@ -842,5 +875,41 @@ describe("asCell scope cap, on a compiled handle beside `null` or `undefined`", 
       expect(r.through).toBe("secret");
       expect(r.whole).toEqual({ field: "secret" });
     });
+  }
+
+  for (const nullish of ["null", "undefined"]) {
+    for (
+      const [label, declaration] of [
+        ["scoped cell", `PerSpace<Writable<Inner>> | ${nullish}`],
+        [
+          "labelled scoped cell",
+          `PerSpace<Confidential<Writable<Inner>, readonly ["owner"]>> | ${nullish}`,
+        ],
+      ] as const
+    ) {
+      it(`blocks every route to a narrower link through the capture of a ${label} beside ${nullish}`, async () => {
+        const r = routes(
+          await compiledCaptureSchema(declaration, nullish),
+          `capture-blocked-${label}-${nullish}`,
+          "session",
+        );
+
+        expect(r.projection).toBeUndefined();
+        expect(r.through).toBeUndefined();
+        expect(r.whole).toBeUndefined();
+      });
+
+      it(`allows every route to a link the cap admits through the capture of a ${label} beside ${nullish}`, async () => {
+        const r = routes(
+          await compiledCaptureSchema(declaration, nullish),
+          `capture-allowed-${label}-${nullish}`,
+          "space",
+        );
+
+        expect(r.projection).toEqual({ field: "secret" });
+        expect(r.through).toBe("secret");
+        expect(r.whole).toEqual({ field: "secret" });
+      });
+    }
   }
 });

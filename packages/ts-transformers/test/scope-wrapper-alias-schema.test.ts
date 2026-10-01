@@ -242,6 +242,71 @@ export default pattern(() => {
       });
     });
 
+    it("keeps the scope, the cap, the labels, and `null` of a labelled nullable scoped cell's capture", async () => {
+      // The cell's alternative holds its CFC carrier beside it.
+      const module = await transformed(
+        `import { computed, pattern, Writable, type Confidential, type PerSpace } from "commonfabric";
+interface A { a: string; b: number }
+type Maybe = PerSpace<Confidential<Writable<A>, readonly ["owner"]>> | null;
+export default pattern<{ enabled: boolean }>(({ enabled }) => {
+  const handle: Maybe = enabled ? Writable.perSpace.of<A>({ a: "x", b: 1 }) : null;
+  return { out: computed(() => handle?.get().a) };
+});`,
+      );
+      const captures = callsNamed(module, "lift").at(-1)!.typeArguments![0]!;
+      const [input] = callSchemas(module, "lift");
+
+      expect(captures.getText(module).replace(/\s+/g, " ")).toBe(
+        "{ handle: __cfHelpers.PerSpace<__cfHelpers.ReadonlyCell<A> | null>; }",
+      );
+      expect((input!.properties as Record<string, unknown>).handle).toEqual({
+        anyOf: [
+          {
+            $ref: "#/$defs/A",
+            asCell: [{ kind: "readonly", scope: "space" }],
+          },
+          { type: "null" },
+        ],
+        scope: "space",
+        ifc: { confidentiality: ["owner"] },
+      });
+    });
+
+    it("reads a nullable labelled intersection in a scope alike written outside the wrapper and inside", async () => {
+      const schemaOf = async (argument: string) =>
+        emittedSchemas(
+          await transformed(
+            `import { toSchema, type Confidential, type PerUser } from "commonfabric";
+interface A { a: string }
+interface B { b: number }
+type Maybe = ${argument};
+export const schema = toSchema<Maybe>();`,
+          ),
+        )[0];
+
+      const outside = await schemaOf(
+        'PerUser<Confidential<A & B, readonly ["owner"]>> | null',
+      );
+
+      expect(
+        await schemaOf(
+          'PerUser<Confidential<A & B, readonly ["owner"]> | null>',
+        ),
+      ).toEqual(outside);
+      expect(outside).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { a: { type: "string" }, b: { type: "number" } },
+            required: ["a", "b"],
+            ifc: { confidentiality: ["owner"] },
+          },
+          { type: "null" },
+        ],
+        scope: "user",
+      });
+    });
+
     it("reads a nullable wrapper around an intersection alike through an alias and written out", async () => {
       const schemaOf = async (declarations: string, argument: string) =>
         emittedSchemas(

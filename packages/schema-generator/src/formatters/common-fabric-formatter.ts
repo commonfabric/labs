@@ -57,6 +57,7 @@ import {
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
+import { cfcCarrierProperty } from "../typescript/cfc-carrier.ts";
 import {
   getScopeBrand,
   hasNestedScopeBrands,
@@ -425,12 +426,6 @@ const soleConditionalBranch = (
 };
 
 /**
- * The member a CFC metadata carrier holds (`Cfc` in `packages/api/cfc.ts`).
- * It is a phantom: no value holds it.
- */
-export const CFC_CARRIER_PROPERTY = "__ct_cfc__";
-
-/**
  * The default-library aliases that map an object's members, which fold a
  * labelled operand's carrier into the object they build as one more member.
  */
@@ -451,18 +446,6 @@ const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
   "Partial",
   "Required",
 ]);
-
-/**
- * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
- * metadata carrier, which a CFC alias intersects its payload with.
- */
-const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
-  const properties = member.getProperties();
-  return properties.length === 1 &&
-      properties[0]!.name === CFC_CARRIER_PROPERTY
-    ? properties[0]
-    : undefined;
-};
 
 /**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
@@ -859,7 +842,8 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     if (
       this.#scopeBrand(type, context) !== undefined ||
-      hasNestedScopeBrands(type, context.typeChecker)
+      hasNestedScopeBrands(type, context.typeChecker) ||
+      this.#isLabelledScopePayload(type, context)
     ) {
       return true;
     }
@@ -1029,6 +1013,18 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#applyScopeWrapperSemantics(
         this.#formatScopePayload(type, brand, context),
         brand.scope,
+      );
+    }
+
+    // A labelled payload of several members, as `Confidential<A & B, …>` in
+    // a scope, has no one member for the carrier reading below, so its
+    // structure is read by the formatters after this one, and its labels from
+    // its carriers.
+    if (this.#isLabelledScopePayload(type, context)) {
+      return this.#withCarriedLabels(
+        this.#schemaGenerator.formatStructure(type, context),
+        cfcCarrierMetadata(type, context.typeChecker),
+        context,
       );
     }
 
@@ -1493,17 +1489,24 @@ export class CommonFabricFormatter implements TypeFormatter {
         undefined,
       );
     }
-    if (this.supportsType(type, payloadContext)) {
-      return this.formatType(type, payloadContext);
-    }
-    // A labelled payload of several members, as `Confidential<A & B, …>`, has
-    // no one member for the carrier reading, so its structure is read by the
-    // formatters after this one, and its labels from its carriers.
-    return this.#withCarriedLabels(
-      this.#schemaGenerator.formatStructure(type, payloadContext),
-      cfcCarrierMetadata(type, context.typeChecker),
-      payloadContext,
-    );
+    return this.supportsType(type, payloadContext)
+      ? this.formatType(type, payloadContext)
+      : this.#schemaGenerator.formatStructure(type, payloadContext);
+  }
+
+  /**
+   * Whether `type` is a member of a scope wrapper's payload the wrapper has
+   * taken its brand off (`GenerationContext.scopeBrandRead`) that holds CFC
+   * metadata carriers beside several other members, whose labels the carrier
+   * reading, which needs one payload member, cannot take apart.
+   */
+  #isLabelledScopePayload(
+    type: ts.Type,
+    context: GenerationContext,
+  ): boolean {
+    return context.scopeBrandRead?.has(type) === true &&
+      cfcCarrierMetadata(type, context.typeChecker).length > 0 &&
+      cfcCarriedParts(type, context.typeChecker) === undefined;
   }
 
   /**

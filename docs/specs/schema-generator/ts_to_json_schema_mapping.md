@@ -880,7 +880,8 @@ the type for more than the brand, as for the labels of
 `PerUser<Confidential<T, […]>>`, whose CFC parts pass over the brand
 (`cfcCarriedParts`), and otherwise by the formatters after it
 (`formatStructure`), with the labels of any CFC metadata carrier it holds, as
-`Confidential<A & B, […]>` does. The payload of a wrapper found by name is
+`Confidential<A & B, […]>` does, alone or as an alternative beside `null` or
+`undefined`. The payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):
@@ -908,7 +909,10 @@ handle, which a read applies however it reaches the handle
 `PerSpace<Cell<T>> | null` and `PerSpace<Cell<T> | null>` →
 `{ anyOf: [{ type: "null" }, { …, asCell: [{ kind: "cell", scope: "space" }]
 }], scope: "space" }`; the scope-placement walk accepts that one declaration
-in a branch, a cell's cap naming the slot's own scope. Beside anything else a
+in a branch, a cell's cap naming the slot's own scope. Inside a cell, the
+value is a slot of its own, whose scope is declared beside the cell's entry, so
+a nullable scoped cell nested in another is checked against its own scope:
+`PerUser<Cell<PerSession<Cell<T>> | null>> | null` keeps both. Beside anything else a
 wrapper around a cell **throws** (`A scope wrapper around a cell cannot hold
 anything beside the cell`): beside a value, one scope cannot be the value's
 slot scope and the cell's cap both, and beside another cell, as in

@@ -1,6 +1,7 @@
 import ts from "typescript";
 import type { SchemaScope } from "@commonfabric/api";
 import { getCellWrapperInfo } from "@commonfabric/schema-generator/cell-brand";
+import { cfcCarrierProperty } from "@commonfabric/schema-generator/cfc-carrier";
 import {
   isCommonFabricSymbol,
   resolvesToCommonFabricSymbol,
@@ -1400,9 +1401,12 @@ function getScopedCell(
   const [alternative, ...others] = alternatives.filter((members) =>
     !isNullish(members)
   );
-  const cell = alternative?.length === 1 && others.length === 0
-    ? alternative[0]!
-    : undefined;
+  // A labelled cell holds its CFC carriers beside it, whose labels the
+  // capture's schema keeps (`SchemaHint.narrowedFrom`).
+  const [cell, ...rest] = (alternative ?? []).filter((member) =>
+    !cfcCarrierProperty(member)
+  );
+  if (rest.length > 0 || others.length > 0) return undefined;
   return brand && cell && isCellLikeType(cell, checker)
     ? {
       name: SCOPE_WRAPPER_FOR_SCOPE[brand.scope],

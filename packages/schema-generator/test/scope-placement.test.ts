@@ -39,6 +39,44 @@ describe("scope-placement", () => {
     ).not.toThrow();
   });
 
+  it("accepts a cap inside a capped cell's value that names that value's scope", () => {
+    // The branch's own `anyOf` holds the alternatives of the value inside its
+    // cell, a slot whose scope is declared beside the cell's entry.
+    expect(() =>
+      assertScopeDeclarationsAreReachable(
+        beside(
+          {
+            anyOf: [
+              { type: "null" },
+              { type: "string", asCell: [{ kind: "cell", scope: "session" }] },
+            ],
+            asCell: [{ kind: "cell", scope: "user" }],
+            scope: "session",
+          },
+          "user",
+        ),
+      )
+    ).not.toThrow();
+  });
+
+  it("throws for a cap inside a capped cell's value that names another scope than that value's", () => {
+    expect(() =>
+      assertScopeDeclarationsAreReachable(
+        beside(
+          {
+            anyOf: [
+              { type: "null" },
+              { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+            ],
+            asCell: [{ kind: "cell", scope: "user" }],
+            scope: "session",
+          },
+          "user",
+        ),
+      )
+    ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
   it("throws for a cell's cap in a branch that names another scope than the slot's", () => {
     expect(() =>
       assertScopeDeclarationsAreReachable(

@@ -15,7 +15,8 @@
  * scope the slot declares at its own top level, as a scoped cell beside `null`
  * or `undefined` carries. The slot's scope is read at the top, and the entry's,
  * the cap on following the handle, wherever the handle is reached
- * (`ContextualFlowControl.getAsCellFollowScopeCap`).
+ * (`ContextualFlowControl.getAsCellFollowScopeCap`). Inside a cell, the value
+ * is a slot of its own, whose scope is declared beside the cell's entry.
  *
  * The subject here is PLACEMENT. Which scope a slot should carry, and which
  * instance the runtime addresses once it has one, are the write path's
@@ -106,7 +107,8 @@ export const scopeAroundCellUnionError = (scope: string): Error =>
     `A scope wrapper around a cell cannot hold anything beside the cell ` +
       `but \`null\` or \`undefined\`, as \`PerUser<Cell<T> | string>\` ` +
       `and \`PerUser<Cell<T> | Cell<U>>\` do (\`scope: "${scope}"\`). Put ` +
-      `the alternatives inside one cell (\`PerUser<Cell<T | string>>\`).`,
+      `a value inside the cell (\`PerUser<Cell<T | string>>\`), and two ` +
+      `cells' values in one cell (\`PerUser<Cell<T | U>>\`).`,
   );
 
 const walkSlot = (schema: MutableJSONSchema): void => {
@@ -145,12 +147,18 @@ const checkBranch = (
     throw scopeInsideUnionError(scope);
   }
 
-  // A nested compound is still the same slot's alternatives.
+  // A nested compound is still the same slot's alternatives, except in a
+  // branch that declares a cell: there they are the alternatives of the value
+  // inside the cell, a slot of its own, whose scope is declared beside the
+  // cell's entry.
+  const innerScope = Array.isArray(schema.asCell) && schema.asCell.length > 0
+    ? (typeof schema.scope === "string" ? schema.scope : undefined)
+    : slotScope;
   for (const keyword of SAME_SLOT_COMPOUND_KEYWORDS) {
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
     for (const branch of branches) {
-      checkBranch(branch as MutableJSONSchema, slotScope);
+      checkBranch(branch as MutableJSONSchema, innerScope);
     }
   }
 

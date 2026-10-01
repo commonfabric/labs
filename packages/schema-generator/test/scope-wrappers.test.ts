@@ -197,6 +197,29 @@ interface SchemaRoot {
         });
     });
 
+    it("checks a nullable scoped cell inside a nullable scoped cell against each one's own scope", async () => {
+      // The inner cell is inside the outer one's value, a slot of its own
+      // whose scope is declared beside the outer cell's entry.
+      expect(
+        await draftSchema(
+          "PerUser<Cell<PerSession<Cell<string>> | null>> | null",
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "null" },
+          {
+            anyOf: [
+              { type: "null" },
+              { type: "string", asCell: [{ kind: "cell", scope: "session" }] },
+            ],
+            scope: "session",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        ],
+        scope: "user",
+      });
+    });
+
     it("throws for a handle's cap in a branch that is not the slot's scope", async () => {
       // `PerUser<Cell<string>> | PerSession<Cell<string>>` puts two caps in
       // branches under no scope of the slot's own.
