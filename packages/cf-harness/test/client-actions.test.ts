@@ -156,13 +156,52 @@ Deno.test("a url's authority must be well-formed, as Loom's final validator hold
 });
 
 Deno.test("a command's first character after the slash is not whitespace", () => {
-  for (const line of ["/ ", "/\t", "/  x", "/ x", "/"]) {
+  // Python's whitespace set, as Loom's `str.isspace` reads it: it holds
+  // U+001C..U+001F and U+0085, and not U+FEFF.
+  for (
+    const line of [
+      "/ ",
+      "/\t",
+      "/  x",
+      "/ x",
+      "/",
+      "/\x1cfoo",
+      "/\x85x",
+      "/\u3000x",
+    ]
+  ) {
     assertEquals(readHarnessClientAction({ kind: "command", line }), undefined);
   }
-  for (const line of ["/a", "/weave notes"]) {
+  for (const line of ["/a", "/weave notes", "/\uFEFFx"]) {
     assertEquals(readHarnessClientAction({ kind: "command", line }), {
       kind: "command",
       line,
+    });
+  }
+});
+
+Deno.test("a url holds no character Loom's final validator refuses, and brackets are read on the host", () => {
+  for (
+    const url of [
+      "https://example.com/a\x1fb",
+      "https://example.com/a\x00b",
+      "https://example.com/a\x7fb",
+      "https://example.com/a\x85b",
+      "https://example.com/a\x9fb",
+      "https://example.com/a\x1cb",
+      "https://example.com/a\u3000b",
+      "https://u@[::1]evil",
+      "https://u[ser@example.com/",
+    ]
+  ) {
+    assertEquals(readHarnessClientAction({ kind: "open_url", url }), undefined);
+  }
+  for (
+    const url of ["https://u[ser]@example.com/", "https://example.com/a\uFEFFb"]
+  ) {
+    assertEquals(readHarnessClientAction({ kind: "open_url", url }), {
+      kind: "open_url",
+      url,
     });
   }
 });

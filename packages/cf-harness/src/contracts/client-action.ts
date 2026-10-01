@@ -41,6 +41,30 @@ export const HARNESS_CLIENT_COMMAND_LINE_PATTERN =
  */
 const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
 
+/**
+ * Python's whitespace, as Loom's `str.isspace`, `str.strip` and `re` `\\s`
+ * read it: U+0009..U+000D, U+001C..U+001F, U+0020, U+0085, U+00A0, U+1680,
+ * U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. JavaScript's `\\s`
+ * differs (it lacks U+001C..U+001F and U+0085, and adds U+FEFF), so the set
+ * is spelled out here.
+ */
+const PYTHON_SPACE_CLASS =
+  "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const PYTHON_SPACE = new RegExp(`[${PYTHON_SPACE_CLASS}]`);
+const PYTHON_SPACE_ENDS = new RegExp(
+  `^[${PYTHON_SPACE_CLASS}]+|[${PYTHON_SPACE_CLASS}]+$`,
+  "g",
+);
+
+/**
+ * A character a client opening a url as given cannot be shown faithfully:
+ * Python whitespace, any C0 or C1 control, and the Unicode line and
+ * paragraph separators (Loom's `_URL_UNSAFE`).
+ */
+const URL_UNSAFE = new RegExp(
+  `[${PYTHON_SPACE_CLASS}\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]`,
+);
+
 /** A loom identifier as the service mints it. */
 const LOOM_ID = /^loom-[a-f0-9]{16}$/;
 
@@ -66,13 +90,17 @@ const hasExactlyKeys = (
 /** One DNS label as Loom holds it: letters, digits, inner hyphens, 1..63. */
 const HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
-/** Whether `text` is an IPv6 address literal (no zone), as `ipaddress` reads. */
+/**
+ * Whether the dot-separated `labels` are an IPv4 address as `ipaddress`
+ * reads one: four decimal octets 0..255, none with a leading zero.
+ */
 const isIpv4 = (labels: readonly string[]): boolean =>
   labels.length === 4 &&
   labels.every((octet) =>
     /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255
   );
 
+/** Whether `text` is an IPv6 address literal (no zone), as `ipaddress` reads. */
 const isIpv6 = (text: string): boolean => {
   const halves = text.split("::");
   if (halves.length > 2) return false;
@@ -109,10 +137,13 @@ const isIpv6 = (text: string): boolean => {
 const authorityIsWellFormed = (value: string): boolean => {
   const authority = /^https?:\/\/([^/?#]*)/.exec(value)?.[1];
   if (authority === undefined || authority.includes("%")) return false;
+  // `urlsplit` raises on a bracket with no partner anywhere in the netloc.
+  if (authority.includes("[") !== authority.includes("]")) return false;
   const hostinfo = authority.slice(authority.lastIndexOf("@") + 1);
   let host: string;
   let port: string;
-  if (authority.includes("[") || authority.includes("]")) {
+  // Brackets are read on the host, after the userinfo, as Loom reads them.
+  if (hostinfo.includes("[") || hostinfo.includes("]")) {
     const bracketed = /^\[([^\]]*)\](?::(.*))?$/.exec(hostinfo);
     if (bracketed === null) return false;
     host = bracketed[1];
@@ -136,11 +167,12 @@ const authorityIsWellFormed = (value: string): boolean => {
 
 /**
  * An http or https address as Loom's final validator reads it, or undefined.
- * Whitespace is refused on the string as given (URL parsing would encode it),
+ * Whitespace, controls and separators (`URL_UNSAFE`) are refused on the
+ * string as given (URL parsing would encode them),
  * and the scheme is matched case-sensitively as Loom's `re.match` does.
  */
 const readHttpUrl = (value: string): string | undefined =>
-  !/\s/.test(value) && authorityIsWellFormed(value) ? value : undefined;
+  !URL_UNSAFE.test(value) && authorityIsWellFormed(value) ? value : undefined;
 
 /**
  * Reads one client action, or undefined when its kind is unknown or any
@@ -164,7 +196,8 @@ export const readHarnessClientAction = (
       return hasExactlyKeys(record, ["kind", "line"]) &&
           line !== undefined &&
           HARNESS_CLIENT_COMMAND_LINE_PATTERN.test(line) &&
-          line.trim().length > 1 && !/\s/.test(line[1]) &&
+          line.replace(PYTHON_SPACE_ENDS, "").length > 1 &&
+          !PYTHON_SPACE.test(line[1]) &&
           line.length <= HARNESS_CLIENT_COMMAND_MAX_LENGTH
         ? { kind: "command", line }
         : undefined;
