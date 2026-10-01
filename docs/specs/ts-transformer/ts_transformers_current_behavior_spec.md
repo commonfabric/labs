@@ -1991,15 +1991,15 @@ adjustments:
   binding under a computed key, reads no one property, so no property's
   declaration spells its value
 - a capture leaf printed from its type is read as the annotation of the member
-  it holds the value of, where that annotation names a value binding, as
-  `PolicyOf<typeof rules>` does (`namesValueBinding` in
-  `ast/type-building.ts`). The print spells the binding as the structural type
-  of the value it names, from which schema generation could not tell the
-  binding. The leaf records the annotation as its `spelledBy` schema hint, and
-  a print of the same type that a later pass rebuilds it into keeps the hint;
-  schema generation reads the node as the annotation spells the type at hand
-  (the schema-generator mapping spec's §13). A value captured whole thus keeps
-  a label that names a binding, as a part of it does
+  or binding it holds the value of, where that annotation denotes the type at
+  hand and names a value binding, as `PolicyOf<typeof rules>` does
+  (`namesValueBinding` in `ast/type-building.ts`). The print spells the binding
+  as the structural type of the value it names, from which schema generation
+  could not tell the binding. The leaf records the annotation as its `spelledBy`
+  schema hint, and a print of the same type that a later pass rebuilds it into
+  keeps the hint; schema generation reads the node as the annotation spells the
+  type at hand (the schema-generator mapping spec's §13). A value captured whole
+  thus keeps a label that names a binding, as a part of it does
   (`buildTypeElementsFromCaptureTree` in `ast/type-building.ts`;
   `carryNarrowing` in `transformers/type-shrinking.ts`;
   `test/printed-type-node-schema.test.ts`). Distinct policy bindings on union

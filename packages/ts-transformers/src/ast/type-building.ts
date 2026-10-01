@@ -3,6 +3,7 @@ import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/com
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
 import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
 import {
+  denotesSameType,
   readAuthoredTypeNodeOnce,
   readMemberAnnotation,
   unwrapTypeParentheses,
@@ -1522,10 +1523,18 @@ export function buildTypeElementsFromCaptureTree(
       }
       // A print spells a `typeof` binding as the structural type of the value
       // it names, from which no reader can tell the binding, so where the
-      // member's annotation names one, the print is read as that annotation.
+      // annotation of the member or binding the leaf reads names one, the
+      // print is read as that annotation.
       const printedType = context.state.printedFrom(typeNode);
       const annotation = declaring && printedType &&
-        readMemberAnnotation(declaring, printedType, checker);
+        (readMemberAnnotation(declaring, printedType, checker) ??
+          (declared &&
+              denotesSameType(
+                checker.getTypeFromTypeNode(declared),
+                printedType,
+              )
+            ? declared
+            : undefined));
       if (annotation && namesValueBinding(annotation, checker)) {
         context.state.recordSchemaHint(typeNode, { spelledBy: annotation });
       }

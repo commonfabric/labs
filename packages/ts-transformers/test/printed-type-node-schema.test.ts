@@ -1876,6 +1876,22 @@ export default pattern<{ secret: Confidential<Secret, [PolicyOf<typeof rules>]> 
       ).toMatchObject({ ifc: { confidentiality: [policy] } });
     });
 
+    it("reads the policy a declaration's annotation names of a value captured whole as a shorthand property", async () => {
+      expect(
+        await captured({
+          "/main.tsx":
+            `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+interface Secret { a: string; b: string; }
+export default pattern<{ value: Secret }>(({ value }) => {
+  const secret: Confidential<Secret, [PolicyOf<typeof rules>]> = value;
+  return { out: computed(() => JSON.stringify({ secret })) };
+});`,
+        }, "secret"),
+      ).toMatchObject({ ifc: { confidentiality: [policy] } });
+    });
+
     it("reads the policy of a value an alias of a nullable union names", async () => {
       expect(
         await captured({
