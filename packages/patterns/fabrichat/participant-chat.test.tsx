@@ -20,7 +20,13 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import { findNodeByProp, propValue, readValue } from "../test/vnode-helpers.ts";
+import {
+  findElement,
+  findNodeById,
+  findNodeByProp,
+  propValue,
+  readValue,
+} from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import {
   type ActivityCounters,
@@ -101,6 +107,15 @@ const chatDisplay = (chip: unknown): unknown =>
     ) as { display?: unknown })?.display,
   );
 
+// How a manager shows its user's chat address, and the address it offers to
+// copy.
+const addressShown = (root: unknown): string => {
+  const shown = findNodeById(root, "fabrichat-my-address");
+  return `${
+    readValue((propValue(shown, "style") as { display?: unknown })?.display)
+  }:${propValue(findElement(shown, "cf-copy-button"), "text")}`;
+};
+
 /** The room's records, which every participant's room shares. */
 interface Records {
   messages: Writable<MessagesValue>;
@@ -171,6 +186,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const unclaimed = Writable.of<UnclaimedProfile>({ name: "Nobody" });
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
   const rooms = Writable.of<ChatIndexEntry[]>([]);
+  const bobDid = Writable.of<string>("");
+  const action_note_principal = action(() =>
+    bobDid.set(currentPrincipal() ?? "")
+  );
   const manager = FabriChatManagerCore({
     myProfile: profile,
     rooms,
@@ -198,6 +217,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   return {
     [TESTS]: [
       { action: writeProfile, event: {}, trustedUi: profileGesture },
+      { action: action_note_principal },
+      // Bob's manager offers his chat address, which his profile attests, to
+      // read and to copy.
+      {
+        assertion: assert(() =>
+          bobDid.get() !== "" &&
+          addressShown(manager[UI]) === `block:${bobDid.get()}`
+        ),
+      },
       { await: "alice-sent" },
       // The room's activity entry for Alice's message names her as its
       // author, as her own message does.

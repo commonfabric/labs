@@ -38,8 +38,9 @@ import type {
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
+// Stand-ins for principals, each a base58btc key as a principal's is.
 const BOB = "did:key:z6MkBob";
-const CAROL = "did:key:z6MkCarol";
+const CAROL = "did:key:z6MkCaro1";
 
 /** A room held apart from the index, which forgetting it changes. */
 interface HeldRoom {
@@ -344,6 +345,27 @@ export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
           shownRefusal(group[UI]) ===
             "block:The counterpart is not a principal. Received: " +
               `"${BOB}/of:fid1:profile"`
+        ),
+      },
+      // A well-formed DID whose key isn't base58btc names no principal: here,
+      // one a sentence's period follows.
+      {
+        action: group.openDirect,
+        event: { requestId: "d-period", counterpart: `${BOB}.` },
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "d-period") ===
+            "The counterpart is not a principal." &&
+          shownRefusal(group[UI]) ===
+            "block:The counterpart is not a principal. Received: " +
+              `"${BOB}."`
+        ),
+      },
+      // A profile that attests no principal offers no chat address.
+      {
+        assertion: assert(() =>
+          displayOf(group[UI], "fabrichat-my-address") === "none"
         ),
       },
       // A start that is done shows nothing.

@@ -156,6 +156,18 @@ export interface ManagerActState {
   id?: string;
 }
 
+/** A `did:key` whose key is base58btc multibase, as every principal's is. */
+const DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
+
+/**
+ * Whether `value` is a DID a principal can have: well formed, and, for a
+ * `did:key`, a base58btc key, so that a key a period or other punctuation
+ * follows is refused.
+ */
+const isPrincipalDID = (value: unknown): value is DID =>
+  isWellFormedDID(value) &&
+  (!value.startsWith("did:key:") || DID_KEY.test(value));
+
 /** The DIDs in `text`, separated by spaces, commas, or lines. */
 const principalsIn = (text: string): string[] =>
   text.split(/[\s,]+/).filter((part) => part !== "");
@@ -167,7 +179,7 @@ const otherMembers = (
 ): DID[] =>
   members.reduce<DID[]>(
     (found, member) =>
-      isWellFormedDID(member) && member !== self && !found.includes(member)
+      isPrincipalDID(member) && member !== self && !found.includes(member)
         ? [...found, member]
         : found,
     [],
@@ -333,7 +345,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
     if (act === "openDirect") {
       const counterpart = event?.counterpart ?? typed;
-      if (!isWellFormedDID(counterpart)) {
+      if (!isPrincipalDID(counterpart)) {
         const reason = "The counterpart is not a principal.";
         // The session is shown the text it sent, which says what is wrong
         // with it. The recorded reason is kept for as long as the manager
@@ -610,6 +622,14 @@ export const FabriChatManagerCore = pattern<
       () => [...((outgoingNotices.get() ?? []) as ChatManagerNotice[])],
     );
     const cannotStart = computed(() => myProfile?.get() === undefined);
+    // The principal this user's profile attests, which someone starting a
+    // chat with them needs; empty when the profile attests none.
+    const myAddress = computed(() =>
+      principalOf(myProfile, "represents-principal") ?? ""
+    );
+    const addressDisplay = computed(
+      () => (myAddress === "" ? "none" : "block"),
+    );
     const streams = {
       openDirect: commitManager({ act: "openDirect", ...records }),
       createGroup: commitManager({ act: "createGroup", ...records }),
@@ -663,6 +683,14 @@ export const FabriChatManagerCore = pattern<
           >
             <cf-empty-state message="Choose a chat, or start one." />
           </div>
+          <div id="fabrichat-my-address" style={{ display: addressDisplay }}>
+            <cf-hstack gap="2" align="center">
+              <cf-text variant="caption">
+                Your chat address: {myAddress}
+              </cf-text>
+              <cf-copy-button text={myAddress} size="sm" icon-only />
+            </cf-hstack>
+          </div>
           <div
             data-ui-pattern={CHAT_START_SURFACE}
             data-ui-event-integrity={CHAT_START_SURFACE}
@@ -671,7 +699,7 @@ export const FabriChatManagerCore = pattern<
               <cf-submit-input
                 data-ui-action={CHAT_START_ACTION}
                 inputId="fabrichat-start-direct"
-                placeholder="did:key:… of the person to chat with"
+                placeholder="Their chat address (did:key:…)"
                 buttonText="Chat"
                 disabled={cannotStart}
                 onClick={streams.openDirect}
@@ -682,7 +710,7 @@ export const FabriChatManagerCore = pattern<
               />
               <cf-textarea
                 $value={draft.key("members")}
-                placeholder="Members' did:key:…, one per line"
+                placeholder="Members' chat addresses, one per line"
               />
               <cf-button
                 data-ui-action={CHAT_START_ACTION}

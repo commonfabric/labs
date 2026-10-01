@@ -22,8 +22,9 @@ import {
 const signer = await Identity.fromPassphrase("fabrichat-manager");
 const home = signer.did();
 
+// Stand-ins for principals, each a base58btc key as a principal's is.
 const BOB = "did:key:z6MkBob";
-const CAROL = "did:key:z6MkCarol";
+const CAROL = "did:key:z6MkCaro1";
 
 const MANAGER_PATH = fromFileUrl(
   new URL("../fabrichat/manager.tsx", import.meta.url),
