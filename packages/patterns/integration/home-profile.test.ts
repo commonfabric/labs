@@ -222,9 +222,9 @@ describe("home-space profile creation", () => {
     await waitForCondition(page, defaultMarkerShownIs, { args: [false] });
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
-    // The marker shows the "Set default" write landed. It does not show the
-    // declared writer was consulted: the picker writes a cell that carries
-    // none of `TrustedDefaultProfile`'s labels.
+    // The marker shows the "Set default" write landed. The picker writes
+    // home's default slot, whose cell is typed `TrustedDefaultProfile`, so the
+    // write is checked against the writer that type declares.
     await waitForCondition(page, defaultMarkerShownIs, { args: [true] });
 
     await clickProfileLink(page, "Alan Turing");
