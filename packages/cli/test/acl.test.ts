@@ -247,6 +247,18 @@ describe("acl", () => {
       expect(held.written).toEqual([]);
     });
 
+    it("names no write for an identity the ACL holds no entry for", async () => {
+      // A receipt is a claim that the space changed, and a leave with no entry
+      // to remove changes nothing.
+
+      resetWriteReceipts();
+      const held = connection(stored, undefined, { principal: GUEST });
+      const lines = await captureStderr(async () => {
+        await leaveAcl(config, over(held));
+      });
+      expect(lines).toEqual([]);
+    });
+
     it("throws, writing nothing, for an ACL with a `*` entry", async () => {
       const held = connection(
         { ...stored, [GUEST]: "WRITE", "*": "READ" },

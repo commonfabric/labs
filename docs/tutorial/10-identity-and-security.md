@@ -178,19 +178,21 @@ resolves to one. `ANYONE`
 is the CLI spelling of the `"*"` wildcard, so the shell does not glob-expand it
 before the CLI sees it — `cf acl ls` still prints the raw `*`.
 
-All four commands act as the identity in the key file, and writing the ACL
-needs OWNER, so you can only administer a space you own. Leaving is the
-exception: any member may remove their own entry, whatever its level, and
-nothing else. `cf acl leave` refuses, saying why, a space whose ACL has a `*`
-entry, since that entry would still admit you, and a space you are the last
-concrete OWNER of; make someone else OWNER first. Once you have left, the
-server ends your session there, and you can no longer read the space. Two guardrails come
-from the server rather than the CLI: it refuses any mutation that would leave
-the space with no concrete (non-`"*"`) OWNER, so this is not a way to lock
-yourself out; and it requires an ACL change to arrive as a single
-whole-document replacement, which is why `ACLManager` writes the entire ACL on
-every grant. That rule and the genesis rule are catalogued as INV-12 and INV-13
-in [`docs/specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md).
+All four commands act as the identity in the key file, and writing the ACL needs
+OWNER, so you can only administer a space you own. Leaving is the exception: any
+member may remove their own entry, whatever its level, and nothing else.
+`cf acl leave` refuses, saying why, a space whose ACL has a `*` entry, since
+that entry would still admit you, and a space you are the last concrete OWNER
+of; make someone else OWNER first. Once you have left, a server in `enforce`
+mode ends your session there, and you can no longer read the space; in `observe`
+and `off` modes it ends no session for a lost entry, and does not stop the reads
+those modes allow. Two guardrails come from the server rather than the CLI: it
+refuses any mutation that would leave the space with no concrete (non-`"*"`)
+OWNER, so this is not a way to lock yourself out; and it requires an ACL change
+to arrive as a single whole-document replacement, which is why `ACLManager`
+writes the entire ACL on every grant. That rule and the genesis rule are
+catalogued as INV-12 and INV-13 in
+[`docs/specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md).
 
 ## Running untrusted code: three rings
 

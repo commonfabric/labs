@@ -136,9 +136,12 @@ export async function leaveAcl(
         );
       }
       await acl.remove(me);
+      // Only a leave that wrote names a write: one with no entry to remove
+      // changed nothing.
+      noteWroteTo(config.space);
       return "left";
     },
-    { writes: true, revokesSelf: true },
+    { revokesSelf: true },
     deps,
   );
 }
