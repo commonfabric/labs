@@ -196,27 +196,11 @@
             "type": "number"
           },
           "what": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ChatMessage",
-                "asCell": [
-                  "cell"
-                ]
-              },
-              {
-                "asCell": [
-                  "cell"
-                ],
-                "items": {
-                  "$ref": "#/$defs/ChatProfile",
-                  "asCell": [
-                    "cell"
-                  ]
-                },
-                "type": "array"
-              }
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
             ],
-            "description": "The thing the event changed or added: a message, or the room's\nmembership, as the room offers it (its `roster`)."
+            "description": "The message the event changed or added."
           }
         },
         "required": [
@@ -574,18 +558,8 @@
             "type": "number"
           },
           "what": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ChatMessage"
-              },
-              {
-                "items": {
-                  "$ref": "#/$defs/ChatProfile"
-                },
-                "type": "array"
-              }
-            ],
-            "description": "The thing the event changed or added: a message, or the room's\nmembership, as the room offers it (its `roster`)."
+            "$ref": "#/$defs/ChatMessage",
+            "description": "The message the event changed or added."
           }
         },
         "required": [

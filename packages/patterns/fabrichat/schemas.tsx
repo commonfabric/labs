@@ -1,8 +1,9 @@
 /**
  * The FabriChat records, and the parts of the contracts that don't depend on
  * how a room stores its messages: the reviewed surfaces, recorded times,
- * profiles, a room's records and requests, and the manager's records. `docs/specs/fabrichat/` states each of them, and the names here are
- * the spec's. `room.tsx` defines the room's own output types, over the
+ * profiles, a room's records and requests, and the manager's records.
+ * `docs/specs/fabrichat/` states each of them, and the names here are the
+ * spec's. `room.tsx` defines the room's own output types, over the
  * records it stores.
  *
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
@@ -235,11 +236,8 @@ export interface ChatRoomActivity {
   /** The `requestId` of the event it records. */
   requestId: string;
 
-  /**
-   * The thing the event changed or added: a message, or the room's
-   * membership, as the room offers it (its `roster`).
-   */
-  what: Cell<ChatMessage> | Cell<ProfileCell[]>;
+  /** The message the event changed or added. */
+  what: Cell<ChatMessage>;
 }
 
 /** Where a window of messages sits in its view. */

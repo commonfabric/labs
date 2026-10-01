@@ -16,8 +16,8 @@ interface ChatRoomActivity {
   /** The `requestId` of the event it records. */
   requestId: string;
 
-  /** The thing the event changed or added. */
-  what: Cell<ChatMessage> | Cell<Cell<ChatProfile>[]>;
+  /** The message the event changed or added. */
+  what: Cell<ChatMessage>;
 }
 ```
 
@@ -43,7 +43,7 @@ can't find its message by its proposal among the messages. It can in
   times](ChatMessage.md#unique-times)), so it identifies its entry. Entries
   expire by `at`, but are ordered by `seq` (see [catching up](#catching-up)).
 - **`requestId`** is the `requestId` of the event the entry records.
-- **`what`** links the thing the event changed or added:
+- **`what`** links the message the event changed or added:
 
   | Event | `what` |
   | --- | --- |
