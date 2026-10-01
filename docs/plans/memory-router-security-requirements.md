@@ -54,14 +54,14 @@ certificate private key, compromise exposes that key too.
 ## Authentication and authorization
 
 1. **Bind each proof to one router.** `connection.auth` must sign the protocol,
-   deployment audience, router identity, router-issued unpredictable challenge,
-   principal, issue time, and expiry. The routed invocation names the router in
-   `aud` and the deployment in `args.deployment`; routed `hello.ok` supplies
-   both. A toolshed must verify the signature and all these fields before
-   accepting a forwarded proof. The link agent must attest the challenge's
-   issuance, router identity, and client-context binding in a form the toolshed
-   can verify. It must also attest that it received the exact signed statement
-   within the challenge's one-minute lifetime, binding that receipt to the
+   deployment identifier, router identity, router-issued unpredictable
+   challenge, principal, issue time, and expiry. The routed invocation names
+   the router in `aud` and the deployment in `args.deployment`; routed
+   `hello.ok` supplies both. A toolshed must verify the signature and all
+   signed fields before accepting a forwarded proof. The link agent must
+   attest challenge issuance, router identity, and client-context binding in a
+   form the toolshed can verify. It must also attest receipt of the exact signed
+   statement within the challenge's one-minute lifetime, binding it to the
    exact forwarded statement bytes, context, and claimed principal without
    trusting the worker's claimed timestamp. The toolshed checks that the
    receipt's claimed principal equals the signed issuer, verifies both
