@@ -176,6 +176,10 @@
       },
       "ChatRoomLink": {
         "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json",
+            "description": "The room's rendering, which `cf-render` reads through the link."
+          },
           "$VIEWS": {
             "description": "The room's data face.",
             "properties": {
@@ -461,6 +465,10 @@
       },
       "ChatRoomLink": {
         "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json",
+            "description": "The room's rendering, which `cf-render` reads through the link."
+          },
           "$VIEWS": {
             "description": "The room's data face.",
             "properties": {
