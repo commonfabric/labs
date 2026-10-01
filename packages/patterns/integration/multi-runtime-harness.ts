@@ -42,8 +42,10 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { type DID, Identity } from "@commonfabric/identity";
-import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import type { ACL } from "@commonfabric/memory/acl";
+import type { MemoryAclMode } from "@commonfabric/memory/v2/server";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   experimentalOptionsFromEnv,
   type PatternCoverageData,
@@ -55,7 +57,6 @@ import {
   PATTERNS_ROOT,
 } from "@commonfabric/integration/pattern-coverage";
 import { createTestSpace } from "@commonfabric/integration/test-space";
-import type { ACL } from "@commonfabric/memory/acl";
 import type {
   CfcConfClause,
   CfcWriteFloorMode,
@@ -65,6 +66,7 @@ import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import {
   type CommitRejection,
+  type PieceAddress,
   type RuntimeDiagnosticsSnapshot,
   type TrustedUiDescriptor,
   type WorkerRequest,
@@ -86,7 +88,7 @@ export type MultiRuntimeCfcOptions = Pick<
   | "experimental"
 >;
 
-export type { TrustedUiDescriptor };
+export type { PieceAddress, TrustedUiDescriptor };
 export type { CommitRejection, RuntimeDiagnosticsSnapshot };
 
 export interface MultiRuntimeSessionSpec {
@@ -182,6 +184,18 @@ export interface MultiRuntimeHarnessOptions {
    * self-hosted in-process storage server.
    */
   apiUrl?: URL;
+
+  /**
+   * The access-list mode of the self-hosted storage server. Under server
+   * execution its serving loop's identity is the server's delegating
+   * principal, as a toolshed running server execution lists its own. Absent,
+   * the server has no access-list configuration, which is `off`: no access
+   * check refuses anything, so a session reads a space it was never granted.
+   * A deployed toolshed runs `enforce`. Not accepted with `apiUrl`, whose
+   * toolshed has a mode of its own.
+   */
+  aclMode?: MemoryAclMode;
+
   /**
    * Write-side `requiredIntegrity` floor for every runtime this harness
    * creates, the bootstrap worker that authors the piece included. Defaults to
@@ -219,6 +233,19 @@ function systemPatternsRoute(): PatternsRoute {
   return patternsRoute ??= new PatternsRoute(
     fromFileUrl(new URL("..", import.meta.url)),
   );
+}
+
+/**
+ * Whether a harness runs the server-execution ON posture, given what its first
+ * session's `cfc.experimental.serverExecution` asks for: that, else the
+ * canonical environment mapping, else the first-party default, as the
+ * header's POSTURE block describes. A test whose expectations differ by
+ * posture resolves it here, with the same `explicit` its harness is given.
+ */
+export function resolveServerExecution(explicit?: boolean): boolean {
+  return explicit ??
+    experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
+    SERVER_EXECUTION_DEFAULT_ENABLED;
 }
 
 const coverageFile =
@@ -362,7 +389,8 @@ export class MultiRuntimeSession {
   /**
    * Send an event to a handler stream exposed on the piece result. Pass
    * `trustedUi` to emulate a genuine user interaction on a trusted CFC
-   * surface (required for trusted-action handlers).
+   * surface (required for trusted-action handlers). Pass `piece` to send to a
+   * stream on another piece's result instead, as for {@link read}.
    *
    * Pass `thenHoldInbound` to hold every storage frame this session receives
    * from the moment the event has run here until `releaseInbound()`, on a
@@ -376,7 +404,11 @@ export class MultiRuntimeSession {
     handler: string,
     event: FabricValue = {},
     trustedUi?: TrustedUiDescriptor,
-    opts: { idle?: boolean; thenHoldInbound?: boolean } = {},
+    opts: {
+      idle?: boolean;
+      thenHoldInbound?: boolean;
+      piece?: PieceAddress;
+    } = {},
   ): Promise<void> {
     await this.#client.call("send", {
       handler,
@@ -384,6 +416,7 @@ export class MultiRuntimeSession {
       trustedUi,
       idle: opts.idle,
       thenHoldInbound: opts.thenHoldInbound,
+      piece: opts.piece,
     });
   }
 
@@ -393,17 +426,19 @@ export class MultiRuntimeSession {
    * commit, without the retry `Runtime.commitUiCellWrite()` gives the UI's
    * write. Returns the commit outcome so tests can observe conflicts. Pass
    * `idle: false` to leave this runtime un-settled (preserves a stale local
-   * replica for own-write-race / no-op repros).
+   * replica for own-write-race / no-op repros). Pass `piece` to reach the cell
+   * from another piece's result instead, as for {@link read}.
    */
   async set(
     path: (string | number)[],
     value: FabricValue,
-    opts: { idle?: boolean } = {},
+    opts: { idle?: boolean; piece?: PieceAddress } = {},
   ): Promise<{ ok: boolean; error?: { name?: string; message?: string } }> {
     return await this.#client.call("set", {
       path,
       value,
       idle: opts.idle,
+      piece: opts.piece,
     }) as { ok: boolean; error?: { name?: string; message?: string } };
   }
 
@@ -412,17 +447,19 @@ export class MultiRuntimeSession {
    * that keeps its read as a compare-and-set precondition, so a concurrent
    * push conflicts rather than being clobbered — unlike the blind `set` above.
    * A UI's `CellHandle.push()` does not take this path: the runtime appends
-   * through `Cell.push()`'s mergeable operation instead.
+   * through `Cell.push()`'s mergeable operation instead. Pass `piece` to reach
+   * the cell from another piece's result, as for {@link read}.
    */
   async push(
     path: (string | number)[],
     value: FabricValue,
-    opts: { idle?: boolean } = {},
+    opts: { idle?: boolean; piece?: PieceAddress } = {},
   ): Promise<{ ok: boolean; error?: { name?: string; message?: string } }> {
     return await this.#client.call("push", {
       path,
       value,
       idle: opts.idle,
+      piece: opts.piece,
     }) as { ok: boolean; error?: { name?: string; message?: string } };
   }
 
@@ -432,16 +469,32 @@ export class MultiRuntimeSession {
    * places — the value carries the link that reaches the cell rather than the
    * cell, which belongs to the runtime's own realm. Read a path below such a
    * cell, or use `readRaw`, to reach its contents.
+   *
+   * Pass `piece` to read from another piece's result instead: one living in a
+   * space of its own, say, which the harness's piece holds a link to. Its
+   * address is what {@link link} returns for that link. The first command in
+   * this session to address a piece starts it here and syncs it. Each one
+   * throws the server's refusal once this session's identity may not read the
+   * space the piece lives in, whether it never could or has been revoked.
    */
-  async read(path: (string | number)[] = []): Promise<FabricValue> {
-    return await this.#client.call("read", { path });
+  async read(
+    path: (string | number)[] = [],
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<FabricValue> {
+    return await this.#client.call("read", { path, piece: opts.piece });
   }
 
-  /** Read the RAW stored value at `path` (links resolved to the target cell,
-   *  no result-schema shaping) — for state the declared schema does not
-   *  carry, e.g. a query result's `requestHash`. */
-  async readRaw(path: (string | number)[] = []): Promise<FabricValue> {
-    return await this.#client.call("readRaw", { path });
+  /**
+   * Read the RAW stored value at `path` (links resolved to the target cell,
+   * no result-schema shaping) — for state the declared schema does not
+   * carry, e.g. a query result's `requestHash`. Pass `piece` to read from
+   * another piece's result, as for {@link read}.
+   */
+  async readRaw(
+    path: (string | number)[] = [],
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<FabricValue> {
+    return await this.#client.call("readRaw", { path, piece: opts.piece });
   }
 
   /**
@@ -461,11 +514,16 @@ export class MultiRuntimeSession {
     return await this.#client.call("createCell", { cause, value });
   }
 
-  /** Inspect the normalized link (id, space, scope) at `path` in the result. */
+  /**
+   * Inspect the normalized link (id, space, scope) at `path` in the result,
+   * or in another piece's result when `piece` is given, as for {@link read}.
+   * The link at a path holding a piece is that piece's {@link PieceAddress}.
+   */
   async link(
     path: (string | number)[] = [],
+    opts: { piece?: PieceAddress } = {},
   ): Promise<{ id: string; space: string; scope: string; path: string[] }> {
-    return await this.#client.call("link", { path }) as {
+    return await this.#client.call("link", { path, piece: opts.piece }) as {
       id: string;
       space: string;
       scope: string;
@@ -653,6 +711,12 @@ export class MultiRuntimeHarness {
     if (options.sessions.length === 0) {
       throw new Error("MultiRuntimeHarness needs at least one session");
     }
+    if (options.aclMode !== undefined && options.apiUrl !== undefined) {
+      throw new Error(
+        "`aclMode` configures the storage server the harness hosts, and " +
+          "this harness targets a running toolshed",
+      );
+    }
     // Resolve the posture exactly like a deployed entry point (canonical env
     // mapping, else the first-party default), and host a server matching it —
     // see the header's POSTURE block.
@@ -660,15 +724,17 @@ export class MultiRuntimeHarness {
     const explicitServerExecution = typeof firstSession === "string"
       ? undefined
       : firstSession.cfc?.experimental?.serverExecution;
-    const serverExecutionOn = explicitServerExecution ??
-      experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
-      SERVER_EXECUTION_DEFAULT_ENABLED;
+    const serverExecutionOn = resolveServerExecution(explicitServerExecution);
     const serve = (request: Request) => systemPatternsRoute().serve(request);
+    const { aclMode } = options;
     const server = options.apiUrl !== undefined
       ? undefined
       : serverExecutionOn
-      ? await listenServingMemoryServer({ serve })
-      : StandaloneMemoryServer.start({ serve });
+      ? await listenServingMemoryServer({ serve, aclMode })
+      : StandaloneMemoryServer.start({
+        serve,
+        ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),
+      });
     const targetUrl = options.apiUrl ?? server!.url;
     const apiUrl = targetUrl.href;
 

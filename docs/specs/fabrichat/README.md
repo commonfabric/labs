@@ -249,6 +249,13 @@ viewer's local state. Native clients use
 for reviewed controls. Notice delivery remains the client's responsibility
 through the manager's `outgoingNotices` and `delivered` contract.
 
+A handler on a client runtime can send a member a best-effort DID inbox notice
+with `noticeSpaceAccess()`
+([space access notices](../../features/space-access-notices.md)).
+No client in this repository reads a recipient's inbox yet, and the send has no
+delivery result, so it does not replace the manager's durable notice queue.
+
+
 ## Identity and presentation
 
 The five questions from [multi-user

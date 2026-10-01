@@ -67,10 +67,14 @@ room roster and supplies no subsequent space-administration handlers.
 ### First contact
 
 A notice has to reach a principal who may share no space with the sender.
-Nothing in this repository lets a pattern deliver one today:
+Nothing in this repository delivers one end to end today:
 
 - DID inboxes ([`did-inboxes.md`](../../features/did-inboxes.md)) deliver to a
-  principal, but patterns can't reach them.
+  principal. A handler on a client runtime sends to one with
+  `noticeSpaceAccess()`, which tells a member of a space about it
+  ([telling a member of a space about it](../../features/space-access-notices.md)),
+  but no client in this repository reads a recipient's inbox, a serving runtime
+  refuses the call, and a notice it sends may not arrive.
 - A profile's `inbox` field (`inbox.piece`,
   `packages/patterns/system/profile-home.tsx`) points at a receiving piece in a
   space of its own, which a host outside this repository provides. It is the
@@ -82,4 +86,4 @@ Nothing in this repository lets a pattern deliver one today:
 
 That is why step 3 hands notices to a client through `outgoingNotices` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once one of
-these is usable from a pattern, the manager can deliver notices itself.
+these delivers end to end, the manager can deliver notices itself.

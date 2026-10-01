@@ -14,7 +14,11 @@ import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
 } from "../ensure-piece-running.ts";
-import { waveRunContextOf, waveSettlementOf } from "../executor/wave.ts";
+import {
+  isAclDocumentWriteRefusal,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "../executor/wave.ts";
 import {
   areNormalizedLinksSame,
   type NormalizedFullLink,
@@ -2284,6 +2288,22 @@ export async function dispatchQueuedEvent(state: {
             message: error.message,
           });
         };
+        // The seal's refusal of a write to the space's ACL document is
+        // deterministic in the same way, so a run delivering a durable entry
+        // seals it as that entry's error consequence too, and the wave
+        // requeues nothing for it (`WaveAccumulator.noteSealFailure()`).
+        const sealAclDocumentRefusalConsequence = (): void => {
+          if (
+            served?.streamEntry === undefined ||
+            !isAclDocumentWriteRefusal(error)
+          ) {
+            return;
+          }
+          reportServedEventFailure(served, {
+            kind: "error",
+            message: error.message,
+          });
+        };
         const deferCommitPreparationFailure = (): void => {
           if (
             served === undefined || error?.name !== "CommitPreparationError"
@@ -2367,6 +2387,7 @@ export async function dispatchQueuedEvent(state: {
             routeProvenNoCommitFailure();
             sealExplicitHandlerAbort();
             sealCfcRefusalConsequence();
+            sealAclDocumentRefusalConsequence();
             runFinalCommitCallback();
             reportDroppedCfcRejectedWrite(error, handlerId);
             // No further attempt at this event is coming, so anything staged on

@@ -39,6 +39,12 @@ a room to anyone its space doesn't admit.
   the person's decision, so a client SHOULD accept only after showing them who
   created the room, and what it is.
 
+When a notice names a space this runtime was previously refused, the host calls
+`retrySpaceAccess(space)` on its `Runtime` or `RuntimeClient` before reading the
+room and offering `accept`. This asks the memory server to check admission again
+and repeats the refused loads; the notice itself grants no access. See
+[space access](../../features/space-access.md).
+
 ## Showing a room
 
 A client that draws natively reads a placement's `chat` group, which the adapter
@@ -196,9 +202,9 @@ for automation or notice delivery.
 
 ## Delivering notices
 
-Until a pattern can deliver to a principal it shares no space with, delivering a
-notice is the client's job. A client finds the notices waiting in its user's
-manager and reports each one once it's delivered (see
+Until a pattern can deliver end to end to a principal it shares no space with,
+delivering a notice is the client's job. A client finds the notices waiting in
+its user's manager and reports each one once it's delivered (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client MUST
 deliver only the notice: which room, and who sent it. It MUST NOT deliver any of
 the room's contents.

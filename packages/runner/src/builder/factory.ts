@@ -88,6 +88,7 @@ import {
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
+import { noticeSpaceAccess } from "./space-access-notice.ts";
 import { spaceAccess } from "./space-access.ts";
 import { spaceMembers } from "./space-members.ts";
 import { viewerPrincipal } from "./viewer-principal.ts";
@@ -312,6 +313,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccess,
     grantSpaceAccess,
     revokeSpaceAccess,
+    noticeSpaceAccess,
 
     // Entity utilities
     getEntityId,

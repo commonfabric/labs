@@ -2241,10 +2241,11 @@ export class Server {
     );
   }
 
-  /** Enforce ACL document shape and fresh-space genesis independently of the
-   *  observe/enforce access-decision dial. These are storage invariants: an
-   *  invalid ACL or an ordinary first write would make later enforcement
-   *  ambiguous or impossible. */
+  /** Enforce ACL document shape and fresh-space genesis in the `observe` and
+   *  `enforce` modes alike, apart from the access decision those modes
+   *  differ on. These are storage invariants: an invalid ACL or an ordinary
+   *  first write would make later enforcement ambiguous or impossible. The
+   *  `off` mode skips them, and checks only a genesis root reservation. */
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,

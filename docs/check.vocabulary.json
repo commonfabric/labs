@@ -43,6 +43,7 @@
     "isWellFormedDID",
     "lift",
     "navigateTo",
+    "noticeSpaceAccess",
     "pattern",
     "revokeSpaceAccess",
     "schema",

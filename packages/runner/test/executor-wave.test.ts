@@ -65,6 +65,7 @@ import type { Signer } from "@commonfabric/memory/interface";
 import { Runtime } from "../src/runtime.ts";
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type {
+  IExtendedStorageTransaction,
   ITransactionSealSink,
   MemorySpace,
   Result,
@@ -73,6 +74,7 @@ import type {
   TransactionSealDestination,
 } from "../src/storage/interface.ts";
 import {
+  isAclDocumentWriteRefusal,
   stampWaveRunContext,
   WaveAccumulator,
   type WaveCommitRejection,
@@ -468,6 +470,287 @@ describe("stage D seal-into-wave", () => {
         name: "WaveCommitRejected",
         message: "plain refusal",
       },
+    });
+  });
+
+  describe("the space's access-list document", () => {
+    // The seal refuses a run that writes the document, and the engine and
+    // the sink refuse a batch that carries such a write. The cases below
+    // past the first build their batches directly, so that nothing but the
+    // backstop stands between the write and the store.
+
+    /** A set of the whole access-list document of `target`. */
+    const aclSet = (target: MemorySpace, owner: string) =>
+      ({
+        op: "set",
+        id: `of:${target}`,
+        value: { value: { [owner]: "OWNER" } },
+      }) as const;
+
+    it("refuses at the seal a run writing the document, and nothing enters the wave", async () => {
+      // The seal's own result is what the case reads, and the wave is
+      // abandoned before any assertion: a transaction the seal accepted
+      // would otherwise wait for a wave commit that never comes.
+
+      const wave = newWave();
+      const sealed = Promise.withResolvers<
+        Awaited<ReturnType<WaveAccumulator["seal"]>>
+      >();
+      runtime.installSealDestination({
+        seal: async (tx) => {
+          const result = await wave.seal(tx);
+          sealed.resolve(result);
+          return result;
+        },
+      });
+      seedGenesisAcl(engine, space);
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "acl-document-seal",
+        kind: "event-handler",
+        eventId: "e-acl-document-seal",
+      });
+      tx.writeOrThrow(
+        { space, id: `of:${space}`, type: "application/json", path: [] },
+        { value: { "did:key:mallory": "OWNER" } },
+      );
+      const committed = tx.commit();
+      const result = await sealed.promise;
+      runtime.clearSealDestination();
+      const contributionCount = wave.contributionCount;
+      wave.abandon("test-only");
+
+      expect(isAclDocumentWriteRefusal(result.error)).toBe(true);
+      expect(result.error?.message).toContain(
+        `of:${space} is the space ACL document`,
+      );
+      expect((await committed).error?.message).toBe(result.error?.message);
+      expect(contributionCount).toBe(0);
+      expect(Engine.read(engine, { id: `of:${space}` })?.value).toEqual({
+        "did:key:alice": "OWNER",
+      });
+    });
+
+    it("refuses a home batch writing the document at the engine, naming the operation", async () => {
+      const lease = liveLease();
+      seedGenesisAcl(engine, space);
+      const seqBefore = Engine.serverSeq(engine);
+      const refused = await newSink().commitWave({
+        space,
+        home: true,
+        basisSeq: seqBefore,
+        rebasedHeads: [],
+        operations: [
+          { op: "set", id: "of:acl-document-home-data", value: { value: 1 } },
+          aclSet(space, "did:key:mallory"),
+        ],
+        preconditions: [],
+        annotations: [],
+        consequenceOf: [],
+        basisInstances: [],
+        holder: lease.holder,
+      });
+
+      expect(refused.error).toEqual({
+        name: "AclDocumentWriteRefused",
+        message: expect.stringContaining(`writes of:${space}`),
+        failedOperation: 1,
+      });
+      expect(Engine.serverSeq(engine)).toBe(seqBefore);
+      expect(Engine.read(engine, { id: `of:${space}` })?.value).toEqual({
+        "did:key:alice": "OWNER",
+      });
+    });
+
+    it("refuses a foreign batch writing the target's document, naming the operation", async () => {
+      const foreignSigner = await Identity.fromPassphrase(
+        "wave sink acl document foreign space",
+      );
+      const foreign = foreignSigner.did() as MemorySpace;
+      const foreignEngine = await server.engineForSpace(foreign);
+      seedGenesisAcl(foreignEngine, foreign);
+      const sink = new EngineWaveCommitSink({
+        engineFor: () => foreignEngine,
+        sessionId: executionLeaseHolder(`service:${space}`),
+      });
+      const refused = await sink.commitWave({
+        space: foreign,
+        home: false,
+        basisSeq: 0,
+        rebasedHeads: [],
+        operations: [aclSet(foreign, "did:key:mallory")],
+        preconditions: [],
+        annotations: [],
+        consequenceOf: [],
+        basisInstances: [],
+        holder: undefined,
+        delegated: {
+          actingPrincipal: "did:key:alice",
+          capabilityRef: "event-consequence:e-acl-document-foreign",
+        },
+      });
+
+      expect(refused.error).toEqual({
+        name: "AclDocumentWriteRefused",
+        message: expect.stringContaining(`writes of:${foreign}`),
+        failedOperation: 0,
+      });
+      expect(Engine.serverSeq(foreignEngine)).toBe(1);
+      expect(Engine.read(foreignEngine, { id: `of:${foreign}` })?.value)
+        .toEqual({ "did:key:alice": "OWNER" });
+    });
+
+    describe("a seal refusal's effect on its event", () => {
+      // Each case seals a data write and then a write to the document for
+      // one event, noting the refused seal the way the serving loop's seal
+      // wrapper does, and commits the wave.
+
+      /**
+       * Seals both writes for event `eventId`, with `streamEntry` on both
+       * run contexts when it is given, and commits the wave.
+       */
+      const commitDataAndRefusedWrite = async (
+        eventId: string,
+        streamEntry?: { sidecarId: string; index: number; seq: number },
+      ) => {
+        const lease = liveLease();
+        const wave = newWave({ lease });
+        runtime.installSealDestination({
+          seal: async (tx) => {
+            const result = await wave.seal(tx);
+            if (result.error !== undefined) {
+              wave.noteSealFailure(waveRunContextOf(tx), result.error);
+            }
+            return result;
+          },
+        });
+        const stamp = (tx: IExtendedStorageTransaction, actionId: string) =>
+          stampWaveRunContext(tx, {
+            actionId,
+            kind: "event-handler",
+            eventId,
+            ...(streamEntry === undefined ? {} : { streamEntry }),
+          });
+        const data = runtime.getCell<{ value: number }>(
+          space,
+          `acl-document-requeue-data:${eventId}`,
+          undefined,
+        );
+        const dataTx = runtime.edit();
+        stamp(dataTx, `acl-document-requeue-data:${eventId}`);
+        data.withTx(dataTx).set({ value: 1 });
+        expect((await dataTx.commit()).error).toBeUndefined();
+        const aclTx = runtime.edit();
+        stamp(aclTx, `acl-document-requeue-acl:${eventId}`);
+        aclTx.writeOrThrow(
+          { space, id: `of:${space}`, type: "application/json", path: [] },
+          { value: { "did:key:mallory": "OWNER" } },
+        );
+        const aclCommitted = await aclTx.commit();
+        runtime.clearSealDestination();
+        const outcome = await wave.commitWave(newSink());
+        await wave.settled();
+        return {
+          outcome,
+          aclCommitted,
+          dataId: data.getAsNormalizedFullLink().id,
+        };
+      };
+
+      it("requeues an in-process run's event, withdrawing its other writes", async () => {
+        const { outcome, aclCommitted, dataId } =
+          await commitDataAndRefusedWrite("acl-document-in-process");
+
+        expect(isAclDocumentWriteRefusal(aclCommitted.error)).toBe(true);
+        expect(outcome.requeuedEventIds).toEqual(["acl-document-in-process"]);
+        expect(outcome.committedEventIds).toEqual([]);
+        expect(Engine.selectDocHead(engine, { id: dataId, scopeKey: "space" }))
+          .toBe(0);
+      });
+
+      it("commits a durable entry's other writes, requeueing nothing", async () => {
+        const { outcome, aclCommitted, dataId } =
+          await commitDataAndRefusedWrite("acl-document-durable", {
+            sidecarId: "of:stream-events:acl-document-durable",
+            index: 0,
+            seq: 1,
+          });
+
+        expect(isAclDocumentWriteRefusal(aclCommitted.error)).toBe(true);
+        expect(outcome.requeuedEventIds).toEqual([]);
+        expect(outcome.committedEventIds).toEqual(["acl-document-durable"]);
+        expect(Engine.selectDocHead(engine, { id: dataId, scopeKey: "space" }))
+          .toBeGreaterThan(0);
+      });
+    });
+
+    it("attributes a home batch's refusal to the failed operation's one served event", async () => {
+      const wave = newWave();
+      runtime.installSealDestination(wave);
+      const first = runtime.getCell<{ value: number }>(
+        space,
+        "acl-document-owner-first",
+        undefined,
+      );
+      const second = runtime.getCell<{ value: number }>(
+        space,
+        "acl-document-owner-second",
+        undefined,
+      );
+      for (
+        const [cell, eventId, index, seq] of [
+          [first, "acl-document-event-first", 2, 12],
+          [second, "acl-document-event-second", 5, 15],
+        ] as const
+      ) {
+        const tx = runtime.edit();
+        stampWaveRunContext(tx, {
+          actionId: `acl-document-owner:${eventId}`,
+          kind: "event-handler",
+          eventId,
+          streamEntry: {
+            sidecarId: "of:stream-events:acl-document-owner",
+            index,
+            seq,
+          },
+        });
+        cell.withTx(tx).set({ value: seq });
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      runtime.clearSealDestination();
+
+      const inner = newSink();
+      const sink: WaveCommitSink = {
+        currentHeads: (target, docs) => inner.currentHeads(target, docs),
+        concurrentWritePaths: (target, doc, sinceSeq) =>
+          inner.concurrentWritePaths(target, doc, sinceSeq),
+        commitWave: (batch) =>
+          Promise.resolve({
+            error: {
+              name: "AclDocumentWriteRefused",
+              message: "synthetic access-list refusal",
+              failedOperation: batch.operations.findIndex((operation) =>
+                operation.op !== "sqlite" &&
+                operation.id === second.getAsNormalizedFullLink().id
+              ),
+            },
+          }),
+      };
+      const outcome = await wave.commitWave(sink);
+      await wave.settled();
+
+      expect(outcome.aborted).toBe("rejected");
+      expect(outcome.provenNoCommitDeliveryFailures).toEqual([{
+        eventId: "acl-document-event-second",
+        streamEntry: {
+          sidecarId: "of:stream-events:acl-document-owner",
+          index: 5,
+          seq: 15,
+        },
+        failureClass: "protocol",
+        recoveryEpoch: "acl-document-write",
+        permanentEvidence: true,
+      }]);
     });
   });
 

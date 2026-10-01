@@ -38,3 +38,19 @@ A refusal means that the event was not admitted. It does not revoke read access,
 and hosts can retain the space's rendered view. Authoritative access loss uses
 `spaceaccesslost`. Events requiring recovery use `eventneedsattention` with
 attention details.
+
+## Retrying a refused space
+
+`RuntimeClient.retrySpaceAccess(space)` asks the memory server once more for a
+space it refused the runtime, and resolves once the server has decided. It is
+for a host with word that the runtime's principal was granted access, such as a
+notice naming the space: the runtime never asks again on its own, since the
+refusal turns on an access list it cannot read. The retry goes through the
+memory server's ordinary session admission, so it can admit only what that
+admission would. An admission clears the refusal, tells the render boundaries
+and every `spaceAccess(target)` computation that read it, and repeats the loads
+the refusal failed. A refusal leaves the space refused, and the call resolves
+all the same; any other failure rejects it. A space the runtime has not opened
+is left alone.
+[`docs/features/space-access.md`](../../docs/features/space-access.md) says how
+the answer is kept current.
