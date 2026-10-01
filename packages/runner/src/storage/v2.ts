@@ -179,6 +179,7 @@ import { toTransactionDocumentValue } from "./v2-document.ts";
 import {
   createStorageAddressResolver,
   RemoteSessionFactory,
+  type SessionConnection,
   type SessionFactory,
   storageAddressForHost,
   toWebSocketAddress,
@@ -234,7 +235,7 @@ const isArrayLengthChildPath = (
   arrayPath.every((segment, index) => path[index] === segment);
 
 export { watchIdForEntry } from "./v2-watch.ts";
-export type { SessionFactory } from "./v2-remote-session.ts";
+export type { SessionConnection, SessionFactory } from "./v2-remote-session.ts";
 export {
   RemoteSessionFactory,
   storageAddressForHost,
@@ -1214,6 +1215,9 @@ export class StorageManager implements IStorageManager {
 
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
+
+  /** What `setSharedMemoryConnection()` last declared. */
+  #sharedMemoryConnection = false;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
 
@@ -1592,6 +1596,18 @@ export class StorageManager implements IStorageManager {
     };
   }
 
+  /** See `IStorageManager.setSharedMemoryConnection`. */
+  setSharedMemoryConnection(enabled: boolean): void {
+    if (enabled !== this.#sharedMemoryConnection && this.#providers.size > 0) {
+      throw new Error(
+        "setSharedMemoryConnection: a session is already open; changing " +
+          "the choice now would leave the sessions on two topologies",
+      );
+    }
+    this.#sharedMemoryConnection = enabled;
+    this.#sessionFactory.setSharedConnections?.(enabled);
+  }
+
   /** See `IStorageManager.setSessionReadCeiling`. */
   setSessionReadCeiling(ceiling: SessionReadCeiling): void {
     if (this.#providers.size > 0) {
@@ -1817,7 +1833,7 @@ export class StorageManager implements IStorageManager {
           : new Error("memory replica route replaced");
       }
     };
-    const activeClients = new Set<MemoryV2Client.Client>();
+    const activeClients = new Set<SessionConnection>();
     const closeActiveClients = (): void => {
       for (const client of activeClients) {
         void client.close().catch(() => {});
@@ -2010,6 +2026,9 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
+      // The providers have ended their sessions, so whatever connection the
+      // factory kept open for them has nothing left on it.
+      await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
     }
@@ -2035,6 +2054,7 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
+      await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
     }
@@ -2889,7 +2909,7 @@ type ProviderRouteState = {
 };
 
 type OpenedSpaceSession = {
-  client: MemoryV2Client.Client;
+  client: SessionConnection;
   session: MemoryV2Client.SpaceSession;
 };
 
@@ -3665,17 +3685,17 @@ export class SpaceReplica
   #ownInstanceKeys: Map<string, string> | undefined;
 
   readonly #createSession: () => Promise<{
-    client: MemoryV2Client.Client;
+    client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
   }>;
   #sessionHandle?: Promise<{
-    client: MemoryV2Client.Client;
+    client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
   }>;
 
   /** The client of the last RESOLVED session handle — for synchronous
    *  capability reads (`sqliteServerCommitRowLabelEval`). */
-  #sessionClient?: MemoryV2Client.Client;
+  #sessionClient?: SessionConnection;
 
   /** The session of the last RESOLVED handle — read synchronously so
    *  `authorizationError()` can observe a denial that terminated the session
@@ -5255,7 +5275,7 @@ export class SpaceReplica
     if (sessionHandle) {
       let resolved:
         | {
-          client: MemoryV2Client.Client;
+          client: SessionConnection;
           session: MemoryV2Client.SpaceSession;
         }
         | undefined;
@@ -9369,7 +9389,7 @@ export class SpaceReplica
   }
 
   #memoizedSessionHandle(): Promise<{
-    client: MemoryV2Client.Client;
+    client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
   }> {
     if (this.#closed) {

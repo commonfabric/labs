@@ -824,6 +824,12 @@ export type InitializationData = {
     webViewScopedReplication?: boolean;
 
     /**
+     * Whether the memory sessions of one host share a connection, which
+     * each key authenticates on once.
+     */
+    sharedMemoryConnection?: boolean;
+
+    /**
      * Whether a link writer emits `cid:` schema-document references, each
      * closure materialized in the carrying transaction. Default on; an
      * explicit `false` is the rollback override.

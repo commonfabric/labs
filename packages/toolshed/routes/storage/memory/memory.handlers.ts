@@ -294,7 +294,7 @@ export const attachMemorySocketPipeline = (
             closeConnection();
             return;
           }
-          channel.receive(message, async (payload) => {
+          channel.receive(message, (payload) => {
             const control = parseMemoryCompressionControlMessage(payload);
             if (control && helloReceived) {
               const enabled = compressionNegotiated && control.enabled;
@@ -305,7 +305,14 @@ export const attachMemorySocketPipeline = (
               }));
               return;
             }
-            await connection.receive(payload);
+            // The connection takes the frame's place in its turn order as
+            // it is handed over, so the handling is not waited for: waiting
+            // would hold every later frame behind this one, whichever
+            // spaces they name.
+            connection.receive(payload).catch(() => {
+              safeSocketClose(1011, "Memory websocket message failure");
+              closeConnection();
+            });
             logMemWrites(payload);
           });
         },

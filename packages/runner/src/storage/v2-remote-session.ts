@@ -1,7 +1,10 @@
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
-import { MEMORY_PROTOCOL } from "@commonfabric/memory/v2";
+import {
+  MEMORY_PROTOCOL,
+  type MemoryProtocolFlags,
+} from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
   decodeCompressedMemoryMessage,
@@ -24,6 +27,28 @@ const logger = getLogger("storage.v2.remote", {
   level: "error",
 });
 
+/**
+ * The connection a session was opened on, as far as the session's holder may
+ * use it. A `MemoryClient.Client` holding one session is one, and so is a
+ * holder's share of a client that holds several.
+ */
+export interface SessionConnection {
+  /** Flags the server advertised; `null` before the first handshake. */
+  readonly serverFlags: MemoryProtocolFlags | null;
+
+  /**
+   * Resolves once every server frame the connection held at the call has
+   * been handed to its client.
+   */
+  delivered(): Promise<void>;
+
+  /**
+   * Ends the holder's session. The connection itself closes with it when
+   * nothing else can be using it.
+   */
+  close(): Promise<void>;
+}
+
 export interface SessionFactory {
   /** Opt in to StorageManager's ACL genesis handshake. Scripted factories used
    *  by lower-level replica tests omit this because they intentionally model
@@ -36,12 +61,21 @@ export interface SessionFactory {
     mountOptions?: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ): Promise<{
-    client: MemoryClient.Client;
+    client: SessionConnection;
     session: MemoryClient.SpaceSession;
   }>;
 
   /** Changes compression on live sessions and the default for later ones. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * Chooses, for the sessions created from here on, between one connection
+   * per host and one per space.
+   */
+  setSharedConnections?(enabled: boolean): void;
+
+  /** Closes every connection the factory keeps open between sessions. */
+  close?(): Promise<void>;
 }
 
 export const toWebSocketAddress = (address: URL): URL => {
@@ -96,6 +130,12 @@ const storageAddressForMemoryHost = (host: URL): URL => {
  * minutes covers clock skew and round-trip time while bounding replay.
  */
 export const SESSION_OPEN_TTL_SECONDS = 300;
+
+/**
+ * Lease a signed `connection.auth` asks for, in seconds: the server caps it
+ * at its own limit, and the client renews ahead of whatever it granted.
+ */
+export const CONNECTION_AUTH_LEASE_SECONDS = 3600;
 
 /**
  * Builds the per-space storage-endpoint resolver: a space present in
@@ -476,10 +516,107 @@ export async function createSignedSessionOpenAuth(
   };
 }
 
+/** Builds the signed `connection.auth` for `signer`, as a client sends it. */
+export async function createSignedConnectionAuth(
+  signer: Signer,
+  context: MemoryClient.SessionOpenAuthContext,
+): Promise<MemoryClient.ConnectionAuth> {
+  const iat = Math.floor(Date.now() / 1000);
+  const invocation = {
+    iss: signer.did(),
+    cmd: "connection.auth",
+    aud: context.audience,
+    args: { protocol: MEMORY_PROTOCOL },
+    challenge: context.challenge.value,
+    iat,
+    exp: iat + CONNECTION_AUTH_LEASE_SECONDS,
+  };
+  const signature = await signer.sign(hashOf(invocation).bytes);
+  if (signature.error) {
+    throw signature.error;
+  }
+  return {
+    invocation,
+    authorization: { signature: new FabricBytes(signature.ok) },
+  };
+}
+
+/** The error an aborted `signal` stands for. */
+const abortReason = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error
+    ? signal.reason
+    : new Error("memory replica route replaced");
+
+/**
+ * Settles as `work` settles, or rejects with the abort reason as soon as
+ * `signal` aborts, whichever comes first. `work` itself is not cancelled.
+ */
+const abortable = <T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> => {
+  if (signal === undefined) return work;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  const aborted = Promise.withResolvers<never>();
+  const abort = () => aborted.reject(abortReason(signal));
+  signal.addEventListener("abort", abort, { once: true });
+  return Promise.race([work, aborted.promise]).finally(() =>
+    signal.removeEventListener("abort", abort)
+  );
+};
+
+/** One session's share of a connection that holds several. */
+class SharedSessionConnection implements SessionConnection {
+  #closed = false;
+
+  readonly #client: MemoryClient.Client;
+  readonly #session: MemoryClient.SpaceSession;
+
+  /** Constructs the share `session` has of `client`. */
+  constructor(client: MemoryClient.Client, session: MemoryClient.SpaceSession) {
+    this.#client = client;
+    this.#session = session;
+  }
+
+  /** @inheritDoc */
+  get serverFlags(): MemoryProtocolFlags | null {
+    return this.#client.serverFlags;
+  }
+
+  /** @inheritDoc */
+  delivered(): Promise<void> {
+    return this.#client.delivered();
+  }
+
+  /** Ends the session and leaves the connection to its other sessions. */
+  async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+    await this.#session.close();
+  }
+}
+
+/** A connection that the sessions of one host share. */
+type SharedConnection = {
+  transport: WebSocketTransport;
+
+  /** Settles once the connection's handshake has completed. */
+  client: Promise<MemoryClient.Client>;
+};
+
+/**
+ * Opens memory sessions over WebSockets: one connection per space, or, with
+ * shared connections on, one per host that every session on that host is
+ * mounted on.
+ */
 export class RemoteSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
   #compressionEnabled = true;
   #transports = new Set<WebSocketTransport>();
+  #sharedConnections = false;
+
+  /** The shared connection per storage address, while sharing is on. */
+  #shared = new Map<string, SharedConnection>();
 
   readonly #resolveAddress: (space: MemorySpace) => URL;
   readonly #defaultSigner: Signer;
@@ -505,6 +642,25 @@ export class RemoteSessionFactory implements SessionFactory {
     );
   }
 
+  /** @inheritDoc */
+  setSharedConnections(enabled: boolean): void {
+    this.#sharedConnections = enabled;
+  }
+
+  /** Closes the shared connections, and with them the sessions on them. */
+  async close(): Promise<void> {
+    const shared = [...this.#shared.values()];
+    this.#shared.clear();
+    await Promise.all(shared.map(async ({ transport, client }) => {
+      // The transport closes first: a dial still in progress ends with it,
+      // where waiting for the dial would wait for a peer that may never
+      // answer.
+      await transport.close().catch(() => {});
+      const connected = await client.catch(() => undefined);
+      await connected?.close().catch(() => {});
+    }));
+  }
+
   #createSessionOpenAuth(
     signer: Signer,
     space: MemorySpace,
@@ -514,10 +670,117 @@ export class RemoteSessionFactory implements SessionFactory {
     return createSignedSessionOpenAuth(signer, space, session, context);
   }
 
-  async create(
+  create(
     space: MemorySpace,
     signer = this.#defaultSigner,
     mountOptions: MemoryClient.MountOptions = {},
+    signal?: AbortSignal,
+  ): Promise<{
+    client: SessionConnection;
+    session: MemoryClient.SpaceSession;
+  }> {
+    return this.#sharedConnections
+      ? this.#createShared(space, signer, mountOptions, signal)
+      : this.#createDedicated(space, signer, mountOptions, signal);
+  }
+
+  /**
+   * Helper for `create()`, which mounts the session on the connection its
+   * host's sessions share, dialing that connection if there is none or the
+   * one there can no longer be used.
+   */
+  async #createShared(
+    space: MemorySpace,
+    signer: Signer,
+    mountOptions: MemoryClient.MountOptions,
+    signal?: AbortSignal,
+  ): Promise<{
+    client: SessionConnection;
+    session: MemoryClient.SpaceSession;
+  }> {
+    if (signal?.aborted) throw abortReason(signal);
+    const client = await this.#sharedClient(
+      this.#resolveAddress(space),
+      signal,
+    );
+    try {
+      const session = await client.mount(space, mountOptions, {
+        did: signer.did(),
+        authorizeConnection: (context) =>
+          createSignedConnectionAuth(signer, context),
+        authorizeSessionOpen: (targetSpace, descriptor, context) =>
+          this.#createSessionOpenAuth(
+            signer,
+            targetSpace as MemorySpace,
+            descriptor,
+            context,
+          ),
+      }, signal);
+      return {
+        client: new SharedSessionConnection(client, session),
+        session,
+      };
+    } catch (error) {
+      throw signal?.aborted ? abortReason(signal) : error;
+    }
+  }
+
+  /**
+   * Helper for `#createShared()`, which returns the connected client the
+   * sessions at `address` share. An abort of `signal` while the dial is in
+   * progress stops this caller waiting for it; the dial itself goes on for
+   * the sessions that follow, and is closed only if it fails.
+   */
+  async #sharedClient(
+    address: URL,
+    signal?: AbortSignal,
+  ): Promise<MemoryClient.Client> {
+    const key = address.href;
+    const existing = this.#shared.get(key);
+    if (existing !== undefined) {
+      // A dial that fails fails every session waiting on it; a client that
+      // connected and has since failed or closed is replaced.
+      const client = await abortable(existing.client, signal);
+      const state = client.connectionState;
+      if (state === "connected" || state === "reconnecting") {
+        return client;
+      }
+      if (this.#shared.get(key) === existing) {
+        this.#shared.delete(key);
+        await client.close().catch(() => {});
+      }
+      return await this.#sharedClient(address, signal);
+    }
+    const transport = new WebSocketTransport(
+      toWebSocketAddress(address),
+      this.#compressionEnabled,
+      () => this.#transports.delete(transport),
+      this.#createSocket,
+    );
+    this.#transports.add(transport);
+    const dialed: SharedConnection = {
+      transport,
+      client: MemoryClient.connect({ transport }),
+    };
+    this.#shared.set(key, dialed);
+    // A failed dial takes its entry with it, whoever is waiting on it.
+    dialed.client.catch(async () => {
+      if (this.#shared.get(key) === dialed) {
+        this.#shared.delete(key);
+      }
+      await transport.close().catch(() => {});
+    });
+    return await abortable(dialed.client, signal);
+  }
+
+  /**
+   * Helper for `create()`, which dials a connection for this session alone,
+   * naming the space in its address.
+   */
+  async #createDedicated(
+    space: MemorySpace,
+    signer: Signer,
+    mountOptions: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ) {
     const transport = new WebSocketTransport(

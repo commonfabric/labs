@@ -12,7 +12,9 @@ describes how the pieces fit.
 ## The classification: recoverable versus permanent
 
 The pivot is telling apart an authorization failure a retry can heal from one it
-never will. A `session.open` is denied for one of two kinds of reason:
+never will. A `session.open` — or, on a connection that authenticates each key
+once, the `connection.auth` a session's reopen depends on — is denied for one
+of two kinds of reason:
 
 - **Recoverable (retriable).** The connection-challenge and invocation-freshness
   anti-replay checks: an expired, already-used, or mismatched challenge, or a
@@ -41,7 +43,9 @@ is read as permanent — the safe default for an authorization decision.
   or transact rethrows it. This holds for a denial anywhere in the reopen — the
   `session.open` itself or the watch re-establishment a fresh (non-resumed)
   reopen issues. Sessions for other spaces on the same client keep running: a
-  denial on one space is not a client-wide failure.
+  denial on one space is not a client-wide failure. A permanent denial of a
+  `connection.auth` terminates every session mounted as that key, and no
+  other.
 - A **retriable** authorization race and every transport-level disconnect retry,
   so a transient blip or a fresh-challenge race heals.
 - A **server that cannot take declared holdings** (no `sessionHoldings` in its
@@ -56,9 +60,9 @@ is read as permanent — the safe default for an authorization decision.
   fundamentally-incompatible transport fails fast with the real error.
 
 The reconnect loop therefore has no unbounded retry-on-anything path: a
-permanent failure ends it (per session for an authorization denial, client-wide
-for a handshake mismatch), and only recoverable and transport-level conditions
-retry.
+permanent failure ends it (per session for a session-open denial, per key for
+a connection-authentication denial, client-wide for a handshake mismatch), and
+only recoverable and transport-level conditions retry.
 
 `SpaceSession.subscribeAccessLoss` also delivers an authoritative
 `AuthorizationError` immediately when an established session loses access. An

@@ -322,6 +322,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
 
   /**
+   * Chooses how the sessions this manager opens from here on reach their
+   * hosts: over one connection per host that they share, authenticated once
+   * per key, or over one connection per space. A manager without the method
+   * has no connections to share.
+   *
+   * @throws If a session is already open and the choice would change: the
+   * sessions would then be split across the two.
+   */
+  setSharedMemoryConnection?(enabled: boolean): void;
+
+  /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space
    * (federation site table). Optional: managers without remote resolution
    * (emulated/test) simply don't implement it. Returns true when the

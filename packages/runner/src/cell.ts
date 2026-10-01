@@ -1160,6 +1160,7 @@ let txOf: (
   cell: CellImpl<FabricValue>,
 ) => IExtendedStorageTransaction | undefined;
 let exportOf: (cell: CellImpl<FabricValue>) => CellExport;
+let linkOutsideHandlerSpaceOf: (cell: CellImpl<FabricValue>) => void;
 let setOf: (
   cell: CellImpl<FabricValue>,
   value: unknown,
@@ -1457,6 +1458,17 @@ export class CellImpl<T extends FabricValue>
 
     // Update this cell's link
     this.#_link = frozenLink({ ...this.#_link, id, space });
+  }
+
+  /** Does what `linkCellOutsideHandlerSpace()` does for this cell. */
+  #linkOutsideHandlerSpace(): void {
+    const space = this.#causeContainer.space;
+    if (
+      this.#frame?.inHandler && space !== undefined &&
+      space !== this.#frame.space && !this.#hasFullLink()
+    ) {
+      this.#ensureLink();
+    }
   }
 
   get space(): MemorySpace {
@@ -4414,6 +4426,7 @@ export class CellImpl<T extends FabricValue>
     runtimeOf = (cell) => cell.#runtime;
     txOf = (cell) => cell.#tx;
     exportOf = (cell) => cell.#export();
+    linkOutsideHandlerSpaceOf = (cell) => cell.#linkOutsideHandlerSpace();
     setOf = (cell, value, onCommit, sendOptions) => {
       cell.#set(value as FabricValue, onCommit, sendOptions);
     };
@@ -4524,6 +4537,20 @@ export function cellTx(
  */
 export function exportCell(cell: unknown): CellExport {
   return exportOf(requireCellImpl(cell));
+}
+
+/**
+ * Gives `cell` its link, if a handler built it and it is pinned to a space
+ * other than the one the handler runs in, and does nothing to any other cell.
+ * Throws for anything but a cell or a `Reactive` proxy over one. Host code
+ * only.
+ *
+ * The pattern built from a handler's frame names a cell that has no link by a
+ * partial cause, and a partial cause binds in the space that pattern runs in.
+ * A link is what carries a pinned cell's own space into that pattern.
+ */
+export function linkCellOutsideHandlerSpace(cell: unknown): void {
+  linkOutsideHandlerSpaceOf(requireCellImpl(cell));
 }
 
 /**

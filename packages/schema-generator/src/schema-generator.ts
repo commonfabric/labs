@@ -1140,13 +1140,15 @@ function mentionsBoundParameter(
 export class SchemaGenerator {
   #commonFabricFormatter = new CommonFabricFormatter(this);
 
+  #unionFormatter = new UnionFormatter(
+    this,
+    (type, node, context) => this.#readsWhole(type, node, context),
+  );
+
   #formatters: TypeFormatter[] = [
     this.#commonFabricFormatter,
     new NativeTypeFormatter(),
-    new UnionFormatter(
-      this,
-      (type, node, context) => this.#readsWhole(type, node, context),
-    ),
+    this.#unionFormatter,
     new IntersectionFormatter(this),
     // Prefer array detection before primitives to avoid Any-flag misrouting
     new ArrayFormatter(this),
@@ -2102,6 +2104,15 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
+    // Alternatives that share a type remain separate readings. Their type
+    // identity cannot name either reading or mark one as a cycle of the other.
+    if (context.typeNode && context.inlineUnionMember === context.typeNode) {
+      const { inlineUnionMember: _, ...memberContext } = context;
+      return this.#commonFabricFormatter.formatType(type, memberContext);
+    }
+    const collapsed = this.#unionFormatter.formatCollapsedUnion(type, context);
+    if (collapsed !== undefined) return collapsed;
+
     // A scope wrapper reads its payload from the reference's argument, even
     // when its declaration erases to an unbound type parameter, and a
     // `Default` over a bound one reads its value as the parameter's argument
@@ -2199,7 +2210,13 @@ export class SchemaGenerator {
     const stackKey = bindingKey === undefined
       ? type
       : `${this.#bindingId(type)}|${bindingKey}`;
-    const tracksCycle = !scopesHandle && !isWrapperContext;
+    // `never` holds no type, so it is never met inside itself and is not a
+    // cycle's entry. A wrapper the checker reduces to it, as it reduces
+    // `PerUser<never>` (`never & brand` is `never`), has `never` both for its
+    // own type and for its payload's, and the payload read inside it is the
+    // value it wraps, not its recursion.
+    const tracksCycle = !scopesHandle && !isWrapperContext &&
+      (type.flags & ts.TypeFlags.Never) === 0;
     // The same type read inside itself with the same arguments written for
     // it, each read under deeper bindings, is either a nesting its author
     // wrote out, `Pair<Pair<string>>`, or a recursion that instantiates it
@@ -2427,15 +2444,16 @@ export class SchemaGenerator {
   }
 
   /**
-   * Whether `node`, a union member that stands for the several members of
-   * `type`, is read whole, for all of them (`pairUnionMemberNodes()`): where
-   * it is a CFC alias the CFC formatter reads, whose labels the node alone
-   * can spell. A wrapper, such as `Default<T, V>` or a cell, is not, nor is a
-   * scope wrapper, since each has rules of its own for its place in a union:
-   * §7's for `Default`, and `scope-placement.ts`'s for a scope.
+   * Whether `node`, a union member that stands for the member or members of
+   * `type`, is read whole, as one alternative for all of them
+   * (`pairUnionMemberNodes()`): where it is a CFC alias the CFC formatter
+   * reads, whose labels the node alone can spell. A wrapper, such as
+   * `Default<T, V>` or a cell, is not, nor is a scope wrapper, since each has
+   * rules of its own for its place in a union: §7's for `Default`, and
+   * `scope-placement.ts`'s for a scope.
    */
   #readsWhole(
-    type: ts.UnionType,
+    type: ts.Type,
     node: ts.TypeNode,
     context: GenerationContext,
   ): boolean {
@@ -2458,8 +2476,9 @@ export class SchemaGenerator {
    * (`joinMemberIfcLabels()`). A member is spelled by the node of the union
    * `typeNode` writes, read through parentheses and aliases
    * (`readAuthoredTypeNode()`), that it is read at
-   * (`pairUnionMemberNodes()`). A member that nodes standing for several
-   * members stand for may be under the labels of any of those nodes.
+   * (`pairUnionMemberNodes()`). A member that several nodes read whole stand
+   * for may be under the labels of any of them, even where the checker
+   * reduces the whole union to that member.
    */
   #labelsOf(
     type: ts.Type,
@@ -2468,9 +2487,9 @@ export class SchemaGenerator {
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
     const written = typeNode && readAuthoredTypeNode(typeNode, checker);
-    const paired = written && ts.isUnionTypeNode(written) && type.isUnion()
+    const paired = written && ts.isUnionTypeNode(written)
       ? pairUnionMemberNodes(
-        type.types,
+        type.isUnion() ? type.types : [type],
         written,
         checker,
         (union, node) => this.#readsWhole(union, node, context),
@@ -2483,6 +2502,16 @@ export class SchemaGenerator {
     const values = type.isUnion()
       ? type.types.filter((member) => (member.flags & nullish) === 0)
       : [type];
+    const wholeNodes = values.length === 1 &&
+      paired?.wholeNodes.get(values[0]!);
+    if (wholeNodes) {
+      return joinMemberIfcLabels(
+        {},
+        wholeNodes.map(({ type, node }) =>
+          this.#labelsOf(type, node, context) ?? {}
+        ),
+      );
+    }
     if (values.length === 1 && values[0] !== type) {
       // An optional property's declaration spells the value alone, since its
       // `?` adds the `undefined`.
@@ -2498,9 +2527,9 @@ export class SchemaGenerator {
     return joinMemberIfcLabels(
       labels ?? {},
       values.flatMap((member) => {
-        const covers = paired?.covering.get(member);
-        return covers
-          ? covers.map(({ node, type }) =>
+        const wholeNodes = paired?.wholeNodes.get(member);
+        return wholeNodes
+          ? wholeNodes.map(({ node, type }) =>
             this.#labelsOf(type, node, context) ?? {}
           )
           : [this.#labelsOf(member, memberNode(member), context) ?? {}];

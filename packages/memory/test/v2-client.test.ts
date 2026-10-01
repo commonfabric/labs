@@ -306,7 +306,7 @@ Deno.test("memory v2 client observes cancellation after session open", async () 
     const tracked = trackAbortListeners(
       controller,
       (removals) => {
-        if (removals === 2) controller.abort(testCase.reason);
+        if (removals === 1) controller.abort(testCase.reason);
       },
     );
     try {

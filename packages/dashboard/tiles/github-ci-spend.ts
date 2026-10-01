@@ -14,10 +14,12 @@
  * all, and is absent from this figure. The package README records which spend
  * that is, under "What the GitHub figure covers".
  *
- * A day reaches the report a day or two after it ends, and a settled day with
- * no row is a day that spent nothing. That reading holds only while the report
- * is still writing rows, so a report whose newest row is too far back is
- * unavailable rather than a run of $0 days.
+ * The report carries rows for a day while that day is still under way, and
+ * takes a day or two after it ends to finish it. Those days are partial
+ * figures, so the chart and the projection's rate stop short of them. A
+ * settled day with no row is a day that spent nothing. That reading holds
+ * only while the report is still writing rows, so a report whose newest row is
+ * too far back is unavailable rather than a run of $0 days.
  *
  * The headline covers every product, while the budget the tile's color comes
  * from covers only the products someone has budgeted. Those two are held apart

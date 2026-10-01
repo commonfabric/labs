@@ -1991,7 +1991,13 @@ adjustments:
   a label that names a binding, as a part of it does
   (`buildTypeElementsFromCaptureTree` in `ast/type-building.ts`;
   `carryNarrowing` in `transformers/type-shrinking.ts`;
-  `test/printed-type-node-schema.test.ts`)
+  `test/printed-type-node-schema.test.ts`). Distinct policy bindings on union
+  alternatives survive even when their identical declared types cause the
+  checker to collapse the alternatives into one semantic member. The schema
+  generator reads each written CFC alternative for both whole and narrowed
+  captures, with or without a nullable member (the schema-generator mapping
+  spec's §8; `test/narrowed-capture-labels.test.ts` and the runner's
+  `test/cfc-narrowed-capture-floor.test.ts`)
 - a pass that reads the structure of a node printed from a type reads the
   print's unfolding in its place: a node of the print's own kind built from the
   type it was printed from, each type node below it printed afresh from its own
@@ -2644,9 +2650,14 @@ A qualifying call, per `detectCallKind` (§5) — as of this writing:
   reactive values in its argument object still get property causes (test:
   "does not add root causes to pattern factory outputs" pins the absence of
   `.for("child", true)` alongside `.for(["child", "value"], true)`).
-- Variable position only, as a last resort: a call whose resolved type is
-  cell-like (`isCellLikeType` via `getTypeAtLocationWithFallback`, consulting
-  the cross-stage `typeRegistry`).
+- Variable position only, as a last resort: a call whose resolved type is a
+  cell in every arm a value can take (`isCellByType`: `isCellLikeType` of the
+  type, or of each member of a union apart from `undefined`, `null`, and
+  `void`; the type via `getTypeAtLocationWithFallback`, consulting the
+  cross-stage `typeRegistry`). A union with a plain-value arm, such as
+  `Writable<string> | string`, gets no cause: the `.for()` would throw on the
+  string (`ast-transform/handler-cell-or-value-call.expected.jsx`). A nullish
+  arm instead makes the access optional (§13.5).
 
 Suppression: if the receiver chain of the (visited) initializer already
 contains a `.for(...)` call — property access `.for` or element access
@@ -2708,10 +2719,34 @@ export default pattern((state) => ({
 
 Inside object-literal properties (only there), a *reference* to an existing
 reactive value is re-caused at its result location: after visiting, a bare
-identifier whose type is a branded cell or cell-like — or, absent type
-information, is a reactive value expression (`isReactiveValueExpression`) —
-gets `.for(<path>, true)` appended (`shouldRetargetReactiveReference`). The
-cause names the property, not the referenced binding:
+identifier whose type is a cell in every arm a value can take (`isCellByType`,
+as for the variable-position fallback in §13.2) — or, absent type information,
+is a reactive value expression (`isReactiveValueExpression`) — gets
+`.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
+identifier whose type has a plain-value arm beside a cell arm is re-rooted
+only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+a parameter of a reactive scope — the callback of a pattern builder call or
+of a reactive array method, through any parentheses or other transparent
+wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,
+`computed()`'s, or plain function's parameter is not one) — or a variable
+whose lowered initializer this stage classified as reactive
+(`isReactiveByConstruction`, recorded per run in `causedVariablesOf`), or a
+`const` initialized with a bare reference to one of those, at any depth,
+which is the same node under another name. That is the shape a hoisted `??`
+leaves:
+`const activeProfile = profile ?? profileWish.result` over a `Cell<Profile>`
+and a `Reactive<Profile>` read is typed `Profile | Cell<Profile> | undefined`
+and lowered to a lift, so `{ profile: activeProfile }` still re-roots it
+(`ast-transform/builder-arg-hoisted-nullish-selection.expected.jsx`); a
+pattern input `maybe: Writable<string> | string` is re-rooted in the pattern
+body — directly, through `const alias = maybe`, as the element of a reactive
+`.map()`, and under a parenthesized callback — and left alone in a handler
+that receives it as state and in a plain function that takes it as a
+parameter (`ast-transform/cell-or-value-parameter.expected.jsx`); and the
+same type on
+a handler-body `const` from a plain call gets no cause
+(`handler-cell-or-value-call`). The cause names the property, not the
+referenced binding:
 
 ```ts
 // Shown inside a pattern body.
@@ -2758,15 +2793,21 @@ throws in that case (`packages/runner/src/cell.ts`, `for(cause, allowIfSet?)`).
 The access is optional, `?.for(<cause>, true)`, when the tagged expression may
 be nullish when it runs (`mayBeNullish`): an optional chain, or an identifier
 (§13.4) or a call that `detectCallKind` does not classify whose type admits
-`undefined`, `null`, or `void`. The type is read both inside and outside any
-`as`, `satisfies`, or `!` around the expression, and either admitting one is
-enough unless a `!` asserts the value present. There is no cell to name in that
-case, and a plain `.for()` would throw on the absent value. A call the runtime
-provides keeps the plain access, since it returns a cell whatever type the
-value in that cell has (`ast-transform/handler-nullable-cell-const.expected.jsx`:
+`undefined`, `null`, or `void`. There is no cell to name in that case, and a
+plain `.for()` would throw on the absent value. A non-null assertion `!`
+around the expression keeps the plain access, over both the chain and the
+type. The other wrappers, `as` and `satisfies`, leave the question to the
+expression inside them: the type is read inside them, so `as unknown` does
+not hide a nullish arm (`satisfies` never changes a type, and a cast to a type
+that admits a cell is refused, §6). A call the runtime provides keeps the
+plain access, since it returns a cell whatever type the value in that cell has
+(`ast-transform/handler-nullable-cell-const.expected.jsx`:
 `const a = state.profile?.resolveAsCell()?.for("a", true)` in a handler,
-`{ profile: a?.for(["d", "profile"], true) }` re-rooting it, and
-`(maybeCell(state.profile) as unknown)?.for("e", true)`).
+`{ profile: a?.for(["d", "profile"], true) }` re-rooting it,
+`(maybeCell(state.profile) as unknown)?.for("e", true)`, and
+`maybeCell(state.profile)!.for("g", true)`;
+`ast-transform/handler-cell-or-value-call.expected.jsx`:
+`state.profile?.resolveAsCell()!.for("d", true)`).
 
 Source-map ranges are
 preserved from the original initializer (`preserveNodeSourceMap`).
