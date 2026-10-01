@@ -20,7 +20,6 @@ import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
   type PieceAddress,
-  resolveServerExecution,
 } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(
@@ -30,9 +29,6 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
-
-/** Whether this run's harness serves handlers from a serving loop. */
-const SERVER_EXECUTION = resolveServerExecution();
 
 describe("fabrichat spaces across runtimes", () => {
   let harness: MultiRuntimeHarness;
@@ -93,17 +89,7 @@ describe("fabrichat spaces across runtimes", () => {
       .toThrow(`lacks READ on space ${room.space}`);
   });
 
-  it("lets a direct room's counterpart read it, and refuses a stranger", {
-    ignore: SERVER_EXECUTION,
-  }, async () => {
-    // TODO(danfuzz): Remove the `ignore` once a refused reader's read no
-    // longer starves the serving loop. Served, the group case's stranger read
-    // starts the room's lifts running as the stranger, whose writes into the
-    // room's space are refused (`foreign-write-refused`) and retried without
-    // end, each failed seal skipping its wave's other spaces; this case's
-    // new room then never gets its first writes, and its counterpart reads
-    // "No data at cell". Run alone, this case passes.
-
+  it("lets a direct room's counterpart read it, and refuses a stranger", async () => {
     const room = await start("openDirect", {
       requestId: "d-1",
       counterpart: member.identity.did(),
