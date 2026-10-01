@@ -42,9 +42,9 @@ export const HARNESS_CLIENT_COMMAND_LINE_PATTERN =
 const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
 
 /**
- * Python's whitespace, as Loom's `str.isspace`, `str.strip` and `re` `\\s`
+ * Python's whitespace, as Loom's `str.isspace`, `str.strip` and `re` `\s`
  * read it: U+0009..U+000D, U+001C..U+001F, U+0020, U+0085, U+00A0, U+1680,
- * U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. JavaScript's `\\s`
+ * U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. JavaScript's `\s`
  * differs (it lacks U+001C..U+001F and U+0085, and adds U+FEFF), so the set
  * is spelled out here.
  */
