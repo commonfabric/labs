@@ -25,6 +25,14 @@ export class CFOwnerView extends BaseElement {
   accessor result: CellHandle<boolean | null> | undefined;
 
   #generation = 0;
+  /** Whether the current binding's reset has landed, so it may be decided. */
+  #reset = false;
+  /** The value last written to `result`, or undefined when it is unknown. */
+  #published: boolean | null | undefined;
+  #followed: CellHandle | undefined;
+  #stopFollowing: (() => void) | undefined;
+  /** Whether the element was disconnected and has not reconnected since. */
+  #disconnected = false;
 
   override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
@@ -36,15 +44,43 @@ export class CFOwnerView extends BaseElement {
     }
   }
 
+  /**
+   * Follows the origin again after a reconnect with no property change, as a
+   * move to another parent makes, which runs no update. A decision already
+   * published stands until the origin's current label decides otherwise.
+   */
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (!this.#disconnected) return;
+    this.#disconnected = false;
+    if (!this.#reset) {
+      void this.refresh();
+      return;
+    }
+    this.#follow(this.originator);
+    void this.#decide(++this.#generation);
+  }
+
   override disconnectedCallback(): void {
     this.#generation++;
+    this.#disconnected = true;
+    this.#follow(undefined);
     super.disconnectedCallback();
   }
 
-  /** Rechecks the immutable origin when its binding or runtime changes. */
+  /**
+   * Rechecks the origin when its binding or runtime changes: closes the
+   * presentation, decides from the origin's label, and decides again each
+   * time the origin updates. The label is read from what the store holds,
+   * which can lag the binding, as when the origin's document is not loaded
+   * yet, or is rolled back while the piece's start is retried.
+   */
   async refresh(): Promise<void> {
     const generation = ++this.#generation;
-    const { runtime, originator, result } = this;
+    const { result } = this;
+    this.#reset = false;
+    this.#published = undefined;
+    this.#follow(this.isConnected ? this.originator : undefined);
     if (!result) return;
     try {
       await result.setStrict(null);
@@ -52,19 +88,46 @@ export class CFOwnerView extends BaseElement {
       // A refused reset cannot establish a fresh owner decision.
       return;
     }
-    if (!runtime || !originator || !this.isConnected) return;
+    if (generation !== this.#generation) return;
+    this.#reset = true;
+    this.#published = null;
+    await this.#decide(generation);
+  }
+
+  #follow(originator: CellHandle | undefined): void {
+    if (originator === this.#followed) return;
+    this.#stopFollowing?.();
+    this.#stopFollowing = undefined;
+    this.#followed = originator;
+    if (typeof originator?.subscribe !== "function") return;
+    this.#stopFollowing = originator.subscribe(() => {
+      if (this.#reset) void this.#decide(++this.#generation);
+    }, { includeCfcLabel: true });
+  }
+
+  /** Publishes the decision the origin's current label supports. */
+  async #decide(generation: number): Promise<void> {
+    const { runtime, originator, result } = this;
+    if (!runtime || !originator || !result || !this.isConnected) return;
+    let decision: boolean | null = null;
     try {
-      const label = await readCfcLabelView(originator);
-      if (
-        generation !== this.#generation || !this.isConnected ||
-        runtime !== this.runtime || originator !== this.originator ||
-        result !== this.result
-      ) return;
-      const owner = attestedOwnerPrincipal(label);
+      const owner = attestedOwnerPrincipal(await readCfcLabelView(originator));
       const actor = runtime.actingPrincipalDid();
-      if (owner && actor) await result.setStrict(owner === actor);
+      if (owner && actor) decision = owner === actor;
     } catch {
       // Missing or unreadable attestation keeps the presentation closed.
+    }
+    if (
+      generation !== this.#generation || !this.isConnected ||
+      runtime !== this.runtime || originator !== this.originator ||
+      result !== this.result || decision === this.#published
+    ) return;
+    this.#published = decision;
+    try {
+      await result.setStrict(decision);
+    } catch {
+      // The next update decides again from whatever the cell holds.
+      this.#published = undefined;
     }
   }
 
