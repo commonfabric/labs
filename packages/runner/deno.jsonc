@@ -64,6 +64,7 @@
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
+    "./cfc/prompt-caveat-kinds": "./src/cfc/prompt-caveat-kinds.ts",
     "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
     "./cfc/custody-seal": "./src/cfc/custody-seal.ts",
     "./cfc/trust-authority": "./src/cfc/trust-authority.ts",

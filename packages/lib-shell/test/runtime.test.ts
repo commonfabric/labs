@@ -963,14 +963,30 @@ describe("RuntimeInternals", () => {
     expect(options.renderConfidentialityCeiling?.atoms).toContain(
       session.as.did(),
     );
-    // Influence-class caveat kinds are display-dischargeable (rendered
-    // disclosure); material-risk kinds (e.g. injection-risk-unscreened) are
-    // deliberately NOT allow-listed.
-    expect(options.renderConfidentialityCeiling?.caveatKinds).toContain(
-      "https://commonfabric.org/cfc/concepts/prompt-influence",
-    );
-    expect(options.renderConfidentialityCeiling?.caveatKinds).not.toContain(
-      "https://commonfabric.org/cfc/concepts/prompt-injection-risk-unscreened",
+    // The whole §10.1 prompt-caveat family, and nothing else: the legacy
+    // single-risk form, the three screening-gradient tiers and prompt
+    // influence, each in its canonical and its short spelling. A prompt
+    // caveat says not to trust the content as instructions to a model; a
+    // display shows it to the acting user, so the default display ceiling
+    // admits it (§8.10.6). Admission is not discharge: the caveat stays on
+    // the value. Spelled out here rather than read from the constant the
+    // ceiling is built from, so a family member missing there fails here.
+    const family = [
+      "prompt-injection-risk",
+      "prompt-injection-risk-unscreened",
+      "prompt-injection-risk-ingress-screened",
+      "prompt-injection-risk-value-screened",
+      "prompt-influence",
+    ];
+    expect(
+      [...(options.renderConfidentialityCeiling?.caveatKinds ?? [])].sort(),
+    ).toEqual(
+      [
+        ...family.map((kind) =>
+          `https://commonfabric.org/cfc/concepts/${kind}`
+        ),
+        ...family,
+      ].sort(),
     );
 
     const off = createRuntimeClientOptions({
