@@ -16,7 +16,13 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import { findNodeByProp, propValue } from "../test/vnode-helpers.ts";
+import {
+  clickButton,
+  findNodeById,
+  findNodeByProp,
+  propValue,
+  readValue,
+} from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import type {
   ChatIndexEntry,
@@ -40,6 +46,19 @@ const statusOf = (
   requests: Writable<Record<string, ChatRequestOutcome>>,
   id: string,
 ): string => requests.get()?.[id]?.status ?? "none";
+
+// How the element `id` under `root` is displayed.
+const displayOf = (root: unknown, id: string): unknown =>
+  readValue(
+    (propValue(findNodeById(root, id), "style") as { display?: unknown })
+      ?.display,
+  );
+
+// Which of a manager's two parts it shows: the chosen room, or the prompt to
+// choose one.
+const shownPart = (root: unknown): string =>
+  `selected:${displayOf(root, "fabrichat-selected")} ` +
+  `unselected:${displayOf(root, "fabrichat-unselected")}`;
 
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
@@ -183,6 +202,18 @@ export default pattern(() => {
           directRooms.get().length === 1 &&
           directRooms.get()[0]?.counterpart === BOB &&
           recipientsOf(directNotices) === BOB
+        ),
+      },
+      // Choosing the room shows it in place of the prompt to choose one.
+      {
+        assertion: assert(() =>
+          shownPart(direct[UI]) === "selected:none unselected:block"
+        ),
+      },
+      { action: action(() => clickButton(direct[UI], `With ${BOB}`)) },
+      {
+        assertion: assert(() =>
+          shownPart(direct[UI]) === "selected:block unselected:none"
         ),
       },
       // The conversation with one person is always the same room.
