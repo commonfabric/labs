@@ -10,10 +10,10 @@ import type {
 } from "../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -84,6 +84,17 @@ const projectingAttacks = {
       const own = new Writable<string[]>([]).for("own");
       return { own, list: items };
     });
+    const inner = Inner({});
+    items.set(["forged"]);
+    return inner;`,
+  "sets up a pattern whose rows capture the list and whose result names it": `
+    const Inner = pattern<
+      Record<string, never>,
+      { list: Writable<Items>; rows: { item: string }[] }
+    >(() => ({
+      list: items,
+      rows: items.map((item) => ({ item, remove: edit({ items }) })),
+    }));
     const inner = Inner({});
     items.set(["forged"]);
     return inner;`,
@@ -211,7 +222,7 @@ describe("setup-result-projection", () => {
       return resultCell;
     }
 
-    it("records a binding projection of the result field naming the list, and no setup projection", async () => {
+    it("records a capture of the result field naming the list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       await setUpExporter(tx);
@@ -220,25 +231,28 @@ describe("setup-result-projection", () => {
       const list = runtime.getCell(space, "board", undefined, tx).key("items")
         .getAsNormalizedFullLink();
 
-      const projections = tx.getCfcState().writePolicyInputs.flatMap((
-        input,
-      ) =>
-        input.kind === "structural-provenance" &&
-          (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
-            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) &&
-          input.target.id === exporter.id
-          ? [{
-            claim: input.claim,
+      const records = tx.getCfcState().writePolicyInputs.flatMap((input) => {
+        if (
+          input.kind === "initialization" && input.target.id === exporter.id
+        ) {
+          const named = parseLink(input.value, exporter);
+          return [{
+            record: input.mode,
             path: input.target.path,
-            sources: input.sources.map(({ id, path }) => ({ id, path })),
-          }]
-          : []
-      );
+            names: named && { id: named.id, path: named.path },
+          }];
+        }
+        return input.kind === "structural-provenance" &&
+            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+            input.target.id === exporter.id
+          ? [{ record: input.claim, path: input.target.path }]
+          : [];
+      });
 
-      expect(projections).toEqual([{
-        claim: CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
+      expect(records).toEqual([{
+        record: "capture",
         path: ["items"],
-        sources: [{ id: list.id, path: list.path }],
+        names: { id: list.id, path: list.path },
       }]);
       tx.abort();
     });

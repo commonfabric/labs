@@ -198,7 +198,6 @@ import {
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -1452,18 +1451,11 @@ const setupProjectionSourceMatchesValue = (
   },
   path: readonly string[],
 ): boolean => {
-  // A field projecting the piece's own cell and a slot holding a binding
-  // alike: either marker names the redirect a setup put at the path.
   const projection = structuralProvenanceForPath(
     tx,
     target,
     path,
     CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
-  ) ?? structuralProvenanceForPath(
-    tx,
-    target,
-    path,
-    CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   );
   if (projection === undefined) {
     return false;
@@ -1508,10 +1500,10 @@ const setupProjectionSourceMatchesValue = (
 // redirect *source* of a setup-projection marker recorded in this transaction,
 // covering the field path. A redirect to any other cell — a binding staged into
 // an argument, or a result field naming the piece's argument or a cell the code
-// setting the piece up closed over — records a marker of its own
-// (`CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION`), which does not count here:
-// the cell it names belongs to whoever handed the piece the binding, and the
-// setup initializes none of it.
+// setting the piece up closed over — records a capture of its slot instead
+// (`writeIsRuntimeInitialization`), which does not count here: the cell it
+// names belongs to whoever handed the piece the binding, and the setup
+// initializes none of it.
 //
 // This is safe because the marker counts only with the runtime's authorization
 // (`isRuntimeWritePolicyInput`), which the runtime's result projection records
@@ -1605,10 +1597,8 @@ const slotHoldsInitialization = (
 
 /**
  * A runtime initialization covers one absent slot and its exact final value.
- * A reference initialization also covers a slot that holds that link already
- * and receives no write. A capture covers a slot that was absent or held a
- * link to the same cell, and ends holding a link to it, whatever schema each
- * link carries. `waived` names the declaration the calling gate would waive
+ * A capture covers a slot that was absent or held a link to the same cell,
+ * and ends holding a link to it, whatever schema each link carries. `waived` names the declaration the calling gate would waive
  * for it: one the stored envelope already makes on an absent slot keeps its
  * requirement, so installing a link waives only a declaration the candidate
  * schema introduces. A stored `writePolicyAnyOf` makes both declarations,
@@ -1632,15 +1622,9 @@ const writeIsRuntimeInitialization = (
     concretePathHasPrefix(path, input.target.path)
   );
   if (input?.kind !== "initialization") return false;
-  // A reference covers a link to a cell and nothing the cell holds. A write
-  // redirect is no such link, since a write at its slot lands at the cell.
-  if (
-    input.mode === "reference" &&
-    (!isPrimitiveCellLink(input.value) || isWriteRedirectLink(input.value))
-  ) return false;
-  // A capture covers a link to a cell, redirect or not. The slot is what the
-  // capture installs; a write through a redirect there lands at the cell it
-  // names, and that cell's own policy decides it.
+  // A capture covers a link to a cell, redirect or not, and nothing the cell
+  // holds. The slot is what the capture installs; a write through a redirect
+  // there lands at the cell it names, and that cell's own policy decides it.
   if (input.mode === "capture" && !isPrimitiveCellLink(input.value)) {
     return false;
   }
@@ -1655,10 +1639,7 @@ const writeIsRuntimeInitialization = (
   );
   // A link staged over the link the slot holds already lands no write there:
   // the slot keeps its link, so nothing is repointed.
-  if (
-    (input.mode === "reference" || input.mode === "capture") &&
-    covering.length === 0
-  ) return true;
+  if (input.mode === "capture" && covering.length === 0) return true;
   // What one covering write's snapshot held at the slot, if it can tell.
   // Overlapping write paths can capture different intermediate states, so
   // every covering snapshot is consulted; the deepest alone is insufficient.
@@ -1709,8 +1690,8 @@ const writeIsRuntimeInitialization = (
 };
 
 /**
- * Whether `path` lies at or under a reference or capture the runtime staged
- * in this transaction, with the slot still holding it. Staging writes nothing
+ * Whether `path` lies at or under a capture the runtime staged in this
+ * transaction, with the slot still holding it. Staging writes nothing
  * the referenced value holds, so the integrity the receiving slot's schema
  * would add describes content the stager did not write and is not minted for
  * it.
@@ -1727,8 +1708,7 @@ const pathHoldsStagedReference = (
   const logicalPath = canonicalizeLogicalPath(path);
   const scope = normalizeCellScope(target.scope);
   return tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "initialization" &&
-    (input.mode === "reference" || input.mode === "capture") &&
+    input.kind === "initialization" && input.mode === "capture" &&
     tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
     normalizeCellScope(input.target.scope) === scope &&
@@ -1834,14 +1814,11 @@ const pathHoldsUnattributedInitialization = (
         if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
         // internal cell holding the field's value; both are the pattern's own
-        // initialization (`writeIsPatternSetupInitialization`). A binding
-        // projection names the slot this setup stages and the cell the piece
-        // was handed, and only the slot is the setup's.
-        if (input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) {
-          return [input.target, ...input.sources].some(covers);
-        }
-        return input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION &&
-          covers(input.target);
+        // initialization (`writeIsPatternSetupInitialization`). A slot holding
+        // a binding the setup staged is a capture, whose integrity the
+        // staging mints none of (`pathHoldsStagedReference`).
+        return input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+          [input.target, ...input.sources].some(covers);
       }
       return input.kind === "initialization" &&
         (input.mode === "seed" || input.mode === "projection" ||

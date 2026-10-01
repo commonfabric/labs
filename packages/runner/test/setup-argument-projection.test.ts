@@ -16,11 +16,10 @@ import {
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
-import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
+import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
@@ -163,7 +162,7 @@ describe("setup-argument-projection", () => {
   }
 
   describe("the record", () => {
-    it("records a binding projection of the slot, naming the passed list, and no setup projection", async () => {
+    it("records a capture of the slot, naming the passed list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       const argument = await setUpChild(tx, binding(tx));
@@ -171,26 +170,27 @@ describe("setup-argument-projection", () => {
       const list = runtime.getCell(space, "board", undefined, tx).key("items")
         .getAsNormalizedFullLink();
 
-      const projections = tx.getCfcState().writePolicyInputs.flatMap((
-        input,
-      ) =>
-        input.kind === "structural-provenance" &&
-          (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
-            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) &&
-          input.target.id === slot.id
-          ? [{
-            claim: input.claim,
+      const records = tx.getCfcState().writePolicyInputs.flatMap((input) => {
+        if (input.kind === "initialization" && input.target.id === slot.id) {
+          const named = parseLink(input.value, slot);
+          return [{
+            record: input.mode,
             path: input.target.path,
-            sources: input.sources.map(({ id, path }) => ({ id, path })),
+            names: named && { id: named.id, path: named.path },
             runtime: tx.isRuntimeWritePolicyInput(input),
-          }]
-          : []
-      );
+          }];
+        }
+        return input.kind === "structural-provenance" &&
+            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+            input.target.id === slot.id
+          ? [{ record: input.claim, path: input.target.path }]
+          : [];
+      });
 
-      expect(projections).toEqual([{
-        claim: CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
+      expect(records).toEqual([{
+        record: "capture",
         path: ["list"],
-        sources: [{ id: list.id, path: list.path }],
+        names: { id: list.id, path: list.path },
         runtime: true,
       }]);
       tx.abort();
@@ -220,6 +220,22 @@ describe("setup-argument-projection", () => {
 
         expect(await commit(tx)).toBeUndefined();
       }
+    });
+
+    it("refuses a later setup staging a redirect to another list over it", async () => {
+      // The slot keeps the cell it was first given, as a list builtin's
+      // captured binding does. Whether a trusted setup may re-point it when a
+      // pattern version names another cell is not settled.
+      await initializeOwnersList();
+      await initializeOwnersList("other");
+      const first = runtime.edit();
+      await setUpChild(first, binding(first));
+      expect(await commit(first)).toBeUndefined();
+
+      const later = runtime.edit();
+      await setUpChild(later, binding(later, "other"));
+
+      expect(await commit(later)).toContain(`${refusal} at /list`);
     });
 
     it("refuses a relative write redirect over it in the transaction staging it, which names the child's own argument document rather than the list", async () => {
@@ -456,8 +472,7 @@ describe("setup-argument-projection", () => {
           ? [{ record: input.mode, path: input.target.path }]
           : input.kind === "structural-provenance" &&
               input.target.id === row.id &&
-              (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
-                input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION)
+              input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION
           ? [{ record: input.claim, path: input.target.path }]
           : []
       );

@@ -32,15 +32,6 @@ export type {
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
-// A write redirect a setup stages to a cell the piece it sets up did not
-// create: a binding passed into the piece's argument, or a result field that
-// names its argument or a cell the code setting it up closed over. `target` is
-// the slot holding the redirect, `sources` the cell it names. That cell belongs
-// to whoever handed the piece the binding, and the setup initializes none of
-// it, so the prepare gate takes the marker for the slot alone.
-export const CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION =
-  "runtime.setup.binding-projection";
-
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
 // argument, result and internal documents, minted by the runner from the
@@ -620,12 +611,13 @@ export type WritePolicyInput =
   | {
     /**
      * Authority is carried by the runtime's private mark, never this record
-     * alone. A `"reference"` initialization stages a link to a cell that exists
-     * already and none of what the cell holds, so its `value` is that link.
-     * A `"capture"` initialization stages a binding a callback captures: a
-     * link, usually a write redirect, to a cell that exists already. It is
-     * matched by the cell the link names and not by the link's bytes, which
-     * carry the binding's schema beside the address. A `"replay"` record
+     * alone. A `"capture"` initialization stages a link to a cell that exists
+     * already into a slot, and none of what the cell holds, so its `value` is
+     * that link: a list's entry or the list itself handed to a sub-pattern, a
+     * binding a callback captures, or a binding a setup stages into an
+     * argument or a result field. It is matched by the cell the link names
+     * and by whether the link is a write redirect, not by the link's bytes,
+     * which can carry the binding's schema beside the address. A `"replay"` record
      * names an argument slot a runtime replaying a piece's setup carries over
      * from the stored argument document, with the bytes it holds; it permits
      * nothing but leaving those bytes as they are.
@@ -637,7 +629,6 @@ export type WritePolicyInput =
       | "seed"
       | "default"
       | "projection"
-      | "reference"
       | "capture"
       | "replay";
   }

@@ -111,7 +111,7 @@ describe("reference-initialization", () => {
       );
       expect(recorded).toHaveLength(1);
       expect(recorded[0]).toMatchObject({
-        mode: "reference",
+        mode: "capture",
         target: { id: link.id, path: ["element"] },
         value: argument.key("element").getRaw(),
       });
@@ -238,27 +238,11 @@ describe("reference-initialization", () => {
       const argument = runtime.getCell(space, "argument", argumentSchema, tx);
       tx.recordCfcWritePolicyInput({
         kind: "initialization",
-        mode: "reference",
+        mode: "capture",
         target: { ...argument.getAsNormalizedFullLink(), path: ["element"] },
         value: { body: "forged" },
       }, runtimeWritePolicyAuthorization);
       argument.set({ element: { body: "forged" } });
-      runtime.prepareTxForCommit(tx);
-
-      expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
-    });
-
-    it("refuses a runtime-recorded reference whose value is a write redirect", async () => {
-      const tx = runtime.edit();
-      const argument = runtime.getCell(space, "argument", argumentSchema, tx);
-      const redirect = entryCell(tx, "entry", "a").getAsWriteRedirectLink();
-      argument.set({ element: redirect });
-      tx.recordCfcWritePolicyInput({
-        kind: "initialization",
-        mode: "reference",
-        target: { ...argument.getAsNormalizedFullLink(), path: ["element"] },
-        value: redirect,
-      }, runtimeWritePolicyAuthorization);
       runtime.prepareTxForCommit(tx);
 
       expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
@@ -270,7 +254,7 @@ describe("reference-initialization", () => {
       argument.set({ element: entryCell(tx, "entry", "a") });
       tx.recordCfcWritePolicyInput({
         kind: "initialization",
-        mode: "reference",
+        mode: "capture",
         target: { ...argument.getAsNormalizedFullLink(), path: ["element"] },
         value: argument.key("element").getRaw(),
       });
@@ -776,7 +760,6 @@ describe("reference-initialization", () => {
         ),
       ).toContain("writeAuthorizedBy");
     });
-
   });
 
   describe("labels of a staged reference", () => {

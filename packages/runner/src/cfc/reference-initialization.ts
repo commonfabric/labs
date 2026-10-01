@@ -19,9 +19,11 @@ import { runtimeWritePolicyAuthorization } from "./types.ts";
  * link to a cell is recorded, and a field holding anything else is not: a link
  * hands the new piece a reference and writes nothing of what it points at,
  * which is what makes the staging an initialization of the argument and no
- * modification of the cell. The commit verifier independently checks that the
- * slot was absent before the transaction or already held the link, and that
- * the final bytes are the link recorded.
+ * modification of the cell. A write redirect sends writes on to its cell, so
+ * it is no such reference and is not recorded. The commit verifier
+ * independently checks that the slot was absent before the transaction or
+ * held a link to the same cell, and that it ends holding a link to the cell
+ * recorded.
  */
 export function recordReferencedArgumentFields(
   tx: IExtendedStorageTransaction,
@@ -35,7 +37,7 @@ export function recordReferencedArgumentFields(
     });
     // A redirect sends writes on to its target, so it is no plain reference.
     if (!isPrimitiveCellLink(staged) || isWriteRedirectLink(staged)) continue;
-    recordStagedLink(tx, argument, path, "reference", staged);
+    recordStagedLink(tx, argument, path, staged);
   }
 }
 
@@ -79,7 +81,7 @@ function recordCapturedLinks(
   staged: FabricValue,
 ): void {
   if (isPrimitiveCellLink(staged)) {
-    recordStagedLink(tx, argument, path, "capture", staged);
+    recordStagedLink(tx, argument, path, staged);
   } else if (Array.isArray(staged)) {
     staged.forEach((child, index) =>
       recordCapturedLinks(tx, argument, [...path, String(index)], child)
@@ -93,18 +95,17 @@ function recordCapturedLinks(
 
 /**
  * Helper for the recorders above, which records `link`, staged at `path` of
- * `argument`, as an initialization of the given `mode`.
+ * `argument`, as a capture.
  */
 function recordStagedLink(
   tx: IExtendedStorageTransaction,
   argument: NormalizedFullLink,
   path: readonly string[],
-  mode: "reference" | "capture",
   link: PrimitiveCellLink,
 ): void {
   tx.recordCfcWritePolicyInput({
     kind: "initialization",
-    mode,
+    mode: "capture",
     target: {
       space: argument.space,
       id: argument.id,
