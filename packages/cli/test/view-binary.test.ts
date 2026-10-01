@@ -275,7 +275,7 @@ describe("view-binary", () => {
     viewInternals.writeAllSync({
       writeSync(data: Uint8Array): number {
         const count = Math.min(2, data.length);
-        written.push(...data.subarray(0, count));
+        for (const byte of data.subarray(0, count)) written.push(byte);
         return count;
       },
     }, new Uint8Array([1, 2, 3, 4, 5]));

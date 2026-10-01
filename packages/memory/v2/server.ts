@@ -21,7 +21,6 @@ import {
   hasConcreteOwner,
   isACL,
   isCapable,
-  sameAcl,
 } from "../acl.ts";
 import {
   canResolveScopeKey,
@@ -845,7 +844,7 @@ const watchReadRoots = (
           : { scope: watch.query.scope }),
       });
     } else {
-      roots.push(...watch.query.roots);
+      for (const root of watch.query.roots) roots.push(root);
     }
   }
   return roots;
@@ -2253,19 +2252,6 @@ export class Server {
     commit: ClientCommit,
   ): V2Error | null {
     const principal = session.principal;
-    if (commit.aclChange !== undefined) {
-      const change = commit.aclChange;
-      if (
-        !change || !isACL(change.before) || !isACL(change.after) ||
-        !hasConcreteOwner(change.after) || !principal ||
-        principal === ANYONE_USER ||
-        commit.genesisRoot !== undefined ||
-        (commit.branch !== undefined && commit.branch !== "") ||
-        commitTouchesAclDoc(commit.operations, space)
-      ) {
-        return toError("ProtocolError", "Invalid atomic ACL change");
-      }
-    }
     if (commit.genesisRoot !== undefined) {
       if (!isGenesisRoot(commit.genesisRoot)) {
         return toError("ProtocolError", "Invalid genesis root reservation");
@@ -4251,23 +4237,12 @@ export class Server {
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
-          ) || message.commit.aclChange !== undefined;
-          const change = message.commit.aclChange;
-          const remaining: Record<string, Capability | undefined> = change
-            ? { ...change.before }
-            : {};
-          if (session.principal) delete remaining[session.principal];
-          const selfRemoval = change !== undefined &&
-            change.before[ANYONE_USER] === undefined &&
-            (change.before as Record<string, Capability | undefined>)[
-                session.principal!
-              ] !== undefined &&
-            sameAcl(change.after, remaining);
+          );
           const deny = this.#authorizeMessageWithEngine(
             engine,
             message.space,
             session.principal,
-            aclTouched && !selfRemoval ? "OWNER" : "WRITE",
+            aclTouched ? "OWNER" : "WRITE",
           );
           if (deny) {
             return respondTypedError<Engine.AppliedCommit>(
@@ -4293,7 +4268,7 @@ export class Server {
               "memory.commit.persist",
               (persistSpan) => {
                 try {
-                  const options: Engine.ApplyCommitOptions = {
+                  return Engine.applyCommit(engine, {
                     sessionId: message.sessionId,
                     space: message.space,
                     principal: session.principal,
@@ -4303,45 +4278,6 @@ export class Server {
                     // The class is determined HERE, by the admission path —
                     // never read from the client payload (protocol.md §1).
                     commitClass: "authored",
-                    allowAclChange: change !== undefined,
-                  };
-                  if (!change) return Engine.applyCommit(engine, options);
-                  return Engine.runAtomicCommit(engine, (apply) => {
-                    const applied = apply(options);
-                    if (applied.replayed) return applied;
-                    const state = this.#aclState(engine, message.space);
-                    if (
-                      state.kind !== "valid" ||
-                      !sameAcl(state.acl, change.before)
-                    ) {
-                      throw new Engine.ConflictError(
-                        "Atomic ACL basis changed",
-                      );
-                    }
-                    const stored = Engine.readState(engine, {
-                      id: aclDocId(message.space),
-                    });
-                    const aclCompanion = apply({
-                      sessionId: this.#directSessionId,
-                      space: message.space,
-                      commitClass: "system",
-                      commit: {
-                        localSeq: ++this.#directLocalSeq,
-                        reads: { confirmed: [], pending: [] },
-                        operations: [{
-                          op: "set",
-                          id: aclDocId(message.space),
-                          scope: "space",
-                          value: { ...stored!.document!, value: change.after },
-                        }],
-                      },
-                    });
-                    Engine.recordAclCompanion(
-                      engine,
-                      applied,
-                      aclCompanion.seq,
-                    );
-                    return applied;
                   });
                 } finally {
                   persistSpan.end();
@@ -4380,7 +4316,6 @@ export class Server {
               );
             }
           }
-
           // Mark dirty immediately after the durable apply so the next batch
           // reflects this write and can carry its catch-up marker. Keys are
           // per scope INSTANCE (M4): resolved from the committing session's
@@ -4441,32 +4376,6 @@ export class Server {
               ? { eventAppends: admittedEventAppends }
               : {}),
           });
-          if (commit.aclCompanionSeq !== undefined) {
-            const [companion] = Engine.selectCommitsSince(engine, {
-              fromSeq: commit.aclCompanionSeq - 1,
-              limit: 1,
-            });
-            if (companion?.seq !== commit.aclCompanionSeq) {
-              throw new Error(
-                "The atomic ACL companion is missing from the commit log",
-              );
-            }
-            const writes = companion.writes.map(({ id, scopeKey }) => ({
-              id,
-              scopeKey: scopeKey as ScopeKey,
-            }));
-            this.markSpaceDirty(
-              message.space,
-              writes.map(({ id, scopeKey }) => toDirtyKey(id, scopeKey)),
-            );
-            this.#notifyCommitAdmitted({
-              space: message.space,
-              seq: companion.seq,
-              class: "system",
-              sessionId: companion.sessionId,
-              writes,
-            });
-          }
           // Stage the accept's catch-up obligation with the dirty mark. The
           // verdict response leaves this request before the independently
           // scheduled batch can send its covering frame. The batched fan-out
@@ -7462,13 +7371,6 @@ export class Server {
     }
     this.markSpaceDirty(notice.space, keys);
     this.#notifyCommitAdmitted(notice);
-  }
-
-  /** Applies an engine-admitted ACL companion to live authorization and sessions. */
-  completeAtomicAclChange(engine: Engine.Engine, space: string): void {
-    this.#invalidateAclCapabilities(space);
-    this.#revokeDeauthorizedSessions(engine, space);
-    this.markSpaceDirty(space, [toDirtyKey(aclDocId(space))]);
   }
 
   /**

@@ -6,8 +6,8 @@
  *
  * A call validates what it can know on its own and stages the change on the
  * handler's frame. The runner then commits each space's staged changes as a
- * commit of its own through the ordinary ACL-only write path, before the
- * handler's transaction commits. The actor keeps `OWNER`
+ * commit of its own, the only kind the memory server admits for an access
+ * list, before the handler's transaction commits. The actor keeps `OWNER`
  * throughout, since no call may change the actor's own entry, so the ordering
  * never costs the handler its own writes.
  */
@@ -172,8 +172,8 @@ function stageChange(
   }
   if (runtime.servingPosture) {
     throw new Error(
-      `\`${call}\` is not available on a serving runtime: its ordinary ` +
-        "ACL commit does not carry the event actor authorization.",
+      `\`${call}\` is not available on a serving runtime, which cannot yet ` +
+        "check that the event's actor holds `OWNER` in the space.",
     );
   }
   if (frame.trustedGesture !== true) {

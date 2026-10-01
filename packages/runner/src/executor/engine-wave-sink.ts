@@ -45,7 +45,6 @@ import {
   selectDocHead,
   selectWritePathsSince,
   serverSeq,
-  WaveAclConflictError,
   WaveCommitConflictError,
   WavePreconditionError,
 } from "@commonfabric/memory/v2/engine";
@@ -99,7 +98,6 @@ export function waveCommitFailureResult(
 }
 
 export class EngineWaveCommitSink implements WaveCommitSink {
-  #onAclChange?: (space: MemorySpace, engine: Engine) => void;
   readonly #engineFor: (space: MemorySpace) => Engine;
   readonly #sessionId: string;
   readonly #principal: string | undefined;
@@ -140,7 +138,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
    */
   constructor(options: {
     /** The co-hosted engine per space (memory server's own engines). */
-    onAclChange?: (space: MemorySpace, engine: Engine) => void;
     engineFor: (space: MemorySpace) => Engine;
 
     /** The service session framing the wave's commits are recorded
@@ -174,7 +171,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     onHomeRefused?: () => void;
   }) {
     this.#engineFor = options.engineFor;
-    this.#onAclChange = options.onAclChange;
     this.#sessionId = options.sessionId;
     this.#principal = options.principal;
     this.#localSeq = options.localSeqRef ?? { value: 0 };
@@ -225,9 +221,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
 
   commitWave(
     batch: WaveSpaceCommit,
-  ): Promise<
-    Result<{ seq: number; aclCompanionSeq?: number }, WaveCommitRejection>
-  > {
+  ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const engine = this.#engineFor(batch.space);
     const commit = {
       localSeq: ++this.#localSeq.value,
@@ -333,16 +327,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
             });
           }
         }
-        const applyForeign = batch.aclChanges?.length
-          ? (options: Parameters<typeof applyCommit>[1]) =>
-            applyWaveCommit(engine, {
-              ...options,
-              waveBasis: { basisSeq: serverSeq(engine), rebasedHeads: [] },
-              aclChanges: batch.aclChanges,
-            })
-          : (options: Parameters<typeof applyCommit>[1]) =>
-            applyCommit(engine, options);
-        const applied = applyForeign({
+        const applied = applyCommit(engine, {
           sessionId: this.#sessionId,
           space: batch.space,
           principal: this.#principal,
@@ -351,12 +336,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
             ? {}
             : { delegated: batch.delegated }),
         });
-        if (applied.aclCompanionSeq !== undefined) {
-          this.#onAclChange?.(batch.space, engine);
-        }
-        return Promise.resolve({
-          ok: { seq: applied.seq, aclCompanionSeq: applied.aclCompanionSeq },
-        });
+        return Promise.resolve({ ok: { seq: applied.seq } });
       }
       // The sqlite bound's discharge (stage G): attach the cell-db
       // file(s) the batch's folded sqlite ops target BEFORE the engine
@@ -410,7 +390,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
             basisSeq: batch.basisSeq,
             rebasedHeads: batch.rebasedHeads,
           },
-          aclChanges: batch.aclChanges,
           basisInstances: batch.basisInstances.map((instance) => ({
             action: instance.action,
             actionScopeKey: instance.actionScopeKey,
@@ -431,24 +410,8 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // discipline as the transact path).
         detachSqlite?.();
       }
-      if (applied.aclCompanionSeq !== undefined) {
-        this.#onAclChange?.(batch.space, engine);
-      }
-      return Promise.resolve({
-        ok: { seq: applied.seq, aclCompanionSeq: applied.aclCompanionSeq },
-      });
+      return Promise.resolve({ ok: { seq: applied.seq } });
     } catch (error) {
-      if (error instanceof WaveAclConflictError) {
-        return Promise.resolve({
-          error: {
-            name: "WaveCommitRejected",
-            message: error.message,
-            requeueContributions: error.indexes.map((index) =>
-              batch.aclChanges![index].contribution
-            ),
-          },
-        });
-      }
       if (batch.home) this.#onHomeRefused?.();
       return Promise.resolve(waveCommitFailureResult(error));
     }

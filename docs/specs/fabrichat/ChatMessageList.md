@@ -1,7 +1,5 @@
 # ChatMessageList
 
-Status: normative reference (see [`README.md`](README.md)).
-
 A room's messages, offered for structured access rather than as one array. A
 room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `messages`. It says
 where the conversation stands and holds its newest messages, the same for every

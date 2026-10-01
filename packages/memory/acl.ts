@@ -6,27 +6,6 @@ export type { ACL, ACLUser, ANYONE, Capability, DID, DIDKey };
 
 export const ANYONE_USER: ANYONE = "*";
 
-/** A membership replacement and the exact access list it was computed from. */
-export interface AclChange {
-  before: ACL;
-  after: ACL;
-}
-
-/** Whether an authenticated principal may perform this membership replacement. */
-export function mayChangeAcl(change: AclChange, principal: string): boolean {
-  if (
-    !isDID(principal) || !isACL(change.before) || !isACL(change.after) ||
-    !hasConcreteOwner(change.after)
-  ) return false;
-  const capability = change.before[principal];
-  if (capability === "OWNER") return true;
-  if (capability !== "WRITE" || change.before[ANYONE_USER] !== undefined) {
-    return false;
-  }
-  const { [principal]: _departing, ...remaining } = change.before;
-  return sameAcl(change.after, remaining);
-}
-
 /**
  * Entity id of a space's ACL document. The id used to be hand-built as
  * `of:${space}` independently by the memory server, the runner's storage

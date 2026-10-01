@@ -59,11 +59,10 @@ own sees the user that pattern runs as, and any pattern a user runs can reach a
 handler that way.
 
 Where a handler has to know that the person made a request — a message they
-sent, a setting they changed — its reviewed writer requires a trusted gesture.
-`AuthoredByCurrentUser` records authenticated authorship; its writer policy
-decides whether the write also requires a gesture. `AuthenticatedActionWrite`
-admits an authenticated action without one, so authorship alone does not prove
-consent. `currentPrincipal()` supplies identity for keying and refusing.
+sent, a setting they changed — what shows it is a trusted gesture, or a value
+labeled `AuthoredByCurrentUser`, whose write the runtime admits only from a
+reviewed writer handling a trusted UI event. `currentPrincipal()` is the right
+tool for keying and for refusing, not for proving consent.
 
 ## How far the value can be trusted
 

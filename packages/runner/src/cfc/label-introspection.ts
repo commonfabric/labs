@@ -311,7 +311,7 @@ const atomProjectionLabel = (
       // would have been consumed AS the field value below): protected.
       const label = protectedFieldObservationLabel(entry, entries, valuePath);
       if (label === undefined) return false;
-      consumed.push(...label);
+      for (const atom of label) consumed.push(atom);
       return true;
     }
     // A record carrying a string `type` or `kind` is an atom for
@@ -338,7 +338,7 @@ const atomProjectionLabel = (
         return false;
       }
       if (observation.length > 0) {
-        consumed.push(...observation);
+        for (const atom of observation) consumed.push(atom);
         continue;
       }
       // Public field: recurse so a nested atom inside it (a `Caveat.by`
@@ -361,7 +361,7 @@ const atomProjectionLabel = (
       alternativePath,
     );
     if (template !== undefined) {
-      consumed.push(...template);
+      for (const atom of template) consumed.push(atom);
     }
   }
   return consumed;
@@ -464,7 +464,7 @@ export const evaluateConfLabelQuery = (
     if (atoms.length === 0) {
       return;
     }
-    consumed.push(...atoms);
+    for (const atom of atoms) consumed.push(atom);
     consumedObservations.push({
       path,
       confidentiality: uniqueCfcAtoms([...atoms]),

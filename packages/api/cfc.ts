@@ -867,7 +867,6 @@ export const CFC_CANONICAL_ALIAS_NAMES = [
   "PolicyOf",
   "WriteAuthorizedBy",
   "WritePolicyAnyOf",
-  "AuthenticatedActionWrite",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -989,12 +988,6 @@ export type WriteAuthorizedBy<T, Binding> = Cfc<T, {
   writeAuthorizedBy: Binding;
 }>;
 
-/** Admits the named authenticated writer without requiring a reviewed UI gesture. */
-export type AuthenticatedActionWrite<T, Binding> = Cfc<T, {
-  writeAuthorizedBy: Binding;
-  authenticatedAction: true;
-}>;
-
 export type TrustedActionWriteWithIntegrity<
   T,
   Binding,
@@ -1022,7 +1015,7 @@ export type TrustedActionWrite<
 
 /**
  * `T`, writable through any one of `Policies`, each a complete writer policy:
- * a `WriteAuthorizedBy`, `AuthenticatedActionWrite`, `TrustedActionWrite`, or
+ * a `WriteAuthorizedBy`, `TrustedActionWrite`, or
  * `TrustedActionWriteWithIntegrity` over `unknown`. A write is admitted when
  * one policy admits it whole — its writer, and the reviewed gesture that
  * policy names if it names one — so one writer's gesture never admits

@@ -375,7 +375,7 @@ export function decomposeSchema(
     const name = queue.pop()!;
     if (reachable.has(name)) continue;
     reachable.add(name);
-    queue.push(...refsByName.get(name)!);
+    for (const ref of refsByName.get(name)!) queue.push(ref);
   }
 
   const components = definitionComponents(

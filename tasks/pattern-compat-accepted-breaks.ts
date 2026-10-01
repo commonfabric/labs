@@ -83,6 +83,93 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    "pattern": "fabrichat/adapter.tsx",
+    "baselines": [
+      "20260930T023438Z-_SkOTm6m5M7lOfTT",
+      "20260930T194946Z-EvahrQYPJhsPhmYO",
+    ],
+    "paths": [
+      "argument.placement.$VIEWS.chat.recentActivity[].what",
+      "result.placement.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/main.tsx",
+    "baselines": [
+      "20260930T023438Z-88tuD6LmNbIOvJVX",
+      "20260930T194946Z-KEI7keFejPNhIeF0",
+    ],
+    "paths": [
+      "result.$VIEWS.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20260930T023438Z-Y-613Y51HslhC28m",
+    ],
+    "paths": [
+      "result.$VIEWS.chats.accept.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/placement.tsx",
+    "baselines": [
+      "20260930T023438Z-7rYdOFuObWLMJLfB",
+      "20260930T194947Z-ssl1VJkx_ZuvRVEj",
+    ],
+    "paths": [
+      "argument.room.$VIEWS.room.recentActivity[].what",
+      "result.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20260930T023438Z-nmyAM6alfm9vz1sp",
+      "20260930T194947Z-9hxxaZZOi7aQ8lgV",
+      "20260930T204159Z-9_2YGyVaYQeqpr9d",
+    ],
+    "paths": [
+      "argument.activity[]",
+      "result.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "system/home.tsx",
+    "baselines": [
+      "20260930T023439Z-1pBKUK1T-dKGS4kd",
+      "20260930T194947Z-dvn-cmHzFRd8Igu0",
+    ],
+    "paths": [
+      "result.chatManager.$VIEWS.chats.accept.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+    "requiredPatternOverride": {
+      "rulingBy": "Dan (@danfuzz)",
+      "on": "2026-09-30",
+      "reason":
+        "Directed PR 8235 to adopt the revised scope in PR 8330: shared-space group management is a system facility. This applies to Home through its new chatManager field; the two affected Home baselines were recorded only in this unmerged PR.",
+    },
+  },
+  {
     pattern: "fabrichat/main.tsx",
     baselines: [
       "20260924T175254Z-lVPuvyO2neYxy2fr",

@@ -116,8 +116,8 @@ export class ACLManager {
 /**
  * Replaces, in `tx`, the access list of `space` with what `mutate` returns
  * given the list `tx` reads there, or `null` when the space has none, and
- * returns the replacement. Ordinary access-list writes go through this
- * function; atomic data companions are staged through `stageAclChange()`.
+ * returns the replacement. This is the one place the runtime writes an access
+ * list after a space's genesis.
  *
  * The write is the single whole-document `set` of the access-list document
  * that the memory server requires of an access-list change (INV-12 in

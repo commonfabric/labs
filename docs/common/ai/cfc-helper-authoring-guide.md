@@ -238,21 +238,13 @@ export const edit = handler<void, { note: Writable<Note> }>((_, { note }) => {
 ```
 
 Each member is a whole policy over `unknown`: a `WriteAuthorizedBy`, a
-`AuthenticatedActionWrite`, `TrustedActionWrite`, or a
-`TrustedActionWriteWithIntegrity`. Write the tuple in
+`TrustedActionWrite`, or a `TrustedActionWriteWithIntegrity`. Write the tuple in
 place, not through an alias of its own. Once stored, the list is fixed, so a
 later version of the pattern cannot add a writer to it, drop one, or change
 one's action, and a record whose policy names one writer cannot move to a list
 or back. Settle the writers before the record holds data that matters.
-`AuthoredByCurrentUser` combines with it when every member names a reviewed
-action or explicitly uses `AuthenticatedActionWrite`.
-
-`AuthenticatedActionWrite<T, typeof handler>` permits the named verified handler
-without requiring a reviewed UI control. Combined with `AuthoredByCurrentUser`,
-it attributes the value to the authenticated actor. It is appropriate for
-actions such as leaving a conversation. The handler must still check which
-record and principal the actor may affect. Neither helper replaces the space’s
-access checks.
+`AuthoredByCurrentUser` combines with it only when every member names an
+action, so that every admitted write carries a reviewed gesture.
 
 ## Authoring Trusted Surfaces
 

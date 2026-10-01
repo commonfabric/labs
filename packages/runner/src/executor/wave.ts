@@ -1,4 +1,3 @@
-import type { ActingAclChange } from "@commonfabric/memory/v2/engine";
 // The wave accumulator (server-execution v2 Phase 1 stage D,
 // docs/specs/server-side-execution/serving-loop.md §3c–§3d): the seal
 // destination a serving runtime's action transactions close into, and the
@@ -443,7 +442,6 @@ export interface WaveBasisInstanceRows {
 
 /** The batched commit the wave hands the sink, per space. */
 export interface WaveSpaceCommit {
-  aclChanges?: Array<ActingAclChange & { contribution: number }>;
   space: MemorySpace;
 
   /** Same-space emitted event entries this batch appends (LT1,
@@ -546,7 +544,6 @@ export interface WaveSpaceCommit {
  * array. A rejection naming neither is terminal for the wave.
  */
 export interface WaveCommitRejection {
-  requeueContributions?: number[];
   name: "WaveCommitRejected" | "RowLabelCommitError";
   message: string;
   conflictedDocs?: readonly string[];
@@ -610,9 +607,7 @@ export interface WaveCommitSink {
 
   commitWave(
     batch: WaveSpaceCommit,
-  ): Promise<
-    Result<{ seq: number; aclCompanionSeq?: number }, WaveCommitRejection>
-  >;
+  ): Promise<Result<{ seq: number }, WaveCommitRejection>>;
 }
 
 /**
@@ -699,7 +694,6 @@ export type ContributionDisposition =
   | { kind: "requeued" };
 
 export interface WaveCommitOutcome {
-  aclCompanionSeq?: number;
   /** The home commit's store seq; absent when the wave had nothing to
    * commit or aborted. */
   seq?: number;
@@ -761,7 +755,6 @@ export interface WaveCommitOutcome {
   foreignCommits: Array<{
     space: MemorySpace;
     seq: number;
-    aclCompanionSeq?: number;
     writes: Array<{ id: string; scopeKey: ScopeKey }>;
   }>;
 }
@@ -1616,19 +1609,6 @@ export class WaveAccumulator
         };
       }
     }
-    if (
-      native.aclChange &&
-      (assembly.context?.kind !== "event-handler" ||
-        !assembly.context.acting?.user || !assembly.context.eventId)
-    ) {
-      return {
-        error: {
-          name: "StorageTransactionAborted",
-          message: "ACL changes require an authenticated event",
-          reason: new Error("missing-membership-actor"),
-        },
-      };
-    }
     const replica = this.#replicaFor(space);
     if (replica.sealNative === undefined) {
       return Promise.resolve({
@@ -1832,21 +1812,6 @@ export class WaveAccumulator
 
     const conflicted = new Set<string>();
     const requeued = new Set<number>();
-    // A membership transition completes before another event observes the room.
-    // Later events retain their durable entries and run against the new ACL.
-    let membershipEvent: string | undefined;
-    for (const contribution of this.#contributions) {
-      if (
-        membershipEvent !== undefined &&
-        contribution.context.kind === "event-handler" &&
-        contribution.context.eventId !== membershipEvent
-      ) requeued.add(contribution.index);
-      if (
-        contribution.spaces.some((entry) =>
-          entry.native.aclChange !== undefined
-        )
-      ) membershipEvent ??= contribution.context.eventId;
-    }
     const droppedWhole = new Set<number>();
 
     /** Event-handler contributions refused as ORPHANS (stage C build W3,
@@ -2318,7 +2283,6 @@ export class WaveAccumulator
       outcome.foreignCommits.push({
         space: batch.space,
         seq: result.ok.seq,
-        aclCompanionSeq: result.ok.aclCompanionSeq,
         writes: warmWritesOf(batch),
       });
     }
@@ -2374,7 +2338,6 @@ export class WaveAccumulator
           orphanRefused,
         );
         outcome.seq = result.ok.seq;
-        outcome.aclCompanionSeq = result.ok.aclCompanionSeq;
         return outcome;
       }
       // The memory server refuses a derived commit whose holder no longer
@@ -2410,13 +2373,8 @@ export class WaveAccumulator
           }
         }
       }
-      const rejectedOwners = [
-        ...(rejection.failedPreconditions ?? []).map((index) =>
-          batch.preconditionOwners?.[index]
-        ),
-        ...(rejection.requeueContributions ?? []),
-      ];
-      for (const owner of rejectedOwners) {
+      for (const index of rejection.failedPreconditions ?? []) {
+        const owner = batch.preconditionOwners?.[index];
         if (
           owner !== undefined && !requeued.has(owner) &&
           !droppedWhole.has(owner)
@@ -2749,7 +2707,6 @@ export class WaveAccumulator
     droppedDocs: ReadonlyArray<ReadonlySet<string>>,
     rebasedHeads: ReadonlyMap<string, number>,
   ): WaveSpaceCommit {
-    const aclChanges: NonNullable<WaveSpaceCommit["aclChanges"]> = [];
     const operations: Operation[] = [];
     const annotations: WaveWriteAnnotation[] = [];
     const preconditions: CommitPrecondition[] = [];
@@ -2786,16 +2743,11 @@ export class WaveAccumulator
       ) {
         consequenceOf.push(context.eventId);
       }
-      outboxAppends.push(...contribution.outboundAppends);
+      for (const append of contribution.outboundAppends) {
+        outboxAppends.push(append);
+      }
       const home = this.#homeSealed(contribution);
       if (home === undefined) continue;
-      if (home.native.aclChange) {
-        aclChanges.push({
-          ...home.native.aclChange,
-          principal: context.acting!.user,
-          contribution: contribution.index,
-        });
-      }
       for (const operation of home.sealed.commit.operations) {
         if (operation.op !== "sqlite") {
           const key = docInstanceKey(
@@ -3030,7 +2982,6 @@ export class WaveAccumulator
     return {
       space: this.#space,
       home: true,
-      ...(aclChanges.length ? { aclChanges } : {}),
       ...(eventAppends.length === 0 ? {} : { eventAppends }),
       basisSeq: this.#basisSeq,
       rebasedHeads: [...rebasedHeads.entries()].map(([doc, head]) => ({
@@ -3154,13 +3105,8 @@ export class WaveAccumulator
         for (const operation of sealed.sealed.commit.operations) {
           batch.operations.push(operation);
         }
-        batch.preconditions.push(...sealed.sealed.commit.preconditions ?? []);
-        if (sealed.native.aclChange) {
-          (batch.aclChanges ??= []).push({
-            ...sealed.native.aclChange,
-            principal: context.acting!.user,
-            contribution: contribution.index,
-          });
+        for (const precondition of sealed.sealed.commit.preconditions ?? []) {
+          batch.preconditions.push(precondition);
         }
       }
     }

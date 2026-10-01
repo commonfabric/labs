@@ -1,7 +1,5 @@
 # FabriChatAdapter
 
-Status: normative reference (see [`README.md`](README.md)).
-
 `FabriChatAdapter` renders one placement
 ([`FabriChatPlacement.md`](FabriChatPlacement.md)) for hosts that render VDOM,
 such as the shell. It is the placement's rendering, and passes the placement's

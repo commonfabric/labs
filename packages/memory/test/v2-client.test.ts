@@ -1,5 +1,4 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
-import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { defer } from "@commonfabric/utils/defer";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -22,7 +21,6 @@ import {
 } from "../v2/client.ts";
 import {
   TEST_SESSION_OPEN_AUDIENCE,
-  TEST_SESSION_OPEN_PRINCIPAL,
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
@@ -3965,41 +3963,5 @@ Deno.test("memory v2 client retains its original root intent across caller mutat
     assertEquals(roots[1], roots[0]);
   } finally {
     await client.close();
-  }
-});
-
-Deno.test("memory v2 client checks atomic ACL support after reconnect negotiation", async () => {
-  const server = new Server({ ...testSessionOpenServerOptions });
-  const transport = new ReconnectableLoopbackTransport(server);
-  const client = await connect({ transport });
-  const space = "did:key:z6Mk-atomic-reconnect";
-  try {
-    const session = await client.mount(space, {}, testSessionOpenAuthFactory);
-    const before = { [TEST_SESSION_OPEN_PRINCIPAL]: "OWNER" as const };
-    await session.transact({
-      localSeq: 1,
-      reads: { confirmed: [], pending: [] },
-      operations: [{ op: "set", id: `of:${space}`, value: { value: before } }],
-    });
-    client.serverFlags!.atomicAclChanges = false;
-    transport.disconnect();
-    const applied = await session.transact({
-      localSeq: 2,
-      reads: { confirmed: [], pending: [] },
-      operations: [{
-        op: "set",
-        id: "of:membership",
-        value: { value: "updated" },
-      }],
-      aclChange: {
-        before,
-        after: { ...before, "did:key:z6Mk-invited": "WRITE" },
-      },
-    });
-    expect(applied.aclCompanionSeq).toBeDefined();
-    expect(client.serverFlags?.atomicAclChanges).toBe(true);
-  } finally {
-    await client.close();
-    await server.close();
   }
 });

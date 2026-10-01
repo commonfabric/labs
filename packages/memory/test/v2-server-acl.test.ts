@@ -17,7 +17,6 @@ import { readGenesisRoot } from "../v2/genesis-root.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { sameAcl } from "../acl.ts";
 import {
-  type ClientCommit,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
   type GraphQueryResult,
@@ -170,7 +169,6 @@ const transactOperation = async (
   sessionId: string,
   operation: Record<string, unknown>,
   localSeq: number,
-  aclChange?: ClientCommit["aclChange"],
 ): Promise<ResponseMessage<{ seq: number }>> => {
   await connection.receive(encodeMemoryBoundary({
     type: "transact",
@@ -179,7 +177,6 @@ const transactOperation = async (
     sessionId,
     commit: {
       localSeq,
-      ...(aclChange ? { aclChange } : {}),
       reads: { confirmed: [], pending: [] },
       // Deliberately malformed: this suite feeds the server operations it
       // must reject, so the payload is not an `Operation`.
@@ -245,196 +242,6 @@ const initializeSpaceAcl = async (
 
 describe("v2-server-acl", () => {
   describe("`enforce` mode", () => {
-    it("commits a WRITE member's final metadata atomically with their self-removal", async () => {
-      const server = createAclServer("memory://atomic-leave", {
-        mode: "enforce",
-      });
-      const space = "did:key:z6Mk-atomic-leave";
-      try {
-        const before = { [ALICE]: "OWNER", [BOB]: "WRITE" } as const;
-        await initializeSpaceAcl(server, space, before);
-        const bob = await connect(server);
-        const opened = await openSession(bob, space, BOB);
-        expectExists(opened.ok);
-        const response = await transactOperation(
-          bob,
-          space,
-          opened.ok.sessionId,
-          { op: "set", id: "of:finalized", value: { value: "departed" } },
-          1,
-          { before, after: { [ALICE]: "OWNER" } },
-        );
-        expectExists(response.ok);
-        expect(bob.messages.map((message) => message.type)).toEqual([
-          "session/revoked",
-        ]);
-        const alice = await connect(server);
-        const owner = await openSession(alice, space, ALICE);
-        expectExists(owner.ok);
-        const metadata = await graphQuery(
-          alice,
-          space,
-          owner.ok.sessionId,
-          "of:finalized",
-        );
-        expect(metadata.ok?.entities[0]?.document?.value).toBe("departed");
-        const acl = await graphQuery(
-          alice,
-          space,
-          owner.ok.sessionId,
-          `of:${space}`,
-        );
-        expect(acl.ok?.entities[0]?.document?.value).toEqual({
-          [ALICE]: "OWNER",
-        });
-      } finally {
-        await server.close();
-      }
-    });
-
-    it("republishes the durable ACL companion when an atomic commit is replayed", async () => {
-      const server = createAclServer("memory://atomic-replay", {
-        mode: "enforce",
-      });
-      const space = "did:key:z6Mk-atomic-replay";
-      try {
-        const before = { [ALICE]: "OWNER" } as const;
-        await initializeSpaceAcl(server, space, before);
-        const alice = await connect(server);
-        const opened = await openSession(alice, space, ALICE);
-        expectExists(opened.ok);
-        const notices: {
-          seq: number;
-          class: string;
-          writes: readonly { id: string }[];
-        }[] = [];
-        server.setServerExecutionObserver({
-          commitAdmitted: (notice) => notices.push(notice),
-        });
-        const change = {
-          before,
-          after: { ...before, [BOB]: "WRITE" as const },
-        };
-        const operation = {
-          op: "set" as const,
-          id: "of:membership",
-          value: { value: "added" },
-        };
-        expect(
-          (await transactOperation(
-            alice,
-            space,
-            opened.ok.sessionId,
-            operation,
-            1,
-            change,
-          )).error,
-        ).toBeUndefined();
-        const firstCompanion = notices.find((notice) =>
-          notice.class === "system"
-        );
-        expect(firstCompanion?.writes).toContainEqual({
-          id: `of:${space}`,
-          scopeKey: "space",
-        });
-        notices.length = 0;
-        expect(
-          (await transactOperation(
-            alice,
-            space,
-            opened.ok.sessionId,
-            operation,
-            1,
-            change,
-          )).error,
-        ).toBeUndefined();
-        expect(notices.find((notice) => notice.class === "system")).toEqual(
-          firstCompanion,
-        );
-      } finally {
-        await server.close();
-      }
-    });
-
-    it("rolls back metadata when the atomic ACL basis is stale", async () => {
-      const server = createAclServer("memory://atomic-stale", {
-        mode: "enforce",
-      });
-      const space = "did:key:z6Mk-atomic-stale";
-      try {
-        await initializeSpaceAcl(server, space, {
-          [ALICE]: "OWNER",
-          [BOB]: "WRITE",
-        });
-        const alice = await connect(server);
-        const owner = await openSession(alice, space, ALICE);
-        expectExists(owner.ok);
-        const response = await transactOperation(
-          alice,
-          space,
-          owner.ok.sessionId,
-          { op: "set", id: "of:finalized", value: { value: "must-not-exist" } },
-          1,
-          {
-            before: { [ALICE]: "OWNER" },
-            after: { [ALICE]: "OWNER", [CAROL]: "WRITE" },
-          },
-        );
-        expectExists(response.error);
-        const metadata = await graphQuery(
-          alice,
-          space,
-          owner.ok.sessionId,
-          "of:finalized",
-        );
-        expect(metadata.ok?.entities[0]?.document ?? null).toBeNull();
-        const acl = await graphQuery(
-          alice,
-          space,
-          owner.ok.sessionId,
-          `of:${space}`,
-        );
-        expect(acl.ok?.entities[0]?.document?.value).toEqual({
-          [ALICE]: "OWNER",
-          [BOB]: "WRITE",
-        });
-      } finally {
-        await server.close();
-      }
-    });
-
-    it("refuses a WRITE member's atomic grant without committing metadata", async () => {
-      const server = createAclServer("memory://atomic-unauthorized", {
-        mode: "enforce",
-      });
-      const space = "did:key:z6Mk-atomic-unauthorized";
-      try {
-        const before = { [ALICE]: "OWNER", [BOB]: "WRITE" } as const;
-        await initializeSpaceAcl(server, space, before);
-        const bob = await connect(server);
-        const member = await openSession(bob, space, BOB);
-        expectExists(member.ok);
-        const response = await transactOperation(
-          bob,
-          space,
-          member.ok.sessionId,
-          { op: "set", id: "of:finalized", value: { value: "must-not-exist" } },
-          1,
-          { before, after: { ...before, [CAROL]: "WRITE" } },
-        );
-        expect(response.error?.name).toBe("AuthorizationError");
-        const metadata = await graphQuery(
-          bob,
-          space,
-          member.ok.sessionId,
-          "of:finalized",
-        );
-        expect(metadata.ok?.entities[0]?.document ?? null).toBeNull();
-      } finally {
-        await server.close();
-      }
-    });
-
     it("leaves a new space unclaimed by an ordinary opener and returns `AuthorizationError` for their write", async () => {
       const server = createAclServer("memory://acl-enforce-stranger", {
         mode: "enforce",

@@ -53,7 +53,10 @@ export const FabriChatPlacement = pattern<
       const container = spaceMembers();
       const members = spaceMembers(room);
       if (!container || !members) return "unavailable";
-      if (Object.keys(container).some((principal) => !members[principal])) {
+      if (
+        Object.keys(members).length !== 2 || members["*"] || container["*"] ||
+        Object.keys(container).some((principal) => !members[principal])
+      ) {
         return "unavailable";
       }
     }

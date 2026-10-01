@@ -1,7 +1,5 @@
 # ChatWindowAnchor
 
-Status: normative reference (see [`README.md`](README.md)).
-
 Where a window of messages sits in its view of the conversation. A client passes
 one to a message list's `openWindow` (see
 [`ChatMessageList`](ChatMessageList.md#windows)), as `from`.

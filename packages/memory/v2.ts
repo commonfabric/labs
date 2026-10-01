@@ -17,7 +17,6 @@ import {
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
-import type { ACL } from "./acl.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
 export const DEFAULT_BRANCH = "" as const;
@@ -1060,8 +1059,6 @@ export type GenesisRoot = {
 };
 
 export type ClientCommit = {
-  /** An ACL-only companion committed atomically after this data commit. */
-  aclChange?: { before: ACL; after: ACL };
   genesisRoot?: GenesisRoot;
   localSeq: number;
   reads: {
@@ -1098,8 +1095,6 @@ export type SessionOpenResult = {
 };
 
 export type MemoryProtocolFlags = {
-  /** Atomic data and ACL-only companion commits, including self-removal. */
-  atomicAclChanges?: boolean;
   genesisRoot?: boolean;
   modernCellRep: boolean;
 
@@ -1222,7 +1217,6 @@ export type MemoryProtocolFlags = {
  * Wire-format flags object.
  */
 export type WireMemoryProtocolFlags = {
-  atomicAclChanges?: boolean;
   genesisRoot?: boolean;
   modernCellRep?: boolean;
 
@@ -2220,7 +2214,6 @@ export function resetOwnWriteEchoConfig(): void {
 }
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
-  atomicAclChanges: true,
   genesisRoot: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
@@ -2279,10 +2272,6 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
-  const atomicAclChanges = value.atomicAclChanges;
-  if (atomicAclChanges !== undefined && typeof atomicAclChanges !== "boolean") {
-    return null;
-  }
   const genesisRoot = value.genesisRoot;
   if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
     return null;
@@ -2430,7 +2419,6 @@ export const parseMemoryProtocolFlags = (
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
-    atomicAclChanges: atomicAclChanges === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
@@ -2475,7 +2463,6 @@ export const wireMemoryProtocolFlags = (
   flags: MemoryProtocolFlags,
 ): WireMemoryProtocolFlags => ({
   genesisRoot: flags.genesisRoot,
-  atomicAclChanges: flags.atomicAclChanges,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,

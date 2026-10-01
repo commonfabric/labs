@@ -102,6 +102,7 @@ import {
   selectStaleBasisInstances,
 } from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/utils/logger";
+import { minOf } from "@commonfabric/utils/math";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
@@ -1418,8 +1419,6 @@ export class SpaceServer implements TransactionSealDestination {
     this.#lastFoldedDemandEnters = demandRootCounters.enters;
     this.#lastFoldedDemandLeaves = demandRootCounters.leaves;
     const sink = new EngineWaveCommitSink({
-      onAclChange: (s, changedEngine) =>
-        this.#options.server.completeAtomicAclChange(changedEngine, s),
       engineFor: (s) => s === space ? engine : this.#foreignEngineFor(s),
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
@@ -1593,14 +1592,13 @@ export class SpaceServer implements TransactionSealDestination {
     // surfacing, never a wedge).
     if (foreignReadInstances.length > 0) {
       try {
-        stale.push(
-          ...await selectForeignStaleInstances(
-            engine,
-            { branch: "", space },
-            (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
-            stale,
-          ),
+        const foreignStale = await selectForeignStaleInstances(
+          engine,
+          { branch: "", space },
+          (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
+          stale,
         );
+        for (const entry of foreignStale) stale.push(entry);
       } catch (error) {
         logger.warn("basis-foreign-remark-failed", () => [
           `${foreignReadInstances.length} basis instance(s) carry ` +
@@ -2259,7 +2257,8 @@ export class SpaceServer implements TransactionSealDestination {
   demandedIdentitiesOf(id: string): ScopeKeyIdentity[] {
     const identities: ScopeKeyIdentity[] = [];
     for (const [key, demanders] of this.#demandersByKey) {
-      if (key.endsWith(`\0${id}`)) identities.push(...demanders.values());
+      if (!key.endsWith(`\0${id}`)) continue;
+      for (const identity of demanders.values()) identities.push(identity);
     }
     return identities;
   }
@@ -5116,8 +5115,10 @@ export class SpaceServer implements TransactionSealDestination {
                 // admitted during the pass, or foreign novelty the replica
                 // still shadows, which lies at or above its floor.
                 const invalidatedAt = Math.min(
-                  ...[...verdict.observedDocIds, ...confirmed.observedDocIds]
-                    .map((id) => changedDocs.get(id) ?? Infinity),
+                  minOf(
+                    [...verdict.observedDocIds, ...confirmed.observedDocIds]
+                      .map((id) => changedDocs.get(id) ?? Infinity),
+                  ),
                   runtime.storageManager.open(this.#options.space)
                     .replica.unappliedForeignSeqFloor?.() ?? Infinity,
                 );
@@ -5625,7 +5626,7 @@ export class SpaceServer implements TransactionSealDestination {
     // even when that input sits below the floor.
     const visible = Math.min(
       eventVisible,
-      ...[...this.#rearmedAwaitingSettle.values()].map((seq) => seq - 1),
+      minOf([...this.#rearmedAwaitingSettle.values()].map((seq) => seq - 1)),
     );
     return { shadowFloor, shadowVisible, visible };
   }
@@ -6475,22 +6476,6 @@ export class SpaceServer implements TransactionSealDestination {
         writes: foreign.writes,
         warm: true,
       });
-      if (foreign.aclCompanionSeq !== undefined) {
-        const companion =
-          Engine.selectCommitsSince(this.#foreignEngineFor(foreign.space), {
-            fromSeq: foreign.aclCompanionSeq - 1,
-            limit: 1,
-          })[0];
-        if (companion) {
-          this.#options.server.noteExecutorCommit({
-            space: foreign.space,
-            seq: companion.seq,
-            class: "system",
-            sessionId: companion.sessionId,
-            writes: companion.writes as AdmittedCommitNotice["writes"],
-          });
-        }
-      }
     }
     await closing.settled();
     this.#reconcileDeliveryWritesAfterWave(closing);
@@ -6703,21 +6688,6 @@ export class SpaceServer implements TransactionSealDestination {
           sessionId: record.sessionId,
           writes: record.writes as AdmittedCommitNotice["writes"],
         });
-      }
-      if (outcome.aclCompanionSeq !== undefined) {
-        const companion = Engine.selectCommitsSince(this.#options.engine, {
-          fromSeq: outcome.aclCompanionSeq - 1,
-          limit: 1,
-        })[0];
-        if (companion) {
-          this.#options.server.noteExecutorCommit({
-            space: this.#options.space,
-            seq: companion.seq,
-            class: "system",
-            sessionId: companion.sessionId,
-            writes: companion.writes as AdmittedCommitNotice["writes"],
-          });
-        }
       }
     }
 

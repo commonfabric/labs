@@ -20,7 +20,7 @@ function createOpsCollector() {
   return {
     onOps: (ops: VDomOp[]) => {
       const batchId = nextBatchId++;
-      allOps.push(...ops);
+      for (const op of ops) allOps.push(op);
       batchIds.push(batchId);
       return batchId;
     },

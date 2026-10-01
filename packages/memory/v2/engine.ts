@@ -1,10 +1,3 @@
-import {
-  type AclChange,
-  aclDocId,
-  isACL,
-  mayChangeAcl,
-  sameAcl,
-} from "../acl.ts";
 import { Database } from "@db/sqlite";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import {
@@ -1198,8 +1191,6 @@ export type InvocationRecord = {
 export type AuthorizationRecord = FabricValue;
 
 export type ApplyCommitOptions = {
-  /** The caller applies the declared ACL companion in this atomic transaction. */
-  allowAclChange?: boolean;
   sessionId: SessionId;
   space?: string;
   principal?: string;
@@ -1319,8 +1310,6 @@ export type CommitReadDropReason =
   | "pending-read-missing";
 
 export type AppliedCommit = {
-  /** An ACL-only system commit made atomically after this data commit. */
-  aclCompanionSeq?: number;
   seq: number;
   branch: BranchName;
   revisions: AppliedRevision[];
@@ -3988,19 +3977,6 @@ WHERE commit_seq = :commit_seq
   }));
 };
 
-/** A served membership change, attributed to the event's authenticated actor. */
-export interface ActingAclChange extends AclChange {
-  principal: string;
-}
-
-/** Membership contributions whose access-list basis no longer holds. */
-export class WaveAclConflictError extends Error {
-  constructor(readonly indexes: number[]) {
-    super("Wave membership basis changed");
-    this.name = "WaveAclConflictError";
-  }
-}
-
 /** One basis-row overwrite unit of a wave commit (serving-loop.md §3b):
  * `seq: null` marks an in-wave read, filled with the wave's own commit
  * seq at write time. */
@@ -4042,7 +4018,6 @@ export const applyWaveCommit = (
       rebasedHeads: ReadonlyArray<{ doc: string; head: number }>;
     };
     basisInstances?: readonly WaveBasisInstance[];
-    aclChanges?: readonly ActingAclChange[];
 
     /** The wave's outbound cross-space appends (serving-loop.md §5,
      * FP1): durable rows written INSIDE this very transaction — the
@@ -4051,275 +4026,170 @@ export const applyWaveCommit = (
     outboxAppends?: readonly OutboxAppendRow[];
   },
 ): AppliedCommit => {
-  return runAtomicCommit(engine, (apply) => {
-    const txEngine = engine;
-    const {
-      waveBasis,
-      basisInstances,
-      outboxAppends,
-      aclChanges,
-      ...restOptions
-    } = options;
-    const combined = aclChanges?.length
-      ? {
-        before: aclChanges[0].before,
-        after: aclChanges[aclChanges.length - 1].after,
-      }
-      : undefined;
-    const canonicalOptions = combined
-      ? {
-        ...restOptions,
-        allowAclChange: true,
-        commit: { ...restOptions.commit, aclChange: combined },
-      }
-      : restOptions;
-    if (
-      engine.statements.selectExistingCommit.get({
-        session_id: resolveCommitSessionKey(
-          options.sessionId,
-          options.principal,
-        ),
-        local_seq: options.commit.localSeq,
-      })
-    ) {
-      return apply(canonicalOptions);
-    }
-    // Basis rows are ADDRESSING (recovery's re-mark scan matches
-    // storage rows against these instance values), so their keys meet
-    // the same admission bar as annotated scope keys: a non-canonical
-    // key would store rows no canonical key ever matches — a silent
-    // liveness hole rather than a loud one. Refused up front, before
-    // any head query runs.
-    for (const instance of basisInstances ?? []) {
-      if (!isScopeKey(instance.actionScopeKey)) {
-        throw new ProtocolError(
-          `wave commit rejected: basis action instance key ` +
-            `"${instance.actionScopeKey}" is not a canonical scope_key ` +
-            "(key-vocabulary.md §3)",
-        );
-      }
-      for (const row of instance.rows) {
-        if (!isScopeKey(row.entityScopeKey)) {
+  return engine.database.transaction(
+    (txEngine: Engine, txOptions: typeof options) => {
+      const { waveBasis, basisInstances, outboxAppends, ...restOptions } =
+        txOptions;
+      // Basis rows are ADDRESSING (recovery's re-mark scan matches
+      // storage rows against these instance values), so their keys meet
+      // the same admission bar as annotated scope keys: a non-canonical
+      // key would store rows no canonical key ever matches — a silent
+      // liveness hole rather than a loud one. Refused up front, before
+      // any head query runs.
+      for (const instance of basisInstances ?? []) {
+        if (!isScopeKey(instance.actionScopeKey)) {
           throw new ProtocolError(
-            `wave commit rejected: basis row entity instance key ` +
-              `"${row.entityScopeKey}" is not a canonical scope_key ` +
+            `wave commit rejected: basis action instance key ` +
+              `"${instance.actionScopeKey}" is not a canonical scope_key ` +
               "(key-vocabulary.md §3)",
           );
         }
-      }
-    }
-    // An appends-only wave commits with zero operations: the durable
-    // rows ride this transaction (FP1), so the emptiness guard below
-    // must not refuse it.
-    const applyOptions = {
-      ...restOptions,
-      ...(outboxAppends !== undefined && outboxAppends.length > 0
-        ? { allowEmptyOperations: true }
-        : {}),
-    };
-    const rebasedHeads = new Map(
-      waveBasis.rebasedHeads.map(({ doc, head }) => [doc, head]),
-    );
-    const scopeKeyByOp = new Map<number, string>();
-    for (const annotation of applyOptions.annotations ?? []) {
-      if (annotation.scopeKey !== undefined) {
-        scopeKeyByOp.set(annotation.op, annotation.scopeKey);
-      }
-    }
-    const conflicted = new Set<string>();
-    const checked = new Set<string>();
-    for (
-      const [opIndex, operation] of applyOptions.commit.operations.entries()
-    ) {
-      if (operation.op === "sqlite") continue;
-      // A space-declared op never takes an annotated key: the apply
-      // below refuses such an annotation as a ProtocolError, and keying
-      // this pre-check by the DECLARED scope keeps that refusal — not a
-      // phantom, resolvable-looking conflict — the error the wave sees.
-      const annotated = normalizeScope(operation.scope) === "space"
-        ? undefined
-        : scopeKeyByOp.get(opIndex);
-      const scopeKey = annotated ??
-        resolveScopeKey(operation.scope, {
-          principal: applyOptions.principal,
-          sessionId: applyOptions.sessionId,
-        });
-      const key = `${operation.id} ${scopeKey}`;
-      if (checked.has(key)) continue;
-      checked.add(key);
-      const head = selectDocHead(txEngine, {
-        branch: applyOptions.commit.branch,
-        id: operation.id,
-        scopeKey,
-      });
-      const rebasedAt = rebasedHeads.get(key);
-      if (rebasedAt !== undefined) {
-        // A rebased write: sound only against the exact head its
-        // field-level merge was decided at.
-        if (head !== rebasedAt) conflicted.add(key);
-      } else if (head > waveBasis.basisSeq) {
-        conflicted.add(key);
-      }
-    }
-    if (conflicted.size > 0) {
-      throw new WaveCommitConflictError([...conflicted]);
-    }
-    // Preconditions pre-checked ONE BY ONE so a failure names its
-    // index: the shared validator throws on the first failure without
-    // saying which, and the wave commit step needs per-owner
-    // resolution (WavePreconditionError above). The synthetic
-    // single-precondition commit reuses the validator unchanged; the
-    // apply below re-runs the full set inside this same transaction,
-    // which — having passed here — cannot fail there.
-    const failedPreconditions: number[] = [];
-    let firstDetail = "";
-    const sessionKey = resolveCommitSessionKey(
-      applyOptions.sessionId,
-      applyOptions.principal,
-    );
-    const branch = applyOptions.commit.branch ?? DEFAULT_BRANCH;
-    for (
-      const [index, precondition] of (
-        applyOptions.commit.preconditions ?? []
-      ).entries()
-    ) {
-      try {
-        validateCommitPreconditions(txEngine, sessionKey, branch, {
-          ...applyOptions.commit,
-          preconditions: [precondition],
-        }, {
-          principal: applyOptions.principal,
-          sessionId: applyOptions.sessionId,
-        });
-      } catch (error) {
-        if (error instanceof PreconditionFailedError) {
-          failedPreconditions.push(index);
-          if (firstDetail === "") {
-            firstDetail = error.message;
+        for (const row of instance.rows) {
+          if (!isScopeKey(row.entityScopeKey)) {
+            throw new ProtocolError(
+              `wave commit rejected: basis row entity instance key ` +
+                `"${row.entityScopeKey}" is not a canonical scope_key ` +
+                "(key-vocabulary.md §3)",
+            );
           }
-        } else {
-          throw error;
         }
       }
-    }
-    if (failedPreconditions.length > 0) {
-      throw new WavePreconditionError(failedPreconditions, firstDetail);
-    }
-    let combinedAclChange: AclChange | undefined;
-    const aclDocument = aclChanges?.length
-      ? readState(txEngine, { id: aclDocId(options.space!) })?.document
-      : undefined;
-    let projected = aclDocument?.value;
-    for (const [index, change] of (aclChanges ?? []).entries()) {
-      if (
-        !options.space ||
-        options.commit.operations.some((operation) =>
-          operation.op !== "sqlite" && operation.id === aclDocId(options.space!)
-        )
-      ) {
-        throw new ProtocolError(
-          "Atomic membership requires a space and ACL-free data operations",
-        );
-      }
-      if (!isACL(projected) || !sameAcl(projected, change.before)) {
-        throw new WaveAclConflictError([index]);
-      }
-      if (!mayChangeAcl(change, change.principal)) {
-        throw new ProtocolError("Unauthorized wave membership change");
-      }
-      combinedAclChange = {
-        before: combinedAclChange?.before ?? change.before,
-        after: change.after,
+      // An appends-only wave commits with zero operations: the durable
+      // rows ride this transaction (FP1), so the emptiness guard below
+      // must not refuse it.
+      const applyOptions = {
+        ...restOptions,
+        ...(outboxAppends !== undefined && outboxAppends.length > 0
+          ? { allowEmptyOperations: true }
+          : {}),
       };
-      projected = change.after;
-    }
-    const applied = apply({
-      ...applyOptions,
-      ...(combinedAclChange
-        ? {
-          allowAclChange: true,
-          commit: { ...applyOptions.commit, aclChange: combinedAclChange },
+      const rebasedHeads = new Map(
+        waveBasis.rebasedHeads.map(({ doc, head }) => [doc, head]),
+      );
+      const scopeKeyByOp = new Map<number, string>();
+      for (const annotation of applyOptions.annotations ?? []) {
+        if (annotation.scopeKey !== undefined) {
+          scopeKeyByOp.set(annotation.op, annotation.scopeKey);
         }
-        : {}),
-    });
-    if (combinedAclChange && !applied.replayed) {
-      const companion = apply({
-        sessionId: `server:acl:${crypto.randomUUID()}`,
-        space: options.space,
-        commitClass: "system",
-        commit: {
-          localSeq: 1,
-          reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "set",
-            id: aclDocId(options.space!),
-            scope: "space",
-            value: { ...aclDocument!, value: combinedAclChange.after },
-          }],
-        },
-      });
-      recordAclCompanion(txEngine, applied, companion.seq);
-    }
-    for (const instance of basisInstances ?? []) {
-      replaceSchedulerBasisRows(txEngine, {
-        branch,
-        action: instance.action,
-        actionScopeKey: instance.actionScopeKey,
-        rows: instance.rows.map((row) => ({
-          entitySpace: row.entitySpace,
-          entity: row.entity,
-          entityScopeKey: row.entityScopeKey,
-          seq: row.seq ?? applied.seq,
-        })),
-      });
-    }
-    // FP1 (serving-loop.md §5): the wave's outbound append rows land
-    // inside this same transaction — atomically with the wave commit,
-    // so a crash either has both (rows re-sent, deduped at the
-    // target's eventId horizon) or neither (the wave never happened).
-    // Gated on a NEWLY INSERTED commit: an exact replay returns the
-    // stored result without applying anything, and its original
-    // application already carried these rows — re-inserting would
-    // resurrect rows the drain may have delivered and retired,
-    // producing duplicate durable delivery work (the target's
-    // eventId horizon dedupes the duplicates, but each one costs a
-    // delegated-append round trip and a dedupe pass).
-    if (
-      applied.replayed !== true &&
-      outboxAppends !== undefined && outboxAppends.length > 0
-    ) {
-      insertExecutionOutboxRows(txEngine, {
-        branch,
-        createdSeq: applied.seq,
-        rows: outboxAppends,
-      });
-    }
-    return applied;
-  });
+      }
+      const conflicted = new Set<string>();
+      const checked = new Set<string>();
+      for (
+        const [opIndex, operation] of applyOptions.commit.operations.entries()
+      ) {
+        if (operation.op === "sqlite") continue;
+        // A space-declared op never takes an annotated key: the apply
+        // below refuses such an annotation as a ProtocolError, and keying
+        // this pre-check by the DECLARED scope keeps that refusal — not a
+        // phantom, resolvable-looking conflict — the error the wave sees.
+        const annotated = normalizeScope(operation.scope) === "space"
+          ? undefined
+          : scopeKeyByOp.get(opIndex);
+        const scopeKey = annotated ??
+          resolveScopeKey(operation.scope, {
+            principal: applyOptions.principal,
+            sessionId: applyOptions.sessionId,
+          });
+        const key = `${operation.id} ${scopeKey}`;
+        if (checked.has(key)) continue;
+        checked.add(key);
+        const head = selectDocHead(txEngine, {
+          branch: applyOptions.commit.branch,
+          id: operation.id,
+          scopeKey,
+        });
+        const rebasedAt = rebasedHeads.get(key);
+        if (rebasedAt !== undefined) {
+          // A rebased write: sound only against the exact head its
+          // field-level merge was decided at.
+          if (head !== rebasedAt) conflicted.add(key);
+        } else if (head > waveBasis.basisSeq) {
+          conflicted.add(key);
+        }
+      }
+      if (conflicted.size > 0) {
+        throw new WaveCommitConflictError([...conflicted]);
+      }
+      // Preconditions pre-checked ONE BY ONE so a failure names its
+      // index: the shared validator throws on the first failure without
+      // saying which, and the wave commit step needs per-owner
+      // resolution (WavePreconditionError above). The synthetic
+      // single-precondition commit reuses the validator unchanged; the
+      // apply below re-runs the full set inside this same transaction,
+      // which — having passed here — cannot fail there.
+      const failedPreconditions: number[] = [];
+      let firstDetail = "";
+      const sessionKey = resolveCommitSessionKey(
+        applyOptions.sessionId,
+        applyOptions.principal,
+      );
+      const branch = applyOptions.commit.branch ?? DEFAULT_BRANCH;
+      for (
+        const [index, precondition] of (
+          applyOptions.commit.preconditions ?? []
+        ).entries()
+      ) {
+        try {
+          validateCommitPreconditions(txEngine, sessionKey, branch, {
+            ...applyOptions.commit,
+            preconditions: [precondition],
+          }, {
+            principal: applyOptions.principal,
+            sessionId: applyOptions.sessionId,
+          });
+        } catch (error) {
+          if (error instanceof PreconditionFailedError) {
+            failedPreconditions.push(index);
+            if (firstDetail === "") {
+              firstDetail = error.message;
+            }
+          } else {
+            throw error;
+          }
+        }
+      }
+      if (failedPreconditions.length > 0) {
+        throw new WavePreconditionError(failedPreconditions, firstDetail);
+      }
+      const applied = applyCommitTransaction(txEngine, applyOptions);
+      for (const instance of basisInstances ?? []) {
+        replaceSchedulerBasisRows(txEngine, {
+          branch,
+          action: instance.action,
+          actionScopeKey: instance.actionScopeKey,
+          rows: instance.rows.map((row) => ({
+            entitySpace: row.entitySpace,
+            entity: row.entity,
+            entityScopeKey: row.entityScopeKey,
+            seq: row.seq ?? applied.seq,
+          })),
+        });
+      }
+      // FP1 (serving-loop.md §5): the wave's outbound append rows land
+      // inside this same transaction — atomically with the wave commit,
+      // so a crash either has both (rows re-sent, deduped at the
+      // target's eventId horizon) or neither (the wave never happened).
+      // Gated on a NEWLY INSERTED commit: an exact replay returns the
+      // stored result without applying anything, and its original
+      // application already carried these rows — re-inserting would
+      // resurrect rows the drain may have delivered and retired,
+      // producing duplicate durable delivery work (the target's
+      // eventId horizon dedupes the duplicates, but each one costs a
+      // delegated-append round trip and a dedupe pass).
+      if (
+        applied.replayed !== true &&
+        outboxAppends !== undefined && outboxAppends.length > 0
+      ) {
+        insertExecutionOutboxRows(txEngine, {
+          branch,
+          createdSeq: applied.seq,
+          rows: outboxAppends,
+        });
+      }
+      return applied;
+    },
+  ).immediate(engine, options);
 };
-
-/** Records a data commit's ACL companion in the same open store transaction. */
-export function recordAclCompanion(
-  engine: Engine,
-  applied: AppliedCommit,
-  companionSeq: number,
-): void {
-  const row = engine.database.prepare(
-    `SELECT resolution FROM "commit" WHERE seq = ?`,
-  ).get<{ resolution: string }>(applied.seq)!;
-  const resolution = decodeTrustedMemoryBoundary(row.resolution) as Record<
-    string,
-    FabricValue
-  >;
-  engine.statements.updateCommitResolution.run({
-    seq: applied.seq,
-    resolution: encodeMemoryBoundary({
-      ...resolution,
-      aclCompanionSeq: companionSeq,
-    }),
-  });
-  applied.aclCompanionSeq = companionSeq;
-}
 
 // Per-version record of stored schema documents whose content verified
 // during commit-time closure validation, held as the interned schema, so a
@@ -5066,12 +4936,8 @@ const applyCommitTransaction = (
     delegated,
     systemEventActor,
     allowEmptyOperations,
-    allowAclChange,
   }: ApplyCommitOptions,
 ): AppliedCommit => {
-  if (commit.aclChange !== undefined && !allowAclChange) {
-    throw new ProtocolError("ACL changes require atomic companion admission");
-  }
   // The derived-class posture gate (protocol.md §1): off the flag NOTHING
   // may claim the class — retries included — because `derived` names the
   // single-deriver posture and nothing outside EXPERIMENTAL_SERVER_EXECUTION
@@ -5131,10 +4997,7 @@ const applyCommitTransaction = (
     );
     const storedResolution = decodeTrustedMemoryBoundary(existing.resolution) as
       & FabricValue
-      & {
-        operationResolutions?: ApplyOpResolution[];
-        aclCompanionSeq?: number;
-      };
+      & { operationResolutions?: ApplyOpResolution[] };
     return {
       seq: existing.seq,
       branch: existing.branch,
@@ -5144,9 +5007,6 @@ const applyCommitTransaction = (
         : {}),
       ...(replayedElided.length > 0 ? { elidedOpIndexes: replayedElided } : {}),
       replayed: true,
-      ...(storedResolution.aclCompanionSeq !== undefined
-        ? { aclCompanionSeq: storedResolution.aclCompanionSeq }
-        : {}),
     };
   }
 

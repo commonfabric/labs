@@ -96,10 +96,7 @@ entry, and the change would remove or lower the only concrete `OWNER`.
 The memory server admits a change to an access list only as a commit's single
 operation, a whole-document `set` of the list (INV-12 in
 `docs/specs/memory-v2/09-invariants.md`). A handler also writes its own data,
-so these helpers commit the change separately from the data. They use ordinary
-ACL writes; the [atomic membership API](pattern-space-membership.md#atomic-membership-changes)
-can instead pair an ACL-only companion with data in one database transaction.
-For grant and revoke, the two commits run in order:
+so the change cannot share its commit. It goes in two, in order:
 
 1. The call checks what it can and stages the change on the handler's frame.
    When the runtime holds the space's list, it checks the actor's `OWNER` and
@@ -139,8 +136,9 @@ a failure on the second leaves the first in place.
 
 ## Serving runtimes
 
-Both calls throw on a serving runtime. Their ordinary ACL-only commits do not
-carry the actor authorization required for a served access-list change.
-The [atomic membership API](pattern-space-membership.md#atomic-membership-changes)
-uses a separate companion path whose memory-host checks include the carried
-actor's access. Grant and revoke do not use that path.
+Both calls throw on a serving runtime. A serving runtime's sessions write
+through the wave's delegated carriage, and the memory server checks only that
+the carried actor is present, not what that actor holds in the space. The
+runtime's own check would then be the only one between a served handler and
+the list. Carrying an access-list change through the wave, with the actor's
+level checked where the wave commits, is not built.

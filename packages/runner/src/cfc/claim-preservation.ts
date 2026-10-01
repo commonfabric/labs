@@ -29,7 +29,6 @@ type Ifc = Record<string, unknown>;
 const CLAIMS: Readonly<
   Record<string, (stored: unknown, merged: unknown) => boolean>
 > = {
-  authenticatedAction: (stored, merged) => deepEqual(stored, merged),
   uiContract: (stored, merged) => deepEqual(stored, merged),
   exactCopyOf: (stored, merged) => deepEqual(stored, merged),
   projection: (stored, merged) => deepEqual(stored, merged),
@@ -43,7 +42,6 @@ const CLAIMS: Readonly<
       const other = merged[index];
       return isObjectNotArray(policy) && isObjectNotArray(other) &&
         deepEqual(policy.uiContract, other.uiContract) &&
-        policy.authenticatedAction === other.authenticatedAction &&
         keepsWriterClaim(policy.writeAuthorizedBy, other.writeAuthorizedBy);
     }),
   // A floor may rise, never fall.

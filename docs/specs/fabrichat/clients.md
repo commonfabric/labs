@@ -1,7 +1,5 @@
 # FabriChat: requirements on clients
 
-Status: normative reference (see [`README.md`](README.md)).
-
 A client is a program that reads and writes FabriChat on a person's behalf. The
 shell is one. This document is about the others: a separate application that
 embeds the runtime, and in particular one that draws chats with its own toolkit
@@ -28,7 +26,8 @@ a room to anyone its space doesn't admit.
   each linking to a placement of one room, plus the container's own chat when it
   is a shared space that has one.
 - **The people a client offers** when starting a conversation from a shared
-  space are that space's member set.
+  space are that space's participants, as claims, until it offers a member set
+  (see [shared spaces](README.md#shared-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about` is labeled `authored-by`
@@ -65,9 +64,9 @@ A client that draws natively MUST:
   [`ChatProfile.md`](ChatProfile.md#when-a-profile-cant-be-read)).
 - **Identify people by their profile links**, compared with `equals()`, and
   never by display name.
-- **Show members from the member set.** Members are the room space's member set.
-  Where a room still keeps its own roster, a roster entry is a claim, not proof
-  that someone can read the room.
+- **Show members from the room's space.** A room's `participants` are its
+  space's participants, as claims, plus its authors. None of them is proof that
+  someone can read the room.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
@@ -88,9 +87,6 @@ A client that draws natively MUST:
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads.
-- **Offer leaving wherever it shows a group room of its own**, with no more
-  steps than the room requires. Leaving has to be reliably within reach, since a
-  room someone can't leave is a way to hold them there.
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -111,8 +107,6 @@ gesture on the reviewed surface its policy names:
 | obliterate a message | room | `obliterateMessage` | `ChatObliterateSurface` |
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
-| add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |
-| leave a room | room | `leave` | none |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
 A client sends to the room's own streams, never through a placement or an
@@ -190,41 +184,34 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Prerequisite: a sanctioned issuing path
+### Sanctioned native controls
 
-A native client needs a sanctioned way to hand the runtime a gesture it vouches
-for. The host embedding record already names this as the right posture: "a
-sanctioned headless issuance path, **not** a weakening of the in-runtime
-surface-origin defense". No such path exists yet. The runtime client's generic
-`cell:send` doesn't mark an event, and the in-repository precedents that do mark
-one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
-`trustedUi` steps) are not for embedding hosts. The path this design needs:
-
-- It is available only to the host, never to pattern code that the runtime runs.
-- It takes the surface and action with the event, and the runtime checks them
-  against the write's policy as it checks a rendered gesture's provenance.
-- It carries the mark to wherever the handler runs, as `rendererTrusted` already
-  does between runtimes.
+An embedding host uses `bindNativeUiControl()` from
+`@commonfabric/runner/native-ui` to bind a live reviewed control to its callback.
+The binding validates the control's action and surface and dispatches only
+through the bound stream. It is a host capability, unavailable to pattern code.
+Generic `cell:send` does not establish gesture provenance. The host must still
+connect the callback to a real user gesture; it must not manufacture gestures
+for automation or notice delivery.
 
 ## Delivering notices
 
 Until a pattern can deliver to a principal it shares no space with, delivering a
 notice is the client's job. A client finds the notices waiting in its user's
 manager and reports each one once it's delivered (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client that
-sends a room's `add` delivers that notice itself. A client MUST deliver only the
-notice: which room, and who sent it. It MUST NOT deliver any of the room's
-contents.
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client MUST
+deliver only the notice: which room, and who sent it. It MUST NOT deliver any of
+the room's contents.
 
 ## What a client must not do, in one place
 
 - Create a direct room except through `openDirect`.
-- Relay a send, a reaction, or a membership change through a placement, an
-  adapter, or any other piece.
+- Relay a send or a reaction through a placement, an adapter, or any other
+  piece.
 - Issue a trusted gesture from anything but a person's own act on the matching
   control.
 - Copy a room's contents into another space.
-- Identify a person by name, or treat a roster entry as access.
+- Identify a person by name, or treat a participant entry as access.
 - Trust a notice's claim of who sent it.
 - Show a room's title, members, or history to someone its space doesn't admit.
 - Place a direct room in a container that admits anyone besides the room's two

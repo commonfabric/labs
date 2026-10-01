@@ -41,6 +41,7 @@
 //     --theme NAME          color palette: "default" (light) or "dark"
 //     --colors JSON         override palette keys, e.g. '{"work":"#6ea8fe"}'
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import { type Phase, phaseOf } from "../tasks/ci-step-phases.ts";
 
 const args = Deno.args;
@@ -281,7 +282,7 @@ async function fetchJobs(path: string): Promise<Job[]> {
     const sep = path.includes("?") ? "&" : "?";
     const url = `${path}${sep}per_page=${JOBS_PER_PAGE}&page=${page}`;
     const pageJobs = (await githubApi<{ jobs?: Job[] }>(url)).jobs ?? [];
-    jobs.push(...pageJobs);
+    for (const job of pageJobs) jobs.push(job);
     if (pageJobs.length < JOBS_PER_PAGE) {
       break;
     }
@@ -450,7 +451,7 @@ for (const { run, jobs } of jobsPerRun) {
   ]
     .map((value) => value ? Date.parse(value) : NaN)
     .filter((value) => Number.isFinite(value));
-  const t0 = Math.min(...startCandidates);
+  const t0 = minOf(startCandidates);
   if (!Number.isFinite(t0)) continue;
   const chartJobs = singleRun ? jobs : latestJobsByName(jobs);
   for (const j of chartJobs) {
@@ -539,7 +540,7 @@ for (const [name, e] of acc) {
   );
   const firstStart = attempts[0]?.start;
   const finalEnd = attempts.length
-    ? Math.max(...attempts.map((attempt) => attempt.end))
+    ? maxOf(attempts.map((attempt) => attempt.end))
     : undefined;
   aggregates.push({
     name,
@@ -610,15 +611,15 @@ const prTiers = orderSection(prJobs);
 // The run finishes when its latest-finishing job ends. Fall back to the full
 // job set when no pull-request jobs are present (e.g. a push-only workflow), so
 // the subtitle never shows an -Infinity/NaN time. (aggregates is non-empty here.)
-const prFinish = Math.max(
-  ...(prJobs.length ? prJobs : aggregates).map((j) => j.end.med),
+const prFinish = maxOf(
+  (prJobs.length ? prJobs : aggregates).map((j) => j.end.med),
 );
 
 //
 // SVG layout
 //
 
-const maxEnd = Math.max(...aggregates.map((j) => j.end.max));
+const maxEnd = maxOf(aggregates.map((j) => j.end.max));
 const PAD = 22;
 const TITLE_H = 48;
 const AXIS_H = 20;
@@ -628,7 +629,7 @@ const HEADER_H = 22;
 const SECTION_GAP = 10;
 const RIGHT_PAD = 150;
 
-const longestName = Math.max(...aggregates.map((j) => j.name.length), 16);
+const longestName = Math.max(maxOf(aggregates.map((j) => j.name.length)), 16);
 const COUNT_COL = 44; // far-left column showing how many runs the job ran in
 const NAME_X = PAD + COUNT_COL;
 const LEFT_COL = Math.min(300, Math.round(longestName * 6.4) + 16);
@@ -928,7 +929,7 @@ function drawSection(title: string, jobs: JobAgg[]) {
     }
     const durationLanes = Math.max(
       0,
-      ...durationPlacements.map((placement) => placement.lane),
+      maxOf(durationPlacements.map((placement) => placement.lane)),
     );
     y += ROW_H + durationLanes * DURATION_LABEL_LANE_H;
   }

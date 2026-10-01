@@ -1,7 +1,5 @@
 # FabriChatRoom
 
-Status: normative reference (see [`README.md`](README.md)).
-
 `FabriChatRoom` is an implementation of [`ChatRoomOutput`](ChatRoomOutput.md),
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.
@@ -10,29 +8,29 @@ Its records and surfaces are named for the contract rather than for the
 implementation, because they are part of the contract: `ChatMessage`,
 `ChatReaction`, and the surfaces the table under [writers](#writers) names.
 
+## Space hookup
+
+The space record's `chat` field holds the canonical room link. The `/` wish
+reaches that record even before a host installs its `defaultPattern`. The
+manager registers a newly allocated room there before publishing it. The
+standalone entry point claims an empty slot in the same transaction that
+initializes the room, so competing starts converge on one link. The default
+app's Chat link opens this entry point and reuses the registered conversation.
+The slot, like the rest of the space record, is governed by the space ACL.
+
 ## State
 
 The room keeps these `PerSpace` values, shared by everyone the space admits:
 
-- The contract's own records: `about`, its messages, `recentActivity` with its
-  next `seq` and `recentActivityExpiredThrough`, `roster`, and
-  `outgoingNotices`. Messages, reactions, and activity use original document
-  references. Views order messages by `sentAt`; reaction and roster handlers
-  check identity before adding an entry.
+- The contract's own records: `about`, its messages, and `recentActivity` with
+  its next `seq` and `recentActivityExpiredThrough`. Messages and reactions are separate authored documents, linked from the
+  room and projected in recorded-time order.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
 - The times the room has used, so it can make each new one unique.
-- The principals who have left, which `commitAdd` checks.
-- The admission order: when each member was admitted, from the room's creation
-  or their `add`, which `commitLeave` reads to choose whom to promote. Members
-  admitted at the room's creation are ordered by principal, so the order is
-  total. This is bookkeeping, not membership: the access list still decides who
-  is a member. Once the runtime provides member sets, the order can come from
-  them instead.
-- Membership request identities, committed atomically with their access-list
-  changes and activity records.
 
-`participants` is computed from `roster` and the messages' authors, keyed by
+`participants` is computed from the participants the space's default pattern
+lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
 profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
 computed from the messages, and `canSend` from the reader's access and profile,
 when they're read. Neither is stored.
@@ -59,11 +57,6 @@ Every write goes through one handler per stream:
 | `commitObliterate` | `obliterateMessage` | `ChatObliterateSurface` |
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
-| `commitShowProfile` | `showProfile` | none |
-| `commitLeave` | `leave` | none |
-| `commitAdd` | `add` | `ChatMembersSurface` |
-| `commitRemove` | `remove` | `ChatMembersSurface` |
-| `commitDelivered` | `delivered` | none |
 
 Messages and reactions are separate `AuthoredByCurrentUser` documents with
 `WritePolicyAnyOf` branches for their permitted reviewed writers. The runtime
@@ -107,39 +100,15 @@ conflict and rerun against the accepted collection. Message creation and editing
 do not receive the reaction documents' writer authority. Deletion and
 obliteration may clear them.
 
-`commitShowProfile` appends to `roster` as the `loom` pattern's `addParticipant`
-does: a mergeable set add, so concurrent additions all land and a profile is not
-listed twice.
-
-`commitLeave` asks the host to remove the sender's own entry from the room
-space's access list. When the sender is the last OWNER, it first asks the host
-to grant OWNER to the remaining member admitted earliest. The room keeps the
-admission order (see [state](#state)) for that. It also records the sender in a
-keyed collection of principals who have left, which `commitAdd` checks.
-
-### Atomic membership changes
-
-`add`, `remove`, and `leave` use `setSpaceMembers()` to commit the room's
-metadata and an ACL companion together. The engine retains a separate ACL-only
-commit record while making both records durable in one storage transaction
-([INV-12](../memory-v2/09-invariants.md#inv-12--acl-mutation-commit-shape)). A
-stale ACL conflicts. Removing one's own WRITE grant is supported without OWNER
-authority; granting or removing another principal requires OWNER authority.
-
-`commitAdd` and `commitRemove` ask the host to change the room space's access
-list. They are the only handlers that reach beyond the room's own record.
-`commitAdd` also adds a notice to `outgoingNotices`, and `commitDelivered`
-removes one.
-
 `about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
 handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves.
 
-Every handler that changes the room's own record, except `commitDelivered`,
-appends its `recentActivity` entry in the same transaction as the change, so the
-log never disagrees with the messages. Membership changes include their activity in the atomic data commit. Entries older than the window are dropped as new ones
-are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
-remove the message's earlier entries.
+Every handler that changes the room's own record appends its `recentActivity`
+entry in the same transaction as the change, so the log never disagrees with the
+messages. Entries older than the window are dropped as new ones are appended.
+`commitObliterate`, and `commitDelete` when it obliterates, also remove the
+message's earlier entries.
 
 The message list keeps `windows` as a `PerSession` keyed collection, and
 fulfills `openWindow` and `closeWindow` by setting and removing entries in it. A
@@ -172,15 +141,17 @@ the room is created from the same settings the handlers read.
 
 ## Runtime support
 
-`Factory.inSpace()` allocates random creator-only spaces.
-`currentPrincipal()` authenticates the handler actor; `viewerPrincipal()`
-reads the viewer with per-user scope and confidentiality. `spaceMembers()`,
-`spaceAccess()`, and `setSpaceMembers()` provide reactive membership, access
-status, and atomic membership changes. `eventKey()` identifies each logical
-UI event across handler retries. The [membership API guide](../../features/pattern-space-membership.md)
-describes these capabilities. Reactions have their own storage documents and
-writer policies. Session windows use scoped cells; rendered message-card
-instances explicitly use the viewer's session scope.
-
-A shared space-wide profile roster is future work. Rooms keep contributed
-profiles locally while the access list remains authoritative for membership.
+- **Private allocation.** The first factory call using a named `inSpace()`
+  allocation supplies its genesis grants. The manager creates its policy there
+  first, granting the creator OWNER and intended other members WRITE.
+- **System participants.** The host creates the space's default pattern when
+  someone opens the space. The room reads its participants through `#default`.
+  Before that, the room's participants are only its message authors.
+- **Session windows.** Handler event scope selects the sending session's
+  `PerSession` window collection across the message-list cell boundary.
+- **Separate writer authority.** Messages and reactions occupy separate
+  documents with their own reviewed-writer policies.
+- **Lifetime deduplication.** Request memory lasts for the room's lifetime;
+  no finite delivery-delay guarantee is assumed.
+- **Activity expiry.** An interval clock updates the visible activity window
+  even without a write. The next activity write prunes expired stored entries.

@@ -255,12 +255,14 @@ function subschemaChildren(
   }
   for (const key of SUBSCHEMA_LIST_KEYS) {
     const nested = record[key];
-    if (!skip?.has(key) && Array.isArray(nested)) children.push(...nested);
+    if (!skip?.has(key) && Array.isArray(nested)) {
+      for (const child of nested) children.push(child);
+    }
   }
   for (const key of SUBSCHEMA_MAP_KEYS) {
     const nested = record[key];
     if (!skip?.has(key) && isKeyableObjectOrArray(nested)) {
-      children.push(...Object.values(nested));
+      for (const child of Object.values(nested)) children.push(child);
     }
   }
   return children;
@@ -389,7 +391,6 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   collection: "declared",
   flowPrecisionClaim: "declared",
   uiContract: "declared",
-  authenticatedAction: "declared",
   writeAuthorizedBy: "writerIdentity",
   writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
@@ -565,7 +566,11 @@ const comparableIfc = (ifc: unknown): unknown => {
  * Reject a piece update unless its argument and result schemas preserve the
  * contracts of the currently running pattern.
  *
- * Arguments are contravariant and results are covariant. Open argument objects
+ * Arguments are contravariant and results are covariant. An object is open
+ * when its `additionalProperties` admits any value: absent, `true`, `{}`, or
+ * `{ type: "unknown" }`, the last being what an index signature over `unknown`
+ * records. A result object that is open may gain any named field, since its
+ * readers already accept whatever sits there. Open argument objects
  * may still gain optional/defaulted named fields as the piece-evolution policy,
  * and may drop named fields the pattern no longer reads — a demand given up
  * leaves a writer's value unread, where a dropped result field breaks a reader,
@@ -1106,6 +1111,27 @@ function isScalarSchemaType(type: string): boolean {
   return SCALAR_SCHEMA_TYPES.has(type);
 }
 
+/**
+ * The `additionalProperties` of `schema`, with every schema that admits any
+ * value written as `true`: an absent keyword, `{}`, and `{ type: "unknown" }`,
+ * which is what a TypeScript index signature `[key: string]: unknown` records.
+ * A `type` list containing `unknown` admits any value as well, and descriptive
+ * annotations beside `type` leave it unconstrained. Any other
+ * keyword, `asCell` and `$comment` among them, is a constraint, and the schema
+ * is returned as written.
+ */
+function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
+  const additional = schema.additionalProperties ?? true;
+  if (typeof additional === "boolean") return additional;
+  const unconstrained = Object.entries(additional).every(([key, value]) =>
+    (key === "type" &&
+      (value === "unknown" ||
+        (Array.isArray(value) && value.includes("unknown")))) ||
+    (key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+  );
+  return unconstrained ? true : additional;
+}
+
 function objectSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
@@ -1177,7 +1203,7 @@ function objectSubsetIssue(
       }
     }
 
-    const previousAdditional = source.additionalProperties ?? true;
+    const previousAdditional = additionalPropertiesOf(source);
     for (const property of Object.keys(candidateProperties)) {
       const matchedPatterns = matchingPatternPropertySchemas(
         previousPatternProperties,
@@ -1192,9 +1218,11 @@ function objectSubsetIssue(
         );
         if (issue) return issue;
       }
-      // Open objects remain evolvable by adding optional/defaulted fields.
-      // A typed index signature is different: it promised that every unknown
-      // property accepted values of that type, including this newly named one.
+      // Open objects remain evolvable by adding optional/defaulted fields, and
+      // an index signature over `unknown` leaves an object open. An index
+      // signature over any narrower type is different: it promised that every
+      // unnamed property accepted values of that type, including this newly
+      // named one.
       if (
         Object.hasOwn(previousProperties, property) ||
         matchedPatterns.length > 0 ||
@@ -1257,7 +1285,7 @@ function objectSubsetIssue(
       }
     }
 
-    const previousAdditional = target.additionalProperties ?? true;
+    const previousAdditional = additionalPropertiesOf(target);
     for (const property of Object.keys(candidateProperties)) {
       const matchedPatterns = matchingPatternPropertySchemas(
         previousPatternProperties,
@@ -1356,7 +1384,7 @@ function objectSubsetIssue(
       !Object.hasOwn(targetProperties, property) &&
       targetPatternContracts.length === 0
     ) {
-      const targetAdditional = target.additionalProperties ?? true;
+      const targetAdditional = additionalPropertiesOf(target);
       if (targetAdditional === true) continue;
       if (targetAdditional === false) {
         return `${path}.${property}: source field is rejected by the target object`;
@@ -1488,8 +1516,8 @@ function additionalPropertiesSubsetIssue(
   path: string,
   context: CompatibilityContext,
 ): string | undefined {
-  const sourceAdditional = source.additionalProperties ?? true;
-  const targetAdditional = target.additionalProperties ?? true;
+  const sourceAdditional = additionalPropertiesOf(source);
+  const targetAdditional = additionalPropertiesOf(target);
   // Verb events: a boolean↔boolean additionalProperties transition is free
   // in both directions (see CompatibilityContext.verbEvent). Schema-valued
   // additionalProperties on either side still compares — a constraint on the
@@ -2091,7 +2119,6 @@ function valueSchemaType(value: unknown): string | undefined {
     return Number.isInteger(value) ? "integer" : "number";
   }
   if (typeof value === "boolean") return "boolean";
-  if (typeof value === "bigint") return "bigint";
   if (Array.isArray(value)) return "array";
   return isPlainObject(value) ? "object" : undefined;
 }

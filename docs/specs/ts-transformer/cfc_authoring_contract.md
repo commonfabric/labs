@@ -86,7 +86,6 @@ Canonical alias set:
 - `PolicyOf`
 - `WriteAuthorizedBy`
 - `WritePolicyAnyOf`
-- `AuthenticatedActionWrite`
 - `TrustedActionWriteWithIntegrity`
 - `TrustedActionWrite`
 - `TrustedActionUiContract`
@@ -179,13 +178,6 @@ Path tuple encoding rules:
 - `[]` encodes to `/`
 - otherwise encode as `/${segments.join("/")}`
 
-### `AuthenticatedActionWrite<T, typeof binding>`
-
-Lower the value as `T`, resolve the writer as for `WriteAuthorizedBy`, and add
-`ifc.authenticatedAction: true`. The runtime requires the named verified writer.
-Combined with `AuthoredByCurrentUser`, it requires an authenticated actor and
-attributes the value to that actor without requiring a reviewed UI contract.
-
 ### `WriteAuthorizedBy<T, typeof binding>`
 
 `WriteAuthorizedBy` is special because the emitted schema must refer to a local
@@ -254,13 +246,13 @@ but the implementation still needs an equivalent cross-stage identity channel.
 
 `WritePolicyAnyOf` admits a write through any one of several complete writer
 policies, for a record that more than one handler writes. Each member `P` is a
-`WriteAuthorizedBy`, `AuthenticatedActionWrite`, `TrustedActionWrite`, or
-`TrustedActionWriteWithIntegrity` over `unknown`, written directly or through a user alias.
+`WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity`
+over `unknown`, written directly or through a user alias.
 
 Normative behavior:
 
 1. It lowers to `ifc.writePolicyAnyOf`, a list holding, for each member in
-   order, the `writeAuthorizedBy` and any `uiContract` or `authenticatedAction` that member lowers to on
+   order, the `writeAuthorizedBy` and any `uiContract` that member lowers to on
    its own. Each member's binding follows every rule above for
    `WriteAuthorizedBy`, and `WriteAuthorizedByValidationTransformer` reports a
    member's binding exactly as it reports a lone one's.
@@ -273,15 +265,14 @@ Normative behavior:
    recorded for the write. Writer and gesture are of the same member, so one
    member's gesture never admits another's writer.
 4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
-   `writeAuthorizedBy`, `uiContract`, or `authenticatedAction`, whether one
-   schema declares both or a
+   `writeAuthorizedBy` or `uiContract`, whether one schema declares both or a
    later schema declares one where the stored schema declares the other, and
    refuses a later schema that adds, drops, reorders, or changes a stored
    member. Each member's claim is stamped with its module identity where the
    list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with no
    stamp admits no writer, as a stored lone claim with none does.
 5. An `AuthoredByCurrentUser` label beside it requires every member to name a
-   reviewed contract or explicitly declare `authenticatedAction: true`.
+   contract, so every write the position admits carries a reviewed gesture.
 
 ## Pipeline Contract
 

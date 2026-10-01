@@ -21,7 +21,7 @@ const pathsUpTo = (
     layer = layer.flatMap((path) =>
       segments.map((segment) => [...path, segment])
     );
-    paths.push(...layer);
+    for (const path of layer) paths.push(path);
   }
   return paths;
 };

@@ -1,6 +1,7 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   isObjectNotArray,
   isPlainObject,
@@ -1772,7 +1773,7 @@ export class SpaceSession {
       this.#readyOnConnection = true;
       replayedThroughLocalSeq = Math.max(
         0,
-        ...this.#outstandingCommits.keys(),
+        maxOf(this.#outstandingCommits.keys()),
       );
       const replayTasks = [...this.#outstandingCommits.entries()].map((
         [localSeq, pendingCommit],
@@ -2541,14 +2542,6 @@ export class SpaceSession {
       }
 
       try {
-        if (
-          pendingCommit.commit.aclChange &&
-          this.#client.serverFlags?.atomicAclChanges !== true
-        ) {
-          throw protocolError(
-            "memory server does not support atomic ACL changes",
-          );
-        }
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
           requestId: crypto.randomUUID(),

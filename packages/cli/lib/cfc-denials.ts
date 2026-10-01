@@ -51,7 +51,8 @@ export function formatCfcDenial(denial: CfcDenial): string[] {
   for (const reason of reasons) {
     lines.push(`  - ${String(reason)}`);
     for (const detail of refusals) {
-      if (detail.reason === reason) lines.push(...formatDetail(detail));
+      if (detail.reason !== reason) continue;
+      for (const line of formatDetail(detail)) lines.push(line);
     }
   }
   for (const [key, value] of Object.entries(inputs)) {

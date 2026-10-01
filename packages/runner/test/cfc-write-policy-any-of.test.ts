@@ -465,32 +465,4 @@ describe("cfc-write-policy-any-of", () => {
       ]);
     });
   });
-  it("allows explicitly authenticated authorship without weakening reviewed writers", async () => {
-    const f = fixture();
-    const authenticated: JSONSchemaObj = {
-      type: "string",
-      ifc: {
-        addIntegrity: [{
-          kind: "authored-by",
-          subject: { __ctCurrentPrincipal: true },
-        }],
-        writePolicyAnyOf: [{
-          writeAuthorizedBy: policy("send", "Send").writeAuthorizedBy,
-          authenticatedAction: true,
-        }],
-      },
-    };
-    try {
-      expect(
-        await f.write("send", undefined, { schema: authenticated }),
-      )
-        .toBeUndefined();
-      expect(
-        await f.write("rogue", undefined, { schema: authenticated }),
-      )
-        .toContain("writePolicyAnyOf failed");
-    } finally {
-      await f.dispose();
-    }
-  });
 });

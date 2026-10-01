@@ -47,7 +47,6 @@ const IFC_KEYS = [
   "ownerPrincipal",
   "writeAuthorizedBy",
   "writePolicyAnyOf",
-  "authenticatedAction",
   "exactCopyOf",
   "projection",
   "collection",
@@ -324,7 +323,6 @@ const mergeSetLikeIfcArray = (
         throw new Error(`${key} must remain stable at ${path || "/"}`);
       }
       return existing;
-    case "authenticatedAction":
     case "flowPrecisionClaim":
     case "uiContract":
       if (!deepEqual(existing, candidate)) {
@@ -362,8 +360,7 @@ const mergeWritePolicyAnyOf = (
     if (
       !isObjectNotArray(policy) || !isObjectNotArray(other) ||
       !sameKeys(policy, other) ||
-      !deepEqual(policy.uiContract, other.uiContract) ||
-      policy.authenticatedAction !== other.authenticatedAction
+      !deepEqual(policy.uiContract, other.uiContract)
     ) {
       throw unstable();
     }
@@ -419,9 +416,7 @@ const mergeIfc = (
   // the runtime refuses every write to.
   if (
     merged.writePolicyAnyOf !== undefined &&
-    (merged.writeAuthorizedBy !== undefined ||
-      merged.uiContract !== undefined ||
-      merged.authenticatedAction !== undefined)
+    (merged.writeAuthorizedBy !== undefined || merged.uiContract !== undefined)
   ) {
     throw new Error(
       `writePolicyAnyOf cannot join writeAuthorizedBy or uiContract at ${

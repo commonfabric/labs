@@ -1,7 +1,5 @@
 # ChatManagerOutput
 
-Status: normative reference (see [`README.md`](README.md)).
-
 The result of a user's chat manager: what `wish({ query: "#chatManager" })`
 resolves to. It is the contract clients read, and it is named for the role
 rather than for an implementation. [`FabriChatManager`](FabriChatManager.md) is
@@ -170,17 +168,17 @@ conversation from splitting.
   with it resumes the request rather than starting another.
 - `members: string[]` — The DIDs of the people to admit besides this user.
   Duplicates, and this user's own DID, are ignored. It may be empty, which
-  creates a group room of one, and people can be added later with the room's
-  `add`.
+  creates a group room of one, and people can be added later through the
+  space's own tools.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 
 Creates a group room. This is an outward act: it grants other people access.
 
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
-- **Effect:** always creates a new room, even when another group room has the
-  same members. Grants each member access, produces a notice for each, and
-  records the entry in `rooms`.
+- **Effect:** always creates a new space, with a new room as its chat, even when
+  another group room has the same members. Grants each member access, produces a
+  notice for each, and records the entry in `rooms`.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`
@@ -212,8 +210,8 @@ Records a room this user has been admitted to.
   room, or if the room is direct and `counterpart` is missing, or, once there
   are member sets, isn't a member.
 
-A client also sends `accept` when the user first opens a shared space's own
-chat, which is created with its space and not by a manager.
+A client also sends `accept` when the user first opens the chat of an existing
+shared space, which is created with its space and not by a manager.
 
 ### `forget(requestId: string, room: Cell<ChatRoomOutput>)`
 

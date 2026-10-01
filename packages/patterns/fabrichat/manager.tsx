@@ -13,7 +13,6 @@ import {
   NAME,
   type OpaqueCell,
   pattern,
-  setSpaceMembers,
   spaceMembers,
   type Stream,
   toSchema,
@@ -27,6 +26,7 @@ import {
   type WritePolicyAnyOf,
 } from "commonfabric";
 import { FabriChatRoom, type StoredMemory } from "./room.tsx";
+import type { SpaceChat, SpaceChatRoom } from "./space.ts";
 import { CHAT_POLICY } from "./records.ts";
 import type {
   ChatIndexEntry,
@@ -51,8 +51,11 @@ interface CreationIntent {
 
 /** The private provisioning record, separate from the room's public surface. */
 interface CreationTarget {
-  room: ChatRoomOutput;
-  configured: boolean;
+  room: SpaceChatRoom;
+  registration: "missing" | "registered" | "occupied";
+  register: Stream<
+    { requestId: string; resume: Stream<{ requestId: string }> }
+  >;
 }
 
 /** Manager storage; every room reference stays in its original space. */
@@ -79,7 +82,7 @@ interface StartState extends ManagerState {
 const resumeCreation = handler<{ requestId: string }, ManagerState>(
   (event, state) => {
     if (state.requests.key(event.requestId).get()?.status === "pending") {
-      advance(event.requestId, state);
+      advance(event.requestId, state, resumeCreation(state));
     }
   },
 );
@@ -100,7 +103,7 @@ function resumePending(requestId: string, state: StartState): boolean {
       ids.includes(requestId)
     )?.[0];
   if (creationId) {
-    advance(creationId, state);
+    advance(creationId, state, state.resume);
     state.resume.send({ requestId: creationId });
   }
   return true;
@@ -124,7 +127,11 @@ function remember(entry: ChatIndexEntry, state: ManagerState): void {
 }
 
 /** Advances a creation using only the choices recorded by its first request. */
-function advance(requestId: string, state: ManagerState): void {
+function advance(
+  requestId: string,
+  state: ManagerState,
+  resume: Stream<{ requestId: string }>,
+): void {
   const actor = currentPrincipal();
   if (!actor) return;
   const intentCell = state.intents.key(requestId);
@@ -132,11 +139,13 @@ function advance(requestId: string, state: ManagerState): void {
   if (!intent || intent.creator !== actor) return;
   if (!intent.target) {
     const allocation = `fabrichat:${requestId}`;
-    const policy = RoomPolicy.inSpace(allocation)({
+    const grants = Object.fromEntries(
+      intent.members.map((member) => [member, "WRITE" as const]),
+    );
+    const policy = RoomPolicy.inSpace(allocation, { grants })({
       value: CHAT_POLICY,
     });
     const target = PrivateRoom.inSpace(allocation)({
-      initialMembers: [actor, ...intent.members],
       about: {
         kind: intent.kind,
         title: intent.title,
@@ -149,20 +158,14 @@ function advance(requestId: string, state: ManagerState): void {
   }
   const target = intent.target;
   const room = target.key("room").resolveAsCell();
-  if (!target.key("configured").get()) {
-    const current = spaceMembers(target);
-    if (!current || current[actor] !== "OWNER" || current["*"] !== undefined) {
-      refuse(
-        requestId,
-        "The private room cannot be administered by this user.",
-        state,
-      );
-      return;
-    }
-    const next = { ...current };
-    for (const member of intent.members) next[member] ??= "WRITE";
-    setSpaceMembers(next, target);
-    target.key("configured").set(true);
+  const registration = target.key("registration").get();
+  if (registration === "occupied") {
+    refuse(requestId, "That space already has a conversation.", state);
+    return;
+  }
+  if (registration !== "registered") {
+    target.key("register").send({ requestId, resume });
+    return;
   }
   const entry: ChatIndexEntry = {
     room,
@@ -241,7 +244,7 @@ function writeOpenDirect(
   if (!(waiting.get() ?? []).includes(event.requestId)) {
     waiting.set([...(waiting.get() ?? []), event.requestId]);
   }
-  advance(creationId, state);
+  advance(creationId, state, state.resume);
   state.resume.send({ requestId: creationId });
   const outcome = state.requests.key(creationId).get();
   if (outcome && outcome.status !== "pending") {
@@ -304,7 +307,7 @@ function writeCreateGroup(
     });
   }
   state.requests.key(event.requestId).set({ status: "pending" });
-  advance(event.requestId, state);
+  advance(event.requestId, state, state.resume);
   state.resume.send({ requestId: event.requestId });
 }
 
@@ -336,7 +339,7 @@ export const accept = handler<
   const acl = spaceMembers(event.room);
   const about = event.room.key("about").get();
   if (
-    !actor || !acl?.[actor] || !about ||
+    !actor || !(acl?.[actor] ?? acl?.["*"]) || !about ||
     (about.kind === "direct" &&
       (!event.counterpart || !acl[event.counterpart] ||
         event.counterpart === actor))
@@ -439,36 +442,58 @@ const RoomPolicy = pattern<
   { value: Cell<ChatRoomPolicy> }
 >(({ value }) => ({ value }));
 
+/** Claims the conversation in its own space before continuing the home index. */
+const registerRoom = handler<{
+  requestId: string;
+  resume: Stream<{ requestId: string }>;
+}, {
+  space: Writable<SpaceChat | undefined>;
+  room: Cell<SpaceChatRoom>;
+  registration: Writable<"missing" | "registered" | "occupied">;
+}>(
+  (event, { space, room, registration }) => {
+    const registered = space.get()?.chat;
+    if (registered && !equals(registered, room)) {
+      registration.set("occupied");
+    } else {
+      if (!registered) {
+        space.key("chat").set(room);
+      }
+      registration.set("registered");
+    }
+    event.resume.send({ requestId: event.requestId });
+  },
+);
+
 /** The private room's initialization belongs to its creator's reviewed request. */
 const PrivateRoom = pattern<{
-  initialMembers: string[];
   about: Cell<
     Created<
       Omit<ChatRoomAbout, "policy"> & { policy: Cell<Created<ChatRoomPolicy>> }
     >
   >;
-}, CreationTarget>(({ about, initialMembers }) => {
-  const configured = new Writable<Managed<boolean>>(false);
+}, CreationTarget>(({ about }) => {
   const profile = wish<ChatProfile>({ query: "#profile" });
   const room = FabriChatRoom({
     about,
     myProfile: profile.result,
-    dedicated: true,
-    initialMembers,
     memory: new Writable<StoredMemory>({
       requests: {},
       authors: {},
       usedTimes: {},
       nextSeq: 1,
       expiredThrough: 0,
-      left: {},
-      admissions: {},
-      profiles: {},
-      abandoned: false,
-      notices: [],
     }),
   });
-  return { room, configured };
+  const space = wish<Writable<SpaceChat>>({ query: "/" });
+  const registration = new Writable<"missing" | "registered" | "occupied">(
+    "missing",
+  );
+  return {
+    room,
+    registration,
+    register: registerRoom({ space: space.result!, room, registration }),
+  };
 });
 
 /** The handlers permitted to update the private index and request memory. */

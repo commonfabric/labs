@@ -329,11 +329,11 @@ export interface IReadable<T> {
 /**
  * Writable cells can update their value.
  *
- * **Frozenness contract:** Values passed into `set()`, `update()`, and `push()`
- * flow through a write-boundary normalization step that shallowly freezes any
- * plain unfrozen Object/Array levels it visits. Inputs that are already
- * deep-frozen valid `FabricValue` trees are accepted identity-preservingly with
- * no further cloning.
+ * **Frozenness contract:** Values passed into `set()`, `update()`, `push()`,
+ * and `pushAll()` flow through a write-boundary normalization step that
+ * shallowly freezes any plain unfrozen Object/Array levels it visits. Inputs
+ * that are already deep-frozen valid `FabricValue` trees are accepted
+ * identity-preservingly with no further cloning.
  */
 export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
@@ -355,11 +355,26 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Append one or more values to an array cell. See the
    * {@link IWritable} interface docs for the frozenness contract on the
-   * inputs.
+   * inputs. To append a list, pass it to {@link IWritable.pushAll} rather
+   * than spreading it here: every spread element is a separate argument, and a
+   * long enough list overflows the stack.
    */
   push(
     this: IsThisArray,
-    ...value: T extends (infer U)[] ? (U | AnyCellWrapping<U>)[] : never
+    ...value: T extends readonly (infer U)[] ? (U | AnyCellWrapping<U>)[]
+      : never
+  ): void;
+
+  /**
+   * Append every value in `values` to an array cell, in order, as one
+   * mergeable append, exactly as `push(...values)` would, but for a list of
+   * any length. See the {@link IWritable} interface docs for the frozenness
+   * contract on the inputs.
+   */
+  pushAll(
+    this: IsThisArray,
+    values: T extends readonly (infer U)[] ? readonly (U | AnyCellWrapping<U>)[]
+      : never,
   ): void;
 
   /**
@@ -403,9 +418,9 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
 
 /**
  * How the pattern transformer classifies a mergeable write: an
- * `array-identity-writer` takes element arguments whose identity is tracked
- * (`push` / `addUnique` / `removeByValue`); a `scalar-writer` does not
- * (`increment`).
+ * `array-identity-writer` takes elements whose identity is tracked, as
+ * arguments (`push` / `addUnique` / `removeByValue`) or as one list argument
+ * (`pushAll`); a `scalar-writer` does not (`increment`).
  */
 export type MergeableOpMethodKind = "scalar-writer" | "array-identity-writer";
 
@@ -430,9 +445,12 @@ export interface MergeableOpMethod {
  * transformer's method classification both derive from it, so adding a mergeable
  * op is one entry here plus its behavior descriptor — the transformer picks up
  * the new method with no edit, and a consistency test cross-checks the wire tags.
+ * Two methods may record the same wire op, as `push` and `pushAll` both record
+ * `append`.
  */
 export const MERGEABLE_OP_METHODS: readonly MergeableOpMethod[] = [
   { method: "push", wireOp: "append", kind: "array-identity-writer" },
+  { method: "pushAll", wireOp: "append", kind: "array-identity-writer" },
   { method: "addUnique", wireOp: "add-unique", kind: "array-identity-writer" },
   {
     method: "removeByValue",
@@ -1899,7 +1917,6 @@ export type JSONSchemaObj = {
     readonly requiredIntegrity?: readonly JSONValue[];
     readonly maxConfidentiality?: readonly JSONValue[];
     readonly ownerPrincipal?: string | CurrentPrincipal;
-    readonly authenticatedAction?: true;
     readonly writeAuthorizedBy?:
       | readonly string[]
       | {
@@ -1914,7 +1931,6 @@ export type JSONSchemaObj = {
     // policies, any one of which admits a write whole. A position declaring
     // it declares no `writeAuthorizedBy` or `uiContract` of its own.
     readonly writePolicyAnyOf?: readonly {
-      readonly authenticatedAction?: true;
       readonly writeAuthorizedBy: NonNullable<
         NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
       >;
@@ -3385,12 +3401,6 @@ export declare function spaceMembers(
   target?: Cell<unknown>,
 ): Readonly<Record<string, "READ" | "WRITE" | "OWNER" | undefined>> | undefined;
 
-/** Replaces the current space's ACL atomically with a handler's metadata writes. */
-export declare function setSpaceMembers(
-  members: Readonly<Record<string, "READ" | "WRITE" | "OWNER" | undefined>>,
-  target?: Cell<unknown>,
-): void;
-
 export type WishParams = {
   query: WishTag | string;
   path?: string[];
@@ -3963,7 +3973,7 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * writes commit. If the handler's writes then fail, the change stands.
  *
  * Available only in a handler on a client runtime, and throws anywhere else:
- * these helpers' ordinary ACL commits do not carry served actor authorization.
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
  * Every refusal throws. One the handler lets escape drops its whole
  * transaction; the call throws before staging anything, so one the handler
  * catches leaves nothing staged for that call.
@@ -3990,7 +4000,7 @@ export declare function grantSpaceAccess(
  * writes commit. If the handler's writes then fail, the change stands.
  *
  * Available only in a handler on a client runtime, and throws anywhere else:
- * these helpers' ordinary ACL commits do not carry served actor authorization.
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
  * Every refusal throws. One the handler lets escape drops its whole
  * transaction; the call throws before staging anything, so one the handler
  * catches leaves nothing staged for that call.

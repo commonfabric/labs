@@ -200,7 +200,9 @@ export const loadRunFamilies = async (
 ): Promise<readonly RunFamily[]> => {
   const families: RunFamily[] = [];
   for (const path of paths) {
-    families.push(...await discoverRunFamilies(path));
+    for (const family of await discoverRunFamilies(path)) {
+      families.push(family);
+    }
   }
   return families;
 };
@@ -364,7 +366,7 @@ export const runAuditCli = async (
         ? { toolshedMeta: await readToolshedMeta(options.toolshedUrl) }
         : {}),
     };
-    results.push(...auditDeployment(audit));
+    for (const result of auditDeployment(audit)) results.push(result);
   }
   if (results.length === 0) {
     // Nothing was audited, so no threshold applies: a green exit here would

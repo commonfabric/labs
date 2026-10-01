@@ -1,4 +1,4 @@
-/** Tests FabriChat provisioning and departure against an enforced memory server. */
+/** Tests FabriChat provisioning and system-owned spaces against enforced memory. */
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
@@ -25,7 +25,6 @@ import {
   type SessionFactory,
   StorageManager,
 } from "@commonfabric/runner/storage/v2";
-import { stuckNet } from "@commonfabric/test-support/stuck-net";
 
 /** Supplies the explicit principal expected by the in-process loopback server. */
 function testPrincipalSessionOpenAuthFactory(
@@ -61,12 +60,12 @@ class PrivateStorageManager extends StorageManager {
   }
 }
 
-/** Finds the actual rendered departure stream without changing its bindings. */
-function findLeaveControl(value: unknown): Cell<unknown> | undefined {
-  if (isCell(value)) return findLeaveControl(value.get());
+/** Finds the live start control without replacing its handler bindings. */
+function findStartControl(value: unknown): Cell<unknown> | undefined {
+  if (isCell(value)) return findStartControl(value.get());
   if (Array.isArray(value)) {
     for (const child of value) {
-      const found = findLeaveControl(child);
+      const found = findStartControl(child);
       if (found) return found;
     }
     return undefined;
@@ -76,12 +75,12 @@ function findLeaveControl(value: unknown): Cell<unknown> | undefined {
   const children = isCell(node.children) ? node.children.get() : node.children;
   if (
     node.name === "cf-button" && Array.isArray(children) &&
-    children.includes("Leave conversation")
+    children.includes("Start conversation")
   ) {
     const props = isCell(node.props) ? node.props.get() : node.props;
     return (props as { onClick: Cell<unknown> }).onClick;
   }
-  return findLeaveControl(children);
+  return findStartControl(children);
 }
 
 const creator = await Identity.fromPassphrase("private-space-creator");
@@ -168,10 +167,15 @@ describe("FabriChat manager", () => {
       const profile = runtime.getCell(
         profileSpace,
         "test-profile",
-        undefined,
+        {
+          type: "object",
+          properties: { name: { type: "string" } },
+          ifc: { addIntegrity: ["fabrichat-test-profile"] },
+        },
         profileTx,
       );
       profile.set({ name: "Creator" });
+      runtime.prepareTxForCommit(profileTx);
       expect((await profileTx.commit()).error).toBeUndefined();
       const homeTx = runtime.edit();
       home.withTx(homeTx).set({
@@ -196,6 +200,14 @@ describe("FabriChat manager", () => {
       const room = result.key("rooms").key(0).key("room").resolveAsCell();
       const roomSpace = room.getAsNormalizedFullLink().space;
       expect(roomSpace).not.toBe(creator.did());
+      expect(
+        runtime.getSpaceCell(roomSpace).key("chat").resolveAsCell().equals(
+          room,
+        ),
+      )
+        .toBe(true);
+      expect(runtime.getSpaceCell(roomSpace).key("defaultPattern").getRaw())
+        .toBeUndefined();
       const about = room.key("about").resolveAsCell();
       const policy = about.key("policy").resolveAsCell();
       expect(policy.getAsNormalizedFullLink().space).toBe(roomSpace);
@@ -300,6 +312,10 @@ describe("FabriChat manager", () => {
       );
       expect(placement.key(VIEWS).key("chat").key("messages").get())
         .toBeUndefined();
+      await new ACLManager(runtime, directLink.space).set(outsider, "READ");
+      await runtime.idle();
+      expect(placement.key(VIEWS).key("chat").key("state").get())
+        .toBe("unavailable");
       await result.key("forget").send({ requestId: "forget-1", room: direct });
       await runtime.idle();
       expect(result.key("rooms").get()).toHaveLength(1);
@@ -365,129 +381,168 @@ describe("FabriChat manager", () => {
         await reopenedRuntime.dispose();
         await reopenedStorage.close();
       }
-      const extra = (await Identity.fromPassphrase("chat-extra-member")).did();
-      const membership = async (
-        stream: string,
-        payload: Record<string, unknown>,
-        count: number,
-      ) => {
-        const event = {
-          ...payload,
-          provenance: {
-            origin: "dom",
-            trusted: true,
-            ui: {
-              pattern: "ChatMembersSurface",
-              eventIntegrity: ["ChatMembersSurface"],
-              uiContractDataset: { uiAction: "ChatMembers" },
-            },
-          },
-        };
-        markRendererTrustedEvent(event);
-        await room.key(stream).send(event);
-        await waitForCellValue<unknown[]>(
-          runtime,
-          room.key("recentActivity"),
-          (value) => value?.length === count,
-        );
-        await manager.synced();
-        const publicActivity = room.key("recentActivity").key(count - 1)
-          .resolveAsCell();
-        const claims = cfcLabelViewForCell(publicActivity)?.entries.flatMap((
-          entry,
-        ) => entry.label.integrity ?? []);
-        expect(claims).toContainEqual({
-          kind: "authored-by",
-          subject: creator.did(),
-        });
-      };
-      await membership("add", {
-        requestId: "add-extra",
-        principal: extra,
-        access: "WRITE",
-      }, 1);
-      await membership("remove", {
-        requestId: "remove-original",
-        principal: member,
-      }, 2);
-      await membership("add", {
-        requestId: "re-add-original",
-        principal: member,
-        access: "WRITE",
-      }, 3);
-      const ui = room.key(UI);
-      await ui.pull();
-      const leaveControl = findLeaveControl(ui);
-      expect(leaveControl).toBeDefined();
-      const roomAcl = new ACLManager(runtime, roomSpace);
-      await roomAcl.set("*", "READ");
-      await leaveControl!.send(undefined);
-      await runtime.idle();
-      expect((await roomAcl.get())?.[creator.did()]).toBe("OWNER");
-      expect(result.key("rooms").get()).toHaveLength(2);
-      await roomAcl.remove("*");
-      const replica = manager.open(roomSpace).replica as unknown as {
-        commitNative: (...args: unknown[]) => unknown;
-      };
-      const originalCommit = replica.commitNative;
-      let rejected = false;
-      replica.commitNative = function (...args: unknown[]) {
-        if ((args[0] as { aclChange?: unknown }).aclChange) {
-          rejected = true;
-          return Promise.resolve({
-            error: new Error("Injected leave refusal"),
-          });
-        }
-        return Reflect.apply(originalCommit, this, args);
-      };
-      try {
-        await leaveControl!.send(undefined);
-        await runtime.idle();
-      } finally {
-        replica.commitNative = originalCommit;
+      expect(room.key("participants").get()).toEqual([]);
+      for (
+        const key of [
+          "roster",
+          "showProfile",
+          "leave",
+          "add",
+          "remove",
+          "outgoingNotices",
+        ]
+      ) {
+        expect(room.key(key).get()).toBeUndefined();
       }
-      expect(rejected).toBe(true);
-      await result.key("rooms").pull();
-      expect(result.key("rooms").get()).toHaveLength(2);
-      expect((await new ACLManager(runtime, roomSpace).get())?.[creator.did()])
-        .toBe("OWNER");
-      const forgotten = Promise.withResolvers<void>();
-      const stuck = stuckNet(
-        "leaving a FabriChat room removes its private index entry",
+
+      const defaultProgram = await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        { main: join(root, "system", "default-app.tsx"), root },
       );
-      const stopWatching = result.key("rooms").sink((value) => {
-        if (Array.isArray(value) && value.length === 1) forgotten.resolve();
-      });
-      try {
-        await leaveControl!.send(undefined);
-        await Promise.race([forgotten.promise, stuck.rejects]);
-        await manager.synced();
-        expect(result.key("rooms").get()).toHaveLength(1);
-      } finally {
-        stuck.clear();
-        stopWatching();
-      }
-      const remaining = await MemoryClient.connect({
-        transport: MemoryClient.loopback(server),
-      });
-      const remainingSession = await remaining.mount(
+      const defaultPattern = await runtime.patternManager.compilePattern(
+        defaultProgram,
+      );
+      const spaceRoot = runtime.getCell<Record<string, unknown>>(
         roomSpace,
-        {},
-        testPrincipalSessionOpenAuthFactory(
-          await Identity.fromPassphrase("chat-manager-member"),
-        ),
+        "system-space-root",
+        defaultPattern.resultSchema,
       );
-      const remainingAcl = await remainingSession.queryGraph({
-        roots: [{
-          id: `of:${roomSpace}`,
-          selector: { path: [], schema: false },
-        }],
+      await runtime.runSynced(spaceRoot, defaultPattern, {});
+      const rootTx = runtime.edit();
+      runtime.getSpaceCell(roomSpace, undefined, rootTx).key("defaultPattern")
+        .set(spaceRoot);
+      expect((await rootTx.commit()).error).toBeUndefined();
+      const mainProgram = await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        { main: join(root, "fabrichat", "main.tsx"), root },
+      );
+      const mainPattern = await runtime.patternManager.compilePattern(
+        mainProgram,
+      );
+      const reopenedChat = runtime.getCell<Record<string, unknown>>(
+        roomSpace,
+        "reopened-space-chat",
+        mainPattern.resultSchema,
+      );
+      await runtime.runSynced(reopenedChat, mainPattern, {});
+      await reopenedChat.key("room").pull();
+      expect(reopenedChat.key("room").resolveAsCell().equals(room)).toBe(true);
+      expect(
+        runtime.getSpaceCell(roomSpace).key("chat").resolveAsCell().equals(
+          room,
+        ),
+      )
+        .toBe(true);
+
+      const existingSpace = await manager.createSpace({
+        [creator.did()]: "OWNER",
       });
-      expect(remainingAcl.entities[0]?.document?.value).toEqual({
-        [member]: "WRITE",
-        [extra]: "OWNER",
+      const firstChat = runtime.getCell<Record<string, unknown>>(
+        existingSpace,
+        "first-space-chat",
+        mainPattern.resultSchema,
+      );
+      const secondChat = runtime.getCell<Record<string, unknown>>(
+        existingSpace,
+        "second-space-chat",
+        mainPattern.resultSchema,
+      );
+      await runtime.runSynced(firstChat, mainPattern, {});
+      await runtime.runSynced(secondChat, mainPattern, {});
+      await firstChat.key(UI).pull();
+      await secondChat.key(UI).pull();
+      const firstStart = findStartControl(firstChat.key(UI).get());
+      const secondStart = findStartControl(secondChat.key(UI).get());
+      expect(firstStart).toBeDefined();
+      expect(secondStart).toBeDefined();
+      for (const start of [firstStart!, secondStart!]) {
+        const event = {};
+        markRendererTrustedEvent(event);
+        await start.send(event);
+      }
+      await runtime.idle();
+      await firstChat.key("room").pull();
+      await secondChat.key("room").pull();
+      expect(
+        firstChat.key("room").resolveAsCell().equals(
+          secondChat.key("room").resolveAsCell(),
+        ),
+      ).toBe(true);
+      expect(firstChat.key("room").key("about").key("title").get())
+        .toBeUndefined();
+
+      const unmaterializedSpace = await manager.createSpace({
+        [creator.did()]: "OWNER",
       });
-      await remaining.close();
+      const unmaterializedStart = runtime.getCell<Record<string, unknown>>(
+        unmaterializedSpace,
+        "unmaterialized-start",
+        mainPattern.resultSchema,
+      );
+      await runtime.runSynced(unmaterializedStart, mainPattern, {});
+      await unmaterializedStart.key(UI).pull();
+      const staleStart = findStartControl(unmaterializedStart.key(UI).get());
+      expect(staleStart).toBeDefined();
+      const unmaterializedRoom = runtime.getCell(
+        unmaterializedSpace,
+        "unmaterialized-room",
+      );
+      const claimTx = runtime.edit();
+      runtime.getSpaceCell(unmaterializedSpace, undefined, claimTx).key("chat")
+        .set(unmaterializedRoom);
+      expect((await claimTx.commit()).error).toBeUndefined();
+      const staleEvent = {};
+      markRendererTrustedEvent(staleEvent);
+      await staleStart!.send(staleEvent);
+      await runtime.idle();
+      expect(
+        runtime.getSpaceCell(unmaterializedSpace).key("chat").resolveAsCell()
+          .equals(unmaterializedRoom),
+      ).toBe(true);
+      expect(unmaterializedRoom.getRaw()).toBeUndefined();
+
+      const existingRoom = firstChat.key("room").resolveAsCell();
+      const existingAcl = new ACLManager(runtime, existingSpace);
+      await existingAcl.set(member, "OWNER");
+      await existingAcl.set("*", "READ");
+      await existingAcl.remove(creator.did());
+      await result.key("accept").send({
+        requestId: "accept-wildcard",
+        room: existingRoom,
+      });
+      await waitForCellValue(
+        runtime,
+        result.key("requests").key("accept-wildcard").key("status"),
+        (value) => value === "done",
+      );
+      await result.key("forget").send({
+        requestId: "forget-wildcard",
+        room: existingRoom,
+      });
+      await runtime.idle();
+
+      await spaceRoot.key("addParticipant").send({ profile });
+      await waitForCellValue<Cell<unknown>[]>(
+        runtime,
+        room.key("participants"),
+        (value) => value?.length === 1,
+      );
+      expect(room.key("participants").key(0).resolveAsCell().equals(profile))
+        .toBe(true);
+      await spaceRoot.key("addParticipant").send({ profile });
+      await runtime.idle();
+      expect(room.key("participants").get()).toHaveLength(1);
+
+      // Space administration changes access without rewriting the conversation.
+      const roomAcl = new ACLManager(runtime, roomSpace);
+      await roomAcl.set(member, "OWNER");
+      await roomAcl.remove(creator.did());
+      await result.key("forget").send({ requestId: "forget-revoked", room });
+      await waitForCellValue<unknown[]>(
+        runtime,
+        result.key("rooms"),
+        (value) => value?.length === 1,
+      );
     } finally {
       await runtime.dispose();
       await manager.close();

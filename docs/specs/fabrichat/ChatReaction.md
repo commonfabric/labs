@@ -1,7 +1,5 @@
 # ChatReaction
 
-Status: normative reference (see [`README.md`](README.md)).
-
 One person's reaction to one message, with one emoji. A
 [`ChatMessage`](ChatMessage.md) holds its reactions, in no particular order, as
 `reactions`.

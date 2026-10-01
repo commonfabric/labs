@@ -89,7 +89,7 @@ import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import { spaceAccess } from "./space-access.ts";
-import { setSpaceMembers, spaceMembers } from "./space-members.ts";
+import { spaceMembers } from "./space-members.ts";
 import { viewerPrincipal } from "./viewer-principal.ts";
 import type {
   BuilderFunctionsAndConstants,
@@ -279,7 +279,6 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     currentPrincipal,
     viewerPrincipal,
     spaceMembers,
-    setSpaceMembers,
     eventKey,
     // The DID Core syntax guard the runtime itself decides by.
     isWellFormedDID,

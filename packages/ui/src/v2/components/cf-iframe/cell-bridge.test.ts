@@ -189,7 +189,7 @@ describe("cf-iframe cell bridge", () => {
       path: [],
     });
     await expect(stable.key!("title").pull()).resolves.toBe("A");
-    await items.push!({ title: "B" });
+    await items.push!([{ title: "B" }]);
 
     expect(
       requests.find(({ type }) => type === RequestType.CellPull)?.cell,

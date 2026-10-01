@@ -1,10 +1,9 @@
-/** Reads authoritative space membership and stages atomic handler changes. */
+/** Reads authoritative space membership as a reactive dependency. */
 
 import type { Cell } from "@commonfabric/api";
-import { type ACL, aclDocId, isACL } from "@commonfabric/memory/acl";
+import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { topFrame } from "./frame-context.ts";
-import { stageAclChange } from "../storage/acl-change.ts";
 import { validateStoredAcl } from "../acl-manager.ts";
 import { spaceOfTarget } from "./space-access.ts";
 import type { Runtime } from "../runtime.ts";
@@ -74,23 +73,4 @@ export function spaceMembers(target?: Cell<unknown>): ACL | undefined {
     }
   }
   return validateStoredAcl(value) ?? undefined;
-}
-
-/** Atomically replaces the current space's ACL with the handler's metadata writes. */
-export function setSpaceMembers(after: ACL, target?: Cell<unknown>): void {
-  const frame = topFrame();
-  if (!frame?.inHandler || !frame.tx || !frame.space) {
-    throw new Error("`setSpaceMembers()` requires a handler transaction.");
-  }
-  const before = spaceMembers(target);
-  if (!before || !isACL(after)) {
-    throw new Error("A membership change requires valid access lists.");
-  }
-  const space = target === undefined
-    ? frame.space
-    : spaceOfTarget(target, "setSpaceMembers(after, target)");
-  if (space !== frame.space) {
-    frame.tx.enableMultiSpaceWrites?.([space, frame.space]);
-  }
-  stageAclChange(frame.tx.tx, space, { before, after });
 }

@@ -22,7 +22,7 @@ describe("worker reconciler access loss", () => {
       const ops: VDomOp[] = [];
       const reconciler = new WorkerReconciler({
         onOps: (batch) => {
-          ops.push(...batch);
+          for (const op of batch) ops.push(op);
         },
         spaceAccess: {
           error: (space) =>
@@ -117,7 +117,7 @@ describe("worker reconciler access loss", () => {
     const ops: VDomOp[] = [];
     const reconciler = new WorkerReconciler({
       onOps: (batch) => {
-        ops.push(...batch);
+        for (const op of batch) ops.push(op);
       },
       spaceAccess: {
         error: () => new Error("Access revoked"),
@@ -166,7 +166,7 @@ describe("worker reconciler access loss", () => {
     const ops: VDomOp[] = [];
     const reconciler = new WorkerReconciler({
       onOps: (batch) => {
-        ops.push(...batch);
+        for (const op of batch) ops.push(op);
       },
       spaceAccess: {
         error: () => error,
@@ -240,7 +240,7 @@ describe("worker reconciler access loss", () => {
     const ops: VDomOp[] = [];
     const reconciler = new WorkerReconciler({
       onOps: (batch) => {
-        ops.push(...batch);
+        for (const op of batch) ops.push(op);
       },
       spaceAccess: {
         error: (space) => errors.get(space),

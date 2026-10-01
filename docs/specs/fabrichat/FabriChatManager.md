@@ -1,7 +1,5 @@
 # FabriChatManager
 
-Status: normative reference (see [`README.md`](README.md)).
-
 `FabriChatManager` is an implementation of
 [`ChatManagerOutput`](ChatManagerOutput.md), which states everything a chat
 manager does: where it lives, what its indexes mean, and what each request does.
@@ -15,8 +13,8 @@ one. The home target `#chatManager` resolves to that field. The spelling follows
 the camel case of the other multi-word targets (`#learnedSummary`,
 `#pieceRegistry`, `#profileName`).
 
-The home wish resolver supplies the manager child through `#chatManager`.
-Home's Conversations tab renders its index and creation controls.
+The Home pattern instantiates the manager, and the runtime's home-target
+resolver exposes it as `#chatManager`.
 
 ## State
 
@@ -29,30 +27,34 @@ counterpart after crossing creations.
 ## Creating a room
 
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
-create a room of its own in four steps:
+create a space for the conversation, with the room as its chat:
 
-1. Create the room's space, with only this user granted (OWNER), and instantiate
-   `FabriChatRoom` there with its `about`.
-2. Grant each other member WRITE on the room's space, by principal.
-3. Add a notice for each other member to `outgoingNotices`, for a client to
-   deliver.
-4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
-   request `done`.
+1. Resolve the sender's profile and persist the immutable creation intent.
+2. Allocate the space with the creator as OWNER and all intended other members
+   as WRITE in its genesis. The first `inSpace()` call creates the policy with
+   those grants; the room uses the same named allocation.
+3. Persist the room reference. A handler in the new space claims its canonical
+   `chat` slot, then queues a continuation in the home space.
+4. Verify registration, then publish the index entry and outgoing notices
+   together and mark the request `done`.
 
-Each step is recorded under the request's `requestId` as it completes, which is
-how a repeated request resumes where the last attempt stopped instead of
-creating another room. A pending `openDirect` is also recorded under its
-`counterpart`, which is how a second `openDirect` for the same person finds it
-and resumes it. Step 1 writes the room's `about` from this user's handler, which
-is what labels it `authored-by` this user.
+Each phase is recorded under `requestId`, so repeating a request resumes its
+existing allocation. Pending direct requests coalesce by counterpart. An
+interrupted allocation may leave an unindexed space with the intended members'
+creation grants; no room is published before those grants exist.
+
+The space record holds one `chat` link, separate from `defaultPattern`.
+Registration and home publication use separate transactions because a
+transaction writes one space.
+
+The host installs the normal default app as the space's root when the space is
+opened. That root owns the participant roster. The manager creates no separate
+room roster and supplies no subsequent space-administration handlers.
 
 ## Prerequisites
 
-Starting a conversation requires a resolved `#profile`. A request without one
-is recorded as refused before the manager allocates a space or publishes a link.
-
-- Private creation and grants use the room's
-  [runtime support](FabriChatRoom.md#runtime-support).
+- **Creating a private space from a pattern**: the same as the room's (see
+  [`FabriChatRoom.md`](FabriChatRoom.md#runtime-support)).
 - **A principal from a profile.** A client that starts a direct room from a
   person's profile needs that profile's principal. A profile's value carries a
   `represents-principal` label, but no pattern-facing call returns the

@@ -5,7 +5,6 @@
 
 import {
   action,
-  type AuthenticatedActionWrite,
   type AuthoredByCurrentUser,
   type Cell,
   computed,
@@ -17,16 +16,12 @@ import {
   FabricEpochNsec,
   getEntityId,
   handler,
-  isWellFormedDID,
   lift,
   NAME,
   pattern,
   type PerSession,
   type PerSpace,
-  setSpaceMembers,
   spaceAccess,
-  spaceMembers,
-  type Stream,
   type TrustedActionWrite,
   UI,
   viewerPrincipal,
@@ -48,8 +43,6 @@ import {
   threadRoot,
 } from "./records.ts";
 import type {
-  ChatIndexEntry,
-  ChatManagerOutput,
   ChatMessage,
   ChatMessageWindow,
   ChatProfile,
@@ -181,11 +174,6 @@ interface RoomMemory {
   usedTimes: Record<string, boolean>;
   nextSeq: number;
   expiredThrough: number;
-  left: Record<string, boolean>;
-  admissions: Record<string, number>;
-  profiles: Record<string, Cell<ChatProfile>[]>;
-  abandoned: boolean;
-  notices: { id: string; recipient: string }[];
 }
 
 /** Bookkeeping writable only by the room's record writers. */
@@ -202,13 +190,6 @@ export type StoredMemory = WritePolicyAnyOf<RoomMemory, [
   WriteAuthorizedBy<unknown, typeof sendReactionFromUi>,
   WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
   WriteAuthorizedBy<unknown, typeof deleteReactionFromUi>,
-  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-  WriteAuthorizedBy<unknown, typeof commitLeave>,
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof addMemberFromUi>,
-  WriteAuthorizedBy<unknown, typeof commitRemove>,
-  WriteAuthorizedBy<unknown, typeof removeMemberFromUi>,
-  WriteAuthorizedBy<unknown, typeof commitDelivered>,
 ]>;
 
 /** Activity records retain the authenticated actor of their own event. */
@@ -286,59 +267,18 @@ export type StoredActivity = AuthoredByCurrentUser<
       "ChatReact",
       "ChatReactSurface"
     >,
-    AuthenticatedActionWrite<unknown, typeof commitShowProfile>,
-    AuthenticatedActionWrite<unknown, typeof commitLeave>,
-    TrustedActionWrite<
-      unknown,
-      typeof commitAdd,
-      "ChatMembers",
-      "ChatMembersSurface"
-    >,
-    TrustedActionWrite<
-      unknown,
-      typeof addMemberFromUi,
-      "ChatMembers",
-      "ChatMembersSurface"
-    >,
-    TrustedActionWrite<
-      unknown,
-      typeof commitRemove,
-      "ChatMembers",
-      "ChatMembersSurface"
-    >,
-    TrustedActionWrite<
-      unknown,
-      typeof removeMemberFromUi,
-      "ChatMembers",
-      "ChatMembersSurface"
-    >,
   ]>
 >;
 
-/** Roster contributions may be added by their actor and removed on departure. */
-type StoredRoster = WritePolicyAnyOf<Cell<ChatProfile>[], [
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof addMemberFromUi>,
-  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-  WriteAuthorizedBy<unknown, typeof commitLeave>,
-  WriteAuthorizedBy<unknown, typeof commitRemove>,
-  WriteAuthorizedBy<unknown, typeof removeMemberFromUi>,
-]>;
-
 /** The internal writer bindings; identity is read at execution time. */
 interface RoomWriterState {
-  dedicated: boolean;
-  initialMembers: readonly string[];
   myProfile?: Cell<ChatProfile>;
   records: Writable<ChatMessage[]>;
   memory: Writable<RoomMemory>;
   activity: Writable<ChatRoomActivity[]>;
-  roster: Writable<Cell<ChatProfile>[]>;
   about: Cell<ChatRoomAbout>;
   uiMessage?: Cell<ChatMessage>;
   uiEmoji?: string;
-  uiPrincipal?: string;
-  uiAccess?: Writable<"WRITE" | "OWNER">;
   uiReply?: Writable<ChatReply | null>;
   uiDraft?: Writable<string>;
   uiThread?: Writable<{ root?: Cell<ChatMessage>; before?: FabricEpochNsec }>;
@@ -383,7 +323,7 @@ function requestKey(
 ): string | undefined {
   const principal = currentPrincipal();
   if (
-    !principal || !state.about.get() || state.memory.key("abandoned").get() ||
+    !principal || !state.about.get() ||
     typeof requestId !== "string" || !requestId.trim()
   ) {
     return undefined;
@@ -413,7 +353,7 @@ function isSender(message: Cell<ChatMessage>, state: RoomWriterState): boolean {
 function recordActivity(
   state: RoomWriterState,
   requestId: string,
-  what: Cell<ChatMessage> | Cell<Cell<ChatProfile>[]>,
+  what: Cell<ChatMessage>,
   at: ChatRoomActivity["at"],
   now: bigint,
   obliterated?: Cell<ChatMessage>,
@@ -614,7 +554,7 @@ function writeObliterate(
     !key || !message || message.key("authorProfile").get() === undefined ||
     (state.about.get().kind === "direct"
       ? !isSender(message, state)
-      : spaceMembers()?.[currentPrincipal() ?? ""] !== "OWNER")
+      : spaceAccess(state.about) !== "OWNER")
   ) return;
   removeMessage(event, state, key, message, true);
 }
@@ -774,219 +714,6 @@ const deleteReactionFromUi = handler<TextGesture, RoomWriterState>((
   state,
 ) => writeDeleteReaction(event, state));
 
-/** Adds the sender's resolved profile as a roster claim. */
-export const commitShowProfile = handler<
-  { requestId: string },
-  RoomWriterState
->((event, state) => {
-  const key = requestKey(event.requestId, state);
-  const profile = state.myProfile?.resolveAsCell();
-  if (!key || profile?.get() === undefined) return;
-  state.memory.key("requests").key(key).set(true);
-  if (state.roster.get().some((entry) => equals(entry, profile))) return;
-  const now = handlerTime();
-  const at = reserveTime(state.memory.key("usedTimes"), now, now);
-  if (!at) return;
-  state.roster.addUnique(profile);
-  const contributions = state.memory.key("profiles").key(currentPrincipal()!);
-  contributions.set([...(contributions.get() ?? []), profile]);
-  recordActivity(state, event.requestId, state.roster.resolveAsCell(), at, now);
-});
-
-/** Whether this room offers independent group membership controls. */
-function hasMembership(state: RoomWriterState): boolean {
-  return state.dedicated && state.about.get().kind === "group";
-}
-
-/** Removes a departed actor's roster contribution while retaining message history. */
-function removeProfile(principal: string, state: RoomWriterState): void {
-  const profiles = state.memory.key("profiles").key(principal).get() ?? [];
-  for (const profile of profiles) state.roster.removeByValue(profile);
-  const removed: Writable<Cell<ChatProfile>[] | undefined> = state.memory.key(
-    "profiles",
-  ).key(principal);
-  removed.set(undefined);
-}
-
-/** Records a membership result in the same transaction as its ACL transition. */
-function membershipActivity(
-  requestId: string,
-  key: string,
-  state: RoomWriterState,
-): void {
-  const now = handlerTime();
-  const at = reserveTime(state.memory.key("usedTimes"), now, now);
-  if (!at) throw new Error("No timestamp remains in this clock tick.");
-  state.memory.key("requests").key(key).set(true);
-  recordActivity(state, requestId, state.roster.resolveAsCell(), at, now);
-}
-
-/** Leaves membership and records the departure in one transaction. */
-function writeLeave(
-  event: { requestId: string },
-  state: RoomWriterState,
-): boolean {
-  const key = requestKey(event.requestId, state);
-  const actor = currentPrincipal();
-  const acl = spaceMembers();
-  if (!key || !actor || !hasMembership(state) || !acl?.[actor] || acl["*"]) {
-    return false;
-  }
-  const remaining = Object.keys(acl).filter((principal) =>
-    principal !== actor && principal !== "*"
-  );
-  const after = { ...acl };
-  if (remaining.length === 0) {
-    state.memory.key("abandoned").set(true);
-  } else {
-    delete after[actor];
-    if (!remaining.some((principal) => after[principal] === "OWNER")) {
-      const order = (principal: string) =>
-        state.memory.key("admissions").key(principal).get() ??
-          (state.initialMembers.includes(principal)
-            ? 0
-            : Number.MAX_SAFE_INTEGER);
-      remaining.sort((a, b) =>
-        order(a) - order(b) || (a < b ? -1 : a > b ? 1 : 0)
-      );
-      after[remaining[0]] = "OWNER";
-    }
-    setSpaceMembers(after);
-  }
-  state.memory.key("left").key(actor).set(true);
-  removeProfile(actor, state);
-  membershipActivity(event.requestId, key, state);
-  return true;
-}
-
-/** Lets a member leave and optionally cleans up their client's private index. */
-export const commitLeave = handler<
-  { requestId: string },
-  RoomWriterState & {
-    uiForget?: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
-    uiRooms?: Cell<ChatIndexEntry[]>;
-    uiLeave?: Stream<{ requestId: string }>;
-  }
->((event, state) => {
-  // Find the indexed reference while membership permits reading stream aliases.
-  const room = state.uiRooms?.get()?.find((entry) =>
-    equals(entry.room.key("leave"), state.uiLeave)
-  )?.room;
-  if (writeLeave(event, state) && room) {
-    // Cross-space event lineage holds this send until the departure commits.
-    state.uiForget?.send({ requestId: event.requestId, room });
-  }
-});
-
-/** Admits one member without downgrading an existing owner's grant. */
-function writeAdd(
-  event: { requestId: string; principal: string; access: "WRITE" | "OWNER" },
-  state: RoomWriterState,
-): void {
-  const key = requestKey(event.requestId, state);
-  const acl = spaceMembers();
-  if (
-    !key || !hasMembership(state) ||
-    acl?.[currentPrincipal() ?? ""] !== "OWNER" ||
-    !isWellFormedDID(event.principal) ||
-    !["WRITE", "OWNER"].includes(event.access) ||
-    state.memory.key("left").key(event.principal).get()
-  ) return;
-  const current = acl[event.principal];
-  if (current === "OWNER" || current === event.access) {
-    state.memory.key("requests").key(key).set(true);
-    return;
-  }
-  setSpaceMembers({ ...acl, [event.principal]: event.access });
-  if (!current) {
-    const prior = Object.values(state.memory.key("admissions").get() ?? {});
-    state.memory.key("admissions").key(event.principal).set(
-      Math.max(0, ...prior) + 1,
-    );
-  }
-  const notices = state.memory.key("notices");
-  notices.set([...(notices.get() ?? []), {
-    id: key,
-    recipient: event.principal,
-  }]);
-  membershipActivity(event.requestId, key, state);
-}
-
-/** Binds the membership protocol request to its reviewed writer. */
-export const commitAdd = handler<
-  { requestId: string; principal: string; access: "WRITE" | "OWNER" },
-  RoomWriterState
->((event, state) => writeAdd(event, state));
-
-/** Applies the member choice shown by the reviewed control. */
-const addMemberFromUi = handler<TextGesture, RoomWriterState>((event, state) =>
-  writeAdd({
-    requestId: eventKey(),
-    principal: event.target?.value ?? "",
-    access: state.uiAccess?.get() ?? "WRITE",
-  }, state)
-);
-
-/** Revokes access while preserving the room's final owner. */
-function writeRemove(
-  event: { requestId: string; principal: string },
-  state: RoomWriterState,
-): void {
-  const key = requestKey(event.requestId, state);
-  const acl = spaceMembers();
-  if (
-    !key || !hasMembership(state) || acl?.[currentPrincipal() ?? ""] !== "OWNER"
-  ) return;
-  if (!acl[event.principal]) {
-    state.memory.key("requests").key(key).set(true);
-    return;
-  }
-  if (
-    acl[event.principal] === "OWNER" &&
-    Object.values(acl).filter((access) => access === "OWNER").length === 1
-  ) return;
-  const after = { ...acl };
-  delete after[event.principal];
-  setSpaceMembers(after);
-  removeProfile(event.principal, state);
-  membershipActivity(event.requestId, key, state);
-}
-
-/** Binds the membership protocol request to its reviewed writer. */
-export const commitRemove = handler<
-  { requestId: string; principal: string },
-  RoomWriterState
->((event, state) => writeRemove(event, state));
-
-/** Applies the member choice shown by the reviewed control. */
-const removeMemberFromUi = handler<TextGesture, RoomWriterState>((
-  _event,
-  state,
-) =>
-  writeRemove(
-    { requestId: eventKey(), principal: state.uiPrincipal ?? "" },
-    state,
-  )
-);
-
-/** Removes a delivered membership notice without emitting room activity. */
-export const commitDelivered = handler<
-  { requestId: string; id: string },
-  RoomWriterState
->((event, state) => {
-  const key = requestKey(event.requestId, state);
-  if (
-    !key || !hasMembership(state) ||
-    spaceMembers()?.[currentPrincipal() ?? ""] !== "OWNER"
-  ) return;
-  state.memory.key("notices").set(
-    (state.memory.key("notices").get() ?? []).filter((notice) =>
-      notice.id !== event.id
-    ),
-  );
-  state.memory.key("requests").key(key).set(true);
-});
-
 /** A session's fixed selection, retaining entities rather than message snapshots. */
 interface WindowSelection {
   requestId: string;
@@ -1044,8 +771,6 @@ const closeWindow = handler<{ requestId: string; windowId: string }, {
 
 /** Room storage and the profile supplied by its production wish boundary. */
 export interface RoomInput {
-  dedicated?: Default<boolean, false>;
-  initialMembers?: Default<string[], []>;
   myProfile?: Cell<ChatProfile>;
   about: Cell<ChatRoomAbout>;
   records?: PerSpace<Writable<StoredMessage[] | Default<[]>>>;
@@ -1053,7 +778,6 @@ export interface RoomInput {
   activity?: PerSpace<
     Writable<StoredActivity[] | Default<[]>>
   >;
-  roster?: PerSpace<Writable<StoredRoster | Default<[]>>>;
 }
 
 /** A window keeps original documents while its reader sees message values. */
@@ -1098,13 +822,10 @@ const MessageCard = pattern<{
   const editing = new Writable.perSession(false);
   const history = new Writable.perSession(false);
   const bound = {
-    dedicated: state.dedicated,
-    initialMembers: state.initialMembers,
     myProfile: state.myProfile,
     records: state.records,
     memory: state.memory,
     activity: state.activity,
-    roster: state.roster,
     about: state.about,
     uiMessage: message,
   };
@@ -1326,13 +1047,10 @@ const MessageCard = pattern<{
                           variant="outline"
                           data-ui-action="ChatReact"
                           onClick={deleteReactionFromUi({
-                            dedicated: state.dedicated,
-                            initialMembers: state.initialMembers,
                             myProfile: state.myProfile,
                             records: state.records,
                             memory: state.memory,
                             activity: state.activity,
-                            roster: state.roster,
                             about: state.about,
                             uiMessage: message,
                             uiEmoji: tally.emoji,
@@ -1347,13 +1065,10 @@ const MessageCard = pattern<{
                           variant="ghost"
                           data-ui-action="ChatReact"
                           onClick={sendReactionFromUi({
-                            dedicated: state.dedicated,
-                            initialMembers: state.initialMembers,
                             myProfile: state.myProfile,
                             records: state.records,
                             memory: state.memory,
                             activity: state.activity,
-                            roster: state.roster,
                             about: state.about,
                             uiMessage: message,
                             uiEmoji: tally.emoji,
@@ -1375,13 +1090,10 @@ const MessageCard = pattern<{
                 variant="ghost"
                 data-ui-action="ChatReact"
                 onClick={sendReactionFromUi({
-                  dedicated: state.dedicated,
-                  initialMembers: state.initialMembers,
                   myProfile: state.myProfile,
                   records: state.records,
                   memory: state.memory,
                   activity: state.activity,
-                  roster: state.roster,
                   about: state.about,
                   uiMessage: message,
                   uiEmoji: "😺",
@@ -1412,20 +1124,14 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       records,
       memory,
       activity,
-      roster,
-      dedicated,
-      initialMembers,
     },
   ) => {
     const state = {
-      dedicated,
-      initialMembers,
       myProfile,
       about,
       records,
       memory,
       activity,
-      roster,
     } as RoomWriterState;
     const reply = new Writable.perSession<ChatReply | null>(null);
     const draft = new Writable.perSession("");
@@ -1474,16 +1180,6 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       )
     );
     const recentActivity = ActivityView({ value: activityRefs });
-    const memberAccess = new Writable.perSession<"WRITE" | "OWNER">("WRITE");
-    const members = computed(() =>
-      Object.entries(spaceMembers() ?? {}).filter(([principal]) =>
-        principal !== "*"
-      ).map(([principal, access]) => ({ principal, access }))
-    );
-    const managesMembers = computed(() =>
-      dedicated && about.get()?.kind === "group" &&
-      spaceAccess(about) === "OWNER"
-    );
     const selections = new Writable.perSession<Record<string, WindowSelection>>(
       {},
     );
@@ -1544,20 +1240,22 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       openWindow: openWindow({ records: records!, windows: selections }),
       closeWindow: closeWindow({ windows: selections }),
     };
+    const space = wish<{ participants: Cell<ChatProfile>[] }>({
+      query: "#default",
+    });
     const participants = computed(() =>
       records!.get().reduce<Cell<ChatProfile>[]>(
         (profiles, message) =>
-          message.authorProfile?.get() !== undefined &&
+          message.authorProfile !== undefined &&
             !profiles.some((entry) => equals(entry, message.authorProfile))
             ? [...profiles, message.authorProfile]
             : profiles,
-        [...roster!.get()],
+        [...(space.result?.participants ?? [])],
       )
     );
     const canSend = computed(() => {
       const access = spaceAccess(about);
-      return !memory!.key("abandoned").get() &&
-        myProfile?.get() !== undefined &&
+      return myProfile?.get() !== undefined &&
         (access === "WRITE" || access === "OWNER");
     });
     const reactionTallies = computed((): ChatReactionTallies[] => {
@@ -1596,9 +1294,6 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
         return { message: records!.key(index).resolveAsCell(), reactions };
       });
     });
-    const manager = wish<Pick<ChatManagerOutput, "rooms" | "forget">>({
-      query: "#chatManager",
-    });
     const facts = {
       about,
       recentActivity,
@@ -1612,7 +1307,6 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
             memory!.key("expiredThrough").get() ?? 0,
           )
       ),
-      roster: roster!,
       participants,
       messages,
       canSend,
@@ -1623,37 +1317,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       obliterateMessage: commitObliterate(state),
       sendReaction: commitSendReaction(state),
       deleteReaction: commitDeleteReaction(state),
-      showProfile: commitShowProfile(state),
-      leave: computed(() =>
-        dedicated && about.get().kind === "group"
-          ? commitLeave(state)
-          : undefined
-      ),
-      add: computed(() =>
-        dedicated && about.get().kind === "group" ? commitAdd(state) : undefined
-      ),
-      remove: computed(() =>
-        dedicated && about.get().kind === "group"
-          ? commitRemove(state)
-          : undefined
-      ),
-      delivered: computed(() =>
-        dedicated && about.get().kind === "group"
-          ? commitDelivered(state)
-          : undefined
-      ),
-      outgoingNotices: computed(() =>
-        dedicated && about.get().kind === "group"
-          ? [...(memory!.key("notices").get() ?? [])]
-          : undefined
-      ),
     };
-    const leaveAndForget = commitLeave({
-      ...state,
-      uiForget: manager.result?.forget,
-      uiRooms: manager.result?.rooms,
-      uiLeave: facts.leave,
-    });
     return {
       [NAME]: "FabriChat",
       [UI]: (
@@ -1669,28 +1333,6 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                 {about.get()?.title || "Conversation"}
               </cf-heading>
               <cf-profile-badge $profile={myProfile} size="sm" />
-              <cf-button
-                variant="ghost"
-                disabled={!canSend}
-                onClick={action(() =>
-                  facts.showProfile.send({ requestId: eventKey() })
-                )}
-              >
-                Show my profile
-              </cf-button>
-              {dedicated && about.get()?.kind === "group"
-                ? (
-                  <cf-button
-                    variant="ghost"
-                    disabled={manager.result === undefined}
-                    onClick={action(() =>
-                      leaveAndForget.send({ requestId: eventKey() })
-                    )}
-                  >
-                    Leave conversation
-                  </cf-button>
-                )
-                : null}
             </cf-hstack>
             <cf-vstack id="fabrichat-messages" gap="3" padding="4">
               <cf-hstack gap="2" wrap>
@@ -1698,53 +1340,6 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                   <cf-profile-badge $profile={profile} variant="chip" />
                 ))}
               </cf-hstack>
-              {managesMembers
-                ? (
-                  <details>
-                    <summary>Conversation members</summary>
-                    <div
-                      data-ui-pattern="ChatMembersSurface"
-                      data-ui-event-integrity="ChatMembersSurface"
-                    >
-                      <cf-vstack gap="2">
-                        {members.map((member) => (
-                          <cf-hstack gap="2">
-                            <cf-text>
-                              {member.principal} ({member.access})
-                            </cf-text>
-                            <cf-button
-                              size="sm"
-                              data-ui-action="ChatMembers"
-                              onClick={removeMemberFromUi({
-                                ...state,
-                                uiPrincipal: member.principal,
-                              })}
-                            >
-                              Remove member
-                            </cf-button>
-                          </cf-hstack>
-                        ))}
-                        <cf-select
-                          $value={memberAccess}
-                          items={[{ label: "Writer", value: "WRITE" }, {
-                            label: "Owner",
-                            value: "OWNER",
-                          }]}
-                        />
-                        <cf-submit-input
-                          placeholder="Member principal"
-                          buttonText="Add member"
-                          data-ui-action="ChatMembers"
-                          onClick={addMemberFromUi({
-                            ...state,
-                            uiAccess: memberAccess,
-                          })}
-                        />
-                      </cf-vstack>
-                    </div>
-                  </details>
-                )
-                : null}
               {thread.get().root?.get() !== undefined
                 ? (
                   <cf-hstack gap="2">

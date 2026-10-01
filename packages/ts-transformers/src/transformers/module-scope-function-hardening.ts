@@ -588,7 +588,6 @@ const leftmostName = (name: ts.EntityName): ts.Identifier =>
 const LIBRARY_BINDING_POSITIONS: ReadonlyMap<string, ReadonlySet<number>> =
   new Map([
     ["WriteAuthorizedBy", new Set([1])],
-    ["AuthenticatedActionWrite", new Set([1])],
     ["TrustedActionWrite", new Set([1])],
     ["TrustedActionWriteWithIntegrity", new Set([1])],
   ]);

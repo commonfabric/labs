@@ -2516,12 +2516,11 @@ export async function main(argv: string[] = Deno.args) {
       if (cfcAnnotationsEnabled) {
         reconcileCfcWritebacks("listxattr");
       }
-      xattrNames.push(
-        ...listCfcXattrNames(tree, inode, {
-          enabled: cfcAnnotationsEnabled,
-          namespace: cfcXattrNamespace,
-        }),
-      );
+      const cfcXattrNames = listCfcXattrNames(tree, inode, {
+        enabled: cfcAnnotationsEnabled,
+        namespace: cfcXattrNamespace,
+      });
+      for (const xattrName of cfcXattrNames) xattrNames.push(xattrName);
 
       if (xattrNames.length === 0) {
         // No xattrs — empty list

@@ -9,8 +9,8 @@ export default pattern(() => {
     [TESTS]: [
       { render: chat[UI] },
       { assertion: assert(() => hasText(chat[UI], "Start conversation")) },
-      { assertion: assert(() => chat.room.messages.count === 0) },
-      { assertion: assert(() => !chat.room.canSend) },
+      { assertion: assert(() => chat.room.get().messages.count === 0) },
+      { assertion: assert(() => !chat.room.get().canSend) },
     ],
   };
 });

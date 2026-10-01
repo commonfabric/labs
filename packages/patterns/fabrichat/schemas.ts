@@ -75,7 +75,7 @@ export interface ChatRoomActivity {
   seq: number;
   at: FabricEpochNsec;
   requestId: string;
-  what: Cell<ChatMessage> | Cell<Cell<ChatProfile>[]>;
+  what: Cell<ChatMessage>;
 }
 
 /** A position in a conversation or thread. */
@@ -142,7 +142,6 @@ export interface ChatRoomFacts {
   about: ChatRoomAbout;
   recentActivity: ChatRoomActivity[];
   recentActivityExpiredThrough: number;
-  roster: Cell<ChatProfile>[];
   participants: Cell<ChatProfile>[];
   messages: ChatMessageList;
   canSend: boolean;
@@ -153,16 +152,6 @@ export interface ChatRoomFacts {
   obliterateMessage: Stream<MessageRequest>;
   sendReaction: Stream<MessageRequest & { emoji: string }>;
   deleteReaction: Stream<MessageRequest & { emoji: string }>;
-  showProfile: Stream<{ requestId: string }>;
-  leave?: Stream<{ requestId: string }>;
-  add?: Stream<{
-    requestId: string;
-    principal: string;
-    access: "WRITE" | "OWNER";
-  }>;
-  remove?: Stream<{ requestId: string; principal: string }>;
-  delivered?: Stream<{ requestId: string; id: string }>;
-  outgoingNotices?: { id: string; recipient: string }[];
 }
 
 /** A room's protocol and its own reviewed rendering. */

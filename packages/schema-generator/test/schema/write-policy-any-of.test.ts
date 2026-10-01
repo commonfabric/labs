@@ -4,7 +4,6 @@ import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
 
 const PRELUDE = `
-  type AuthenticatedActionWrite<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding; authenticatedAction: true }>;
   type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
   type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
   type TrustedActionWriteWithIntegrity<
@@ -219,21 +218,14 @@ describe("write-policy-any-of", () => {
       ]>;
     `)).rejects.toThrow("must be a `WriteAuthorizedBy`");
   });
-  it("preserves authenticated writers without inventing a reviewed gesture", async () => {
-    const { type, checker } = await getTypeFromCode(
-      `${PRELUDE}
-      type SchemaRoot = WritePolicyAnyOf<string, [AuthenticatedActionWrite<unknown, typeof send>]>;
-    `,
-      "SchemaRoot",
-    );
-    const schema = asObjectSchema(
-      new SchemaGenerator().generateSchema(type, checker),
-    );
-    expect(schema.ifc?.writePolicyAnyOf).toEqual([{
-      writeAuthorizedBy: {
-        __ctWriterIdentityOf: { file: "test.ts", path: ["send"] },
-      },
-      authenticatedAction: true,
-    }]);
+
+  it("throws given a member whose writer is an alias for a binding", async () => {
+    await expect(schemaOf(`
+      type Indirect = typeof edit;
+      type SchemaRoot = WritePolicyAnyOf<string, [
+        WriteAuthorizedBy<unknown, typeof send>,
+        WriteAuthorizedBy<unknown, Indirect>,
+      ]>;
+    `)).rejects.toThrow("writer must be a direct `typeof` of a binding");
   });
 });

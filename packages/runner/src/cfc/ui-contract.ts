@@ -391,16 +391,15 @@ const uiContractsFromSchemaInternal = (
 
   if (hasProperties) {
     for (const [key, child] of Object.entries(resolvedSchema.properties)) {
-      entries.push(
-        ...uiContractsFromSchemaInternal(
-          child as JSONSchema,
-          childRoot,
-          [...path, key],
-          seenRefs,
-          conditional,
-          includeAlternatives,
-        ),
+      const propertyEntries = uiContractsFromSchemaInternal(
+        child as JSONSchema,
+        childRoot,
+        [...path, key],
+        seenRefs,
+        conditional,
+        includeAlternatives,
       );
+      for (const entry of propertyEntries) entries.push(entry);
     }
   }
 
@@ -416,16 +415,15 @@ const uiContractsFromSchemaInternal = (
     compound.push([child as JSONSchema, conditional]);
   }
   for (const [child, childConditional] of compound) {
-    entries.push(
-      ...uiContractsFromSchemaInternal(
-        child,
-        childRoot,
-        path,
-        seenRefs,
-        childConditional,
-        includeAlternatives,
-      ),
+    const branchEntries = uiContractsFromSchemaInternal(
+      child,
+      childRoot,
+      path,
+      seenRefs,
+      childConditional,
+      includeAlternatives,
     );
+    for (const entry of branchEntries) entries.push(entry);
   }
 
   // `items` keeps its `*` entry even beside prefixItems, mirroring
@@ -438,30 +436,28 @@ const uiContractsFromSchemaInternal = (
     isObjectOrArray(resolvedSchema.items) ||
     typeof resolvedSchema.items === "boolean"
   ) {
-    entries.push(
-      ...uiContractsFromSchemaInternal(
-        resolvedSchema.items as JSONSchema,
-        childRoot,
-        [...path, "*"],
-        seenRefs,
-        conditional,
-        includeAlternatives,
-      ),
+    const itemEntries = uiContractsFromSchemaInternal(
+      resolvedSchema.items as JSONSchema,
+      childRoot,
+      [...path, "*"],
+      seenRefs,
+      conditional,
+      includeAlternatives,
     );
+    for (const entry of itemEntries) entries.push(entry);
   }
 
   if (Array.isArray(resolvedSchema.prefixItems)) {
     for (let index = 0; index < resolvedSchema.prefixItems.length; index++) {
-      entries.push(
-        ...uiContractsFromSchemaInternal(
-          resolvedSchema.prefixItems[index] as JSONSchema,
-          childRoot,
-          [...path, String(index)],
-          seenRefs,
-          conditional,
-          includeAlternatives,
-        ),
+      const slotEntries = uiContractsFromSchemaInternal(
+        resolvedSchema.prefixItems[index] as JSONSchema,
+        childRoot,
+        [...path, String(index)],
+        seenRefs,
+        conditional,
+        includeAlternatives,
       );
+      for (const entry of slotEntries) entries.push(entry);
     }
   }
 

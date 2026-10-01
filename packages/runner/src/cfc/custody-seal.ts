@@ -1418,7 +1418,7 @@ const resolveSeats = async (
         );
       }
       seats[index] = principals[0];
-      evidence.push(...readEvidence(tx));
+      for (const read of readEvidence(tx)) evidence.push(read);
     } finally {
       tx.abort();
     }
@@ -1450,7 +1450,7 @@ const allowedSourcesOf = async (
   const tx = runtime.edit();
   try {
     const sources = sourcePolicyIn(allowed, tx);
-    evidence.push(...readEvidence(tx));
+    for (const read of readEvidence(tx)) evidence.push(read);
     return sources;
   } finally {
     tx.abort();
@@ -1536,7 +1536,7 @@ const requestedPolicyOf = async (
     const requested = isModulePolicyShaped(value)
       ? snapshotJsonValue(value)
       : declaredPolicyOf(tx, cell.getAsNormalizedFullLink());
-    evidence.push(...readEvidence(tx));
+    for (const read of readEvidence(tx)) evidence.push(read);
     return requested;
   } finally {
     tx.abort();
@@ -1613,7 +1613,7 @@ const inspectRoom = async (
         debugStr`Custody terms carry a clause the room's readers do not hold: $quote,long${withheld}`,
       );
     }
-    evidence.push(...readEvidence(termsTx));
+    for (const read of readEvidence(termsTx)) evidence.push(read);
   } finally {
     termsTx.abort();
   }
@@ -1707,7 +1707,7 @@ const inspect = async (
       collectConsumedLabel(draftTx).confidentiality,
       actor,
     );
-    evidence.push(...readEvidence(draftTx));
+    for (const read of readEvidence(draftTx)) evidence.push(read);
   } finally {
     draftTx.abort();
   }
@@ -1747,7 +1747,7 @@ const inspect = async (
         meta: internalVerifierRead,
       }),
     );
-    evidence.push(...readEvidence(aclTx));
+    for (const read of readEvidence(aclTx)) evidence.push(read);
   } finally {
     aclTx.abort();
   }

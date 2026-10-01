@@ -1,7 +1,6 @@
 export type {
   AddIntegrity,
   AnyOf,
-  AuthenticatedActionWrite,
   AuthoredByCurrentUser,
   Cfc,
   CfcAtom,

@@ -1,7 +1,5 @@
 # ChatReply
 
-Status: normative reference (see [`README.md`](README.md)).
-
 What a reply says about the message it replies to: which message, and where the
 reply is shown. A [`ChatMessage`](ChatMessage.md) that is a reply carries one as
 `replyTo`.

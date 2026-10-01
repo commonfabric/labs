@@ -37,7 +37,6 @@ import {
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { getCommitSeq } from "./commit-identity.ts";
-import { getAclChange } from "./acl-change.ts";
 import type {
   Activity,
   ChangeGroup,
@@ -1419,13 +1418,12 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   getNativeCommit(space: MemorySpace): NativeStorageCommit | undefined {
-    const aclChange = getAclChange(this, space);
     const branch = this.#branches.get(space);
     const nativePreconditions = this.#commitPreconditionsFor(space);
     const sqliteOps = this.#sqliteOps.get(space);
     if (
       !branch &&
-      nativePreconditions.length === 0 && !sqliteOps?.length && !aclChange
+      nativePreconditions.length === 0 && !sqliteOps?.length
     ) {
       return undefined;
     }
@@ -1551,17 +1549,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       redeliveries.length > 0 && (operations.length > 0 || sqliteOps?.length)
     ) {
-      operations.push(...redeliveries);
+      for (const redelivery of redeliveries) operations.push(redelivery);
     }
 
-    if (aclChange && operations.length === 0) {
-      throw new Error(
-        "An atomic ACL change requires companion metadata writes",
-      );
-    }
     return {
       operations,
-      ...(aclChange ? { aclChange } : {}),
       ...(nativePreconditions.length
         ? { preconditions: nativePreconditions }
         : {}),
@@ -3685,8 +3677,12 @@ export class V2StorageTransaction implements IStorageTransaction {
         abandoned.push(encodePointer(intent.path));
         continue;
       }
-      ops.push(...built.ops);
-      suppress.push(...built.suppress);
+      for (const op of built.ops) {
+        ops.push(op);
+      }
+      for (const suppression of built.suppress) {
+        suppress.push(suppression);
+      }
     }
     for (const pathKey of abandoned) {
       doc.mergeableOps.delete(pathKey);

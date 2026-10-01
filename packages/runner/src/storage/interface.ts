@@ -1204,6 +1204,16 @@ export interface IStorageTransaction {
   validateReactiveReads?: boolean;
 
   /**
+   * Whether this transaction's writes are derived from its reads, as a
+   * reactive computation's are, so that running it again reproduces them.
+   * When the space refuses such a write for lack of a grant, a replica may
+   * keep it as a local fold rather than revert it: it does so for each
+   * document the write sits directly on the confirmed version it was made
+   * over, and reverts the write to any other.
+   */
+  derivedWrites?: boolean;
+
+  /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
    * resolve against when it is NOT the storage manager's own session
    * (server-execution v2 stage A — OW17's tx→replica identity seam,
@@ -3430,7 +3440,6 @@ export type NativeStorageCommitOperation =
   };
 
 export interface NativeStorageCommit {
-  aclChange?: ClientCommit["aclChange"];
   operations: readonly NativeStorageCommitOperation[];
   preconditions?: readonly CommitPrecondition[];
 

@@ -30,12 +30,6 @@ export type CommonFabricRuntimeExportSpec =
 export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // Reads confidential viewer identity without constructing a reactive node.
   { exportName: "viewerPrincipal", category: "ignored", reactiveOrigin: false },
-  // Stages an atomic ACL companion in the executing handler transaction.
-  {
-    exportName: "setSpaceMembers",
-    category: "ignored",
-    reactiveOrigin: false,
-  },
   // Reads the executing transaction's ACL without creating a reactive node.
   {
     exportName: "spaceMembers",

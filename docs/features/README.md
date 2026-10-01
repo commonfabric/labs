@@ -145,7 +145,7 @@ a line for each new document to the index below.
   leaves behind, and what a resume may claim
 
 - [`pattern-space-membership.md`](pattern-space-membership.md) — authenticated
-  pattern identity, private allocation, access status, and atomic ACL changes
+  pattern identity, private allocation, and authoritative access reads
 
 ## Observability and testing
 

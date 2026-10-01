@@ -188,7 +188,9 @@ Deno.test("safe writeback reconciliation records diagnostics without throwing", 
     reconcile: () => {
       throw new Error("storage unavailable");
     },
-    recordDiagnostics: (messages) => diagnostics.push(...messages),
+    recordDiagnostics: (messages) => {
+      for (const message of messages) diagnostics.push(message);
+    },
   });
 
   assertEquals(ok, false);
@@ -209,7 +211,9 @@ Deno.test("safe writeback reconciliation preserves normal diagnostics", () => {
       stale: 0,
       diagnostics: ["existing diagnostic"],
     }),
-    recordDiagnostics: (messages) => diagnostics.push(...messages),
+    recordDiagnostics: (messages) => {
+      for (const message of messages) diagnostics.push(message);
+    },
   });
 
   assertEquals(ok, true);
