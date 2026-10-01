@@ -18,7 +18,9 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   projected as a list in the contract.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
-- The times the room has used, so it can make each new one unique.
+- The times the room has used, so it can make each new one unique, each kept
+  as long as a request is remembered: no new time is chosen from before the
+  proposed-time window, which that span covers.
 `participants` is computed from the participants the space's default pattern
 lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
 profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is

@@ -434,6 +434,26 @@ const actedOn = (requests: RequestsCell, key: string): boolean =>
   requests.elementById(key).get() !== undefined;
 
 /**
+ * Removes every record recorded before `horizon` from `list`, a list of keyed
+ * records, and clears each one: a keyed record outlives its place in the list,
+ * and it is the record a lookup by key finds.
+ */
+const forgetBefore = <T extends { at: FabricEpochNsec }>(
+  list: Writable<T[]>,
+  keyOf: (record: T) => string,
+  horizon: bigint,
+): void => {
+  ((list.get() ?? []) as T[])
+    .filter((record) => record !== undefined && nsecOf(record.at) < horizon)
+    .forEach((record) => {
+      const key = keyOf(record);
+      list.removeByValue(list.elementById(key));
+      const cleared: Writable<T | undefined> = list.elementById(key);
+      cleared.set(undefined);
+    });
+};
+
+/**
  * Records that the room acted on the request `key`, and forgets every request
  * older than the room's request memory.
  */
@@ -442,16 +462,7 @@ const rememberRequest = (
   key: string,
   clock: bigint,
 ): void => {
-  const stale = ((requests.get() ?? []) as RequestMemo[]).filter((memo) =>
-    memo !== undefined && nsecOf(memo.at) < clock - REQUEST_MEMORY_NSEC
-  );
-  stale.forEach((memo) => {
-    const entry: Writable<RequestMemo | undefined> = requests.elementById(
-      memo.key,
-    );
-    requests.removeByValue(requests.elementById(memo.key));
-    entry.set(undefined);
-  });
+  forgetBefore(requests, (memo) => memo.key, clock - REQUEST_MEMORY_NSEC);
   const memo = requests.elementById(key);
   memo.set({ key, at: epochNsec(clock) });
   requests.addUnique(memo);
@@ -461,6 +472,11 @@ const rememberRequest = (
  * Chooses a recorded time as `chooseRecordedTime()` does, against the times
  * the room has used, and marks it used. `undefined` means the record is
  * refused.
+ *
+ * It also forgets every used time older than the request memory. A recorded
+ * time is never older than the proposed-time window's lower bound, so no
+ * runtime whose clock is within the window's lead of this one chooses a time
+ * that old again.
  */
 const claimTime = (
   usedTimes: UsedTimesCell,
@@ -468,6 +484,11 @@ const claimTime = (
   proposed?: bigint,
   after?: bigint,
 ): FabricEpochNsec | undefined => {
+  forgetBefore(
+    usedTimes,
+    (used) => String(nsecOf(used.at)),
+    clock - REQUEST_MEMORY_NSEC,
+  );
   const time = chooseRecordedTime(
     {
       proposed,
@@ -479,7 +500,9 @@ const claimTime = (
   );
   if (time === undefined) return undefined;
   const at = epochNsec(time);
-  usedTimes.elementById(String(time)).set({ at });
+  const used = usedTimes.elementById(String(time));
+  used.set({ at } as StoredUsedTime);
+  usedTimes.addUnique(used);
   return at;
 };
 
