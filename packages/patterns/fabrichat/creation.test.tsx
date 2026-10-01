@@ -19,7 +19,7 @@ import {
 import {
   cfRenderHasUI,
   clickButton,
-  findElement,
+  findNode,
   findNodeById,
   findNodeByProp,
   fireEvent,
@@ -72,9 +72,17 @@ const shownRefusal = (root: unknown): string =>
   `${displayOf(root, "fabrichat-start-refusal")}:` +
   textContent(findNodeById(root, "fabrichat-start-refusal"));
 
-// The cell a manager's first notice links.
-const noticeLink = (root: unknown): object | undefined =>
-  propsOf(findElement(root, "cf-cell-link"))?.$cell as object | undefined;
+// The cell the first `cf-cell-link` labeled `label` under `root` links: a
+// listed room's, labeled `Open`, or a notice's, which carries no label.
+const cellLinked = (
+  root: unknown,
+  label: string | undefined,
+): object | undefined =>
+  propsOf(
+    findNode(root, (node) =>
+      readValue((node as { name?: unknown })?.name) === "cf-cell-link" &&
+      readValue(propsOf(node)?.label) === label),
+  )?.$cell as object | undefined;
 
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
@@ -130,7 +138,7 @@ export default pattern(() => {
     group.createGroup.send({
       requestId: "g-1",
       title: "Team",
-      members: [CAROL, CAROL, "junk", currentPrincipal() ?? ""],
+      members: [CAROL, CAROL, currentPrincipal() ?? ""],
     })
   );
   const action_open_direct_with_self = action(() =>
@@ -232,10 +240,15 @@ export default pattern(() => {
           recipientsOf(directNotices) === BOB
         ),
       },
-      // The notice offers the room's link, for its creator to send on.
+      // The notice offers the room's link, for its creator to send on, and
+      // so does the room's entry in the list, for whoever is added later.
       {
         assertion: assert(() =>
-          equals(noticeLink(direct[UI]), directRooms.key(0).key("room"))
+          equals(
+            cellLinked(direct[UI], undefined),
+            directRooms.key(0).key("room"),
+          ) &&
+          equals(cellLinked(direct[UI], "Open"), directRooms.key(0).key("room"))
         ),
       },
       // Choosing the room shows it in place of the prompt to choose one.
@@ -354,6 +367,21 @@ export default pattern(() => {
           shownRefusal(group[UI]) ===
             "block:The counterpart is not a principal. Received: " +
               `"${BOB}."`
+        ),
+      },
+      // A group whose members include text that isn't a principal is
+      // refused, and the session is shown that text.
+      {
+        action: group.createGroup,
+        event: { requestId: "g-junk", title: "Team", members: [CAROL, "junk"] },
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "g-junk") ===
+            "A group's members must be principals." &&
+          shownRefusal(group[UI]) ===
+            'block:A group\'s members must be principals. Received: ["junk"]' &&
+          groupRooms.get().length === 1
         ),
       },
       // A profile that attests no principal offers no chat address.

@@ -379,10 +379,21 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         });
         return;
       }
-      const members = otherMembers(
-        event?.members ?? principalsIn(draft?.members ?? ""),
-        self ?? "",
-      );
+      const listed = event?.members ?? principalsIn(draft?.members ?? "");
+      const notPrincipals = listed.filter((member) => !isPrincipalDID(member));
+      if (notPrincipals.length > 0) {
+        const reason = "A group's members must be principals.";
+        // As for a direct room, the session is shown what it sent that isn't
+        // one, and the recorded reason holds no text a person typed.
+        recordOutcome(
+          state,
+          requestId,
+          { status: "refused", reason },
+          debugStr`${reason} Received: $long${notPrincipals}`,
+        );
+        return;
+      }
+      const members = otherMembers(listed, self ?? "");
       const entry = createRoom(state, requestId, "group", members, title);
       if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
       recordOutcome(state, requestId, { status: "done", entry });
@@ -645,6 +656,7 @@ export const FabriChatManagerCore = pattern<
                 >
                   {entry.label}
                 </cf-button>
+                <cf-cell-link $cell={entry.room} label="Open" />
                 <cf-button
                   size="sm"
                   variant="ghost"

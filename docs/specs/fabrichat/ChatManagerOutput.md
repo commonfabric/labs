@@ -166,10 +166,10 @@ conversation from splitting.
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
   with it resumes the request rather than starting another.
-- `members: string[]` — The DIDs of the people to admit besides this user.
-  Duplicates, and this user's own DID, are ignored. It may be empty, which
-  creates a group room of one, and people can be added later through the
-  space's own tools.
+- `members: string[]` — The DIDs of the people to admit besides this user,
+  each a principal's. Duplicates, and this user's own DID, are ignored. It may
+  be empty, which creates a group room of one, and people can be added later
+  through the space's own tools.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 
@@ -179,7 +179,8 @@ Creates a group room. This is an outward act: it grants other people access.
 - **Effect:** always creates a new space, with a new room as its chat, even when
   another group room has the same members. Grants each member access, produces a
   notice for each, and records the entry in `rooms`.
-- **Outcome:** `done` with the entry, or `refused` if `title` is empty.
+- **Outcome:** `done` with the entry, or `refused` if `title` is empty or a
+  member is not a principal's DID.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`
 
