@@ -154,23 +154,29 @@ branch-local expansion rules. Ordinary chains need no shared-result cache.
 The persisted view still contains every distinct labeled path; sharing work
 does not reduce the size of a flat label map for a branching graph.
 
-## Bindings passed to a composed sub-pattern
+## Bindings a setup stages
 
 A pattern that passes a binding to a sub-pattern it composes, as in
 `Child({ items })`, has setup stage a write redirect to the bound cell into the
-sub-pattern's argument. Setup records the redirect as an argument projection of
-the slot holding it. Preparation accepts the slot while it holds a redirect to
-the cell the projection names, compared by that cell's address rather than by
-the redirect's bytes. Outside an attributed transaction the slot is persisted
+sub-pattern's argument. A pattern's result can name a cell the pattern did not
+create the same way: its argument, passed through to a result field, or a cell
+the code setting the pattern up closed over, as when a handler defines a
+pattern that returns one of the handler's own bindings and sets it up. Setup
+records each such redirect as a binding projection of the slot holding it.
+Preparation accepts the slot while it holds a redirect to the cell the
+projection names, compared by that cell's address rather than by the
+redirect's bytes. Outside an attributed transaction the slot is persisted
 without a claim about the current principal, as described under "Attribution
 of an initialized value", so a runtime acting for a principal other than the
 bound cell's owner can stage it.
 
-An argument projection covers the slot alone. The cell its redirect names is
-the caller's, and setup writes none of it, so a write to that cell, through the
-slot or directly, needs the cell's own writer and owner binding in the staging
-transaction as in any other. A result projection differs: the cell it names is
-the pattern's internal cell, which setup initializes.
+A binding projection covers the slot alone. The cell its redirect names
+belongs to whoever handed the piece the binding, and setup writes none of it,
+so a write to that cell, through the slot or directly, needs the cell's own
+writer and owner binding in the setting-up transaction as in any other. Only a
+result field naming one of the piece's own internal cells covers that cell as
+well, since setup creates and initializes it. Those cells are minted from the
+piece's result cell, so no other code names them.
 
 ## Setup replay over a stored argument
 
@@ -216,9 +222,9 @@ carrying such a claim is.
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source
 update installing a new field's default — the seed, the reference that
-exposes it, the new field's default, the cells a setup projects result fields
-to and the argument slots it stages bindings into are all persisted without a
-claim about the current principal.
+exposes it, the new field's default, the internal cells a setup projects
+result fields to and the slots it stages bindings into are all persisted
+without a claim about the current principal.
 Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
 `ownerPrincipal` binding is established by the first write an acting
 principal makes through the field's writer, and that write mints the claim

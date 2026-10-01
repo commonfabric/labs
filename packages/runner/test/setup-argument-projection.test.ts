@@ -12,7 +12,7 @@ import type {
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
+  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
@@ -159,7 +159,7 @@ describe("setup-argument-projection", () => {
   }
 
   describe("the record", () => {
-    it("records an argument projection of the slot, naming the passed list, and no result projection", async () => {
+    it("records a binding projection of the slot, naming the passed list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       const argument = await setUpChild(tx, binding(tx));
@@ -171,7 +171,7 @@ describe("setup-argument-projection", () => {
         input,
       ) =>
         input.kind === "structural-provenance" &&
-          (input.claim === CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION ||
+          (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
             input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) &&
           input.target.id === slot.id
           ? [{
@@ -184,7 +184,7 @@ describe("setup-argument-projection", () => {
       );
 
       expect(projections).toEqual([{
-        claim: CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
+        claim: CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
         path: ["list"],
         sources: [{ id: list.id, path: list.path }],
         runtime: true,

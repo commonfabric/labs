@@ -25,16 +25,21 @@ export type {
   LabelObservationClass,
 } from "./label-view-core.ts";
 
+// A result field a setup projects to one of the piece's own internal cells:
+// `target` is the field, `sources` the internal cell holding its value. The
+// setup creates that cell and initializes it, so the prepare gate takes the
+// marker for the field and for the cell alike.
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
-// A write redirect a setup stages into a piece's argument: `target` is the
-// argument slot holding it, `sources` the cell it names. That cell belongs to
-// whoever passed the binding, and the setup initializes none of it, so the
-// prepare gate takes the marker for the slot alone, where a result
-// projection's marker covers its sources as well.
-export const CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION =
-  "runtime.setup.argument-projection";
+// A write redirect a setup stages to a cell the piece it sets up did not
+// create: a binding passed into the piece's argument, or a result field that
+// names its argument or a cell the code setting it up closed over. `target` is
+// the slot holding the redirect, `sources` the cell it names. That cell belongs
+// to whoever handed the piece the binding, and the setup initializes none of
+// it, so the prepare gate takes the marker for the slot alone.
+export const CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION =
+  "runtime.setup.binding-projection";
 
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
