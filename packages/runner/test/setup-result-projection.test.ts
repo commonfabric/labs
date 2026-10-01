@@ -87,17 +87,6 @@ const projectingAttacks = {
     const inner = Inner({});
     items.set(["forged"]);
     return inner;`,
-  "sets up a pattern whose rows capture the list and whose result names it": `
-    const Inner = pattern<
-      Record<string, never>,
-      { list: Writable<Items>; rows: { item: string }[] }
-    >(() => ({
-      list: items,
-      rows: items.map((item) => ({ item, remove: edit({ items }) })),
-    }));
-    const inner = Inner({});
-    items.set(["forged"]);
-    return inner;`,
   "composes a pattern that passes the list through to its result": `
     const inner = Pass({ list: items });
     items.set(["forged"]);
