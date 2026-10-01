@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
@@ -840,7 +841,9 @@ export default pattern(() => {
     // the narrowed capture is rebuilt from the cell's type, whose print spells
     // `typeof removeItem` as the handler's structural type.
 
-    const transform = async (result: string) =>
+    const constructed =
+      `const items = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");`;
+    const transform = async (result: string, declaration = constructed) =>
       parseModule(
         await transformSource(
           `import { Cfc, CurrentPrincipal, computed, handler, pattern, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy } from "commonfabric";
@@ -850,11 +853,21 @@ const removeItem = handler<void, { items: Writable<Item[]>; id: string }>((_, { 
   items.set(items.get().filter((item) => item.id !== id));
 });
 export default pattern(() => {
-  const items = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");
+  ${declaration}
   return ${result};
 });`,
           { types: COMMONFABRIC_TYPES, typeCheck: true },
         ),
+      );
+    // Each item's button hands the captured list to its handler as a
+    // shorthand property.
+    const list = `{
+    [UI]: <ul>{items.map((item) => <li><button type="button" onClick={removeItem({ items, id: item.id })}>Remove</button></li>)}</ul>,
+  }`;
+    const callbackSchema = (root: ts.SourceFile) =>
+      emittedSchemas(root).find(({ properties }) =>
+        typeof properties === "object" && properties !== null &&
+        "params" in properties
       );
     const ownerPolicy = {
       writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["removeItem"] } },
@@ -866,14 +879,7 @@ export default pattern(() => {
     };
 
     it("keeps the cell's writer beside its owner in a list callback's parameters", async () => {
-      const root = await transform(`{
-    [UI]: <ul>{items.map((item) => <li><button type="button" onClick={removeItem({ items, id: item.id })}>Remove</button></li>)}</ul>,
-  }`);
-      const callback = emittedSchemas(root).find(({ properties }) =>
-        typeof properties === "object" && properties !== null &&
-        "params" in properties
-      );
-      expect(callback).toMatchObject({
+      expect(callbackSchema(await transform(list))).toMatchObject({
         properties: {
           params: { properties: { items: { ifc: ownerPolicy } } },
         },
@@ -886,6 +892,18 @@ export default pattern(() => {
       );
       expect(callSchemas(root, "lift")[0]).toMatchObject({
         properties: { items: { ifc: ownerPolicy } },
+      });
+    });
+
+    it("keeps the writer a declaration's annotation names on a capture written as a shorthand property", async () => {
+      const root = await transform(
+        list,
+        `const items: Writable<Owned<Item[], typeof removeItem>> = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");`,
+      );
+      expect(callbackSchema(root)).toMatchObject({
+        properties: {
+          params: { properties: { items: { ifc: ownerPolicy } } },
+        },
       });
     });
   });

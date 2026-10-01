@@ -1316,6 +1316,24 @@ function describeCapture(expression: ts.Expression, fallback: string): string {
 }
 
 /**
+ * The symbol of the value `identifier` reads. Written as a shorthand property
+ * (`{ x }`), the identifier's own symbol is the property of the object literal
+ * it writes, which declares nothing about the value; the value's symbol is the
+ * binding `x` names.
+ */
+function readValueSymbol(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  return symbol?.valueDeclaration &&
+      ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
+    ? checker.getShorthandAssignmentValueSymbol(symbol.valueDeclaration) ??
+      symbol
+    : symbol;
+}
+
+/**
  * The property of a destructured aggregate that `identifier`, a binding the
  * destructuring declares, reads, or `undefined` for any other identifier. A
  * `{ x }` shorthand resolves to a value symbol, and the binding element keeps
@@ -1331,17 +1349,7 @@ function destructuredSourceProperty(
   localName: string,
   checker: ts.TypeChecker,
 ): ts.Symbol | undefined {
-  let symbol = checker.getSymbolAtLocation(identifier);
-  if (
-    symbol?.valueDeclaration &&
-    ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
-  ) {
-    symbol = checker.getShorthandAssignmentValueSymbol(
-      symbol.valueDeclaration,
-    ) ??
-      symbol;
-  }
-  const binding = symbol?.valueDeclaration;
+  const binding = readValueSymbol(identifier, checker)?.valueDeclaration;
   if (
     !binding || !ts.isBindingElement(binding) ||
     !ts.isObjectBindingPattern(binding.parent)
@@ -1424,7 +1432,7 @@ export function buildTypeElementsFromCaptureTree(
       typeNode = expressionToTypeNode(childNode.expression, context);
       const declaring = ts.isIdentifier(childNode.expression)
         ? destructuredSourceProperty(childNode.expression, propName, checker) ??
-          checker.getSymbolAtLocation(childNode.expression)
+          readValueSymbol(childNode.expression, checker)
         : ts.isPropertyAccessExpression(childNode.expression)
         ? checker.getSymbolAtLocation(childNode.expression.name)
         : undefined;
