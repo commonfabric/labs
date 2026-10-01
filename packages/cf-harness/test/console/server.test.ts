@@ -44,6 +44,18 @@ import type {
   HarnessPromptLoopResult,
   RunHarnessTranscriptOptions,
 } from "../../src/prompt-loop.ts";
+import type {
+  BrowserHostResult,
+  HarnessBrowserHost,
+} from "../../src/contracts/browser-host.ts";
+import {
+  createHarnessChatErrorResponse,
+  createHarnessChatEventEnvelope,
+  createHarnessChatOkResponse,
+  type HarnessChatResponse,
+  type HarnessChatStartTurnParams,
+  type HarnessChatTurnStatus,
+} from "../../src/contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
 
 /**
@@ -146,6 +158,22 @@ const config = () =>
       "console-test",
       "--session-db",
       "none",
+    ],
+    {},
+    "/console",
+  );
+
+/** The same configuration, allowing a task to declare a browser host. */
+const configWithBrowserHost = () =>
+  resolveConsoleConfig(
+    [
+      "--fabric-identity",
+      "key.pkcs8",
+      "--fabric-space",
+      "console-test",
+      "--session-db",
+      "none",
+      "--allow-browser-host",
     ],
     {},
     "/console",
@@ -1470,6 +1498,24 @@ describe("console/server", () => {
       );
 
       expect(response.status).toBe(403);
+    });
+
+    it("answers 403 to a browser's navigation and to another site's page, and 200 to the console's own page and to a client that is no browser", async () => {
+      const requests: Record<string, string>[] = [
+        { "sec-fetch-mode": "navigate", "sec-fetch-site": "none" },
+        { "sec-fetch-mode": "cors", "sec-fetch-site": "cross-site" },
+        { "sec-fetch-mode": "no-cors", "sec-fetch-site": "same-site" },
+        { "sec-fetch-mode": "cors", "sec-fetch-site": "same-origin" },
+        {},
+      ];
+      const statuses = [];
+      for (const headers of requests) {
+        statuses.push(
+          (await server.handle(getRequest("/api/health", headers))).status,
+        );
+      }
+
+      expect(statuses).toEqual([403, 403, 403, 200, 200]);
     });
   });
 
@@ -2814,6 +2860,22 @@ describe("console/server", () => {
   });
 
   describe("resolveConsoleConfig()", () => {
+    it("defaults to Sol 6.1 and preserves explicit model choices", async () => {
+      const flags = ["--fabric-identity", "k", "--fabric-space", "s"];
+      expect((await resolveConsoleConfig(flags, {}, "/console")).model)
+        .toBe("gpt-6.1-sol");
+      expect(
+        (await resolveConsoleConfig(flags, {
+          CF_HARNESS_MODEL: "gpt-5.6-sol",
+        }, "/console")).model,
+      ).toBe("gpt-5.6-sol");
+      expect(
+        (await resolveConsoleConfig([...flags, "--model", "gpt-6-luna"], {
+          CF_HARNESS_MODEL: "gpt-5.6-sol",
+        }, "/console")).model,
+      ).toBe("gpt-6-luna");
+    });
+
     it("throws naming both ways to supply a fabric session when neither is given", async () => {
       await expect(resolveConsoleConfig([], {}, "/console")).rejects.toThrow(
         "a fabric session is required",
@@ -3713,6 +3775,470 @@ describe("console/server", () => {
       );
 
       expect(response.status).toBe(415);
+    });
+  });
+
+  describe("the browser host routes", () => {
+    const PAGE = { url: "https://shop.example/", title: "Shop" };
+
+    /**
+     * A server whose one turn asks its browser host for a snapshot and answers
+     * with what the host returned, so a test can play the host's part over
+     * the routes.
+     */
+    const hostedServer = async (): Promise<{
+      server: ConsoleServer;
+      loopOptions: CreateHarnessPromptLoopOptions[];
+      results: (BrowserHostResult | undefined)[];
+    }> => {
+      const loopOptions: CreateHarnessPromptLoopOptions[] = [];
+      const results: (BrowserHostResult | undefined)[] = [];
+      const hosted = new ConsoleServer(
+        await configWithBrowserHost(),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            createPromptLoop: (options) => {
+              loopOptions.push(options);
+              return {
+                runTranscript: async (run) => {
+                  const result = await options.browserHost?.perform({
+                    action: "snapshot",
+                    interactive: true,
+                  });
+                  results.push(result);
+                  const answer = {
+                    role: "assistant" as const,
+                    content: result?.status === "ok"
+                      ? result.text ?? ""
+                      : `refused: ${result?.status}`,
+                  };
+                  const transcript = [...run.transcript, answer];
+                  await run.onTranscriptEvent?.({
+                    message: answer,
+                    transcript,
+                  });
+                  return {
+                    model: "gpt-test",
+                    finalAssistantText: answer.content,
+                    transcript,
+                    modelTurns: 1,
+                    runState: {} as HarnessPromptLoopResult["runState"],
+                  };
+                },
+              };
+            },
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      return { server: hosted, loopOptions, results };
+    };
+
+    /** Reads `stream` until what it has delivered contains `text`. */
+    const readUntil = async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      text: string,
+    ): Promise<string> => {
+      const decoder = new TextDecoder();
+      let received = "";
+      while (!received.includes(text)) {
+        const { value, done } = await reader.read();
+        if (done) {
+          throw new Error(`stream ended before ${text}: ${received}`);
+        }
+        received += decoder.decode(value);
+      }
+      return received;
+    };
+
+    it("returns a host token only to a task that declares a host", async () => {
+      const { server: hosted, loopOptions } = await hostedServer();
+
+      const plain = await server.handle(
+        jsonRequest("/api/task", { text: "no browser" }),
+      );
+      const plainBody = await plain.json();
+      await server.service.waitForTurn(plainBody.sessionId, plainBody.turnId);
+      const declared = await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: { aFieldThisConsoleDoesNotKnow: true },
+      }));
+      const declaredBody = await declared.json();
+
+      expect(plainBody.browserHostToken).toBeUndefined();
+      expect(typeof declaredBody.browserHostToken).toBe("string");
+      expect(loopOptions[0]?.browserHost).toBeDefined();
+      expect(loopOptions[0]?.allowedSubagentProfiles).toContain("browser");
+
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: declaredBody.turnId,
+          token: declaredBody.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+      await hosted.handle(jsonRequest("/api/browser-host/result", {
+        turnId: declaredBody.turnId,
+        token: declaredBody.browserHostToken,
+        id: "1",
+        result: { status: "ok", page: PAGE, text: "" },
+      }));
+      await readUntil(reader, "event: close");
+      await reader.cancel();
+      await hosted.service.waitForTurn(
+        declaredBody.sessionId,
+        declaredBody.turnId,
+      );
+    });
+
+    it("writes each liveness tick to an attached host's stream", async () => {
+      const { server: hosted } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+
+      hosted.ping();
+      const ticked = await readUntil(reader, ": 1\n\n");
+      await hosted.handle(jsonRequest("/api/browser-host/result", {
+        turnId: started.turnId,
+        token: started.browserHostToken,
+        id: "1",
+        result: { status: "ok", page: PAGE, text: "" },
+      }));
+      await readUntil(reader, "event: close");
+      await reader.cancel();
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(ticked).toContain(": 1\n\n");
+    });
+
+    it("returns 400 for a host route body that is not JSON or names no turn", async () => {
+      const empty = await server.handle(
+        new Request("http://127.0.0.1:8100/api/browser-host/stream", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      const notJson = await server.handle(
+        new Request("http://127.0.0.1:8100/api/browser-host/stream", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      const noTurn = await server.handle(
+        jsonRequest("/api/browser-host/result", { token: "t", id: "1" }),
+      );
+
+      expect(empty.status).toBe(400);
+      expect(await empty.json()).toEqual({ error: "request body is not JSON" });
+      expect(notJson.status).toBe(400);
+      expect(await notJson.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect(noTurn.status).toBe(400);
+      expect(await noTurn.json()).toEqual({ error: "turnId is required" });
+    });
+
+    it("returns 403 for a host declaration a console that allows none is sent, and gives it no browser children", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error:
+          "this console takes no browser host; an operator allows one with --allow-browser-host",
+      });
+      expect(
+        (await (await server.handle(getRequest("/api/policy"))).json())
+          .allowedSubagentProfiles,
+      ).not.toContain("browser");
+    });
+
+    it("runs a console's ordinary task without browser children, and gives a host's turn them", async () => {
+      const { server: hosted, loopOptions } = await hostedServer();
+
+      const plain = await (await hosted.handle(
+        jsonRequest("/api/task", { text: "no browser" }),
+      )).json();
+      await hosted.service.waitForTurn(plain.sessionId, plain.turnId);
+
+      expect(plain.error).toBeUndefined();
+      expect(loopOptions[0]?.browserHost).toBeUndefined();
+      expect(loopOptions[0]?.allowedSubagentProfiles).not.toContain(
+        "browser",
+      );
+      expect(
+        (await (await hosted.handle(getRequest("/api/policy"))).json())
+          .allowedSubagentProfiles,
+      ).not.toContain("browser");
+    });
+
+    it("returns 400 for a host declaration that is not an object", async () => {
+      const { server: hosted } = await hostedServer();
+      const response = await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: ["profileFields"],
+      }));
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "browserHost must be an object",
+      });
+    });
+
+    it("returns 413 for a host route body larger than a result may be, without reading the rest", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/browser-host/result", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "x".repeat(32 * 1024 * 1024 + 1),
+        }),
+      );
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        error: "request body is larger than 33554432 bytes",
+      });
+    });
+
+    it("carries an operation to the host and its result back to the run", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+
+      const refused = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: "not-the-token",
+        }),
+      );
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const second = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      const delivered = await readUntil(reader, "\n\n");
+      const posted = await hosted.handle(
+        jsonRequest("/api/browser-host/result", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+          id: "1",
+          result: { status: "ok", page: PAGE, text: '- button "Buy"' },
+        }),
+      );
+      const closing = await readUntil(reader, "event: close");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(refused.status).toBe(404);
+      expect(await refused.json()).toEqual({
+        error: "no browser host for that turn",
+      });
+      expect(stream.headers.get("content-type")).toBe("text/event-stream");
+      expect(second.status).toBe(409);
+      await second.body?.cancel();
+      expect(delivered).toBe(
+        `event: request\ndata: ${
+          JSON.stringify({
+            id: "1",
+            operation: { action: "snapshot", interactive: true },
+          })
+        }\n\n`,
+      );
+      expect(posted.status).toBe(200);
+      expect(closing).toContain("event: close");
+      expect(results).toEqual([
+        { status: "ok", page: PAGE, text: '- button "Buy"' },
+      ]);
+    });
+
+    it("answers 404 for a result under another token or for an id nobody waits on, and 400 for one that is not a result, which fails the operation", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+      const post = (id: string, result: unknown, token: string) =>
+        hosted.handle(jsonRequest("/api/browser-host/result", {
+          turnId: started.turnId,
+          token,
+          id,
+          result,
+        }));
+
+      const forged = await post(
+        "1",
+        { status: "ok", page: PAGE },
+        "not-the-token",
+      );
+      const unknown = await post(
+        "2",
+        { status: "ok", page: PAGE },
+        started.browserHostToken,
+      );
+      const malformed = await post(
+        "1",
+        { status: "ok" },
+        started.browserHostToken,
+      );
+      await readUntil(reader, "event: close");
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(forged.status).toBe(404);
+      await forged.body?.cancel();
+      expect(unknown.status).toBe(404);
+      await unknown.body?.cancel();
+      expect(malformed.status).toBe(400);
+      await malformed.body?.cancel();
+      expect(results).toEqual([{
+        status: "failed",
+        message:
+          "the browser host answered with something that is not a result",
+      }]);
+    });
+
+    it("ends a turn's channel when the turn ends before its start returns, and when it fails to start or throws", async () => {
+      const attached: (HarnessBrowserHost | undefined)[] = [];
+      /** A service whose turn ends inside its own start, or never starts. */
+      class ShortTurnService extends HarnessInteractiveChatService {
+        readonly #onEvent: HarnessInteractiveChatEventListener;
+        readonly #start: "ends" | "refuses" | "throws";
+
+        constructor(
+          onEvent: HarnessInteractiveChatEventListener,
+          start: "ends" | "refuses" | "throws",
+        ) {
+          super({
+            createPromptLoop: () => {
+              throw new Error("no turn runs here");
+            },
+            onEvent,
+          });
+          this.#onEvent = onEvent;
+          this.#start = start;
+        }
+
+        override async startTurn(
+          requestId: string,
+          params: HarnessChatStartTurnParams,
+          extra: { browserHost?: HarnessBrowserHost } = {},
+        ): Promise<HarnessChatResponse<HarnessChatTurnStatus>> {
+          attached.push(extra.browserHost);
+          const turnId = params.turnId ?? "";
+          if (this.#start === "throws") {
+            throw new Error("this turn could not be started");
+          }
+          if (this.#start === "refuses") {
+            return createHarnessChatErrorResponse(requestId, {
+              code: "invalid_request",
+              message: "this turn does not start",
+            });
+          }
+          await this.#onEvent(createHarnessChatEventEnvelope({
+            sessionId: params.sessionId,
+            turnId,
+            sequence: 1,
+            event: { kind: "turn_canceled", turnId },
+          }));
+          const at = new Date().toISOString();
+          return createHarnessChatOkResponse(requestId, {
+            turnId,
+            status: "canceled",
+            startedAt: at,
+            updatedAt: at,
+          });
+        }
+      }
+      const task = async (start: "ends" | "refuses" | "throws") => {
+        const shortTurns = new ConsoleServer(
+          await configWithBrowserHost(),
+          (onEvent) => new ShortTurnService(onEvent, start),
+        );
+        const response = await shortTurns.handle(jsonRequest("/api/task", {
+          text: "use the web",
+          browserHost: {},
+        }));
+        return { server: shortTurns, response };
+      };
+
+      const ended = await task("ends");
+      const started = await ended.response.json();
+      const attach = await ended.server.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const refused = await task("refuses");
+      await refused.response.body?.cancel();
+      await expect(task("throws")).rejects.toThrow(
+        "this turn could not be started",
+      );
+
+      expect(attach.status).toBe(404);
+      await attach.body?.cancel();
+      expect(refused.response.ok).toBe(false);
+      expect(attached).toHaveLength(3);
+      for (const host of attached) {
+        expect(await host?.perform({ action: "reload" })).toEqual({
+          status: "session-ended",
+          message: "the turn has ended",
+        });
+      }
+    });
+
+    it("ends the run's outstanding operation when the host's stream ends", async () => {
+      const { server: hosted, results } = await hostedServer();
+      const started = await (await hosted.handle(jsonRequest("/api/task", {
+        text: "use the web",
+        browserHost: {},
+      }))).json();
+      const stream = await hosted.handle(
+        jsonRequest("/api/browser-host/stream", {
+          turnId: started.turnId,
+          token: started.browserHostToken,
+        }),
+      );
+      const reader = stream.body!.getReader();
+      await readUntil(reader, "event: request");
+
+      await reader.cancel();
+      await hosted.service.waitForTurn(started.sessionId, started.turnId);
+
+      expect(results).toEqual([{
+        status: "session-ended",
+        message: "the browser host's connection ended",
+      }]);
     });
   });
 });

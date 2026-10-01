@@ -146,6 +146,9 @@ export interface OpenAIResponsesRequest {
   };
   reasoning?: {
     effort: string;
+
+    /** Asks for a readable summary of the reasoning in each reasoning item. */
+    summary?: "auto" | "concise" | "detailed";
   };
 }
 

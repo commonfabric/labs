@@ -21,6 +21,7 @@ import {
 import { establishHarnessSessionContext } from "./session-assembly.ts";
 import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import type { HarnessBrowserHost } from "./contracts/browser-host.ts";
 import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessPatternRefSpec } from "./contracts/pattern-refs.ts";
@@ -1269,9 +1270,15 @@ export class HarnessInteractiveChatService {
     return createHarnessChatOkResponse(requestId, session);
   }
 
+  /**
+   * Starts a turn in a session. `attached` carries what an in-process caller
+   * hands the turn that no wire request can: a browser host whose session the
+   * turn's browser children drive. It lives for the turn and is not recorded.
+   */
   async startTurn(
     requestId: string,
     params: HarnessChatStartTurnParams,
+    attached: { browserHost?: HarnessBrowserHost } = {},
   ): Promise<HarnessChatResponse<HarnessChatTurnStatus>> {
     if (
       params.input.loomId !== undefined &&
@@ -1353,15 +1360,31 @@ export class HarnessInteractiveChatService {
       return activeTurnError(requestId, record.status, record.startingTurnId);
     }
     const context = params.context ?? record.status.context;
-    const policy = resolveHarnessChatPolicy(
+    const sessionPolicy = resolveHarnessChatPolicy(
       params.policy ?? record.status.policy,
       context,
       this.#basePromptLoopOptions.loomAuthoring?.allowCommentThreads === true,
     );
+    // A turn its caller attached a browser host to may delegate to browser
+    // children: the host is the browser they drive, and attaching one is the
+    // caller's decision. The session's policy, which a later turn without a
+    // host runs under, stays as it is.
+    const policy = attached.browserHost !== undefined &&
+        !sessionPolicy.allowedSubagentProfiles.includes(
+          BROWSER_SUBAGENT_PROFILE,
+        )
+      ? {
+        ...sessionPolicy,
+        allowedSubagentProfiles: [
+          ...sessionPolicy.allowedSubagentProfiles,
+          BROWSER_SUBAGENT_PROFILE,
+        ],
+      }
+      : sessionPolicy;
     const browserAccess = params.browserAccess ?? record.status.browserAccess;
     if (
       policy.allowedSubagentProfiles.includes(BROWSER_SUBAGENT_PROFILE) &&
-      browserAccess === undefined
+      browserAccess === undefined && attached.browserHost === undefined
     ) {
       return browserAccessRequiredError(requestId);
     }
@@ -1430,6 +1453,7 @@ export class HarnessInteractiveChatService {
       abortController.signal,
       policy,
       browserAccess,
+      attached.browserHost,
     );
     const activeTurnToken = {};
     const finalizeTask = (interrupted?: HarnessChatTurnCheckpoint) =>
@@ -1596,6 +1620,7 @@ export class HarnessInteractiveChatService {
     signal: AbortSignal,
     policy: HarnessChatPolicy,
     browserAccess: HarnessChatBrowserAccessLease | undefined,
+    browserHost: HarnessBrowserHost | undefined,
   ): Promise<HarnessChatTurnCheckpoint | undefined> {
     const session = record.status;
     const researchGoal = record.researchContext?.researchGoal ??
@@ -1636,6 +1661,7 @@ export class HarnessInteractiveChatService {
             inputCells,
             params.patternRefs,
             params.input.loomId,
+            browserHost,
           ),
           taskText: params.input.text,
           researchGoal,
@@ -1918,6 +1944,7 @@ export class HarnessInteractiveChatService {
     inputCells?: readonly HarnessInputCellSpec[],
     patternRefs?: readonly HarnessPatternRefSpec[],
     loomId?: string,
+    browserHost?: HarnessBrowserHost,
   ): CreateHarnessPromptLoopOptions {
     const loomAuthoring = loomAuthoringForTurn(
       this.#basePromptLoopOptions.loomAuthoring,
@@ -1957,6 +1984,7 @@ export class HarnessInteractiveChatService {
       allowedToolIds: policy.allowedToolIds,
       allowedSubagentProfiles: policy.allowedSubagentProfiles,
       ...(browserAccess !== undefined ? { browserAccess } : {}),
+      ...(browserHost !== undefined ? { browserHost } : {}),
       ...(policy.cfcEnforcementMode !== undefined
         ? { cfcEnforcementModeOverride: policy.cfcEnforcementMode }
         : {}),
@@ -2120,6 +2148,14 @@ export class HarnessInteractiveChatService {
     subagent?: HarnessChatSubagentRef,
   ): Promise<void> {
     const tag = subagent === undefined ? {} : { subagent };
+    // What the model was thinking comes before what it did about it.
+    if (message.reasoning !== undefined) {
+      await this.#emit(sessionId, turnId, {
+        kind: "assistant_reasoning",
+        text: message.reasoning,
+        ...tag,
+      });
+    }
     for (const toolCall of message.toolCalls ?? []) {
       await this.#emit(sessionId, turnId, {
         kind: "tool_started",

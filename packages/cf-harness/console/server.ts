@@ -9,14 +9,17 @@
  *   deno task --cwd packages/cf-harness console
  *   open http://127.0.0.1:8100
  *
- * The server binds 127.0.0.1 and asks one thing of a request: that it names
- * this server's own host. A hostile name that resolves to 127.0.0.1 would
- * otherwise make these routes same-origin to a browser, and that name is
- * visible on the wire. Nothing else is asked, and no client carries a
+ * The server binds 127.0.0.1 and asks two things of a request: that it names
+ * this server's own host, and, for an `/api/` route, that no browser marks it
+ * as a navigation or as another site's request. A hostile name that resolves
+ * to 127.0.0.1 would otherwise make these routes same-origin to a browser, and
+ * that name is visible on the wire; a page an agent opened would otherwise
+ * read a route by loading it. Nothing else is asked, and no client carries a
  * credential — a caller that reaches this socket is a caller the network
  * admitted. So the network is the boundary: run this where reaching it already
  * means being trusted, which on a shared host means a tailnet with an access
- * policy, and not behind a public address.
+ * policy, and not behind a public address. A browser host's routes also take
+ * the per-turn token their turn was given.
  *
  * What a task runs under is not decided here. This server resolves flags, the
  * environment and the request body into a `HarnessSessionConfig` — the same
@@ -77,7 +80,7 @@ import {
   resolveCfcEnforcementMode,
 } from "../src/config.ts";
 import type { CfcPosture } from "@commonfabric/runner";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type HarnessChatError,
   type HarnessChatEventEnvelope,
@@ -159,6 +162,7 @@ import {
 } from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
+import { ConsoleBrowserHost } from "./browser-host.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
 import {
   ConsoleHealth,
@@ -281,7 +285,7 @@ const DEFAULT_FABRIC_API_URL = "http://localhost:8000";
 const DEFAULT_FABRIC_CFC_POSTURE: CfcPosture = "max-enforcement";
 
 /** The CLI's own default model, so both entrypoints bill the same route. */
-const DEFAULT_MODEL = "gpt-5.6-sol";
+const DEFAULT_MODEL = "gpt-6.1-sol";
 
 /** How often the stream publishes a liveness tick, in milliseconds. */
 const PING_INTERVAL_MS = 15_000;
@@ -510,6 +514,9 @@ interface ConsoleConfig extends HarnessSessionConfig {
   port: number;
   harnessHome: string;
 
+  /** Whether a task may declare a browser host (`--allow-browser-host`). */
+  allowBrowserHost: boolean;
+
   /** Active configuration values and the source selected by this resolver. */
   healthFacts: readonly ConsoleResolvedValue[];
 
@@ -646,6 +653,7 @@ const CONSOLE_BOOLEAN_FLAGS = [
   "no-pattern-index-publish",
   "pattern-index-publish-discoverable",
   "allow-skill-scripts",
+  "allow-browser-host",
 ] as const;
 
 /** Every flag the console takes, without its dashes. */
@@ -953,8 +961,9 @@ export const resolveConsoleConfig = async (
       nonEmpty(env.CF_HARNESS_ALLOW_SKILL_SCRIPTS) === "1",
     // The rest of the session description this surface does not vary. Skills
     // are scanned rather than preloaded by name, no individual script is
-    // named, handles materialize nowhere, and a task's input cells and pattern
-    // references arrive per task on `/api/task` rather than at startup.
+    // named, no page is a destination for a handle's value, and a task's input
+    // cells and pattern references arrive per task on `/api/task` rather than
+    // at startup.
     skillNames: [],
     allowedSkillScripts: [],
     skillScriptExecutionTarget: "sandbox",
@@ -973,6 +982,11 @@ export const resolveConsoleConfig = async (
       DEFAULT_SUBAGENT_PROFILE,
       PATTERN_AUTHOR_SUBAGENT_PROFILE,
     ],
+    // Whether a task may declare a browser host is the operator's decision,
+    // taken at launch like skill scripts. A turn with a host has browser
+    // children to drive it; a session's other turns have none.
+    allowBrowserHost: parsed["allow-browser-host"] === true ||
+      nonEmpty(env.CF_HARNESS_ALLOW_BROWSER_HOST) === "1",
     // Stated only when it is being turned off: guidance is what the profile
     // ships with, so saying so restates a default rather than configuring one.
     ...(parsed["no-child-composition-guidance"] === true
@@ -1016,6 +1030,14 @@ export const resolveConsoleConfig = async (
         ? "--allow-skill-scripts"
         : nonEmpty(env.CF_HARNESS_ALLOW_SKILL_SCRIPTS) === "1"
         ? "CF_HARNESS_ALLOW_SKILL_SCRIPTS"
+        : "console default",
+    }, {
+      name: "browser host",
+      value: config.allowBrowserHost ? "a task may declare one" : "refused",
+      source: parsed["allow-browser-host"] === true
+        ? "--allow-browser-host"
+        : nonEmpty(env.CF_HARNESS_ALLOW_BROWSER_HOST) === "1"
+        ? "CF_HARNESS_ALLOW_BROWSER_HOST"
         : "console default",
     }, {
       name: "index",
@@ -1431,9 +1453,42 @@ const TERMINAL_TURN_EVENT_KINDS: ReadonlySet<string> = new Set([
   "turn_canceled",
 ]);
 
+/**
+ * The largest body a browser host route reads: a screenshot's encoding, at
+ * the most an attachment may be, with room for the rest of its result.
+ */
+const MAX_BROWSER_HOST_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * `request`'s body as text, or `undefined` once it runs past `limit` bytes,
+ * which stops reading it there.
+ */
+const boundedBodyText = async (
+  request: Request,
+  limit: number,
+): Promise<string | undefined> => {
+  if (request.body === null) {
+    return "";
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  for await (const chunk of request.body) {
+    bytes += chunk.byteLength;
+    if (bytes > limit) {
+      return undefined;
+    }
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return text + decoder.decode();
+};
+
 /** The live event fan-out, and the routes that read and write through it. */
 export class ConsoleServer {
   readonly #clients = new Set<StreamClient>();
+
+  /** Each running turn's browser host channel, by turn id. */
+  readonly #browserHosts = new Map<string, ConsoleBrowserHost>();
   readonly #config: ConsoleConfig;
   readonly #service: HarnessInteractiveChatService;
   readonly #health: ConsoleHealth;
@@ -1506,6 +1561,12 @@ export class ConsoleServer {
    * all.
    */
   broadcast(envelope: HarnessChatEventEnvelope): Promise<void> {
+    if (
+      TERMINAL_TURN_EVENT_KINDS.has(envelope.event.kind) &&
+      envelope.turnId !== undefined
+    ) {
+      this.#closeBrowserHost(envelope.turnId);
+    }
     if (
       !TERMINAL_TURN_EVENT_KINDS.has(envelope.event.kind) &&
       this.#heldFanOut === undefined
@@ -1617,6 +1678,9 @@ export class ConsoleServer {
     for (const client of this.#clients) {
       this.#enqueue(client, frame);
     }
+    for (const host of this.#browserHosts.values()) {
+      host.ping(this.#beats);
+    }
   }
 
   async handle(request: Request): Promise<Response> {
@@ -1662,6 +1726,16 @@ export class ConsoleServer {
     }
     if (request.method === "POST" && url.pathname === "/api/task") {
       return await this.#startTask(request);
+    }
+    if (
+      request.method === "POST" && url.pathname === "/api/browser-host/stream"
+    ) {
+      return await this.#browserHostStream(request);
+    }
+    if (
+      request.method === "POST" && url.pathname === "/api/browser-host/result"
+    ) {
+      return await this.#browserHostResult(request);
     }
     if (request.method === "POST" && url.pathname === "/api/index/call") {
       return await this.#indexCall(request);
@@ -1723,6 +1797,18 @@ export class ConsoleServer {
     }
     if (!url.pathname.startsWith("/api/")) {
       return undefined;
+    }
+    // A route is called by the console's own page, or by a client that is no
+    // browser. A browser marks a navigation, and a request another site's
+    // page made, so a page an agent opened can neither read a route by
+    // loading it nor reach one from elsewhere.
+    const fetchSite = request.headers.get("sec-fetch-site");
+    if (
+      request.headers.get("sec-fetch-mode") === "navigate" ||
+      (fetchSite !== null && fetchSite !== "same-origin" &&
+        fetchSite !== "none")
+    ) {
+      return new Response("forbidden", { status: 403 });
     }
     if (
       request.method === "POST" &&
@@ -1944,6 +2030,7 @@ export class ConsoleServer {
       inputCells?: unknown;
       patternRefs?: unknown;
       loomId?: unknown;
+      browserHost?: unknown;
     } = isObjectOrArray(parsed) ? parsed : {};
     if (
       body.loomId !== undefined &&
@@ -1977,6 +2064,25 @@ export class ConsoleServer {
         error: error instanceof Error ? error.message : String(error),
       }, { status: 400 });
     }
+    let browserHost: ConsoleBrowserHost | undefined;
+    let browserHostToken: string | undefined;
+    if (body.browserHost !== undefined && body.browserHost !== null) {
+      if (!this.#config.allowBrowserHost) {
+        return Response.json({
+          error:
+            "this console takes no browser host; an operator allows one with --allow-browser-host",
+        }, { status: 403 });
+      }
+      // The declaration is an object so it can grow; nothing in it is read
+      // yet, and a field this console does not know is left alone.
+      if (!isObjectNotArray(body.browserHost)) {
+        return Response.json({ error: "browserHost must be an object" }, {
+          status: 400,
+        });
+      }
+      browserHostToken = crypto.randomUUID();
+      browserHost = new ConsoleBrowserHost(browserHostToken);
+    }
     let sessionId = body.sessionId;
     if (sessionId === undefined) {
       const session = await this.#service.startSession(crypto.randomUUID(), {
@@ -1990,21 +2096,143 @@ export class ConsoleServer {
       }
       sessionId = session.result.sessionId;
     }
-    const turn = await this.#service.startTurn(crypto.randomUUID(), {
-      sessionId,
-      input: {
-        text,
-        ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
+    // The channel is registered under the turn's id before the turn starts,
+    // so nothing the turn does can reach its end before the channel exists.
+    const turnId = crypto.randomUUID();
+    if (browserHost !== undefined) {
+      this.#browserHosts.set(turnId, browserHost);
+    }
+    const turn = await this.#service.startTurn(
+      crypto.randomUUID(),
+      {
+        turnId,
+        sessionId,
+        input: {
+          text,
+          ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
+        },
+        ...(body.inputCells !== undefined && body.inputCells !== null
+          ? { inputCells }
+          : {}),
+        ...(patternRefs.length > 0 ? { patternRefs } : {}),
       },
-      ...(body.inputCells !== undefined && body.inputCells !== null
-        ? { inputCells }
-        : {}),
-      ...(patternRefs.length > 0 ? { patternRefs } : {}),
+      browserHost !== undefined ? { browserHost } : {},
+    ).catch((error: unknown) => {
+      this.#closeBrowserHost(turnId);
+      throw error;
     });
     if (!turn.ok) {
+      this.#closeBrowserHost(turnId);
       return chatErrorResponse(turn);
     }
-    return Response.json({ sessionId, turnId: turn.result.turnId });
+    return Response.json({
+      sessionId,
+      turnId: turn.result.turnId,
+      ...(browserHostToken !== undefined ? { browserHostToken } : {}),
+    });
+  }
+
+  /**
+   * Reads a browser host request body: the turn it names and the token that
+   * proves the caller is that turn's host. Returns the channel, or the
+   * response refusing the request.
+   */
+  async #browserHostRequest(
+    request: Request,
+  ): Promise<
+    | {
+      host: ConsoleBrowserHost;
+      body: Record<string, unknown>;
+      refusal?: undefined;
+    }
+    | { host?: undefined; body?: undefined; refusal: Response }
+  > {
+    const text = await boundedBodyText(request, MAX_BROWSER_HOST_BODY_BYTES);
+    if (text === undefined) {
+      return {
+        refusal: Response.json({
+          error:
+            `request body is larger than ${MAX_BROWSER_HOST_BODY_BYTES} bytes`,
+        }, { status: 413 }),
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return {
+        refusal: Response.json({ error: "request body is not JSON" }, {
+          status: 400,
+        }),
+      };
+    }
+    if (!isObjectNotArray(parsed) || typeof parsed.turnId !== "string") {
+      return {
+        refusal: Response.json({ error: "turnId is required" }, {
+          status: 400,
+        }),
+      };
+    }
+    const host = this.#browserHosts.get(parsed.turnId);
+    // A turn with no channel and a token that does not match are answered
+    // alike, so the route says nothing about which turns have hosts.
+    if (host === undefined || !host.admits(parsed.token)) {
+      return {
+        refusal: Response.json({ error: "no browser host for that turn" }, {
+          status: 404,
+        }),
+      };
+    }
+    return { host, body: parsed };
+  }
+
+  /**
+   * `POST /api/browser-host/stream`: the host's end of its turn's channel, as
+   * Server-Sent Events. A POST because the body carries the token, which a
+   * query string would leave in every log between the two.
+   */
+  async #browserHostStream(request: Request): Promise<Response> {
+    const read = await this.#browserHostRequest(request);
+    if (read.refusal !== undefined) {
+      return read.refusal;
+    }
+    const stream = read.host.attach();
+    if (stream === undefined) {
+      return Response.json({
+        error: "that turn's browser host is already attached, or has ended",
+      }, { status: 409 });
+    }
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  /** `POST /api/browser-host/result`: the host's answer to one operation. */
+  async #browserHostResult(request: Request): Promise<Response> {
+    const read = await this.#browserHostRequest(request);
+    if (read.refusal !== undefined) {
+      return read.refusal;
+    }
+    switch (read.host.acceptResult(read.body.id, read.body.result)) {
+      case "accepted":
+        return Response.json({ ok: true });
+      case "unknown":
+        return Response.json({
+          error: "no operation with that id is waiting for a result",
+        }, { status: 404 });
+      case "invalid":
+        return Response.json({
+          error: "result is not a browser host result",
+        }, { status: 400 });
+    }
+  }
+
+  #closeBrowserHost(turnId: string): void {
+    this.#browserHosts.get(turnId)?.close();
+    this.#browserHosts.delete(turnId);
   }
 
   /**

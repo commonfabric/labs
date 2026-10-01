@@ -76,7 +76,7 @@ import { objectValue, stringValue, unique } from "./model-value.ts";
 export const RESEARCH_MODEL = "gemini-3.5-flash" as const;
 
 /** Cheap model available on the owner-authenticated Codex transport. */
-export const RESEARCH_CODEX_MODEL = "gpt-5.6-luna" as const;
+export const RESEARCH_CODEX_MODEL = "gpt-6-luna" as const;
 
 /** Most model turns one research call may spend. */
 export const MAX_RESEARCH_MODEL_TURNS = 8;

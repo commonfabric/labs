@@ -172,7 +172,7 @@ import {
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
-const DEFAULT_MODEL = "gpt-5.6-sol";
+const DEFAULT_MODEL = "gpt-6.1-sol";
 const DEFAULT_MAX_MODEL_TURNS = 8;
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
 const CLI_OUTPUT_MODES = ["operator", "batch"] as const;

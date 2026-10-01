@@ -668,6 +668,51 @@ Diagnostics emitted in all modes:
     `wish(...)`, or reactive collection aliases and their property accesses
   - message instructs the author to move the use into a nested
     `computed(() => ...)` or module-scope `lift()`
+- **Error** `pattern-context:self-access`
+  - enforces the target-language matrix row "`x[SELF]` inside an explicit
+    computation callback, inside a reactive collection callback, or on anything
+    but the pattern's own input parameter" (Unsupported)
+  - an element access keyed by `SELF` (`x[SELF]`) inside a compute callback —
+    `computed(...)`, `action(...)`, `lift(...)`, a `handler(...)` body, an
+    inline JSX event handler — or inside a reactive collection callback such as
+    `items.map((item) => ...)`
+  - in pattern context, an `x[SELF]` whose receiver is not the pattern's input
+    parameter: a value read off the input (`input.sub[SELF]`), another
+    pattern's result (`child[SELF]`), or a local bound to `input[SELF]`
+    (`self[SELF]`). The input parameter is the first parameter, bound to a
+    plain name and not a rest parameter, of a `pattern(...)` callback or of a
+    standalone function definition. The receiver must be that parameter
+    itself: a local holding the input (`const i = input; i[SELF]`) is not
+    followed back to it, and the message says so rather than calling the read
+    `undefined`
+  - in pattern context, a well-known key other than `SELF` (`NAME`, `UI`,
+    `FS`) read through `input[SELF]` on the input parameter, as in
+    `input[SELF][NAME]`: the data-flow analyzer
+    counts only `SELF` among those keys as static, so the read is lifted and
+    is `undefined` against the plain value the lift sees. The message suggests
+    `const me = input[SELF]` and reading the key off `me`, which lowers in
+    place
+  - `SELF` names the pattern's own result only on the reactive proxy a
+    `pattern(...)` body receives as its input. A compute callback sees plain
+    values, a reactive collection callback sees a captured reference to the
+    input, and a value read off the input is not the input, so `[SELF]` on any
+    of them is `undefined` at runtime, and the link it would make names a cell
+    that never holds a value
+  - not reported: a receiver built from an object literal (`{ [SELF]: 1 }`,
+    or a name a `const` declaration initializes with one; a `let` or `var`
+    could hold anything by the time it is read), which holds whatever keys it
+    was given; anything in a standalone function definition, which is ordinary
+    code over whatever it is handed, and which a `pattern(...)` callback held
+    in a `const` also is; and `input[SELF]` read directly in the pattern body,
+    in its JSX, in a plain array callback, or bound into a handler's state
+    (`poke({ room: input[SELF] })`), which the matrix row for `input[SELF]`
+    makes Supported (§9.7)
+  - the message names the access. Inside a callback it instructs the author to
+    read `const self = input[SELF]` in the pattern body, or destructure
+    `[SELF]: self` in the pattern's parameter, and capture `self`, or hand it
+    to the handler as state; on another receiver it instructs the author to
+    read `input[SELF]` first and the rest of the path off it
+  - `test/pattern-input-self.test.ts`
 - **Error** `pattern-context:optional-chaining`
   - optional property / element access that appears outside a supported
     lowerable expression site — including inside a lowered array-method
@@ -776,7 +821,9 @@ structurally representable.
   it explicit with `pattern<Input, Output>(...)`
 
 This inference runs through `collectFunctionSchemaTypeNodes` via
-`inferReturnType`, object-literal recovery, and direct projection recovery.
+`inferReturnType`, object-literal recovery, and direct projection recovery. The
+inferred return type is printed under the flags §10.1 names, so a result type
+holding `[]` anywhere is printed whole.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1655,6 +1702,34 @@ Primary behaviors:
   nested blocks) also receive `.key(...)` lowering
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
+- reads `input[SELF]` in place, as the destructured `[SELF]: self` binding is
+  read: the data-flow analyzer counts a `SELF` element key as static on any
+  receiver (`isSelfElementAccess` in `src/ast/dataflow.ts`), so the access is
+  not lifted. Outside a standalone function definition, validation has
+  already rejected every receiver but the pattern's input parameter (§6.5). A
+  `pattern(...)` callback held in a `const` is read as a standalone
+  definition, so there an `x[SELF]` on another receiver is not reported, and
+  lowers as written.
+  Every lowering that reads a path off a reactive value builds the read with
+  one helper, `createPathRead()` in
+  `src/transformers/destructuring-lowering.ts`: the pattern-body lowering,
+  the destructuring prologue, and the receiver of a lowered collection method.
+  It emits `input[__cfHelpers.SELF]` for a leading `SELF` segment and keys the
+  rest of the path off it, so `input[SELF].title` becomes
+  `input[__cfHelpers.SELF].key("title")` and `input[SELF].items.map(fn)`
+  becomes `input[__cfHelpers.SELF].key("items").mapWithPattern(...)`. A
+  `SELF` segment in any other position is keyed like any other segment, which
+  only a program §6.5 has rejected can reach. `const self = input[SELF]` and
+  `const { [SELF]: self } = input` in the body both lower to
+  `const self = input[__cfHelpers.SELF]`. A computation over the read, such as
+  `input[SELF].title + "!"`, lifts with the keyed read as its capture; a
+  receiver-method call over it, such as `input[SELF].title.toUpperCase()`,
+  lifts with the authored `input[SELF].title` as its capture, read off the
+  reactive input when the lift is applied (golden
+  `closures/pattern-input-self-index`). Other well-known keys (`UI`, `NAME`,
+  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` would lift
+  and read `undefined`; §6.5 reports it instead, and a local bound to
+  `input[SELF]`, or a destructured `[SELF]: self`, reads `[NAME]` in place
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for
@@ -1701,6 +1776,16 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - otherwise infers from signatures/contextual types
 - `_param` convention implies `never` schema for that parameter
 - failed inference falls back to `unknown`
+- every print of a type as a type node allows the empty tuple, without which
+  the checker prints nothing at all for a type holding `[]` anywhere, so an
+  inferred result holding an alias given `readonly []` reads as its
+  instantiation. The shared flag set is `TYPE_NODE_FLAGS`
+  (`src/ast/type-inference.ts`); `DEFAULT_TYPE_NODE_FLAGS` adds
+  `UseAliasDefinedOutsideCurrentScope` to it for an annotation printed into
+  the output, and `typeToTypeNodeWithRegistry()` adds `AllowEmptyTuple` to
+  whatever flags its caller passes. `test/type-node-print-flags.test.ts`
+  checks that every raw `checker.typeToTypeNode()` call in the package names
+  `AllowEmptyTuple` or one of the two sets
 - `typeRegistry` is consulted first for synthetic nodes/types
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
@@ -1880,6 +1965,17 @@ adjustments:
   are retained the original TypeReference is kept for schema fidelity.
 - pattern boundaries apply defaults-only mode to preserve broad shape continuity
   while still applying extracted static defaults
+- on the input parameter of a `pattern(...)` callback, capability analysis
+  records nothing for a use under `SELF`: no path, and no flag such a path
+  would set, so a `SELF` read leaves an otherwise identity-only input
+  identity-only. `input[SELF]` there names the pattern's own result, not any
+  of the input's data, so it asks nothing of the input schema and draws no
+  `schema:path-not-in-type` error. The analysis is told which function is a
+  pattern callback (the `patternCallback` option), and pattern-callback
+  lowering sets it for every callback it lowers, whether the `pattern(...)`
+  call holds the callback inline or names it through a `const`. On any other
+  function's parameter, `x[SELF]` is recorded as the path `$SELF`
+  (`test/policy/capability-analysis.test.ts`, `test/pattern-input-self.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather

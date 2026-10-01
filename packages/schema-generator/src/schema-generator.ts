@@ -1584,15 +1584,24 @@ export class SchemaGenerator {
       : undefined;
     if (settled) return this.#referToReading(settled.type, settled.context);
     if (again.length >= MAX_BOUND_NESTING) {
-      // Locate the diagnostic at the reference, or at the type being read
-      // where the chain was reached without a written reference.
-      const node = written ? entry : context.typeNode ??
-        checker.typeToTypeNode(type, undefined, undefined);
       if (kind === "cfc") {
-        reportUnreadCfcRecursion(context, node);
+        // At the written reference, or at the node the context reads. A chain
+        // reached by its type alone has neither, and the error goes without
+        // one.
+        reportUnreadCfcRecursion(context, written ? entry : context.typeNode);
       } else {
+        // The warning names the type the chain stops at, which a chain
+        // reached by its type alone has only as a print. `IgnoreErrors`
+        // prints any type, where with no flags the checker prints nothing for
+        // one holding `[]`.
+        const named = written ? entry : context.typeNode ??
+          checker.typeToTypeNode(
+            type,
+            undefined,
+            ts.NodeBuilderFlags.IgnoreErrors,
+          );
         const unread = context.uninterpretedTypeNodes;
-        if (unread && node && !unread.includes(node)) unread.push(node);
+        if (unread && named && !unread.includes(named)) unread.push(named);
       }
       return {};
     }

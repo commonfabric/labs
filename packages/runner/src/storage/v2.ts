@@ -5516,22 +5516,24 @@ export class SpaceReplica
     // §2b free-read row would fail intermittently whenever any pattern
     // persistently attempted one foreign scoped read. Refusing the
     // OFFENDING caller's pull keeps the refusal action-scoped, the
-    // arc's standing refusal convention.
+    // arc's standing refusal convention. The refusal is typed rather than
+    // a `ConnectionError`: it can never heal in this runtime, so a served
+    // event whose required load meets it terminalizes at once
+    // (`toReplicaLoadFailureError`).
     if (this.#refuseForeignScopedReads) {
       for (const [address] of normalizedEntries) {
         const scope = normalizeCellScope(address.scope) ?? "space";
         if (scope !== "space") {
           return {
-            error: toPullError(
-              new Error(
-                `foreign scoped read refused on the serving path: ` +
-                  `${address.id} (scope "${scope}") in ${this.#space} — ` +
-                  "a serving runtime reads foreign scoped instances only " +
-                  "under the grant-scoped read design (protocol.md §2; " +
-                  "delegated scoped reads are fail-closed until grant " +
-                  "resolution lands)",
-              ),
-            ),
+            error: {
+              name: "ForeignScopedReadRefusedError",
+              message: `foreign scoped read refused on the serving path: ` +
+                `${address.id} (scope "${scope}") in ${this.#space} — ` +
+                "a serving runtime reads foreign scoped instances only " +
+                "under the grant-scoped read design (protocol.md §2; " +
+                "delegated scoped reads are fail-closed until grant " +
+                "resolution lands)",
+            },
           };
         }
       }

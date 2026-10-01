@@ -148,8 +148,72 @@ console-live {
   white-space: pre-wrap;
 }
 
+/* A model's summary of its own reasoning reads as an aside to what it does. */
+.live-entry.thought {
+  color: var(--muted);
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .live-final {
   white-space: pre-wrap;
+}
+
+/* A rendered answer lays itself out; its code blocks keep their lines. */
+.live-final.live-answer {
+  white-space: normal;
+}
+
+.live-answer > :first-child {
+  margin-top: 0;
+}
+
+.live-answer pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-answer a {
+  overflow-wrap: anywhere;
+}
+
+/* Something an agent found, shown where the answer named it: one line, cut
+   short, and badged so it never reads as the answer's own words. */
+.live-final .live-found {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  padding: 0 4px;
+  border: 1px dotted currentColor;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.live-found-badge {
+  margin-right: 4px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Where a link goes, beside what its author called it. */
+.live-link-host {
+  color: var(--muted);
+}
+
+.live-answer table {
+  border-collapse: collapse;
+}
+
+.live-answer th,
+.live-answer td {
+  border: 1px solid var(--line);
+  padding: 0.2rem 0.4rem;
+  text-align: left;
 }
 
 .live-entry.ended {
