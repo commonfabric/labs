@@ -185,6 +185,39 @@ describe("pieces-controller", () => {
           }
         });
 
+        it("throws the space's authorization denial once its session has opened", async () => {
+          // A denial reaches no caller through `synced()`, so the controller
+          // asks the storage manager for it by name after the session opens.
+
+          const storageManager = EmulatedStorage.emulate({ as: identity });
+          using _open = stub(StorageManager, "open", () => storageManager);
+          using _healthy = stub(
+            Runtime.prototype,
+            "healthCheck",
+            () => Promise.resolve(true),
+          );
+          const space = (await Identity.fromPassphrase("a denied space")).did();
+          const denial = new Error("denied by the space's access control list");
+          const asked: string[] = [];
+          using _denied = stub(
+            storageManager,
+            "authorizationError",
+            (of) => {
+              asked.push(of);
+              return denial;
+            },
+          );
+
+          const opening = PiecesController.initialize({
+            apiUrl,
+            identity,
+            space,
+            experimental: {},
+          });
+          await expect(opening).rejects.toBe(denial);
+          expect(asked).toEqual([space]);
+        });
+
         it("throws the connection error for a space given as a `did:key:` DID", async () => {
           const spaceDid = (await Identity.fromPassphrase("a space of its own"))
             .did();
