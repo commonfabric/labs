@@ -40,6 +40,31 @@ const defaultMarkerShownIs = async (
   ) === shown;
 };
 
+/**
+ * Whether, once the view has settled, the picker shows exactly one
+ * default-profile marker (see `defaultMarkerShownIs`), in the row of the
+ * profile named `name`.
+ */
+const defaultRowNames = async (
+  probe: ProbeApi,
+  name: string,
+): Promise<boolean> => {
+  const settle = (globalThis as typeof globalThis & {
+    commonfabric?: { viewSettled?: () => Promise<void> };
+  }).commonfabric?.viewSettled;
+  if (!settle) return false;
+  await settle();
+  const markers = probe.collect("#profile-picker span").filter((element) =>
+    probe.isRendered(element) && probe.deepText(element).trim() === "default"
+  );
+  if (markers.length !== 1) return false;
+  let row: Element | null = markers[0]!;
+  while (row && row.tagName.toLowerCase() !== "cf-hstack") {
+    row = row.parentElement;
+  }
+  return row !== null && probe.deepText(row).includes(name);
+};
+
 // Workaround for a flaky activeTab regression (tracked in Linear CT-1666):
 // navigating to the home view with profile data already persisted sometimes
 // resets the active tab from "profile" back to its "spaces" default. That hides
@@ -216,6 +241,39 @@ describe("home-space profile creation", () => {
     await waitForRuntimeIdle(page);
     await page.waitForSelector('[data-ui-region="profile-edit"]', {
       strategy: "pierce",
+    });
+  });
+
+  it("moves the default from one profile to another", async () => {
+    // A home of its own, so the first "Set default" in the picker is the
+    // first profile this test creates.
+    const page = shell.page();
+    const ownIdentity = await Identity.generate({ implementation: "noble" });
+
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { builtin: "home" },
+      identity: ownIdentity,
+    });
+
+    await clickCfButton(page, 'cf-tab[value="profile"]');
+    await createProfile(page, "Katherine Johnson");
+    await createProfile(page, "Dorothy Vaughan");
+    await waitForText(page, "#home-profile-summary", "Dorothy Vaughan");
+
+    await clickTrustedAction(page, "SetDefaultProfile");
+    await waitForRuntimeIdle(page);
+    await waitForCondition(page, defaultRowNames, {
+      args: ["Katherine Johnson"],
+    });
+
+    // Katherine's row shows the marker, so the "Set default" left is
+    // Dorothy's. Choosing it re-points the default rather than writing into
+    // the profile chosen first.
+    await clickTrustedAction(page, "SetDefaultProfile");
+    await waitForRuntimeIdle(page);
+    await waitForCondition(page, defaultRowNames, {
+      args: ["Dorothy Vaughan"],
     });
   });
 

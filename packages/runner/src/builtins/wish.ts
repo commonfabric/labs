@@ -538,8 +538,9 @@ function getProfileCandidateCells(
     return { ordered: [], defaultValid: false };
   }
 
-  // Ordering inputs: the default link and the MRU list.
-  const defaultEntry = defaultPattern.key("defaultProfile");
+  // Ordering inputs: the default link, held under `profile` in home's
+  // `defaultProfile` slot, and the MRU list.
+  const defaultEntry = defaultPattern.key("defaultProfile").key("profile");
   const defaultCell = defaultEntry.resolveAsCell();
   const defaultValid = profileCellIsValid(
     defaultCell,

@@ -8,9 +8,9 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 // Runs the shipped `profile-picker.tsx` and reads the badge it renders per
 // row. Each profile lives in its own space, as `ProfileHome.inSpace()` puts
-// it, and the home's `defaultProfile` links to one of them — the shape the
-// home Profile tab shows. The row for the default must say "default"; every
-// other row offers "Set default".
+// it, and the home's `defaultProfile` holds a link to one of them under
+// `profile` — the shape the home Profile tab shows. The row for the default
+// must say "default"; every other row offers "Set default".
 //
 // The pin exists because the badge compared the default link against the map
 // callback's element parameter, which inside a `computed` is the opaque
@@ -112,10 +112,10 @@ describe("profile-picker default badge", () => {
       {
         profiles: [a, b],
         defaultProfile: defaultProfile === "a"
-          ? a
+          ? { profile: a }
           : defaultProfile === "b"
-          ? b
-          : undefined,
+          ? { profile: b }
+          : {},
         mru: [],
       },
       resultCell,

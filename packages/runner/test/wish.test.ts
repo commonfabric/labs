@@ -2834,7 +2834,7 @@ describe("wish built-in", () => {
         tx,
       );
       homeDefaultCell.key("profiles").set([profileA, profileB]);
-      homeDefaultCell.key("defaultProfile").set(profileA);
+      homeDefaultCell.key("defaultProfile").set({ profile: profileA });
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
       await tx.commit();
@@ -3314,7 +3314,7 @@ describe("wish built-in", () => {
       // Two profiles; the default is the *second* one — it must still resolve
       // first for headless callers.
       homeDefaultCell.key("profiles").set([p1, p2]);
-      homeDefaultCell.key("defaultProfile").set(p2);
+      homeDefaultCell.key("defaultProfile").set({ profile: p2 });
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
       await tx.commit();
@@ -3999,11 +3999,11 @@ describe("wish built-in", () => {
             bio: "",
             elements: [],
           });
-          homeDefaultCell.key("defaultProfile").set(orphan);
+          homeDefaultCell.key("defaultProfile").set({ profile: orphan });
         } else if (opts.defaultIndex !== undefined) {
-          homeDefaultCell.key("defaultProfile").set(
-            profileCells[opts.defaultIndex],
-          );
+          homeDefaultCell.key("defaultProfile").set({
+            profile: profileCells[opts.defaultIndex],
+          });
         }
         if (opts.mruIndices) {
           homeDefaultCell.key("mru").set(
@@ -4346,7 +4346,7 @@ describe("wish built-in", () => {
             );
           }
           if (opts.defaultIndex !== undefined) {
-            homeDefaultCell.key("defaultProfile").setRawUntyped(
+            homeDefaultCell.key("defaultProfile").key("profile").setRawUntyped(
               // deno-lint-ignore no-explicit-any
               aliasSigil(opts.defaultIndex) as any,
             );

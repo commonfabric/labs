@@ -81,9 +81,9 @@ export type HomeOutput = {
   // profile-home spells externalLinks/verifiedIdentities. An empty default
   // carries no elements and therefore asserts no writer claims; the contract
   // governs every real element appended through the trusted create surface.
-  // `defaultProfile` is semantically optional: a home may have no selected
-  // profile. Requiredness is decided by the `?` marker, not by including
-  // `undefined` in the value type.
+  // `defaultProfile` is the slot holding the selected profile's link under
+  // `profile`, and no `profile` while none is selected (`DefaultProfileSlot`).
+  // It is optional, decided by the `?` marker, because a home can hold none.
   profiles: Default<TrustedProfileList, []>;
   defaultProfile?: TrustedDefaultProfile;
   mru: Default<TrustedProfileMru, []>;
@@ -256,16 +256,18 @@ const Home = pattern(
     // fix.
     //
     // Multi-profile model: a user has many profiles, each in its own `inSpace`
-    // space. `profiles` is the durable list (appended on create). `defaultProfile`
-    // is the one `#profile` resolves to in headless mode and orders first in the
-    // picker; `mru` is the recency-ordered list driving the rest of the ordering.
+    // space. `profiles` is the durable list (appended on create).
+    // `defaultProfile` holds, under `profile`, the one `#profile` resolves to
+    // in headless mode and orders first in the picker; `mru` is the
+    // recency-ordered list driving the rest of the ordering. The default's cell
+    // carries its trusted type, so its write contract labels the document
+    // `setDefaultProfile` writes.
     const profiles = new Writable<BackwardsCompatibleProfile[]>([]).for(
       "profiles",
     );
-    const defaultProfile = new Writable<BackwardsCompatibleProfile | undefined>(
-      undefined,
-    )
-      .for("defaultProfile");
+    const defaultProfile = new Writable<TrustedDefaultProfile>({}).for(
+      "defaultProfileSlot",
+    );
     const mru = new Writable<BackwardsCompatibleProfile[]>([]).for("mru");
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT

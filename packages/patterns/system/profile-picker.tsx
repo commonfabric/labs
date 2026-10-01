@@ -8,6 +8,7 @@ import {
   Writable,
 } from "commonfabric";
 import ProfileCreate, {
+  type DefaultProfileSlot,
   profileLinkListSchema,
   profileLinkSchema,
   setDefaultProfile,
@@ -37,7 +38,7 @@ import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
 
 type ProfilePickerInput = {
   profiles: Writable<BackwardsCompatibleProfile[]>;
-  defaultProfile: Writable<BackwardsCompatibleProfile | undefined>;
+  defaultProfile: Writable<DefaultProfileSlot>;
   mru: Writable<BackwardsCompatibleProfile[]>;
 };
 
@@ -45,9 +46,10 @@ type ProfilePickerInput = {
 // own SPACE, NOT by `equals` / entity id (CT-1843; mirrors the runner-side
 // `sameProfileCell` in wish.ts landed by CT-1842 #4534).
 //
-// The `defaultProfile` link and a `profiles`-list entry for the SAME profile
-// reach it through DIFFERENT links — different entity `id` (and scope) WITHIN
-// that profile's own space (the list stores one cell, the default link another).
+// The default's link (`defaultProfile.profile`) and a `profiles`-list entry for
+// the SAME profile reach it through DIFFERENT links — different entity `id`
+// (and scope) WITHIN that profile's own space (the list stores one cell, the
+// default link another).
 // `equals` compares id (and scope), so it returns false cross-space and the
 // default badge is mislabeled/omitted. The stable per-profile identity is the
 // profile's own SPACE: each profile is a distinct anonymous
@@ -139,7 +141,7 @@ export default pattern<
                   profileLinkListSchema(),
                 ).get() ?? []) as unknown[];
                 const entry = entries[i as any];
-                const def = (defaultProfile as any).asSchema(
+                const def = (defaultProfile as any).key("profile").asSchema(
                   profileLinkSchema(),
                 ).get();
                 return def && entry

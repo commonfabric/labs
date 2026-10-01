@@ -185,8 +185,10 @@ async function readProfileCreateProbe(page: Page) {
         const defaultPattern = await homeCell?.key?.("defaultPattern")
           .resolveAsCell?.();
         // Multi-profile model: profiles[] + defaultProfile + mru (no single
-        // `profile`/`profileName`). Best-effort diagnostic only.
-        const defaultProfile = defaultPattern?.key?.("defaultProfile");
+        // `profile`/`profileName`); the default's link sits under
+        // `defaultProfile.profile`. Best-effort diagnostic only.
+        const defaultProfile = defaultPattern?.key?.("defaultProfile")
+          ?.key?.("profile");
         const resolvedDefault = await defaultProfile?.resolveAsCell?.().catch((
           error: unknown,
         ) => ({

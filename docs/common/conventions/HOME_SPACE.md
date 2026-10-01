@@ -89,8 +89,12 @@ most-recently-used (MRU) ordering:
 
 - `homeSpaceCell.defaultPattern.profiles` — the list of profile links (each a
   cross-space link to a `profile-home.tsx` default pattern in its own space).
-- `homeSpaceCell.defaultPattern.defaultProfile` — the profile `#profile`
-  resolves to in headless mode and that the picker selects by default.
+- `homeSpaceCell.defaultPattern.defaultProfile` — a slot holding, under
+  `profile`, the link to the profile `#profile` resolves to in headless mode and
+  that the picker selects by default; no `profile` while none is chosen. The
+  link sits under a key because a handle to a cell whose root holds a link
+  denotes the cell that link names, so a link stored at the root could be set
+  once and never re-pointed.
 - `homeSpaceCell.defaultPattern.mru` — recency-ordered links; drives ordering
   after the default.
 
