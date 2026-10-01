@@ -17,6 +17,14 @@ the cell, passes it to a sub-pattern, or keeps it to itself. The reference that
 exposes the cell requires its own protection: changing that reference must not
 provide an alternative way to replace the protected value.
 
+A setup that creates a new piece's argument document records, the same way, the
+default it writes into each concrete protected field the caller leaves to that
+default. The document is new, so every field in it is new; "New fields during a
+source update" below covers an argument document that exists already, where
+only a field the prior schema did not declare is. A value the caller supplies in
+place of the default, explicit `undefined` included, is not initialization, and
+a path containing `*` receives no permission here either.
+
 When a generated initializer returns the same protected cell again, its changed
 default does not replace an existing backing value. The runtime may record a
 private claim for an unchanged ordinary root output reference with no carried
@@ -36,13 +44,14 @@ writer identity.
 
 ## New fields during a source update
 
-Verified pattern setup may initialize a concrete, newly declared protected
-argument field from its schema default. It uses the candidate schema's ordinary
-default extraction and argument validation. The prior argument schema must be
-known and must not already declare the field. The argument document must be
-readable. Paths containing `*` (including a literal property with that name)
-and ambiguous previous declarations do not receive this permission. CFC's
-schema-entry paths do not distinguish literal `*` properties from wildcards.
+Verified pattern setup may initialize a concrete, newly declared protected field
+of an argument document that exists already from its schema default. It uses the
+candidate schema's ordinary default extraction and argument validation. The
+prior argument schema must be known and must not already declare the field. The
+argument document must be readable. Paths containing `*` (including a literal
+property with that name) and ambiguous previous declarations do not receive this
+permission. CFC's schema-entry paths do not distinguish literal `*` properties
+from wildcards.
 
 The setup records the permission alongside the candidate argument schema and
 source transition. Preparation requires the field to be absent and the final

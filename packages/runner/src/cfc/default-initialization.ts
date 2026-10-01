@@ -34,6 +34,62 @@ export function recordNewProtectedDefaults(
   if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
     return;
   }
+  recordProtectedDefaults(
+    tx,
+    target,
+    schema,
+    defaults,
+    next,
+    "default",
+    (path) =>
+      ContextualFlowControl.schemaAtPath(
+        previousSchema,
+        path,
+        undefined,
+        false,
+        false,
+      ) === false,
+  );
+}
+
+/**
+ * Records exact defaults for the protected fields of an argument document a
+ * setup creates for a new piece. Every field of a new document is new, so each
+ * protected field the written value fills with its schema default is a seed,
+ * as an internal cell's default is; the commit verifier independently checks
+ * pre-transaction absence and final bytes.
+ */
+export function recordNewDocumentProtectedDefaults(
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+  schema: JSONSchema,
+  defaults: FabricValue,
+  next: unknown,
+): void {
+  recordProtectedDefaults(
+    tx,
+    target,
+    schema,
+    defaults,
+    next,
+    "seed",
+    () => true,
+  );
+}
+
+/**
+ * Records, as an initialization of `mode`, each concrete protected field of
+ * `schema` at which `next` holds the field's default and `isNew` holds.
+ */
+function recordProtectedDefaults(
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+  schema: JSONSchema,
+  defaults: FabricValue,
+  next: unknown,
+  mode: "default" | "seed",
+  isNew: (path: readonly string[]) => boolean,
+): void {
   // Schema-entry paths do not distinguish a literal `*` property from a
   // wildcard. Neither receives automatic initialization authority.
   for (const entry of cfcSchemaEntries(schema)) {
@@ -42,13 +98,7 @@ export function recordNewProtectedDefaults(
       (entry.schema.ifc?.writeAuthorizedBy === undefined &&
         entry.schema.ifc?.writePolicyAnyOf === undefined) ||
       entry.path.length === 0 || entry.path.includes("*") ||
-      ContextualFlowControl.schemaAtPath(
-          previousSchema,
-          entry.path,
-          undefined,
-          false,
-          false,
-        ) !== false
+      !isNew(entry.path)
     ) continue;
     const expected = ownValueAtPath(defaults, entry.path);
     const actual = ownValueAtPath(next, entry.path);
@@ -58,7 +108,7 @@ export function recordNewProtectedDefaults(
     ) continue;
     tx.recordCfcWritePolicyInput({
       kind: "initialization",
-      mode: "default",
+      mode,
       target: {
         space: target.space,
         id: target.id,

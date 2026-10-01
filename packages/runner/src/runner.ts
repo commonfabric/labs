@@ -79,7 +79,10 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
+import {
+  recordNewDocumentProtectedDefaults,
+  recordNewProtectedDefaults,
+} from "./cfc/default-initialization.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./cfc/policy.ts";
 import {
   recordReferencedArgumentFields,
@@ -3325,6 +3328,18 @@ export class Runner {
       argumentLink = newArgumentCell.getAsNormalizedFullLink();
       if (argumentLink === undefined) {
         throw new Error("Invalid argument link in updateArgument");
+      }
+      // The argument document is new, so a protected field the caller leaves
+      // to its default is the setup's initialization, whatever later reads
+      // or projects the field.
+      if (nextArgument !== undefined) {
+        recordNewDocumentProtectedDefaults(
+          tx,
+          argumentLink,
+          pattern.argumentSchema,
+          defaults,
+          nextArgument,
+        );
       }
     } else if (!restageStoredArgument) {
       // Same stored setup over an argument document that already exists. The
