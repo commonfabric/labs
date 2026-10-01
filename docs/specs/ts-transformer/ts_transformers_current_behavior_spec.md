@@ -1971,7 +1971,12 @@ adjustments:
   adds the labels that value's own formatting attaches at its top (the
   schema-generator mapping spec's §13). A capture leaf printed from its type
   stands for the value its declaration spells, which the print may not, as
-  with a `typeof` binding in a label. A node built from part of a narrowed
+  with a `typeof` binding in a label. A declaration that writes no type spells
+  a constructed cell's value with the type arguments its constructor is given
+  (`getConstructedCellTypeNode`), which the leaf capturing the cell is written
+  with, and a leaf rebuilt from its type, as a closure's narrowed capture is,
+  prints a `typeof` writer binding among them as a structural type; that leaf
+  stands for the value the arguments spell. A node built from part of a narrowed
   node or of such a print, rebuilt from one by a later pass, or built from the
   type of one narrows the same value, its parts matched by property name and
   array element (`recordNarrowedFrom` and `recordDeclaredValue` in

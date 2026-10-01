@@ -5,6 +5,7 @@ import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   bindingIdentities,
   callSchemas,
+  emittedSchemas,
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
@@ -832,5 +833,60 @@ export default pattern(() => {
 
     expect(await severities(false)).toEqual(["error"]);
     expect(await severities(true)).toEqual(["error"]);
+  });
+
+  describe("a closure's capture of a constructed cell", () => {
+    // A closure narrows its capture of the cell to what it does with it, and
+    // the narrowed capture is rebuilt from the cell's type, whose print spells
+    // `typeof removeItem` as the handler's structural type.
+
+    const transform = async (result: string) =>
+      parseModule(
+        await transformSource(
+          `import { Cfc, CurrentPrincipal, computed, handler, pattern, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy } from "commonfabric";
+type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
+interface Item { id: string }
+const removeItem = handler<void, { items: Writable<Item[]>; id: string }>((_, { items, id }) => {
+  items.set(items.get().filter((item) => item.id !== id));
+});
+export default pattern(() => {
+  const items = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");
+  return ${result};
+});`,
+          { types: COMMONFABRIC_TYPES, typeCheck: true },
+        ),
+      );
+    const ownerPolicy = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["removeItem"] } },
+      ownerPrincipal: { __ctCurrentPrincipal: true },
+      addIntegrity: [{
+        kind: "represents-principal",
+        subject: { __ctCurrentPrincipal: true },
+      }],
+    };
+
+    it("keeps the cell's writer beside its owner in a list callback's parameters", async () => {
+      const root = await transform(`{
+    [UI]: <ul>{items.map((item) => <li><button type="button" onClick={removeItem({ items, id: item.id })}>Remove</button></li>)}</ul>,
+  }`);
+      const callback = emittedSchemas(root).find(({ properties }) =>
+        typeof properties === "object" && properties !== null &&
+        "params" in properties
+      );
+      expect(callback).toMatchObject({
+        properties: {
+          params: { properties: { items: { ifc: ownerPolicy } } },
+        },
+      });
+    });
+
+    it("keeps the cell's writer beside its owner in a computed value's input", async () => {
+      const root = await transform(
+        `{ count: computed(() => items.get().length) }`,
+      );
+      expect(callSchemas(root, "lift")[0]).toMatchObject({
+        properties: { items: { ifc: ownerPolicy } },
+      });
+    });
   });
 });

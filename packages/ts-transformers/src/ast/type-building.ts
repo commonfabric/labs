@@ -1429,8 +1429,17 @@ export function buildTypeElementsFromCaptureTree(
         ? checker.getSymbolAtLocation(childNode.expression.name)
         : undefined;
       // A node narrowed from this one narrows the value the leaf's declaration
-      // spells, which a print of its type may not.
-      const declared = declaredTypeNode(declaring);
+      // spells, which a print of its type may not. A declaration that writes
+      // no type spells a constructed cell's value with the type arguments its
+      // constructor is given, as the leaf does, and a pass that rebuilds the
+      // leaf from its type prints a `typeof` writer binding among them as a
+      // structural type.
+      const declared = declaredTypeNode(declaring) ??
+        getConstructedCellTypeNode(
+          childNode.expression,
+          checker,
+          context.state.typeRegistry,
+        );
       if (declared && declared !== typeNode) {
         context.state.recordDeclaredValue(typeNode, {
           type: checker.getTypeAtLocation(childNode.expression),
