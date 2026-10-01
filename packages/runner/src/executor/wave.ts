@@ -28,6 +28,7 @@
 // Phase 1 stage F. The machinery lands dark, exercised by tests.
 
 import type { CellScope } from "@commonfabric/api";
+import { type DID, isDID } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type CommitPrecondition,
@@ -343,6 +344,19 @@ export function waveRunContextOf(
     }).wrappedTransaction;
   }
   return undefined;
+}
+
+/**
+ * Returns the actor a served run on `tx` acts for: the user its stamped run
+ * context carries, when that is a DID. `undefined` for a run stamped with no
+ * actor, and for a transaction the serving loop did not stamp, which
+ * `waveRunContextOf()` tells apart.
+ */
+export function waveRunActorOf(
+  tx: IExtendedStorageTransaction,
+): DID | undefined {
+  const user = waveRunContextOf(tx)?.acting?.user;
+  return isDID(user) ? user : undefined;
 }
 
 /**
