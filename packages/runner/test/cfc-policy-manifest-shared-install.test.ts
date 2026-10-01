@@ -249,6 +249,19 @@ describe("cfc-policy-manifest-shared-install", () => {
       return failures;
     };
 
+    // Resolves with which comes first: `step`, or a reported start failure.
+    // A case waiting on a step the start never reaches then fails on its
+    // assertion rather than on the pending wait.
+    const firstOf = (step: Promise<void>) => {
+      const failed = Promise.withResolvers<"failed">();
+      const observe = rtB.pieceStartCommitFailureObserver;
+      rtB.pieceStartCommitFailureObserver = (failure) => {
+        observe?.(failure);
+        failed.resolve("failed");
+      };
+      return Promise.race([step.then(() => "step" as const), failed.promise]);
+    };
+
     // Reports the start commits the second runtime makes as refused with what
     // `refusal` returns for each attempt, counting from 1, and passes the
     // commit's own verdict through where it returns nothing. A refused commit
@@ -294,6 +307,10 @@ describe("cfc-policy-manifest-shared-install", () => {
       const failures = observeStartFailures();
 
       await runShared(rtB, "b-piece secret");
+      // The start has its verdict once the runtime is idle, so a refused
+      // start fails here rather than leaving the wait below pending.
+      await rtB.idle();
+      expect(failures).toEqual([]);
 
       await waitForCellValue<string>(
         rtA,
@@ -342,7 +359,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       );
 
       const piece = await runShared(rtB, "b-piece secret");
-      await waiting.promise;
+      expect(await firstOf(waiting.promise)).toBe("step");
       rtB.runner.stop(piece);
       release.resolve();
       await rtB.idle();
@@ -370,6 +387,8 @@ describe("cfc-policy-manifest-shared-install", () => {
       );
 
       await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+      expect(failures).toEqual([]);
 
       await waitForCellValue<string>(
         rtA,
@@ -427,7 +446,7 @@ describe("cfc-policy-manifest-shared-install", () => {
       );
 
       const piece = await runShared(rtB, "b-piece secret");
-      await waiting.promise;
+      expect(await firstOf(waiting.promise)).toBe("step");
       expect(await rtB.start(piece)).toBe(true);
       release.resolve();
       await rtB.idle();
