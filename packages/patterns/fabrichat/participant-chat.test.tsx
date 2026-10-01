@@ -13,6 +13,7 @@ import {
   handler,
   multiUserTest,
   pattern,
+  principalOf,
   type RepresentsCurrentUser,
   TESTS,
   type TrustedActionWrite,
@@ -198,6 +199,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     [TESTS]: [
       { action: writeProfile, event: {}, trustedUi: profileGesture },
       { await: "alice-sent" },
+      // The room's activity entry for Alice's message names her as its
+      // author, as her own message does.
+      {
+        assertion: assert(() =>
+          setup.aliceDid.get() !== "" &&
+          principalOf(setup.records.activity.key(0), "authored-by") ===
+            setup.aliceDid.get()
+        ),
+      },
       {
         assertion: assert(() =>
           chatDisplay(aliceChip[UI]) === "inline-flex" &&

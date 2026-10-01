@@ -218,6 +218,22 @@ export interface ChatRoomPolicy {
 /** The kind of room: how it was created, not how many members it has. */
 export type ChatRoomKind = "direct" | "group";
 
+/**
+ * What a room's creator wrote about it, as it was created. A manager-created
+ * room stores it labeled `authored-by` its creator, which is what
+ * `principalOf(record, "authored-by")` reads.
+ */
+export interface AboutRecord {
+  /** How the room was created. */
+  kind: ChatRoomKind;
+
+  /** A group room's title. */
+  title?: string;
+
+  /** When the room was created. */
+  createdAt?: FabricEpochNsec;
+}
+
 /** What a room says about itself, set once when it is created. */
 export interface ChatRoomAbout {
   /** `"direct"` if created as a direct room; `"group"` otherwise. */
@@ -231,6 +247,12 @@ export interface ChatRoomAbout {
 
   /** The room's policy, stated correctly, in a document of its own. */
   policy: Cell<ChatRoomPolicy>;
+
+  /**
+   * The record the room's creator wrote, whose label names them; absent for a
+   * space's own chat, which no one created as a room.
+   */
+  record?: Cell<AboutRecord>;
 }
 
 /** One entry in a room's log of recent activity. */

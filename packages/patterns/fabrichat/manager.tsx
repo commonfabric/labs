@@ -23,6 +23,7 @@ import {
   NAME,
   noticeSpaceAccess,
   pattern,
+  principalOf,
   spaceAccess,
   Stream,
   UI,
@@ -33,6 +34,7 @@ import {
 } from "commonfabric";
 import FabriChatRoom from "./room.tsx";
 import {
+  type AboutRecord,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
@@ -205,6 +207,16 @@ const tellAbout = (recipient: DID, room: Cell<ChatRoomLink>): void => {
 };
 
 /**
+ * The record a room's creator wrote, which the room's `about` links, as a
+ * cell: what `principalOf()` reads the creator from, and what reads without
+ * the room running. It holds nothing for a space's own chat.
+ */
+function aboutRecordOf(room: Cell<ChatRoomLink>): Cell<AboutRecord>;
+function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
+  return room.key("about").key("record");
+}
+
+/**
  * Creates a room in a space of its own, and its notices, and records its
  * entry, all in one transaction: the space's grants are part of creating it,
  * so nothing has to commit apart. Each other member is told about the room
@@ -370,8 +382,11 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       return;
     }
 
-    // `accept`.
-    const kind = room.key("about").get()?.kind;
+    // `accept`. The kind comes from the record the room's creator wrote,
+    // which reads without the room running, as its own view needs; a space's
+    // own chat has none, and its view says what it is.
+    const record = aboutRecordOf(room);
+    const kind = record.key("kind").get() ?? room.key("about").get()?.kind;
     if (
       currentPrincipal() === undefined || spaceAccess(room) === "none" ||
       (kind !== "direct" && kind !== "group")
@@ -382,14 +397,29 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       });
       return;
     }
-    const counterpart = event?.counterpart;
-    if (kind === "direct" && !isWellFormedDID(counterpart)) {
+    // A direct room's counterpart is its creator, as its `about` is labeled,
+    // whatever the event claims. A room this user created is found again with
+    // `openDirect`, and its label names no one else.
+    const creator = kind === "direct"
+      ? principalOf(record, "authored-by")
+      : undefined;
+    const refusal = kind !== "direct"
+      ? undefined
+      : creator === undefined
+      ? "The room's creator can't be verified."
+      : creator === currentPrincipal()
+      ? "The room was created by this user."
+      : event?.counterpart !== undefined && event.counterpart !== creator
+      ? "The counterpart is not the room's creator."
+      : undefined;
+    if (refusal !== undefined) {
       recordOutcome(requests, requestId, {
         status: "refused",
-        reason: "A direct room needs its counterpart.",
+        reason: refusal,
       });
       return;
     }
+    const counterpart = creator;
     const entry: ChatIndexEntry = {
       room,
       kind,

@@ -15,8 +15,8 @@
  */
 import {
   action,
+  type Cell,
   computed,
-  type Default,
   equals,
   type FabricEpochNsec,
   handler,
@@ -33,7 +33,6 @@ import {
 } from "commonfabric";
 import { isInMain, type ShownIn } from "./logic.ts";
 import {
-  type AboutRecord,
   type ActivityCell,
   type ActivityCounters,
   type ActivityCountersCell,
@@ -59,13 +58,14 @@ import {
   type RequestsCell,
   type RoomStreamEvent,
   type RoomWindowEvent,
-  SPACE_CHAT_ABOUT,
+  type StoredAbout,
   type UsedTimesCell,
   type WindowsCell,
   type WindowsValue,
 } from "./room-records.tsx";
 import { bodyText, FabriChatMessageRow } from "./message-row.tsx";
 import {
+  type AboutRecord,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
@@ -279,8 +279,11 @@ export interface FabriChatRoomCoreInput {
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
 
-  /** What the room says about itself, as its creator wrote it. */
-  about: AboutRecord;
+  /**
+   * What the room says about itself, as its creator wrote it; absent for a
+   * space's own chat, which reads as a group room with no title.
+   */
+  about?: Cell<AboutRecord>;
 
   /** The room's messages. */
   messages: MessagesCell;
@@ -344,7 +347,7 @@ export const FabriChatRoomCore = pattern<
     startDirect,
   } = input;
   const composer = new Writable.perSession<ComposerState>({});
-  const kind = computed((): ChatRoomKind => about?.kind ?? "group");
+  const kind = computed((): ChatRoomKind => about?.get()?.kind ?? "group");
   const records = {
     kind,
     composer,
@@ -389,16 +392,18 @@ export const FabriChatRoomCore = pattern<
   const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);
   const aboutView = {
     kind,
-    title: computed(() => about?.title),
-    createdAt: computed(() => about?.createdAt),
+    title: computed(() => about?.get()?.title),
+    createdAt: computed(() => about?.get()?.createdAt),
     policy,
+    // The stored record itself, as a link, so a reader can read its label.
+    record: about,
   };
   const expiredThrough = computed(() =>
     ((counters.elementById(NUMBERING_KEY).get() ??
       NO_ACTIVITY) as ActivityCounters).expiredThrough
   );
   const title = computed(() =>
-    about?.title ?? (kind === "direct" ? "Direct chat" : "Chat")
+    about?.get()?.title ?? (kind === "direct" ? "Direct chat" : "Chat")
   );
   const hasThread = computed(() => {
     const root = composer.get()?.thread;
@@ -603,15 +608,15 @@ export const FabriChatRoomCore = pattern<
 });
 
 /**
- * What a room stores. Each has a default, so a space's own chat starts with
- * none.
+ * What a room stores. Each record but `about` has a default, so a space's own
+ * chat starts with none of them.
  */
 export interface FabriChatRoomInput {
   /**
-   * What the room says about itself, written once by whoever creates it. A
-   * space's own chat is a group room with no title.
+   * What the room says about itself, written once by the manager that creates
+   * it. A space's own chat has none, and reads as a group room with no title.
    */
-  about?: AboutRecord | Default<typeof SPACE_CHAT_ABOUT>;
+  about?: StoredAbout;
 
   /** The room's messages. */
   messages?: MessagesCell;

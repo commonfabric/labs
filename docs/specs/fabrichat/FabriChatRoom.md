@@ -105,9 +105,10 @@ write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
 the runtime's write policies can split one document this way is a prerequisite
 to check.
 
-`about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
-handler that creates the room, so it is labeled with its creator. `canSend` is
-computed for each viewer from their access and whether their profile resolves.
+`about.record` is stored as `AuthoredByCurrentUser`, written once by the handler
+that creates the room, so it is labeled with its creator, and `about` links it.
+`canSend` is computed for each viewer from their access and whether their
+profile resolves.
 
 Every handler that changes the room's own record appends its `recentActivity`
 entry in the same transaction as the change, so the log never disagrees with the

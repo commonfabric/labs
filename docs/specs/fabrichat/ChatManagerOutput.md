@@ -188,27 +188,28 @@ Creates a group room. This is an outward act: it grants other people access.
   with it resumes the request rather than starting another.
 - `room: Cell<ChatRoomOutput>` — A link to the room this user has been admitted
   to, from the notice that announced it.
-- `counterpart?: string` — For a direct room, the DID of its other member.
-  Required for a direct room, and ignored for a group room. The client MUST have
-  checked that it's the room's creator, as the room's `about` is labeled, before
-  sending (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room) and
+- `counterpart?: string` — For a direct room, the DID of its other member,
+  which is the room's creator, as the room's `about.record` is labeled. The
+  client MUST have checked that before sending (see
+  [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room) and
   [`clients.md`](clients.md#finding-conversations)); a notice's claim of who
-  sent it is only a hint.
+  sent it is only a hint. Ignored for a group room.
 
 Records a room this user has been admitted to.
 
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index. Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
-- **Effect:** records an entry in `rooms`. The manager, being a pattern, can't
-  read `about`'s label itself, so it records the client's checked `counterpart`;
-  once the room's space has a member set, it also checks that `counterpart` is a
-  member. For a direct room, it also records the entry in `direct`, unless
+- **Effect:** records an entry in `rooms`. For a direct room, the counterpart it
+  records is the creator `about.record`'s label names, which it reads itself;
+  once the room's space has a member set, it also checks that the counterpart is
+  a member. For a direct room, it also records the entry in `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
   stays, as under [crossing creations](#crossing-creations).
 - **Outcome:** `done` with the entry, or `refused` if this user can't read the
-  room, or if the room is direct and `counterpart` is missing, or, once there
-  are member sets, isn't a member.
+  room, or if the room is direct and its label names no creator, names this
+  user, or names someone other than a `counterpart` sent, or, once there are
+  member sets, the counterpart isn't a member.
 
 A client also sends `accept` when the user first opens the chat of an existing
 shared space, which is created with its space and not by a manager.

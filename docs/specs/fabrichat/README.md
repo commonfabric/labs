@@ -288,9 +288,9 @@ prerequisite, the patterns depart from this design, as below.
   principals as typed. A room offers a direct chat with each participant
   whose profile attests a principal (`principalOf()`), except the viewer, by
   sending that principal to the `openDirect` of the viewer's manager, found
-  with `#chatManager`. `accept` takes a direct room's counterpart as sent,
-  since the room's `about` carries no `authored-by` label to check it against
-  (see [writers and labels](#writers-and-labels)).
+  with `#chatManager`. `accept` takes a direct room's counterpart from the
+  label on its `about.record`, and refuses one the event names otherwise (see
+  [writers and labels](#writers-and-labels)).
 - **Creation takes one transaction.** The space comes with its grants, so
   writing the room, the manager's notices, and its index entry happens in one
   commit, rather than in the design's resumable steps, and a request's outcome
@@ -312,12 +312,14 @@ prerequisite, the patterns depart from this design, as below.
   gesture, since the manager's records are also written by acts with none.
   One handler, `commitManager`, writes the manager's records, and each of its
   streams is a binding of it.
-- **Only messages and reactions are labeled `authored-by`.** The runtime gives
-  that label only to a record every one of whose writers names a reviewed
-  gesture, so neither `about`, which the creator's manager writes, nor a
-  `recentActivity` entry, which acts with no gesture write too, carries it.
-  `about` is a plain argument of the room, written when the room is created,
-  and its `policy` links a document the room writes when it starts.
+- **Labels without a gesture.** Messages and reactions are labeled
+  `authored-by` under a reviewed gesture, as the design says. A
+  `recentActivity` entry and `about.record` are labeled too, by writers that
+  name no gesture (each handler appending an entry, and the manager's
+  `commitManager`), so their label says whose run wrote them, not that the
+  person made a gesture. `about` is the room's own view, with its `policy`, a
+  document the room writes when it starts, and `about.record` links the stored
+  record.
 
 ### Records
 

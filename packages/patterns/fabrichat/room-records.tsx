@@ -43,7 +43,9 @@ import {
   windowCount,
   windowSlice,
 } from "./logic.ts";
+import type { commitManager } from "./manager.tsx";
 import {
+  type AboutRecord,
   CHAT_DELETE_ACTION,
   CHAT_DELETE_SURFACE,
   CHAT_EDIT_ACTION,
@@ -277,18 +279,20 @@ export type UsedTimesCell = Writable<StoredUsedTime[] | Default<[]>>;
 
 /**
  * A stored activity entry: a document of its own, written once by the handler
- * whose act it records. Entries record acts from every surface and from none,
- * so an entry carries no `authored-by` label, which needs a reviewed gesture
- * from every writer.
+ * whose act it records, and labeled `authored-by` the principal that handler
+ * acts for. Its writers name no gesture, since entries record acts from every
+ * surface; the label says whose act it was, not that they made a gesture.
  */
-export type SentActivity = WritePolicyAnyOf<ChatRoomActivity, [
-  WriteAuthorizedBy<unknown, typeof commitSend>,
-  WriteAuthorizedBy<unknown, typeof commitEdit>,
-  WriteAuthorizedBy<unknown, typeof commitDelete>,
-  WriteAuthorizedBy<unknown, typeof commitObliterate>,
-  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
-  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-]>;
+export type SentActivity = AuthoredByCurrentUser<
+  WritePolicyAnyOf<ChatRoomActivity, [
+    WriteAuthorizedBy<unknown, typeof commitSend>,
+    WriteAuthorizedBy<unknown, typeof commitEdit>,
+    WriteAuthorizedBy<unknown, typeof commitDelete>,
+    WriteAuthorizedBy<unknown, typeof commitObliterate>,
+    WriteAuthorizedBy<unknown, typeof commitSendReaction>,
+    WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+  ]>
+>;
 
 /** The room's recent activity, in `seq` order. */
 export type ActivityCell = Writable<SentActivity[] | Default<[]>>;
@@ -363,22 +367,15 @@ export type WindowsValue = WriteAuthorizedBy<
  */
 export type WindowsCell = Writable<WindowsValue>;
 
-/** What a room says about itself, as its creator wrote it. */
-export interface AboutRecord {
-  /** How the room was created. */
-  kind: ChatRoomKind;
-
-  /** A group room's title. */
-  title?: string;
-
-  /** When the room was created. */
-  createdAt?: FabricEpochNsec;
-}
-
-/** A space's own chat: a group room with no title. */
-export const SPACE_CHAT_ABOUT = {
-  kind: "group",
-} as const satisfies AboutRecord;
+/**
+ * What a room created by a manager says about itself: written once, by the
+ * manager's `commitManager` as it creates the room, and labeled `authored-by`
+ * the room's creator, which `principalOf(about, "authored-by")` reads. It has
+ * no default, which something other than its writer would write.
+ */
+export type StoredAbout = AuthoredByCurrentUser<
+  WriteAuthorizedBy<AboutRecord, typeof commitManager>
+>;
 
 //
 // Helpers

@@ -307,7 +307,9 @@ export default pattern(() => {
         ),
       },
 
-      // Accepting a direct room only with its counterpart.
+      // A direct room this user created is not accepted, with a counterpart
+      // or without one: its label names this user, and `openDirect` finds it
+      // again. `accept.test.tsx` covers accepting someone else's.
       { action: action_forget_group_again },
       {
         action: accepting.openDirect,
@@ -316,17 +318,14 @@ export default pattern(() => {
       { action: action_hold_accepted },
       { action: action_forget_accepted_direct },
       { action: action_accept_direct_alone },
-      {
-        assertion: assert(() =>
-          statusOf(acceptRequests, "a-2") === "refused" &&
-          acceptRooms.get().length === 0
-        ),
-      },
       { action: action_accept_direct_with_bob },
       {
         assertion: assert(() =>
-          acceptRooms.get().length === 1 &&
-          acceptRooms.get()[0]?.counterpart === BOB
+          reasonOf(acceptRequests, "a-2") ===
+            "The room was created by this user." &&
+          reasonOf(acceptRequests, "a-3") ===
+            "The room was created by this user." &&
+          acceptRooms.get().length === 0
         ),
       },
 
