@@ -22,9 +22,10 @@ const RECORD_HANDLER = `
 
 /**
  * A pattern whose `.map()` callback binds `record({ ...records, log, id })`,
- * with `declarations` standing in the pattern body ahead of it.
+ * with `declarations` standing in the pattern body ahead of it. `operand` is
+ * what the callback spreads, `records` unless given.
  */
-function spreadOfRecords(declarations: string): string {
+function spreadOfRecords(declarations: string, operand = "records"): string {
   return `
     import { handler, pattern, type Writable } from "commonfabric";
     ${RECORD_HANDLER}
@@ -37,9 +38,19 @@ function spreadOfRecords(declarations: string): string {
     >(({ ids, log, prefix }) => {
       const base = { log, prefix };
       ${declarations}
-      return { fire: ids.map((id) => record({ ...records, log, id })) };
+      return { fire: ids.map((id) => record({ ...${operand}, log, id })) };
     });
   `;
+}
+
+/** The messages of the computation errors a source reports. */
+async function computationErrorsOf(source: string): Promise<string[]> {
+  const { diagnostics } = await validateSource(source, {
+    types: COMMONFABRIC_TYPES,
+  });
+  return diagnostics
+    .filter((diagnostic) => diagnostic.type === "pattern-context:computation")
+    .map((diagnostic) => diagnostic.message);
 }
 
 /** What a source reports about a spread, and its transformed output. */
@@ -89,6 +100,61 @@ describe("expandCapturedObjectSpreads()", () => {
       );
     });
 
+    it("reads a numeric key under the name JavaScript gives it", async () => {
+      // A numeric literal's key is its value written in decimal, whatever
+      // base or notation the source used.
+      const { captured, opaque, output } = await spreadReportsOf(
+        spreadOfRecords("const records = { 0x10: log, 1e3: prefix };"),
+      );
+
+      expect(captured).toHaveLength(0);
+      expect(opaque).toHaveLength(0);
+      expect(output).toContain(
+        'record({ 16: records.key("16"), 1000: records.key("1000"), log, id })',
+      );
+    });
+
+    it("reads the keys through a wrapper around the operand", async () => {
+      for (
+        const operand of [
+          "(records)",
+          "(records as { log: Writable<string[]>; prefix: Writable<string> })",
+          "(records satisfies { log: Writable<string[]> })",
+          "records!",
+        ]
+      ) {
+        const { captured, opaque, output } = await spreadReportsOf(
+          spreadOfRecords("const records = { log, prefix };", operand),
+        );
+
+        expect(captured).toHaveLength(0);
+        expect(opaque).toHaveLength(0);
+        expect(output).toContain(
+          'record({ log: records.key("log"), prefix: records.key("prefix"), log, id })',
+        );
+      }
+    });
+
+    it("reads an object two spreads share, each time it is spread", async () => {
+      const twice = await spreadReportsOf(
+        spreadOfRecords("const records = { ...base, ...base };"),
+      );
+      expect(twice.captured).toHaveLength(0);
+      expect(twice.output).toContain(
+        'record({ log: records.key("log"), prefix: records.key("prefix"), log: records.key("log"), prefix: records.key("prefix"), log, id })',
+      );
+
+      const diamond = await spreadReportsOf(spreadOfRecords(`
+        const left = { ...base, a: "a" };
+        const right = { ...base, b: "b" };
+        const records = { ...left, ...right };
+      `));
+      expect(diamond.captured).toHaveLength(0);
+      expect(diamond.output).toContain(
+        'record({ log: records.key("log"), prefix: records.key("prefix"), a: records.key("a"), log: records.key("log"), prefix: records.key("prefix"), b: records.key("b"), log, id })',
+      );
+    });
+
     it("reads the keys a literal's own spread copies, in place", async () => {
       const { captured, opaque, output } = await spreadReportsOf(
         spreadOfRecords('const records = { first: "f", ...base, last: "l" };'),
@@ -125,6 +191,46 @@ describe("expandCapturedObjectSpreads()", () => {
 
       expect(captured).toHaveLength(1);
       expect(opaque).toHaveLength(0);
+      expect(output).toContain("...records");
+    });
+
+    it("reports a call result through a wrapper around the operand", async () => {
+      for (
+        const operand of [
+          "(records)",
+          "(records as { prefix: string })",
+          "(records satisfies { prefix: string })",
+        ]
+      ) {
+        const { captured, opaque, output } = await spreadReportsOf(
+          spreadOfRecords("const records = makePlain();", operand),
+        );
+
+        expect(captured).toHaveLength(1);
+        expect(opaque).toHaveLength(0);
+        // The printer reflows a wrapper's type, so only its start is matched.
+        expect(output).toContain("...(records");
+      }
+    });
+
+    it("reports an alias of a binding that is not a `const` with known keys", async () => {
+      const { captured, output } = await spreadReportsOf(
+        spreadOfRecords("const records = prefix;"),
+      );
+
+      expect(captured).toHaveLength(1);
+      expect(output).toContain("...records");
+    });
+
+    it("reports a literal with an accessor", async () => {
+      // What an accessor yields is not a key the literal's text settles.
+      const { captured, output } = await spreadReportsOf(
+        spreadOfRecords(
+          "const records = { log, get prefix() { return prefix; } };",
+        ),
+      );
+
+      expect(captured).toHaveLength(1);
       expect(output).toContain("...records");
     });
 
@@ -205,6 +311,38 @@ describe("expandCapturedObjectSpreads()", () => {
       expect(captured).toHaveLength(1);
       expect(opaque).toHaveLength(0);
       expect(output).toContain("...row");
+    });
+  });
+
+  // The one-report rule is for a spread two stages both see. Two different
+  // errors on one node are each made.
+  describe("leaves other computation errors on one node distinct", () => {
+    it("reports a non-static default and a rest element of one parameter", async () => {
+      const messages = await computationErrorsOf(`
+        import { pattern } from "commonfabric";
+
+        const getDefault = () => 42;
+        export default pattern<{ a?: number; b: string }>(
+          ({ a = getDefault(), ...rest }) => ({ a, rest }),
+        );
+      `);
+
+      expect(new Set(messages).size).toBe(2);
+    });
+
+    it("reports a default and a rest element of one opaque local binding", async () => {
+      const messages = await computationErrorsOf(`
+        import { pattern } from "commonfabric";
+
+        export default pattern<{ record: { a?: number; b: string } }>(
+          ({ record }) => {
+            const { a = 1, ...rest } = record;
+            return { a, rest };
+          },
+        );
+      `);
+
+      expect(new Set(messages).size).toBe(2);
     });
   });
 

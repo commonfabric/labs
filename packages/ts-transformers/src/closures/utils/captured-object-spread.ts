@@ -10,6 +10,7 @@ import {
   isModuleScopedDeclaration,
 } from "../../ast/scope-analysis.ts";
 import type { TransformationContext } from "../../core/mod.ts";
+import { reportSpreadError } from "../../transformers/pattern-body-reactive-root-lowering.ts";
 import { unwrapExpression } from "../../utils/expression.ts";
 
 /**
@@ -28,7 +29,8 @@ import { unwrapExpression } from "../../utils/expression.ts";
  *
  * This rewrites every spread in `body`, outside any function nested in it,
  * whose operand is a capture of `callback` named in `capturedNames` and
- * declared that way. A spread of any other capture copies nothing when it
+ * declared that way, through any parentheses, `as`, `satisfies`, or `!`
+ * around the operand. A spread of any other capture copies nothing when it
  * runs, and nothing else reports it, so it is left as it is with a diagnostic
  * (`reportUnexpandedSpread`). A spread of anything but a capture is left as
  * it is.
@@ -59,7 +61,7 @@ export function expandCapturedObjectSpreads(
         return [property];
       }
 
-      const operand = property.expression;
+      const operand = unwrapExpression(property.expression);
       if (!ts.isIdentifier(operand) || !capturedNames.has(operand.text)) {
         return [property];
       }
@@ -144,22 +146,32 @@ function staticKeysOfCapturedObject(
  * objects, or a `const` that names one, at any depth. A `__proto__:`
  * assignment sets the prototype and contributes no key. Returns `undefined`
  * for anything else, a call or a computed key say, and for a declaration
- * reached twice.
+ * whose initializer reaches the declaration itself.
+ *
+ * `resolving` holds the declarations being read on the way to this one, so a
+ * declaration reached again along another path, as `base` is in
+ * `{ ...base, ...base }`, is read again rather than taken for a cycle.
  */
 function staticKeysOfInitializer(
   initializer: ts.Expression,
   context: TransformationContext,
-  seen: Set<ts.VariableDeclaration>,
+  resolving: Set<ts.VariableDeclaration>,
 ): StaticKey[] | undefined {
   const expression = unwrapExpression(initializer);
 
   if (ts.isIdentifier(expression)) {
     const declaration = constDeclarationOf(expression, context);
-    if (!declaration || seen.has(declaration)) {
+    if (!declaration || resolving.has(declaration)) {
       return undefined;
     }
-    seen.add(declaration);
-    return staticKeysOfInitializer(declaration.initializer, context, seen);
+    resolving.add(declaration);
+    const keys = staticKeysOfInitializer(
+      declaration.initializer,
+      context,
+      resolving,
+    );
+    resolving.delete(declaration);
+    return keys;
   }
 
   if (!ts.isObjectLiteralExpression(expression)) {
@@ -172,12 +184,14 @@ function staticKeysOfInitializer(
       const spread = staticKeysOfInitializer(
         property.expression,
         context,
-        seen,
+        resolving,
       );
       if (!spread) {
         return undefined;
       }
-      keys.push(...spread);
+      for (const key of spread) {
+        keys.push(key);
+      }
       continue;
     }
 
@@ -251,21 +265,18 @@ function copyKey(key: StaticKey, factory: ts.NodeFactory): ts.PropertyName {
 /**
  * Helper for `expandCapturedObjectSpreads()`, which reports a spread of a
  * capture whose keys are not known when the code is compiled. The report goes
- * through `reportDiagnosticOnce()` under the pattern-context computation type,
- * on the authored spread, so that the pattern-context check that runs later
- * (`pattern-body-reactive-root-lowering.ts`), which reports the same spread
- * when the capture is a tracked opaque value, adds nothing to it.
+ * through `reportSpreadError()`, on the authored spread, so that the
+ * pattern-context check that runs later, which reports the same spread when
+ * the capture is a tracked opaque value, adds nothing to it.
  */
 function reportUnexpandedSpread(
   spread: ts.SpreadAssignment,
   operand: ts.Identifier,
   context: TransformationContext,
 ): void {
-  context.reportDiagnosticOnce({
-    severity: "error",
-    type: "pattern-context:computation",
-    message:
-      `Spread of the captured value \`${operand.text}\` copies nothing: the callback reads a capture as an opaque reference, which has no keys. Declare \`${operand.text}\` as a \`const\` initialized with an object literal whose keys are static, or build the object outside the callback.`,
-    node: ts.getOriginalNode(spread),
-  });
+  reportSpreadError(
+    context,
+    ts.getOriginalNode(spread),
+    `Spread of the captured value \`${operand.text}\` copies nothing: the callback reads a capture as an opaque reference, which has no keys. Declare \`${operand.text}\` as a \`const\` initialized with an object literal whose keys are static, or build the object outside the callback.`,
+  );
 }
