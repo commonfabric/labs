@@ -437,8 +437,9 @@ export class PatternContextValidationTransformer
   }
 
   /**
-   * Whether `expression` is an object literal, or a name bound by a
-   * declaration that initializes it with one.
+   * Whether `expression` is an object literal, or a name a `const`
+   * declaration initializes with one. A `let` or `var` binding could hold
+   * anything by the time it is read, so it does not count.
    */
   #isBuiltFromObjectLiteral(
     expression: ts.Expression,
@@ -453,15 +454,17 @@ export class PatternContextValidationTransformer
     const declaration = checker.getSymbolAtLocation(expression)
       ?.valueDeclaration;
     return !!declaration && ts.isVariableDeclaration(declaration) &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
       !!declaration.initializer &&
       ts.isObjectLiteralExpression(unwrapExpression(declaration.initializer));
   }
 
   /**
    * Whether `expression` names the input parameter of the `pattern()`
-   * callback it appears in: the first parameter, bound to a plain name, of a
-   * callback that is a `pattern()` callback's or of a standalone function
-   * definition, which is how a callback held in a `const` reads.
+   * callback it appears in: the first parameter, bound to a plain name and not
+   * a rest parameter, of a callback that is a `pattern()` callback's or of a
+   * standalone function definition, which is how a callback held in a `const`
+   * reads.
    */
   #isPatternInputParameter(
     expression: ts.Expression,
@@ -474,7 +477,7 @@ export class PatternContextValidationTransformer
       ?.valueDeclaration;
     if (
       !declaration || !ts.isParameter(declaration) ||
-      !ts.isIdentifier(declaration.name)
+      !ts.isIdentifier(declaration.name) || declaration.dotDotDotToken
     ) {
       return false;
     }

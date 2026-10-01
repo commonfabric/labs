@@ -680,8 +680,8 @@ Diagnostics emitted in all modes:
     parameter: a value read off the input (`input.sub[SELF]`), another
     pattern's result (`child[SELF]`), or a local bound to `input[SELF]`
     (`self[SELF]`). The input parameter is the first parameter, bound to a
-    plain name, of a `pattern(...)` callback or of a standalone function
-    definition
+    plain name and not a rest parameter, of a `pattern(...)` callback or of a
+    standalone function definition
   - `SELF` names the pattern's own result only on the reactive proxy a
     `pattern(...)` body receives as its input. A compute callback sees plain
     values, a reactive collection callback sees a captured reference to the
@@ -689,7 +689,8 @@ Diagnostics emitted in all modes:
     of them is `undefined` at runtime, and the link it would make names a cell
     that never holds a value
   - not reported: a receiver built from an object literal (`{ [SELF]: 1 }`,
-    or a name a declaration initializes with one), which holds whatever keys it
+    or a name a `const` declaration initializes with one; a `let` or `var`
+    could hold anything by the time it is read), which holds whatever keys it
     was given; anything in a standalone function definition, which is ordinary
     code over whatever it is handed, and which a `pattern(...)` callback held
     in a `const` also is; and `input[SELF]` read directly in the pattern body,

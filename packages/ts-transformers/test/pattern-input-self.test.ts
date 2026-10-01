@@ -264,6 +264,38 @@ describe("pattern-input-self", () => {
       ).toEqual([]);
     });
 
+    it("reports `pattern-context:self-access` for `[SELF]` on a `let` that held an object literal", async () => {
+      expect(
+        await errorsOf(`
+          export default pattern<Input, Output>((input) => ({
+            [NAME]: "n",
+            [UI]: <div />,
+            title: input.title,
+            other: computed(() => {
+              let local: { [SELF]?: unknown } = { [SELF]: input.title };
+              local = input;
+              return local[SELF];
+            }),
+          }));
+        `),
+      ).toEqual(["pattern-context:self-access"]);
+    });
+
+    it("reports `pattern-context:self-access` for `[SELF]` on a rest parameter", async () => {
+      expect(
+        await errorsOf(`
+          export default pattern<Input, Output>(
+            (...input: Input[] & { [SELF]?: unknown }) => ({
+              [NAME]: "n",
+              [UI]: <div />,
+              title: "t",
+              other: input[SELF],
+            }),
+          );
+        `),
+      ).toEqual(["pattern-context:self-access"]);
+    });
+
     it("reports `pattern-context:self-access` for `[SELF]` read off a value under the input", async () => {
       expect(
         await errorsOf(`
