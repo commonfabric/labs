@@ -14,6 +14,10 @@ export const getPattern = createRoute({
       ),
     }),
     query: z.object({
+      sourceRoot: z.union([z.string(), z.array(z.string())]).optional()
+        .describe(
+          "Attached source entry pathname under /api/patterns/. Repeat for multiple roots.",
+        ),
       identity: z.string().optional().describe(
         "When present, return the complete authored pattern closure's " +
           "content-addressed identity as text/plain instead of the entry " +
