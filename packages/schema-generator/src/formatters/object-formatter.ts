@@ -41,7 +41,6 @@ import {
 } from "../typescript/type-node.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -462,12 +461,12 @@ export class ObjectFormatter implements TypeFormatter {
     }
     if (required.length > 0) schema.required = required;
 
-    const labels = carrier &&
-      this.#schemaGenerator.labelsCarriedBy(carrier, context);
-    return labels
-      ? labels.reduce<MutableJSONSchema>(
-        (labelled, label) => withIfcLabels(labelled, label),
+    return carrier
+      ? this.#schemaGenerator.withLabelsCarriedBy(
         schema,
+        type,
+        carrier,
+        context,
       )
       : schema;
   }
