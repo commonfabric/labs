@@ -737,7 +737,9 @@ that replica alone.
 - A later write over a folded document goes to the server as a whole-document
   `set`, never as a patch, because the server holds a different value than the
   one the patch was computed against. That matters once the principal is
-  granted WRITE.
+  granted WRITE. The commit also reads the whole document at the fold's `seq`,
+  so that a change the server took to any part of it since conflicts, rather
+  than being overwritten by the whole-document `set`.
 - The re-run the scheduler makes after the refusal reads the folded value and
   so has nothing to write. Its computation settles instead of re-running
   against the same refusal.

@@ -1206,8 +1206,10 @@ export interface IStorageTransaction {
   /**
    * Whether this transaction's writes are derived from its reads, as a
    * reactive computation's are, so that running it again reproduces them.
-   * A replica keeps such a write as a local fold when the space refuses it
-   * for lack of a grant, rather than reverting it.
+   * When the space refuses such a write for lack of a grant, a replica may
+   * keep it as a local fold rather than revert it: it does so for each
+   * document the write sits directly on the confirmed version it was made
+   * over, and reverts the write to any other.
    */
   derivedWrites?: boolean;
 

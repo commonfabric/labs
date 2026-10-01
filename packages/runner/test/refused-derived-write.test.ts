@@ -22,9 +22,13 @@ import { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 
 const AUDIENCE = "did:key:z6Mk-runner-refused-derived-write-audience";
 
-/** Opens each session on the one in-process server, as `signer`. */
+/**
+ * Opens each session on the one in-process server, as `signer`. A commit
+ * waits for `beforeTransact`, when one is set, before it reaches the server.
+ */
 class LoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
+  beforeTransact: (() => Promise<void>) | undefined;
   readonly #server: MemoryV2Server.Server;
 
   constructor(server: MemoryV2Server.Server) {
@@ -50,6 +54,11 @@ class LoopbackSessionFactory implements SessionFactory {
         authorization: { principal: signer?.did() },
       }),
     );
+    const transact = session.transact.bind(session);
+    session.transact = async (...args: Parameters<typeof transact>) => {
+      await this.beforeTransact?.();
+      return transact(...args);
+    };
     return { client, session };
   }
 }
@@ -70,15 +79,16 @@ describe("refused derived write", () => {
   let server: MemoryV2Server.Server;
   let runtimes: Runtime[];
 
+  let factories: Map<Runtime, LoopbackSessionFactory>;
+
   const open = (identity: Identity): Runtime => {
+    const factory = new LoopbackSessionFactory(server);
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
-      storageManager: TestStorageManager.overServer(
-        { as: identity },
-        new LoopbackSessionFactory(server),
-      ),
+      storageManager: TestStorageManager.overServer({ as: identity }, factory),
     });
     runtimes.push(runtime);
+    factories.set(runtime, factory);
     return runtime;
   };
 
@@ -91,6 +101,7 @@ describe("refused derived write", () => {
       subscriptionRefreshDelayMs: 0,
     });
     runtimes = [];
+    factories = new Map();
   });
 
   afterEach(async () => {
@@ -99,7 +110,8 @@ describe("refused derived write", () => {
   });
 
   /**
-   * Opens `space`, holding `source`, as the owner and as a READ principal,
+   * Opens `space`, holding `source` and, when given, `stored` as `derived`,
+   * as the owner and as a READ principal,
    * and subscribes an action in the reader's runtime that writes
    * `derive(source)` to `derived`. The action reads the cell it writes, as a
    * computation reads its own output to leave an unchanged one alone. The
@@ -107,7 +119,11 @@ describe("refused derived write", () => {
    * has run more often than any retry could account for, so a run that never
    * stops fails its case rather than hanging it.
    */
-  const readerDerives = async <S, D>(source: S, derive: (s: S) => D) => {
+  const readerDerives = async <S, D>(
+    source: S,
+    derive: (s: S) => D,
+    stored?: D,
+  ) => {
     const owner = await Identity.fromPassphrase("refused write owner");
     const reader = await Identity.fromPassphrase("refused write reader");
     const ownerRuntime = open(owner);
@@ -116,6 +132,9 @@ describe("refused derived write", () => {
     });
     await ownerRuntime.editWithRetry((tx) => {
       ownerRuntime.getCell<S>(space, "source", undefined, tx).set(source);
+      if (stored !== undefined) {
+        ownerRuntime.getCell<D>(space, "derived", undefined, tx).set(stored);
+      }
     });
     await ownerRuntime.storageManager.synced();
 
@@ -209,5 +228,38 @@ describe("refused derived write", () => {
     await ownerRuntime.storageManager.pullOpenSpacesToHead();
     await stored.sync();
     expect(stored.get()).toEqual({ doubled: 6, from: "reader" });
+  });
+
+  it("refuses a write over a kept value when the store changed the document since", async () => {
+    // The reader's change is to `doubled` alone, and the owner's concurrent
+    // one to `from` alone, so only a read of the whole document can conflict.
+
+    const { ownerRuntime, readerRuntime, space, reader, derived, counts } =
+      await readerDerives(
+        { n: 2 },
+        ({ n }: { n: number }) => ({ doubled: n * 2, from: "reader" }),
+        { doubled: 0, from: "owner" },
+      );
+    expect(counts.refusals).toBe(1);
+    expect(derived.get()).toEqual({ doubled: 4, from: "reader" });
+
+    await new ACLManager(ownerRuntime, space).grant(reader.did(), "WRITE");
+    factories.get(readerRuntime)!.beforeTransact = async () => {
+      factories.get(readerRuntime)!.beforeTransact = undefined;
+      await ownerRuntime.editWithRetry((tx) => {
+        ownerRuntime.getCell<{ from: string }>(space, "derived", undefined, tx)
+          .key("from").set("concurrent");
+      });
+      await ownerRuntime.storageManager.synced();
+    };
+    const tx = readerRuntime.edit();
+    derived.withTx(tx).key("doubled").set(6);
+    const result = await tx.commit();
+
+    expect(result.error?.name).toBe("ConflictError");
+    const stored = ownerRuntime.getCell<unknown>(space, "derived");
+    await ownerRuntime.storageManager.pullOpenSpacesToHead();
+    await stored.sync();
+    expect(stored.get()).toEqual({ doubled: 0, from: "concurrent" });
   });
 });

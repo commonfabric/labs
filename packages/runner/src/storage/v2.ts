@@ -5645,13 +5645,18 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[];
     reads: ClientCommit["reads"];
   } {
+    const operations = this.#wholeOverLocalFolds(
+      documentOperationsOf(transaction),
+      identity,
+    );
     return {
-      operations: storeOperationsOf(
-        this.#wholeOverLocalFolds(documentOperationsOf(transaction), identity),
-        transaction.sqliteOps ?? [],
-      ),
+      operations: storeOperationsOf(operations, transaction.sqliteOps ?? []),
       preconditions: activeCommitPreconditions(transaction.preconditions),
-      reads: this.#buildReads(source, this.#nextLocalSeq, identity),
+      reads: this.#readsOverLocalFolds(
+        operations,
+        this.#buildReads(source, this.#nextLocalSeq, identity),
+        identity,
+      ),
     };
   }
 
@@ -5680,7 +5685,11 @@ export class SpaceReplica
     }
     const commit: ClientCommit = {
       localSeq,
-      reads: options?.reads ?? this.#buildReads(source, localSeq, identity),
+      reads: this.#readsOverLocalFolds(
+        operations,
+        options?.reads ?? this.#buildReads(source, localSeq, identity),
+        identity,
+      ),
       // Cell ops first, folded SQLite ops last — the same commit shape
       // commitOperations builds, so the wave batch is made of ordinary
       // client commits.
@@ -6331,7 +6340,10 @@ export class SpaceReplica
       ["commitOperations", "buildCommit"],
       (): ClientCommit => ({
         localSeq,
-        reads: this.#buildReads(source, localSeq),
+        reads: this.#readsOverLocalFolds(
+          operations,
+          this.#buildReads(source, localSeq),
+        ),
         // Cell ops first, folded SQLite ops last (applied in array order by the
         // engine; sqlite ops are not entity revisions and carry no id/scope).
         operations: storeOperationsOf(operations, sqliteOps),
@@ -7093,6 +7105,47 @@ export class SpaceReplica
       const { patches: _patches, ...whole } = operation;
       return { ...whole, op: "set" };
     });
+  }
+
+  /**
+   * Returns `reads` with a read of the whole document added, at its confirmed
+   * seq, for each document `operations` writes whose confirmed value is a
+   * local fold. Such a write goes to the store whole, so it has to conflict
+   * with any change the store took to the document since, not only with
+   * changes to the paths its writer read; a read the commit already makes of
+   * the whole document at that seq is not repeated.
+   */
+  #readsOverLocalFolds(
+    operations: readonly NativeCommitOperation[],
+    reads: ClientCommit["reads"],
+    identity?: ScopeKeyIdentity,
+  ): ClientCommit["reads"] {
+    const added: ConfirmedCommitRead[] = [];
+    for (const operation of operations) {
+      const scope = normalizeCellScope(operation.scope);
+      const record = this.#docs.get(
+        docKey(operation.id, this.instanceKey(operation.scope, identity)),
+      );
+      if (record?.confirmed.localFold !== true) continue;
+      const seq = record.confirmed.seq;
+      const covered = [...reads.confirmed, ...added].some((read) =>
+        read.id === operation.id &&
+        normalizeCellScope(read.scope) === scope &&
+        read.path.length === 0 && read.nonRecursive !== true &&
+        read.seq === seq
+      );
+      if (!covered) {
+        added.push({
+          id: operation.id,
+          scope,
+          path: toCommitReadPath([]),
+          seq,
+        });
+      }
+    }
+    return added.length === 0
+      ? reads
+      : { ...reads, confirmed: [...reads.confirmed, ...added] };
   }
 
   /**
@@ -7873,13 +7926,10 @@ export class SpaceReplica
         continue;
       }
       // A same-seq frame is the value a local fold was made over, so the
-      // fold stands until the store moves on.
-      if (
-        upsert.seq === record.confirmed.seq &&
-        record.confirmed.localFold === true
-      ) {
-        continue;
-      }
+      // fold stands until the store moves on; the frame is still recorded as
+      // delivered below.
+      const keepsLocalFold = upsert.seq === record.confirmed.seq &&
+        record.confirmed.localFold === true;
       const previousConfirmedSeq = record.confirmed.seq;
       const previousCoverClass = record.confirmed.coverClass;
       // The covering commit's class (speculation.md §4's arrival-witness
@@ -7891,12 +7941,14 @@ export class SpaceReplica
       // commit — the stale class must not ride onto it.
       const coverClass = upsert.coverClass ??
         (upsert.seq === previousConfirmedSeq ? previousCoverClass : undefined);
-      record.confirmed = confirmedVersion(
-        upsert.seq,
-        upsert.deleted === true ? undefined : upsert.doc,
-        coverClass,
-      );
-      record.materialized = undefined;
+      if (!keepsLocalFold) {
+        record.confirmed = confirmedVersion(
+          upsert.seq,
+          upsert.deleted === true ? undefined : upsert.doc,
+          coverClass,
+        );
+        record.materialized = undefined;
+      }
       // The arrival wake fires on a FORWARD move — and on a same-seq
       // frame whose class arrives LATE (undefined -> defined): an entry
       // failed CLOSED at its floor under an unknown class (a mixed-window
