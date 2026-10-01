@@ -144,6 +144,104 @@ what a pattern decides from the level it is given, such as a control only an
 OWNER is offered. What the memory server refuses a principal is a question for
 a test against a server that enforces access lists.
 
+### Notices a handler sends
+
+A handler that tells a member of a space about it with `noticeSpaceAccess()`
+sends a message to that member's DID inbox once its commit is accepted. The
+test's runtime has an inbox of its own, answered in-process, so the notice is
+delivered without a server, and every recipient counts as having enabled their
+inbox. The checks on the access list still apply: the actor needs `OWNER` in
+the space, and the recipient an entry of their own, or the send is refused and
+logged at error level, which fails the test.
+
+The test reads what was sent from the input `spaceAccessNotices`, a list with
+one `SentSpaceAccessNotice` per notice the inbox accepted: its `sender`,
+`recipient`, `space` and `entry`. A send is a post-commit effect, so the list
+is brought up to date at each `{ settle: true }` step and nowhere else; put one
+between the action and the assertion. A run `cf test` makes against a
+caller-supplied storage host sends to that host's inbox instead, and the list
+stays empty.
+
+In a multi-user test the shared space's list is the one above, so the first
+participant's user, its OWNER, can tell any other listed user about a cell
+there. The recipient's DID is learned the way any fact about another
+participant is: that participant writes `currentPrincipal()` into the setup
+from a handler, and a marker carries it across.
+
+```tsx
+// Shown at module scope.
+import {
+  assert,
+  currentPrincipal,
+  type DID,
+  handler,
+  multiUserTest,
+  noticeSpaceAccess,
+  pattern,
+  type SentSpaceAccessNotice,
+  TESTS,
+  Writable,
+} from "commonfabric";
+
+interface Setup {
+  room: Writable<{ title: string }>;
+  guest: Writable<DID | "">;
+}
+
+export const setup = pattern<Record<string, never>, Setup>(() => ({
+  room: Writable.of({ title: "Donut committee" }),
+  guest: Writable.of<DID | "">(""),
+}));
+
+const introduce = handler<unknown, { me: Writable<DID | ""> }>(
+  (_event, { me }) => {
+    me.set(currentPrincipal() ?? "");
+  },
+);
+
+const tell = handler<unknown, Setup>((_event, { room, guest }) => {
+  const recipient = guest.get();
+  if (recipient !== "") noticeSpaceAccess(recipient, room);
+});
+
+interface Inputs {
+  setup: Setup;
+  spaceAccessNotices: SentSpaceAccessNotice[];
+}
+
+export const host = pattern<Inputs>(({ setup, spaceAccessNotices }) => ({
+  [TESTS]: [
+    { await: "guest-introduced" },
+    { action: tell({ room: setup.room, guest: setup.guest }), event: {} },
+    { settle: true },
+    { assertion: assert(() => spaceAccessNotices.length === 1) },
+    {
+      assertion: assert(() =>
+        spaceAccessNotices[0]?.recipient === setup.guest.get()
+      ),
+    },
+  ],
+}));
+
+export const guest = pattern<Inputs>(({ setup }) => ({
+  [TESTS]: [
+    { action: introduce({ me: setup.guest }), event: {} },
+    { label: "guest-introduced" },
+  ],
+}));
+
+export default multiUserTest({ setup, participants: { host, guest } });
+```
+
+Each participant is handed the notices its own runtime sent: `guest` above
+reads an empty list, whatever `host` sent it. A single-user test's space is its
+identity's home space, whose list names that identity alone, so a handler
+there tells someone about a space it creates with `inSpace()`, whose `grants`
+give the recipient an entry;
+`packages/cli/test/fixtures/space-access-notices/single-user.test.tsx` is that
+shape. [Space-access notices](../../features/space-access-notices.md#in-a-pattern-test)
+describes the inbox the lane answers with.
+
 ## Test Step Format
 
 Tests use a **discriminated union** format:
