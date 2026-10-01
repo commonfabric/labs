@@ -20,6 +20,13 @@ export const HARNESS_CLIENT_ACTION_LIMIT = 8;
 export const HARNESS_CLIENT_COMMAND_MAX_LENGTH = 500;
 
 /**
+ * Longest web address an action may carry. The Weaver refuses longer ones,
+ * so the harness reads actions with the same limit and a session is told at
+ * the call rather than waiting on a request no client will show.
+ */
+export const HARNESS_CLIENT_URL_MAX_LENGTH = 2048;
+
+/**
  * A client command: one line starting with "/". Any line break, Unicode's
  * included (CR, LF, U+0085, U+2028, U+2029), would let one action carry
  * several commands, and the client shows an action as one line for the person
@@ -93,6 +100,7 @@ export const readHarnessClientAction = (
     case "open_url": {
       const url = ownString(record, "url");
       return hasExactlyKeys(record, ["kind", "url"]) && url !== undefined &&
+          url.length <= HARNESS_CLIENT_URL_MAX_LENGTH &&
           !LINE_BREAK.test(url) && readHttpUrl(url) !== undefined
         ? { kind: "open_url", url }
         : undefined;

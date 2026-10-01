@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
 import {
+  HARNESS_CLIENT_URL_MAX_LENGTH,
   type HarnessClientActionRequester,
   readHarnessClientAction,
 } from "../src/contracts/client-action.ts";
@@ -56,6 +57,21 @@ Deno.test("a command or url that spans lines is not a client action", () => {
     undefined,
   );
   assertEquals(readHarnessClientAction(command), command);
+});
+
+Deno.test("a url longer than the client accepts is not a client action", () => {
+  // The Weaver refuses an address over HARNESS_CLIENT_URL_MAX_LENGTH; the
+  // harness reads actions with the same limit so the two edges agree.
+  const base = "https://example.com/";
+  const at = base + "a".repeat(HARNESS_CLIENT_URL_MAX_LENGTH - base.length);
+  assertEquals(
+    readHarnessClientAction({ kind: "open_url", url: at }),
+    { kind: "open_url", url: at },
+  );
+  assertEquals(
+    readHarnessClientAction({ kind: "open_url", url: at + "a" }),
+    undefined,
+  );
 });
 
 /** A host loop that calls the real tool, through the service's door. */

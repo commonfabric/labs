@@ -14,6 +14,7 @@
 import {
   HARNESS_CLIENT_ACTION_LIMIT,
   HARNESS_CLIENT_COMMAND_MAX_LENGTH,
+  HARNESS_CLIENT_URL_MAX_LENGTH,
   type HarnessClientActionOutcome,
   readHarnessClientActions,
 } from "../contracts/client-action.ts";
@@ -34,7 +35,7 @@ export type WeaverActionOutput =
   | { outputId: string; status: "error"; message: string };
 
 const MALFORMED_ACTIONS =
-  `weaver_action requires 1 to ${HARNESS_CLIENT_ACTION_LIMIT} actions, each one of: open_loom with a loomId like loom-0123456789abcdef; command with a line starting with "/" of at most ${HARNESS_CLIENT_COMMAND_MAX_LENGTH} characters; open_url with an http or https url.`;
+  `weaver_action requires 1 to ${HARNESS_CLIENT_ACTION_LIMIT} actions, each one of: open_loom with a loomId like loom-0123456789abcdef; command with a line starting with "/" of at most ${HARNESS_CLIENT_COMMAND_MAX_LENGTH} characters; open_url with an http or https url of at most ${HARNESS_CLIENT_URL_MAX_LENGTH} characters, every one on a single line.`;
 
 const UNAVAILABLE =
   "weaver_action is unavailable: this session's client did not opt in.";
@@ -85,7 +86,11 @@ export const weaverActionTool: HarnessToolDefinition<
                 type: "object",
                 properties: {
                   kind: { type: "string", enum: ["open_url"] },
-                  url: { type: "string", pattern: "^https?://" },
+                  url: {
+                    type: "string",
+                    pattern: "^https?://",
+                    maxLength: HARNESS_CLIENT_URL_MAX_LENGTH,
+                  },
                 },
                 required: ["kind", "url"],
                 additionalProperties: false,
