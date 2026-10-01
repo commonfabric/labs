@@ -4917,7 +4917,9 @@ export declare function noticeSpaceAccess(
  * declares the input `spaceAccessNotices: SentSpaceAccessNotice[]` is handed
  * the notices its own runtime has sent, in the order the inbox accepted them.
  * A send is a post-commit effect, so the list is brought up to date at each
- * `{ settle: true }` step and at no other: an assertion on it follows one.
+ * `{ settle: true }` step and at no other: an assertion on it follows one. A
+ * run against a caller-supplied storage host sends to that host's inbox, and
+ * the list stays empty.
  */
 export interface SentSpaceAccessNotice {
   /** The actor that sent it, as the inbox verified it from the signature. */

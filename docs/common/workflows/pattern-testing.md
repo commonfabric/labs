@@ -158,7 +158,9 @@ The test reads what was sent from the input `spaceAccessNotices`, a list with
 one `SentSpaceAccessNotice` per notice the inbox accepted: its `sender`,
 `recipient`, `space` and `entry`. A send is a post-commit effect, so the list
 is brought up to date at each `{ settle: true }` step and nowhere else; put one
-between the action and the assertion.
+between the action and the assertion. A run `cf test` makes against a
+caller-supplied storage host sends to that host's inbox instead, and the list
+stays empty.
 
 In a multi-user test the shared space's list is the one above, so the first
 participant's user, its OWNER, can tell any other listed user about a cell

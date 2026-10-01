@@ -50,9 +50,20 @@ describe("space-access-notices", () => {
       ]);
     });
 
-    it("returns no record for a message that is not a notice", () => {
+    it("returns no record for a message that is not a version-1 notice", () => {
       expect(sentNoticesOf([
         message(ALICE, BOB, { type: "something-else", space: SPACE }),
+        message(ALICE, BOB, {
+          type: "space-access-notice",
+          space: SPACE,
+          entry: "of:room",
+        }),
+        message(ALICE, BOB, {
+          type: "space-access-notice",
+          v: 2,
+          space: SPACE,
+          entry: "of:room",
+        }),
         message(ALICE, BOB, "hello"),
         message(ALICE, BOB, null),
       ])).toEqual([]);

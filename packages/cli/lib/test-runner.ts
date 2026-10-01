@@ -1525,6 +1525,13 @@ export async function runTestPattern(
       initializationBudgetPending = true;
     }
 
+    // The result cell's cause, and the notices cell's, derived from it: a
+    // caller keeping the store names the result's, so each run it keeps has a
+    // notices document of its own rather than one every run rewrites.
+    const resultCause: unknown = options.storageHost?.resultCause ??
+      `test-pattern-result-${Date.now()}`;
+    const noticesCause = ["space-access-notices", resultCause];
+
     // 4. Instantiate the test pattern using runtime.run() for proper space context
     const patternResult = await withPhase(
       ["runTestPattern", "patternRun"],
@@ -1535,8 +1542,7 @@ export async function runTestPattern(
         // Create a result cell for the pattern
         const resultCell = runtime.getCell<Record<string, unknown>>(
           space,
-          options.storageHost?.resultCause ??
-            `test-pattern-result-${Date.now()}`,
+          resultCause,
           undefined,
           tx,
         );
@@ -1545,12 +1551,7 @@ export async function runTestPattern(
           // The notices the run sends reach the test as an input; see
           // `space-access-notices.ts`. Written empty here, so a test reading
           // it before any `{ settle: true }` step reads a list.
-          const notices = sentNoticesCell(
-            runtime,
-            space,
-            "space-access-notices",
-            tx,
-          );
+          const notices = sentNoticesCell(runtime, space, noticesCause, tx);
           notices.set([]);
           // Run the pattern with proper space context
           const value = runtime.run(
@@ -1735,7 +1736,7 @@ export async function runTestPattern(
         () =>
           publishSentNotices(
             runtime,
-            sentNoticesCell(runtime, space, "space-access-notices"),
+            sentNoticesCell(runtime, space, noticesCause),
             inbox,
           ),
       );

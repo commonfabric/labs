@@ -171,4 +171,6 @@ user. [Pattern testing](../common/workflows/pattern-testing.md#notices-a-handler
 shows a test reading it.
 
 A run against a caller-supplied storage host, which names its own `apiUrl`,
-sends its notices to the inbox at that host, as a deployed runtime would.
+sends its notices to the inbox at that host, as a deployed runtime would, and
+its `spaceAccessNotices` stays empty: that host's inbox is not the one the
+lane reads.

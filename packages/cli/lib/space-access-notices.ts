@@ -51,7 +51,7 @@ export const sentNoticesSchema = {
 export function sentNoticesCell(
   runtime: Runtime,
   space: MemorySpace,
-  cause: string,
+  cause: unknown,
   tx?: IExtendedStorageTransaction,
 ): Cell<SentSpaceAccessNotice[]> {
   return runtime.getCell<SentSpaceAccessNotice[]>(
@@ -65,7 +65,7 @@ export function sentNoticesCell(
 /** Whether `payload` is the payload of a space-access notice. */
 function isSpaceAccessNotice(payload: unknown): payload is SpaceAccessNotice {
   return isObjectNotArray(payload) &&
-    payload.type === SPACE_ACCESS_NOTICE_TYPE &&
+    payload.type === SPACE_ACCESS_NOTICE_TYPE && payload.v === 1 &&
     typeof payload.space === "string" && typeof payload.entry === "string";
 }
 

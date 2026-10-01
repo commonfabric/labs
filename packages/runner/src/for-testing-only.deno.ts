@@ -19,9 +19,47 @@
  */
 
 import type { DIDKey } from "@commonfabric/identity";
-import { InboxError, type InboxMessage } from "@commonfabric/memory/inbox";
+import {
+  InboxError,
+  type InboxMessage,
+  validateInboxPayload,
+} from "@commonfabric/memory/inbox";
 import { InboxStore } from "@commonfabric/memory/inbox-store";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 import { verifyFirstPartyHttpRequest } from "./toolshed-http-auth.ts";
+
+/** The `send` envelope, as the store takes it. */
+type SendRequest = Parameters<InboxStore["send"]>[1];
+
+/**
+ * Helper for {@link FakeInbox.fetch}, which reads `request`'s body as a `send`
+ * envelope: JSON holding a string `recipientDid`, a string `operationId`, and
+ * a `payload` within the inbox's payload contract.
+ *
+ * @throws InboxError `invalid-request` for a body that is not JSON or not
+ *   such an envelope, and `invalid-payload` as `validateInboxPayload()` does.
+ */
+async function sendRequestOf(request: Request): Promise<SendRequest> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    throw new InboxError("invalid-request");
+  }
+  if (
+    !isObjectNotArray(body) || typeof body.recipientDid !== "string" ||
+    typeof body.operationId !== "string" || !("payload" in body)
+  ) {
+    throw new InboxError("invalid-request");
+  }
+  validateInboxPayload(body.payload);
+  return {
+    recipientDid: body.recipientDid,
+    operationId: body.operationId,
+    payload: body.payload,
+  };
+}
 
 /** The shape of `fetch` a {@link FakeInbox} answers and falls back to. */
 export type FakeInboxFetch = (
@@ -88,7 +126,11 @@ export class FakeInbox {
     return this.#sends;
   }
 
-  /** The codes of the `send` requests the store refused, in order. */
+  /**
+   * The codes of the `send` requests refused, in order, by the envelope check
+   * or by the store. A request whose signature did not verify is not among
+   * them: nothing of it was read.
+   */
   get refusals(): readonly string[] {
     return this.#refusals;
   }
@@ -112,10 +154,17 @@ export class FakeInbox {
     return this.#store.list(recipient).messages;
   }
 
-  /** Answers one request, as a runtime's `fetch`. */
+  /**
+   * Answers one request, as a runtime's `fetch`. A send is refused the way the
+   * inbox router refuses one: `401 invalid-proof` for a request whose
+   * signature does not verify, `400` for a body that is not JSON, an envelope
+   * that is not a send, or a refusal code opening with `invalid`, `429` for
+   * `inbox-full`, and `409` for any other refusal.
+   */
   async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const request = new Request(input, init);
-    const url = new URL(request.url);
+    // Read before any `Request` is built from `input`: building one from a
+    // `Request` uses up its body, which a fallback is owed intact.
+    const url = new URL(input instanceof Request ? input.url : input);
     if (url.origin !== this.#apiUrl.origin) {
       if (this.#fallback !== undefined) return this.#fallback(input, init);
       return Response.json({ code: "invalid-request" }, { status: 404 });
@@ -124,15 +173,27 @@ export class FakeInbox {
       return Response.json({ code: "invalid-request" }, { status: 404 });
     }
     this.#sends++;
-    const { userDid } = await verifyFirstPartyHttpRequest({
-      request: request.clone(),
-    });
+    const request = new Request(input, init);
+    let sender: DIDKey;
     try {
-      return Response.json(this.#send(userDid, await request.json()));
+      ({ userDid: sender } = await verifyFirstPartyHttpRequest({
+        request: request.clone(),
+      }));
+    } catch {
+      return Response.json({ code: "invalid-proof" }, { status: 401 });
+    }
+    try {
+      return Response.json(this.#send(sender, await sendRequestOf(request)));
     } catch (error) {
       if (!(error instanceof InboxError)) throw error;
       this.#refusals.push(error.code);
-      return Response.json({ code: error.code }, { status: 409 });
+      return Response.json({ code: error.code }, {
+        status: error.code.startsWith("invalid")
+          ? 400
+          : error.code === "inbox-full"
+          ? 429
+          : 409,
+      });
     }
   }
 
@@ -147,10 +208,7 @@ export class FakeInbox {
    *
    * @throws InboxError as the store does.
    */
-  #send(
-    sender: DIDKey,
-    request: Parameters<InboxStore["send"]>[1],
-  ): unknown {
+  #send(sender: DIDKey, request: SendRequest): unknown {
     if (this.#everyRecipientEnabled) this.#store.enable(request.recipientDid);
     const receipt = this.#store.send(sender, request);
     const key = JSON.stringify([
