@@ -487,19 +487,79 @@ describe("connector-grants", () => {
       expect(result.unnamed).toEqual([]);
     });
 
-    it("reports a handle whose contract labels no column rather than granting it", () => {
-      const unlabeled = {
-        name: "cf-gmail-messages--gmail-work",
-        sqlite_sources: [source("gmail-work", { subject: { type: "string" } })],
-      };
-      const result = resolveConnectorGrants(
-        records({ piecesJson: piecesJson([unlabeled, BANK_PIECE]) }),
-      );
-      expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
-      expect(result.unnamed[0]?.reason).toBe(
-        "its declared table contract labels no column",
-      );
-    });
+    // Each of these declares something, and none of it is confidentiality:
+    // integrity alone (every loom column carries ConnectorObserved), an empty
+    // clause list, and a rule with integrity only. Granting any of them would
+    // hand sessions a store whose reads carry no confidentiality.
+    const NOT_CONFIDENTIAL: Array<[string, Record<string, unknown>]> = [
+      ["declares column types only", {
+        rows: { properties: { subject: { type: "string" } } },
+      }],
+      ["declares only integrity on its columns", {
+        rows: {
+          properties: {
+            subject: {
+              type: "string",
+              ifc: {
+                integrity: [{
+                  type:
+                    "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
+                  connector: "google.gmail-calendar.snapshot",
+                }],
+              },
+            },
+          },
+        },
+      }],
+      ["declares an empty confidentiality list", {
+        rows: {
+          properties: {
+            subject: { type: "string", ifc: { confidentiality: [] } },
+          },
+        },
+      }],
+      ["has a rule with integrity only", {
+        rows: {
+          properties: { sender: { type: "string" } },
+          rowLabel: {
+            version: 1,
+            integrity: {
+              authoredBy: {
+                principal: {
+                  protocol: "mailto",
+                  of: { match: { field: "sender", source: "\\S+", flags: "" } },
+                },
+              },
+            },
+          },
+        },
+      }],
+      ["has a rule whose confidentiality is not valid", {
+        rows: {
+          properties: { subject: { type: "string" } },
+          rowLabel: { version: 1, confidentiality: [] },
+        },
+      }],
+    ];
+    for (const [shape, tables] of NOT_CONFIDENTIAL) {
+      it(`reports a handle whose contract ${shape} rather than granting it`, () => {
+        const unlabeled = {
+          name: "cf-gmail-messages--gmail-work",
+          sqlite_sources: [{ ...source("gmail-work", {}), tables }],
+        };
+        const result = resolveConnectorGrants(
+          records({ piecesJson: piecesJson([unlabeled, BANK_PIECE]) }),
+        );
+        expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
+        expect(result.unnamed.map(({ connection, reason }) => ({
+          connection,
+          reason,
+        }))).toEqual([{
+          connection: "gmail-work",
+          reason: "its declared table contract declares no confidentiality",
+        }]);
+      });
+    }
 
     it("grants a handle whose contract labels rows by a rule alone", () => {
       const ruled = {
@@ -1271,7 +1331,10 @@ describe("connector-grants", () => {
       const line = wellKnownGrantsContextMessage(
         JSON.parse(JSON.stringify(grants)),
       )!.split("\n").find((candidate) => candidate.includes(grants[0]!.token))!;
-      expect(line).toContain("gmail-work");
+      expect(line).toContain(
+        "gmail-work: a read-only connector database whose reads carry CFC labels.",
+      );
+      expect(line).not.toContain("``");
       expect(line).not.toContain("gmail-work ()");
       expect(line).not.toContain("gmail-work (gmail-work)");
     });

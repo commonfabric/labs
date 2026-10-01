@@ -19,6 +19,11 @@
  * path exists to prevent.
  */
 
+import {
+  rowLabelSpecOf,
+  ruleConstrainsConfidentiality,
+  validateRowLabelSpec,
+} from "@commonfabric/memory/sqlite/row-label";
 import { renderCellReference } from "@commonfabric/runner/shared";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -115,20 +120,28 @@ export const declaredClasses = (source: Record<string, unknown>): string[] => {
 };
 
 /**
- * Whether one `sqlite_sources` entry's table contract labels what it reads: a
- * column with a non-empty `ifc.confidentiality`, or a table whose `rowLabel`
- * declares confidentiality. A contract that labels nothing serves its rows
- * unlabeled, so it is not granted, whatever classes it does or does not name.
+ * Whether one `sqlite_sources` entry's table contract declares confidentiality
+ * for what it reads: a column with a non-empty `ifc.confidentiality`, or a
+ * table whose `rowLabel` is valid and constrains confidentiality (as the
+ * runner judges it). Integrity alone does not count. A contract that declares
+ * none serves its rows without confidentiality, so it is not granted, whatever
+ * classes it does or does not name.
  */
 export const declaresConfidentiality = (
   source: Record<string, unknown>,
 ): boolean => {
   const tables = asRecord(source.tables) ?? {};
   for (const table of Object.values(tables)) {
-    if (asRecord(asRecord(table)?.rowLabel)?.confidentiality !== undefined) {
+    const properties = asRecord(asRecord(table)?.properties) ?? {};
+    const rule = rowLabelSpecOf(table);
+    if (
+      rule !== undefined &&
+      validateRowLabelSpec(rule, Object.keys(properties), properties) ===
+        undefined &&
+      ruleConstrainsConfidentiality(rule)
+    ) {
       return true;
     }
-    const properties = asRecord(asRecord(table)?.properties) ?? {};
     for (const column of Object.values(properties)) {
       const confidentiality = asRecord(asRecord(column)?.ifc)?.confidentiality;
       if (Array.isArray(confidentiality) && confidentiality.length > 0) {
@@ -447,8 +460,8 @@ export const resolveConnectorGrants = (
     }
     if (!declaresConfidentiality(matchingSources[0]!)) {
       skip(
-        "its declared table contract labels no column",
-        "Declare per-column ifc.confidentiality (or a rowLabel) in this connector's sqlite_sources, then restart the console.",
+        "its declared table contract declares no confidentiality",
+        "Declare per-column ifc.confidentiality (or a rowLabel confidentiality) in this connector's sqlite_sources, then restart the console.",
       );
       continue;
     }
