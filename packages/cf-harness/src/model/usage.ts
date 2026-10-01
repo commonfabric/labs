@@ -142,6 +142,11 @@ interface OpenAIModelTokenPrices {
 }
 
 const OPENAI_MODEL_TOKEN_PRICES: Record<string, OpenAIModelTokenPrices> = {
+  "gpt-6.1-sol": {
+    inputPerMillionUsd: 2,
+    cachedInputPerMillionUsd: 0.1,
+    outputPerMillionUsd: 10,
+  },
   "gpt-5.6": {
     inputPerMillionUsd: 5,
     cachedInputPerMillionUsd: 0.5,
@@ -218,8 +223,8 @@ const estimateOpenAIModelUsageCost = (
   ) {
     return { estimateWithheldReason: "inconsistent-token-counts" };
   }
-  // The GPT-5.6 model pages apply these multipliers to the full request above
-  // 272K input tokens.
+  // OpenAI applies these multipliers to the full request above 272K input
+  // tokens for the models in this price table.
   const longContextInputMultiplier = usage.inputTokens > 272_000 ? 2 : 1;
   const longContextOutputMultiplier = usage.inputTokens > 272_000 ? 1.5 : 1;
   return {
