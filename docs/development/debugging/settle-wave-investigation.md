@@ -265,11 +265,13 @@ The trigger index checks itself, under `ENV=test`, which the runner's own test
 task sets. On every registration and removal it asserts that the path trie in
 `packages/runner/src/scheduler/entity-triggers.ts` holds what the per-action
 record beside it holds, under `arraysOverlap()`, and throws naming the write
-path and the paths the two disagree on. Nothing needs turning on to get that,
-and nothing turns it off: a lane that does not set `ENV=test`, which is every
-lane outside the runner, `cf-harness`, `llm`, and `toolshed` suites, does not
-carry the check. The profile scripts run through `deno run` and so measure
-without it.
+path and the paths the two disagree on. A sorted reference of the recorded
+paths checks prefixes by exact lookup and extensions by a contiguous range,
+so probing every moved path does not scan the full readership each time.
+Nothing needs turning on to get that, and nothing turns it off: a lane that
+does not set `ENV=test`, which is every lane outside the runner, `cf-harness`,
+`llm`, and `toolshed` suites, does not carry the check. The profile scripts run
+through `deno run` and so measure without it.
 
 Liveness is checked on request rather than always. With
 `SCHEDULER_LIVENESS_EQUIVALENCE=1`, every exit from the four liveness mutators
