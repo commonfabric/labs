@@ -2078,7 +2078,10 @@ export const FabriChatRoomCore = pattern<
   };
 });
 
-/** What a room stores. Each has a default, so a space's own chat starts with none. */
+/**
+ * What a room stores. Each has a default, so a space's own chat starts with
+ * none.
+ */
 export interface FabriChatRoomInput {
   /**
    * What the room says about itself, written once by whoever creates it. A

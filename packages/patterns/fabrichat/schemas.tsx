@@ -3,8 +3,8 @@
  * how a room stores its messages: the reviewed surfaces, recorded times,
  * profiles, a room's records and requests, how a message's reactions tally,
  * and the manager's records. `docs/specs/fabrichat/` states each of them, and
- * the names here are the spec's. `room.tsx` defines the room's own output types, over the
- * records it stores.
+ * the names here are the spec's. `room.tsx` defines the room's own output
+ * types, over the records it stores.
  *
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
  * compared through `nsecOf()`.

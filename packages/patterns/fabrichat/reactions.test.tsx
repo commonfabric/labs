@@ -255,8 +255,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           reactionsOn(messages, 0).length === 0 &&
-          heldCount(firstReactions) ===
-            0 &&
+          heldCount(firstReactions) === 0 &&
           aliceOnFirst.tallies.length === 0
         ),
       },

@@ -64,7 +64,8 @@ export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
-  // Alice created the room, so she is the one OWNER the room knows.
+  // Alice and Bob run here as this lane's one principal, which holds OWNER in
+  // the room's space, so what tells them apart is their profiles alone.
   const records = {
     about: { kind: "direct" as const },
     messages,
@@ -101,6 +102,11 @@ export default pattern(() => {
     myProfile: aliceProfile,
     ...rowRecords,
   } as RowArg);
+  const bobOnHis = FabriChatMessageRow({
+    message: messages.key(1),
+    myProfile: bobProfile,
+    ...rowRecords,
+  } as RowArg);
 
   return {
     [TESTS]: [
@@ -114,7 +120,7 @@ export default pattern(() => {
         event: typed("From Bob"),
         trustedUi: sendGesture,
       },
-      // Neither may obliterate the other's message, Alice's OWNER access
+      // Neither may obliterate the other's message, OWNER access
       // notwithstanding.
       {
         action: bobOnHers.obliterateMessage,
@@ -138,6 +144,16 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           bodies(messages) === "<obliterated> | From Bob"
+        ),
+      },
+      {
+        action: bobOnHis.obliterateMessage,
+        event: {},
+        trustedUi: obliterateGesture,
+      },
+      {
+        assertion: assert(() =>
+          bodies(messages) === "<obliterated> | <obliterated>"
         ),
       },
     ],

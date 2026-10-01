@@ -232,7 +232,7 @@ export type WindowAnchor =
   | { after: bigint | "start" }
   | { around: bigint };
 
-/** A window's place in its view: indexes into the view, and what lies beyond. */
+/** A window's place in its view: indexes into it, and what lies beyond. */
 export interface WindowSlice {
   /** The index of the window's first message in the view. */
   start: number;
