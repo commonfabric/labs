@@ -1178,7 +1178,17 @@ describe("executor-trust-attribution", () => {
           ((Engine.read(engine, { id: argumentId })?.value as
             | { notes?: { "/": { "link@1": { id: string } } }[] }
             | undefined)?.notes ?? []).map((note) => note["/"]["link@1"].id);
-        await awaitAdmitted(server, () => noteIds().length === 1);
+        const errors = () =>
+          sidecarIdsIn(engine).flatMap((id) =>
+            entriesIn(engine, id).flatMap((entry) =>
+              entry.error === undefined ? [] : [entry.error]
+            )
+          );
+        await awaitAdmitted(
+          server,
+          () => noteIds().length === 1 || errors().length > 0,
+        );
+        expect(errors()).toEqual([]);
         const note = Engine.read(engine, { id: noteIds()[0] });
         expect(note?.value).toEqual({ text: "hello" });
         expect(principalSubjects(note, "authored-by")).toEqual([
