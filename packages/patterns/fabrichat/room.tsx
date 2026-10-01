@@ -60,6 +60,7 @@ import {
   threadView,
   type ViewItem,
   type WindowAnchor,
+  windowCount,
   windowSlice,
 } from "./logic.ts";
 import {
@@ -1062,10 +1063,7 @@ export const commitWindow = handler<RoomWindowEvent, WindowActState>(
     if (view === undefined) return;
     const anchor = anchorOf(request.from);
     if (anchor === undefined) return;
-    const count = Math.min(
-      Math.max(0, Math.floor(request.count ?? 0)),
-      FABRICHAT_POLICY.maxWindowCount,
-    );
+    const count = windowCount(request.count, FABRICHAT_POLICY.maxWindowCount);
     const slice = windowSlice(view, anchor, count);
     if (slice === undefined) return;
     windows.key(windowId).set({

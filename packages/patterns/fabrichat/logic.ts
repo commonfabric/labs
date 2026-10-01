@@ -248,6 +248,16 @@ export interface WindowSlice {
 }
 
 /**
+ * How many messages a window asking for `requested` holds, at most `max`: a
+ * request for none, for a negative count, or for no count at all holds none,
+ * and a fractional count is rounded down.
+ */
+export const windowCount = (
+  requested: number | undefined,
+  max: number,
+): number => Math.min(Math.max(0, Math.floor(requested ?? 0)), max);
+
+/**
  * Where a window of at most `count` messages falls in `view`, placed as
  * `anchor` says; or `undefined` for an `around` anchor that names no message
  * in the view. `view` is oldest first.

@@ -10,6 +10,7 @@ import {
   threadView,
   type TimeBounds,
   type ViewItem,
+  windowCount,
   windowSlice,
 } from "./logic.ts";
 
@@ -208,6 +209,25 @@ describe("logic", () => {
       const byKey = new Map(loop.map((item) => [item.key, item]));
       expect(threadRootOf(loop[0], byKey)).toBeDefined();
       expect(threadReplyCounts(loop).size).toBeGreaterThan(0);
+    });
+  });
+
+  describe("windowCount()", () => {
+    it("returns the count asked for within the limit", () => {
+      expect(windowCount(7, 100)).toBe(7);
+    });
+
+    it("returns the limit for a count beyond it", () => {
+      expect(windowCount(5000, 100)).toBe(100);
+    });
+
+    it("returns 0 for no count, a negative one, or zero", () => {
+      expect([undefined, -3, 0].map((count) => windowCount(count, 100)))
+        .toEqual([0, 0, 0]);
+    });
+
+    it("rounds a fractional count down", () => {
+      expect(windowCount(2.9, 100)).toBe(2);
     });
   });
 
