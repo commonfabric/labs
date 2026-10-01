@@ -52,12 +52,20 @@ export function collectViewRenderReads(
 
   /**
    * Reads `value` and the view nodes under it. A `root` is read the way the
-   * reconciler reads the cell it mounts, as a render read.
+   * reconciler reads the cell it mounts, as a render read, and a cell is
+   * visited once as a root and once as a child at most: the two reads of one
+   * address can project differently.
    */
   function visit(value: unknown, root = false): void {
     if (isCell(value)) {
       const link = value.getAsNormalizedFullLink();
-      const key = [link.space, link.scope, link.id, ...link.path];
+      const key = [
+        root ? "root" : "child",
+        link.space,
+        link.scope,
+        link.id,
+        ...link.path,
+      ];
       if (visited.has(key)) return;
       visited.set(key, true);
       visit(

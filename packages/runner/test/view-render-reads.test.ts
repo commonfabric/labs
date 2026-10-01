@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 
 import { componentReadSchema } from "../src/component-read-contract.ts";
@@ -138,6 +139,64 @@ describe("view render reads", () => {
       expect(result.bindings).toEqual([]);
       expect(result.streams).toEqual([]);
     } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("reads the `[UI]` of a piece a root reaches through a narrowly typed link", async () => {
+    // The holder's link carries a stored schema naming `about` and not
+    // `[UI]`, and the piece's `[UI]` lives in a document of its own, so the
+    // reads contain that document exactly when the walk read `[UI]`.
+
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: signer }),
+    });
+    try {
+      const ui = runtime.getCell(space, "narrow ui", undefined);
+      const piece = runtime.getCell(space, "narrow piece", undefined);
+      const holder = runtime.getCell(space, "narrow holder", undefined);
+      await runtime.editWithRetry((tx) => {
+        ui.withTx(tx).set({
+          type: "vnode",
+          name: "p",
+          props: {},
+          children: ["Room"],
+        });
+        piece.withTx(tx).setRaw({ about: "Room", $UI: ui.getAsLink() });
+        const link = piece.getAsNormalizedFullLink();
+        holder.withTx(tx).setRaw(
+          linkRefFrom({
+            id: link.id,
+            space: link.space,
+            scope: link.scope,
+            path: [...link.path],
+            schema: {
+              type: "object",
+              properties: { about: { type: "string" } },
+            },
+          }) as never,
+        );
+      });
+
+      const result = collectViewRenderReads(runtime, space, {
+        id: "narrow",
+        revision: 0,
+        mode: "speculate",
+        componentContractVersion: "1",
+        query: {
+          roots: [{
+            id: holder.getAsNormalizedFullLink().id,
+            selector: { path: [] },
+          }],
+        },
+      }, runtime.scopeKeyIdentity);
+
+      expect(result.reads.map((read) => read.id)).toContain(
+        ui.getAsNormalizedFullLink().id,
+      );
+    } finally {
+      await runtime.storageManager.synced();
       await runtime.dispose();
     }
   });
