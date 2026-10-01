@@ -14,7 +14,7 @@
 
 import type { SentSpaceAccessNotice } from "@commonfabric/api";
 import type { InboxMessage } from "@commonfabric/memory/inbox";
-import type { FakeInbox } from "@commonfabric/runner/fake-inbox.deno";
+import type { FakeInbox } from "@commonfabric/runner/for-testing-only";
 import {
   type Cell,
   type IExtendedStorageTransaction,

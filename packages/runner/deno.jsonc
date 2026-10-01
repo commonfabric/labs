@@ -36,7 +36,7 @@
   },
   "exports": {
     "./inbox": "./src/inbox.ts",
-    "./fake-inbox.deno": "./src/fake-inbox.deno.ts",
+    "./for-testing-only": "./src/for-testing-only.deno.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",

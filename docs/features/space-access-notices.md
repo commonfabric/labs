@@ -145,7 +145,7 @@ where handlers run on the client.
 
 A runtime `cf test` builds, for a single-user test and for each participant
 of a multi-user one, has an inbox of its own: `FakeInbox`, from
-`@commonfabric/runner/fake-inbox.deno`, answers the inbox `send` operation
+`@commonfabric/runner/for-testing-only`, answers the inbox `send` operation
 over an in-memory `InboxStore` as the runtime's `fetch`, at the origin the
 runtime's `apiUrl` names. It verifies each request's signature as the toolshed
 does, so a message's sender is the identity that signed it, and it refuses what

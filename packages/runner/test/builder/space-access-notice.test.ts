@@ -11,7 +11,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { noticeSpaceAccess } from "../../src/builder/space-access-notice.ts";
 import type { Cell } from "../../src/cell.ts";
-import { FakeInbox } from "../../src/fake-inbox.deno.ts";
+import { FakeInbox } from "../../src/for-testing-only.deno.ts";
 import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";

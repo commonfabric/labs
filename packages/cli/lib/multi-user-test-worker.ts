@@ -41,7 +41,7 @@ import {
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity/did";
-import type { FakeInbox } from "@commonfabric/runner/fake-inbox.deno";
+import type { FakeInbox } from "@commonfabric/runner/for-testing-only";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -400,7 +400,9 @@ const handlers: Record<
     // receives the message its creator posted during that load. Loaded here,
     // the `init` request has already arrived.
     // deno-lint-ignore cf-imports/no-inline-module-import
-    const { FakeInbox } = await import("@commonfabric/runner/fake-inbox.deno");
+    const { FakeInbox } = await import(
+      "@commonfabric/runner/for-testing-only"
+    );
     // Every recipient counts as enabled: whether a person has opened their
     // inbox is no fact about the pattern under test. A request to any other
     // origin reaches the real `fetch`.

@@ -45,7 +45,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { FakeInbox } from "@commonfabric/runner/fake-inbox.deno";
+import { FakeInbox } from "@commonfabric/runner/for-testing-only";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,

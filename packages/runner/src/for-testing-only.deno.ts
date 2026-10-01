@@ -1,12 +1,17 @@
 /**
- * An inbox service a test runs in-process: `FakeInbox` answers the DID-inbox
- * `send` operation over an in-memory `InboxStore`, as the `fetch` of a runtime
- * whose `apiUrl` is the inbox's origin. It verifies each request's signature
- * the way the toolshed routes do, so a message's sender is the identity that
- * signed it, and it refuses what the store refuses, so a duplicate operation
- * and a conflicting one behave as they would against the real service. What a
- * run sent is then readable without a network or a server. The store is
- * SQLite, so loading this module takes `--allow-ffi`.
+ * What this package offers to tests alone: `FakeInbox`, an inbox service a
+ * test runs in-process. It answers the DID-inbox `send` operation over an
+ * in-memory `InboxStore`, as the `fetch` of a runtime whose `apiUrl` is the
+ * inbox's origin. It verifies each request's signature the way the toolshed
+ * routes do, so a message's sender is the identity that signed it, and it
+ * refuses what the store refuses, so a duplicate operation and a conflicting
+ * one behave as they would against the real service. What a run sent is then
+ * readable without a network or a server.
+ *
+ * This has its own entry in the package's export map and no place in any
+ * barrel. It is Deno-only, which the file name says: the store is SQLite,
+ * which `@db/sqlite` opens through FFI as it loads, so loading this module
+ * takes `--allow-ffi` and a Deno runtime.
  */
 
 import type { DIDKey } from "@commonfabric/identity";
