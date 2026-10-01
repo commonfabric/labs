@@ -88,12 +88,14 @@ export function registerCapabilitySummary(
   callback: ts.ArrowFunction | ts.FunctionExpression,
   context: TransformationContext,
   interprocedural: boolean,
+  patternCallback = false,
   defaultsByParamName?: ReadonlyMap<string, readonly CapabilityParamDefault[]>,
 ): void {
   const summary = analyzeFunctionCapabilities(callback, {
     checker: context.checker,
     typeRegistry: context.state.typeRegistry,
     interprocedural,
+    patternCallback,
   });
 
   if (!defaultsByParamName || defaultsByParamName.size === 0) {
@@ -260,7 +262,7 @@ export function transformPatternCallback(
   }
 
   if (hasUnsupportedDestructuring) {
-    registerCapabilitySummary(callback, context, false);
+    registerCapabilitySummary(callback, context, false, true);
     return callback;
   }
 
@@ -311,6 +313,7 @@ export function transformPatternCallback(
       transformed,
       context,
       false,
+      true,
       defaultsByParamName,
     );
     return transformed;
@@ -330,6 +333,7 @@ export function transformPatternCallback(
     transformed,
     context,
     false,
+    true,
     defaultsByParamName,
   );
   return transformed;

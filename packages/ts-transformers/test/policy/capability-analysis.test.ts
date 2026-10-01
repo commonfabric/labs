@@ -3116,18 +3116,20 @@ Deno.test(
   },
 );
 
-function analyzeBuilderCallback(builderName: "lift" | "pattern") {
+/**
+ * The capability summary of `input`, the parameter of the first arrow in
+ * `body`, which is compiled after an import of `equals`, `lift`, `pattern` and
+ * `SELF` and a declaration of `Input` and of `other`, an `Input`.
+ */
+function analyzeInputWithSelf(body: string, patternCallback: boolean) {
   const { program, sourceFile } = createProgramWithFiles({
     "/test.ts": `
-      import { lift, pattern, SELF } from "commonfabric";
+      import { equals, lift, pattern, SELF } from "commonfabric";
 
       type Input = { title: string; [SELF]?: { title: string } };
+      declare const other: Input;
 
-      ${builderName}((input: Input) => [
-        input.title,
-        input[SELF],
-        input[SELF]?.title,
-      ]);
+      ${body}
     `,
     "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
   });
@@ -3142,20 +3144,27 @@ function analyzeBuilderCallback(builderName: "lift" | "pattern") {
   };
   visit(sourceFile);
   if (!callback) {
-    throw new Error("Expected a builder callback in test source.");
+    throw new Error("Expected a callback in test source.");
   }
   return getPaths(
     analyzeFunctionCapabilities(callback, {
       checker: program.getTypeChecker(),
+      patternCallback,
     }),
     "input",
   );
 }
 
+const SELF_READS = `(input: Input) => [
+  input.title,
+  input[SELF],
+  input[SELF]?.title,
+]`;
+
 Deno.test(
   "Capability analysis leaves SELF paths out of a pattern callback's input",
   () => {
-    const input = analyzeBuilderCallback("pattern");
+    const input = analyzeInputWithSelf(`pattern(${SELF_READS});`, true);
 
     assertEquals(input.wildcard, false);
     assertEquals(input.readPaths, ["title"]);
@@ -3163,12 +3172,26 @@ Deno.test(
 );
 
 Deno.test(
-  "Capability analysis keeps SELF paths on the input of a lift callback",
+  "Capability analysis keeps SELF paths on the input of any other callback",
   () => {
-    const input = analyzeBuilderCallback("lift");
+    const input = analyzeInputWithSelf(`lift(${SELF_READS});`, false);
 
     assertEquals(input.wildcard, false);
     assertEquals(input.readPaths.toSorted(), ["$SELF", "$SELF.title", "title"]);
+  },
+);
+
+Deno.test(
+  "Capability analysis keeps a pattern callback's input identity-only beside a SELF read",
+  () => {
+    const input = analyzeInputWithSelf(
+      `pattern((input: Input) => [equals(input, other), input[SELF]?.title]);`,
+      true,
+    );
+
+    assertEquals(input.capability, "comparable");
+    assertEquals(input.identityOnly, true);
+    assertEquals(input.readPaths, []);
   },
 );
 

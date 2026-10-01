@@ -672,7 +672,9 @@ Diagnostics emitted in all modes:
   - an element access keyed by `SELF` (`x[SELF]`) inside a compute callback —
     `computed(...)`, `action(...)`, `lift(...)`, a `handler(...)` body, an
     inline JSX event handler — or inside a reactive collection callback such as
-    `items.map((item) => ...)`
+    `items.map((item) => ...)`. A standalone function definition is not
+    reported: it is ordinary code over whatever it is handed, and a
+    `pattern(...)` callback held in a `const` is one
   - `SELF` names the pattern's own result only on the reactive proxy a
     `pattern(...)` body receives as its input. A compute callback sees plain
     values, and a reactive collection callback sees a captured reference to the
@@ -1893,12 +1895,16 @@ adjustments:
 - pattern boundaries apply defaults-only mode to preserve broad shape continuity
   while still applying extracted static defaults
 - on the input parameter of a `pattern(...)` callback, capability analysis
-  leaves out every path under `SELF` (`withoutSelfPaths` in
-  `policy/capability-analysis.ts`). `input[SELF]` there names the pattern's
-  own result, not any of the input's data, so it asks nothing of the input
-  schema and draws no `schema:path-not-in-type` error. On any other function's
-  parameter, `x[SELF]` is recorded as the path `$SELF`
-  (`test/policy/capability-analysis.test.ts`)
+  records nothing for a use under `SELF`: no path, and no flag such a path
+  would set, so a `SELF` read leaves an otherwise identity-only input
+  identity-only. `input[SELF]` there names the pattern's own result, not any
+  of the input's data, so it asks nothing of the input schema and draws no
+  `schema:path-not-in-type` error. The analysis is told which function is a
+  pattern callback (the `patternCallback` option), and pattern-callback
+  lowering sets it for every callback it lowers, whether the `pattern(...)`
+  call holds the callback inline or names it through a `const`. On any other
+  function's parameter, `x[SELF]` is recorded as the path `$SELF`
+  (`test/policy/capability-analysis.test.ts`, `test/pattern-input-self.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather

@@ -384,9 +384,11 @@ export class PatternContextValidationTransformer
     ) {
       return;
     }
+    const reactiveContext = context.getReactiveContext(node);
+    const inComputeCallback = reactiveContext.kind === "compute" &&
+      reactiveContext.owner !== "standalone";
     if (
-      context.getReactiveContext(node).kind !== "compute" &&
-      !isArrayMethodOwnedExpressionSite(node, context)
+      !inComputeCallback && !isArrayMethodOwnedExpressionSite(node, context)
     ) {
       return;
     }

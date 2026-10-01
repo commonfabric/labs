@@ -136,6 +136,26 @@ describe("pattern-input-self", () => {
         "title",
       ]);
     });
+
+    it("asks nothing of the input schema for `input[SELF]` in a callback held in a `const`", async () => {
+      const { diagnostics, output } = await compile(`
+        const body = (input: Input & { [SELF]: Output }): Output => ({
+          [NAME]: "n",
+          [UI]: <div>{input[SELF].title}</div>,
+          title: input.title,
+          other: input[SELF],
+        });
+
+        export default pattern<Input, Output>(body);
+      `);
+      const { input } = patternSchemas(parseModule(output));
+
+      expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+      expect(Object.keys(input.properties as object).sort()).toEqual([
+        "items",
+        "title",
+      ]);
+    });
   });
 
   describe("diagnostics", () => {
@@ -158,6 +178,21 @@ describe("pattern-input-self", () => {
               };
             },
           );
+        `),
+      ).toEqual([]);
+    });
+
+    it("reports no error for `[SELF]` in a module-scope helper function", async () => {
+      expect(
+        await errorsOf(`
+          const selfOf = (value: { [SELF]?: string }) => value[SELF];
+
+          export default pattern<Input, Output>((input) => ({
+            [NAME]: "n",
+            [UI]: <div />,
+            title: input.title,
+            other: selfOf({ [SELF]: "plain" }),
+          }));
         `),
       ).toEqual([]);
     });

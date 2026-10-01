@@ -72,7 +72,7 @@ sees a plain value, and inside a callback over a reactive collection, such as
 `items.map(...)`, it sees a captured reference to the input; `SELF` means
 nothing on either. The compiler reports `input[SELF]` in those places as an
 error. Destructure `[SELF]: self` in the pattern's parameter and capture `self`
-there instead, as in the next section, or bind `input[SELF]` into the
+there instead, as the Quick Start above does, or bind `input[SELF]` into the
 handler's state from the pattern body.
 
 ## SELF in Actions
