@@ -461,6 +461,44 @@ export default pattern<{ n: number }>(() => {
         required: ["host", "run"],
       });
     });
+
+    for (
+      const [position, declaration, holder] of [
+        [
+          "an index signature",
+          "interface Dict<U> { [key: string]: U }",
+          "Dict",
+        ],
+        ["a tuple", "interface Twice<U> { items: [U, U] }", "Twice"],
+      ] as const
+    ) {
+      it(`reports a scope recursion reached through ${position} with no written reference, naming its type`, async () => {
+        // Each `Node<Readonly<…>>` is a new type, and a chain reached by type
+        // has no written reference to name, so the warning names a print of
+        // the type the chain stops at.
+        const diagnostics: TransformationDiagnostic[] = [];
+        await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Cell, pattern, PerUser } from "commonfabric";
+${declaration}
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+type Node<T> = PerUser<Cell<{ value: T; next?: ${holder}<Node<Readonly<T>>> }>>;
+export default pattern<{ a: Node<Wrap<readonly []>> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const unread = diagnostics.filter((diagnostic) =>
+          diagnostic.type === "schema-type:unread"
+        );
+
+        expect(unread.length).toBeGreaterThan(0);
+        for (const diagnostic of unread) {
+          expect(diagnostic.message).toContain("Wrap<readonly []>");
+        }
+      });
+    }
   });
 
   describe("a type the checker cannot print", () => {

@@ -1233,9 +1233,13 @@ Mechanics:
   alias chain reaching it reports a `cfc-schema:recursion-limit` error, including
   one whose writer-query key cannot settle. Its unread remainder would discard
   confidentiality or write policies, so the schema must not be used. A chain
-  reached by its alias is located at its type node where available. The separate
+  reached by its alias is located at the type node its context reads where
+  there is one, and is otherwise reported without a location. The separate
   bound on a type read under bindings and a scope-wrapper chain reaching its
-  nesting bound continue to report an unread-type warning.
+  nesting bound continue to report an unread-type warning. A scope-wrapper
+  chain reached by its alias, with no type node to name, is named in that
+  warning by a print of the type it stops at, made with `IgnoreErrors` so that
+  every type has one, a type holding `[]` among them.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a
