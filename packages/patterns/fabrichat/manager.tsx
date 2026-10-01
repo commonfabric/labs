@@ -13,6 +13,7 @@ import {
   type Cell,
   computed,
   currentPrincipal,
+  debugStr,
   type Default,
   type DID,
   equals,
@@ -71,6 +72,10 @@ export type ManagerAct =
   | "accept"
   | "forget"
   | "delivered";
+
+/** Whether `act` starts a chat. */
+const isStart = (act: ManagerAct): boolean =>
+  act === "openDirect" || act === "createGroup";
 
 /**
  * An event on one of the manager's streams. Each stream's event carries the
@@ -135,6 +140,12 @@ export interface ManagerActState {
   /** The session's group draft, which a rendered create reads. */
   draft: Writable<GroupDraft>;
 
+  /**
+   * Why the session's latest start was refused, which the rendering shows;
+   * empty when it wasn't refused.
+   */
+  startRefusal: Writable<string>;
+
   /** Whether this binding creates a group from `draft`. */
   fromDraft?: boolean;
 
@@ -164,14 +175,22 @@ const otherMembers = (
 
 /**
  * Records a request's outcome. A `done` or `refused` outcome is kept for as
- * long as the manager exists.
+ * long as the manager exists. A start's outcome also replaces what the
+ * session's rendering says about its latest start: `shown` or the reason for
+ * a refusal, and nothing for a start that is done.
  */
 const recordOutcome = (
-  requests: RequestsCell,
+  state: ManagerActState,
   requestId: string,
   outcome: ChatRequestOutcome,
+  shown?: string,
 ): void => {
-  requests.key(requestId).set(outcome);
+  state.requests.key(requestId).set(outcome);
+  if (isStart(state.act)) {
+    state.startRefusal.set(
+      outcome.status === "refused" ? shown ?? outcome.reason : "",
+    );
+  }
 };
 
 /** Whether `rooms` already lists `room`. */
@@ -280,10 +299,10 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     // A chat is started by someone who can take part in it, and taking part
     // needs a profile.
     if (
-      (act === "openDirect" || act === "createGroup") &&
+      isStart(act) &&
       state.myProfile?.get() === undefined
     ) {
-      recordOutcome(requests, requestId, {
+      recordOutcome(state, requestId, {
         status: "refused",
         reason: "Starting a chat needs a profile.",
       });
@@ -304,8 +323,8 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     // A start needs to know who this user is, to leave them out of the
     // room's other members.
     const self = currentPrincipal();
-    if ((act === "openDirect" || act === "createGroup") && self === undefined) {
-      recordOutcome(requests, requestId, {
+    if (isStart(act) && self === undefined) {
+      recordOutcome(state, requestId, {
         status: "refused",
         reason: "Starting a chat needs a signed-in user.",
       });
@@ -315,14 +334,22 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     if (act === "openDirect") {
       const counterpart = event?.counterpart ?? typed;
       if (!isWellFormedDID(counterpart)) {
-        recordOutcome(requests, requestId, {
-          status: "refused",
-          reason: "The counterpart is not a principal.",
-        });
+        const reason = "The counterpart is not a principal.";
+        // The session is shown the text it sent, which says what is wrong
+        // with it. The recorded reason is kept for as long as the manager
+        // exists, so it holds no text a person typed.
+        recordOutcome(
+          state,
+          requestId,
+          { status: "refused", reason },
+          counterpart === undefined || counterpart === ""
+            ? undefined
+            : debugStr`${reason} Received: $long${counterpart}`,
+        );
         return;
       }
       if (counterpart === self) {
-        recordOutcome(requests, requestId, {
+        recordOutcome(state, requestId, {
           status: "refused",
           reason: "The counterpart is this user.",
         });
@@ -333,7 +360,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         if (!lists(rooms, known.room)) {
           rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), known]);
         }
-        recordOutcome(requests, requestId, { status: "done", entry: known });
+        recordOutcome(state, requestId, { status: "done", entry: known });
         return;
       }
       const entry = createRoom(
@@ -345,7 +372,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         counterpart,
       );
       direct.key(counterpart).set(entry);
-      recordOutcome(requests, requestId, { status: "done", entry });
+      recordOutcome(state, requestId, { status: "done", entry });
       return;
     }
 
@@ -353,7 +380,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       const draft = state.fromDraft === true ? state.draft.get() : undefined;
       const title = (event?.title ?? draft?.title ?? "").trim();
       if (title === "") {
-        recordOutcome(requests, requestId, {
+        recordOutcome(state, requestId, {
           status: "refused",
           reason: "A group room needs a title.",
         });
@@ -365,7 +392,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       );
       const entry = createRoom(state, requestId, "group", members, title);
       if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
-      recordOutcome(requests, requestId, { status: "done", entry });
+      recordOutcome(state, requestId, { status: "done", entry });
       return;
     }
 
@@ -378,7 +405,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
           !equals(entry.room, room)
         ),
       );
-      recordOutcome(requests, requestId, { status: "done" });
+      recordOutcome(state, requestId, { status: "done" });
       return;
     }
 
@@ -391,7 +418,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       currentPrincipal() === undefined || spaceAccess(room) === "none" ||
       (kind !== "direct" && kind !== "group")
     ) {
-      recordOutcome(requests, requestId, {
+      recordOutcome(state, requestId, {
         status: "refused",
         reason: "The room can't be read by this user.",
       });
@@ -413,7 +440,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       ? "The counterpart is not the room's creator."
       : undefined;
     if (refusal !== undefined) {
-      recordOutcome(requests, requestId, {
+      recordOutcome(state, requestId, {
         status: "refused",
         reason: refusal,
       });
@@ -435,7 +462,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     ) {
       direct.key(counterpart).set(entry);
     }
-    recordOutcome(requests, requestId, { status: "done", entry });
+    recordOutcome(state, requestId, { status: "done", entry });
   },
 );
 
@@ -536,6 +563,7 @@ export const FabriChatManagerCore = pattern<
 >(
   ({ myProfile, rooms, direct, requests, outgoingNotices }) => {
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
+    const startRefusal = new Writable.perSession<string>("");
     const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
       {},
     );
@@ -546,6 +574,7 @@ export const FabriChatManagerCore = pattern<
       requests,
       outgoingNotices,
       draft,
+      startRefusal,
     };
     const newestFirst = computed(() =>
       [...((rooms.get() ?? []) as ChatIndexEntry[])].sort((a, b) =>
@@ -572,6 +601,11 @@ export const FabriChatManagerCore = pattern<
     // overwrite each other without end.
     const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
     const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
+    // A refusal is the session's too, and is hidden by a prop for the same
+    // reason.
+    const refusalDisplay = computed(() =>
+      startRefusal.get() === "" ? "none" : "block"
+    );
     const noticeList = computed(
       () => [...((outgoingNotices.get() ?? []) as ChatManagerNotice[])],
     );
@@ -661,6 +695,12 @@ export const FabriChatManagerCore = pattern<
               >
                 Create group
               </cf-button>
+              <div
+                id="fabrichat-start-refusal"
+                style={{ display: refusalDisplay }}
+              >
+                <cf-alert status="error">{startRefusal}</cf-alert>
+              </div>
             </cf-vstack>
           </div>
           {noticeList.map((notice) => (

@@ -21,8 +21,10 @@ import {
   clickButton,
   findNodeById,
   findNodeByProp,
+  fireEvent,
   propValue,
   readValue,
+  textContent,
 } from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import type {
@@ -60,6 +62,12 @@ const displayOf = (root: unknown, id: string): unknown =>
 const shownPart = (root: unknown): string =>
   `selected:${displayOf(root, "fabrichat-selected")} ` +
   `unselected:${displayOf(root, "fabrichat-unselected")}`;
+
+// What a manager shows about the session's latest start: how its refusal is
+// displayed, and what it says.
+const shownRefusal = (root: unknown): string =>
+  `${displayOf(root, "fabrichat-start-refusal")}:` +
+  textContent(findNodeById(root, "fabrichat-start-refusal"));
 
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
@@ -125,6 +133,15 @@ export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
       requestId: "d-self",
       counterpart: currentPrincipal(),
     })
+  );
+  // A profile page's address, pasted where a principal's DID goes.
+  const action_type_address = action(() =>
+    fireEvent(
+      findNodeByProp(group[UI], "inputId", "fabrichat-start-direct"),
+      "onClick",
+      { target: { value: ` ${BOB}/of:fid1:profile ` } },
+      "the direct start control",
+    )
   );
 
   // Accepting a group room, and a direct room only with its counterpart.
@@ -285,7 +302,13 @@ export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
           ) === false
         ),
       },
+      { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
       { action: action_open_direct_with_self },
+      {
+        assertion: assert(() =>
+          shownRefusal(group[UI]) === "block:The counterpart is this user."
+        ),
+      },
       {
         action: group.openDirect,
         event: { requestId: "d-junk", counterpart: "not a principal" },
@@ -306,6 +329,27 @@ export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
           recipientsOf(groupNotices) === CAROL
         ),
       },
+      // The session is shown its latest refusal, and for text that isn't a
+      // principal, the text it sent.
+      {
+        assertion: assert(() =>
+          shownRefusal(group[UI]) === "block:A group room needs a title."
+        ),
+      },
+      { action: action_type_address },
+      {
+        assertion: assert(() =>
+          shownRefusal(group[UI]) ===
+            "block:The counterpart is not a principal. Received: " +
+              `"${BOB}/of:fid1:profile"`
+        ),
+      },
+      // A start that is done shows nothing.
+      {
+        action: group.openDirect,
+        event: { requestId: "d-carol", counterpart: CAROL },
+      },
+      { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
 
       // Accepting a group room it was admitted to.
       {
