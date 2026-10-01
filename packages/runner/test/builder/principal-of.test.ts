@@ -324,6 +324,20 @@ describe("principalOf()", () => {
       expect(callIn(edit(), holder, "represents-principal")).toBe(bob.did());
     });
 
+    it("returns the DID the document a link leads to attests, for the link passed as its cell's reactive proxy", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      const holder = runtime.getCell<unknown>(space, "holder");
+      const tx = runtime.edit();
+      holder.withTx(tx).set(profile);
+      expect((await tx.commit()).error).toBeUndefined();
+
+      expect(
+        callIn(edit(), holder.getAsReactiveProxy(), "represents-principal"),
+      ).toBe(bob.did());
+    });
+
     it("returns `undefined` for a document whose label attests no principal", async () => {
       const unlabeled = await seed("unlabeled", []);
       const other = await seed("other", [
