@@ -30,6 +30,7 @@ import {
 import type { Cell } from "../src/cell.ts";
 import { type CfcConfClause, clauseAlternatives } from "../src/cfc/clause.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
 import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { collectConsumedLabel } from "../src/cfc/prepare.ts";
@@ -181,24 +182,35 @@ describe("wish-result-view-labels", () => {
   };
 
   /**
-   * Stores `entries` as the labels of the document `address` names, leaving
-   * its value as it is.
+   * Sets the covering label at `path` of the document `address` names to
+   * `confidentiality`, or removes it when that is undefined, keeping the
+   * document's value and the rest of its stored labels as they are.
    */
-  const labelDocument = async (
+  const labelPath = async (
     address: Pick<NormalizedFullLink, "space" | "scope" | "id">,
-    entries: LabelMapEntry[],
+    path: string[],
+    confidentiality?: CfcConfClause[],
   ) => {
     const tx = runtime.edit();
-    writeSeedEnvelopeDoc(tx, address.space);
+    const stored = readStoredCfcMetadata(tx, address);
+    const kept = (stored?.labelMap.entries ?? []).filter((entry) =>
+      entry.origin !== undefined || !deepEqual(entry.path, path)
+    );
+    if (stored === undefined) writeSeedEnvelopeDoc(tx, address.space);
     seedStoredEnvelope(tx, {
       space: address.space,
       scope: address.scope,
       id: address.id,
       path: ["cfc"],
     }, {
-      version: 1,
-      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: { version: 1, entries },
+      version: stored?.version ?? 1,
+      schemaHash: stored?.schemaHash ?? SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: confidentiality === undefined
+          ? kept
+          : [...kept, { path, label: { confidentiality } }],
+      },
     });
     expect((await tx.commit()).error).toBeUndefined();
   };
@@ -455,9 +467,7 @@ describe("wish-result-view-labels", () => {
         title: "Slot",
         [UI]: viewDoc,
       });
-      await labelDocument(piece.getAsNormalizedFullLink(), [
-        { path: [UI], label: { confidentiality: [sealedClause] } },
-      ]);
+      await labelPath(piece.getAsNormalizedFullLink(), [UI], [sealedClause]);
       await pin(piece, "#slot");
 
       const result = await runWish("#slot", "slot-finder");
@@ -560,10 +570,8 @@ describe("wish-result-view-labels", () => {
         [UI]: viewDoc,
       });
       const pieceLink = piece.getAsNormalizedFullLink();
-      await labelDocument(pieceLink, [
-        { path: [UI], label: { confidentiality: [sealedClause] } },
-      ]);
       await pin(piece, "#healed");
+      await labelPath(pieceLink, [UI], [sealedClause]);
       const finder = finderFor("#healed");
       const tx = runtime.edit();
       const resultCell = runtime.getCell<Record<string, unknown>>(
@@ -578,7 +586,7 @@ describe("wish-result-view-labels", () => {
       await runtime.idle();
       const result = running.withTx(undefined);
       const state = wishState(result);
-      await labelDocument(pieceLink, []);
+      await labelPath(pieceLink, [UI]);
       await runtime.idle();
       expect(holdsSealedClause(titleThrough(result).confidentiality)).toBe(
         true,
@@ -618,13 +626,8 @@ describe("wish-result-view-labels", () => {
         title: "Shared slot",
         [UI]: viewDoc,
       });
-      await labelDocument(piece.getAsNormalizedFullLink(), [{
-        path: [UI],
-        label: {
-          confidentiality: [{
-            anyOf: [sealedClause, cfcAtom.space(patternSpace)],
-          }],
-        },
+      await labelPath(piece.getAsNormalizedFullLink(), [UI], [{
+        anyOf: [sealedClause, cfcAtom.space(patternSpace)],
       }]);
       await mention(piece);
 
