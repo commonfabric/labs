@@ -1093,6 +1093,16 @@ export interface ValidateAndTransformOptions {
    * stored CFC metadata probe — does not run again per property.
    */
   viewChild?: boolean;
+
+  /**
+   * Set by a render read, which mounts a value under the renderer's own
+   * schema. At the read's entry, the stored schema of a link the read crosses
+   * combines with the reader's under reader precedence, as it does at a hop,
+   * rather than replacing it: a link typed by a narrow view of a piece still
+   * renders the piece's `[UI]`. See "The read entry" in
+   * `docs/specs/link-schema-precedence.md`.
+   */
+  renderRead?: boolean;
 }
 
 export function validateAndTransform(
@@ -1401,10 +1411,14 @@ export function validateAndTransform(
       ? asCellCompoundSchemaForValue(effectiveSchema, value)
       : undefined;
     // If we have a ref with a schema, use that; otherwise, use the link's
-    // schema
+    // schema. A render read keeps its own schema across the entry crossing,
+    // combining the way a hop does.
+    const entrySchema = options?.renderRead === true
+      ? combineOptionalSchema(effectiveSchema, resolvedValueLink.schema)
+      : resolvedValueLink.schema;
     selector = {
       path: doc.address.path,
-      schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
+      schema: valueSelectedSchema ?? entrySchema ?? link.schema!,
     };
     if (tx.isLazyMaterialize()) {
       // Crossing the last link is a hop the eager traverser combines schemas
