@@ -35,6 +35,16 @@ const PRELUDE = `
     title: string;
     other: unknown;
   }
+
+  interface ListOutput extends Output {
+    items: string[];
+    echoed: string[];
+  }
+
+  interface Nested {
+    title: string;
+    sub: { title: string; [SELF]?: unknown };
+  }
 `;
 
 /** Compiles `source` after the shared prelude, returning its diagnostics. */
@@ -156,6 +166,47 @@ describe("pattern-input-self", () => {
         "title",
       ]);
     });
+
+    it("keys a collection read through `input[SELF]` off the self reference", async () => {
+      const { diagnostics, output } = await compile(`
+        export default pattern<Input, ListOutput>((input) => ({
+          [NAME]: "n",
+          [UI]: <div />,
+          title: input.title,
+          items: input.items,
+          other: null,
+          echoed: input[SELF].items.map((item) => item + "!"),
+        }));
+      `);
+      const root = parseModule(output);
+
+      expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+      expect(
+        callsNamed(root, "mapWithPattern").map((call) =>
+          ts.isPropertyAccessExpression(call.expression)
+            ? call.expression.expression.getText(root)
+            : ""
+        ),
+      ).toEqual([`input[__cfHelpers.SELF].key("items")`]);
+    });
+
+    it("reads `[SELF]` destructured off the input in the body as `input[__cfHelpers.SELF]`", async () => {
+      const { diagnostics, output } = await compile(`
+        export default pattern<Input, Output>((input) => {
+          const { [SELF]: self } = input;
+          return {
+            [NAME]: "n",
+            [UI]: <div />,
+            title: input.title,
+            other: self,
+          };
+        });
+      `);
+      const root = parseModule(output);
+
+      expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+      expect(selfReceivers(root)).toEqual(["input"]);
+    });
   });
 
   describe("diagnostics", () => {
@@ -195,6 +246,74 @@ describe("pattern-input-self", () => {
           }));
         `),
       ).toEqual([]);
+    });
+
+    it("reports no error for `[SELF]` on an object literal inside `computed()`", async () => {
+      expect(
+        await errorsOf(`
+          export default pattern<Input, Output>((input) => ({
+            [NAME]: "n",
+            [UI]: <div />,
+            title: input.title,
+            other: computed(() => {
+              const local = { [SELF]: input.title };
+              return local[SELF];
+            }),
+          }));
+        `),
+      ).toEqual([]);
+    });
+
+    it("reports `pattern-context:self-access` for `[SELF]` read off a value under the input", async () => {
+      expect(
+        await errorsOf(`
+          export default pattern<Nested, Output>((input) => ({
+            [NAME]: "n",
+            [UI]: <div />,
+            title: input.title,
+            other: input.sub[SELF],
+          }));
+        `),
+      ).toEqual(["pattern-context:self-access"]);
+    });
+
+    it("reports `pattern-context:self-access` for `[SELF]` read off another pattern's result", async () => {
+      expect(
+        await errorsOf(`
+          const Child = pattern<
+            { title: string },
+            { title: string; [SELF]?: unknown }
+          >(({ title }) => ({ title }));
+
+          export default pattern<Input, Output>((input) => {
+            const child = Child({ title: input.title });
+            return {
+              [NAME]: "n",
+              [UI]: <div />,
+              title: input.title,
+              other: child[SELF],
+            };
+          });
+        `),
+      ).toEqual(["pattern-context:self-access"]);
+    });
+
+    it("suggests reading `input[SELF]` into a local in the pattern body", async () => {
+      const { diagnostics } = await compile(`
+        export default pattern<Input, Output>((input) => ({
+          [NAME]: "n",
+          [UI]: <div />,
+          title: input.title,
+          other: computed(() => input[SELF]),
+        }));
+      `);
+
+      expect(
+        diagnostics.filter((d) =>
+          d.type === "pattern-context:self-access" &&
+          d.message.includes("`const self = input[SELF]`")
+        ),
+      ).toHaveLength(1);
     });
 
     it("reports `pattern-context:self-access` for `input[SELF]` inside `computed()`", async () => {

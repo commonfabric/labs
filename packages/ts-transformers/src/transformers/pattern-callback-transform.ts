@@ -8,7 +8,7 @@ import { analyzeFunctionCapabilities } from "../policy/mod.ts";
 import { cloneKeyExpression } from "../utils/reactive-keys.ts";
 import {
   collectDestructureBindings,
-  createKeyCall,
+  createPathRead,
   type DefaultDestructureBinding,
   type DestructureBinding,
 } from "./destructuring-lowering.ts";
@@ -84,12 +84,33 @@ function buildPlainCaptureAccessExpression(
   return current;
 }
 
+/** How `registerCapabilitySummary()` analyzes the callback it is handed. */
+export interface CapabilitySummaryRegistration {
+  /** Whether the analysis follows calls into the callees it can resolve. */
+  readonly interprocedural: boolean;
+
+  /**
+   * Whether the callback is a `pattern()` callback, whose first parameter is
+   * the pattern's input (`patternCallback` in `CapabilityAnalysisOptions`).
+   */
+  readonly patternCallback?: boolean;
+
+  /** Static destructuring defaults to merge in, by parameter name. */
+  readonly defaultsByParamName?: ReadonlyMap<
+    string,
+    readonly CapabilityParamDefault[]
+  >;
+}
+
+/**
+ * Analyzes `callback`'s capabilities and records the summary on `context`,
+ * where schema injection reads it back for the callback's parameters.
+ */
 export function registerCapabilitySummary(
   callback: ts.ArrowFunction | ts.FunctionExpression,
   context: TransformationContext,
-  interprocedural: boolean,
-  patternCallback = false,
-  defaultsByParamName?: ReadonlyMap<string, readonly CapabilityParamDefault[]>,
+  { interprocedural, patternCallback, defaultsByParamName }:
+    CapabilitySummaryRegistration,
 ): void {
   const summary = analyzeFunctionCapabilities(callback, {
     checker: context.checker,
@@ -204,7 +225,7 @@ export function transformPatternCallback(
         } else if (binding.path.length === 0) {
           initializer = factory.createIdentifier(inputIdentifier.text);
         } else {
-          initializer = createKeyCall(
+          initializer = createPathRead(
             inputIdentifier,
             binding.path,
             factory,
@@ -262,7 +283,10 @@ export function transformPatternCallback(
   }
 
   if (hasUnsupportedDestructuring) {
-    registerCapabilitySummary(callback, context, false, true);
+    registerCapabilitySummary(callback, context, {
+      interprocedural: false,
+      patternCallback: true,
+    });
     return callback;
   }
 
@@ -309,13 +333,11 @@ export function transformPatternCallback(
       callback.equalsGreaterThanToken,
       body,
     );
-    registerCapabilitySummary(
-      transformed,
-      context,
-      false,
-      true,
+    registerCapabilitySummary(transformed, context, {
+      interprocedural: false,
+      patternCallback: true,
       defaultsByParamName,
-    );
+    });
     return transformed;
   }
 
@@ -329,12 +351,10 @@ export function transformPatternCallback(
     callback.type,
     body as ts.Block,
   );
-  registerCapabilitySummary(
-    transformed,
-    context,
-    false,
-    true,
+  registerCapabilitySummary(transformed, context, {
+    interprocedural: false,
+    patternCallback: true,
     defaultsByParamName,
-  );
+  });
   return transformed;
 }

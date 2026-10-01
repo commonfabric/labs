@@ -169,7 +169,7 @@ function maybeRegisterBuilderCapabilitySummary(
 ): void {
   const callback = getCapabilitySummaryCallbackArgument(node, context.checker);
   if (callback) {
-    registerCapabilitySummary(callback, context, true);
+    registerCapabilitySummary(callback, context, { interprocedural: true });
   }
 }
 

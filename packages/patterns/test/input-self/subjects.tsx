@@ -8,6 +8,7 @@
  */
 
 import {
+  computed,
   type Default,
   handler,
   pattern,
@@ -57,6 +58,58 @@ export const IndexedTitle = pattern<In, TitleOut>((input) => ({
   title: input.title,
   otherTitle: input[SELF].title,
 }));
+
+interface ListIn {
+  items: Default<string[], ["a", "b"]>;
+}
+
+/** What a pattern over a list publishes about itself. */
+export interface ListOut {
+  items: string[];
+  echoed: string[];
+  kept: string[];
+}
+
+/** Maps and filters a list read through `input[SELF]`. */
+export const OverOwnList = pattern<ListIn, ListOut>((input) => ({
+  items: input.items,
+  echoed: input[SELF].items.map((item) => item + "!"),
+  kept: input[SELF].items.filter((item) => item !== "b"),
+}));
+
+/** Destructures `[SELF]` off the input in the pattern body. */
+export const DestructuredInBody = pattern<In, Out>((input) => {
+  const { [SELF]: self } = input;
+  return { title: input.title, other: self };
+});
+
+/** What a pattern publishes from its own result through callbacks. */
+export interface CapturedOut {
+  title: string;
+  items: string[];
+  shouted: string;
+  computedTitle: string;
+  mappedTitles: string[];
+}
+
+/**
+ * Reads `input[SELF]` into a local in the pattern body and captures that local
+ * in `computed()` and in a reactive `.map()`, and calls a method through
+ * `input[SELF]`.
+ */
+export const CapturedAlias = pattern<
+  In & { items: Default<string[], ["a", "b"]> },
+  CapturedOut
+>((input) => {
+  const self = input[SELF];
+  return {
+    title: input.title,
+    items: input.items,
+    shouted: input[SELF].title.toUpperCase(),
+    computedTitle: computed(() => self.title),
+    mappedTitles: input.items.map(() => self.title),
+  };
+});
 
 /** A child that republishes the title of the `room` it is handed. */
 export const Child = pattern<
