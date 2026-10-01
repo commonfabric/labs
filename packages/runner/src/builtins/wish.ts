@@ -811,9 +811,12 @@ function searchByHashtag(
   const allMatches: BaseResolution[] = [];
 
   if (searchFavorites) {
-    allMatches.push(
-      ...searchFavoritesForHashtag(ctx, searchTermWithoutHash, parsed.path),
+    const matches = searchFavoritesForHashtag(
+      ctx,
+      searchTermWithoutHash,
+      parsed.path,
     );
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchMentionables) {
@@ -822,7 +825,7 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchProfile) {
@@ -831,7 +834,7 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   // Search mentionables in arbitrary DID spaces
@@ -844,7 +847,7 @@ function searchByHashtag(
       parsed.path,
       didSpaceCell,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   if (allMatches.length === 0) {

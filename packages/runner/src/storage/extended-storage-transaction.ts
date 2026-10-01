@@ -3074,7 +3074,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       };
       // Diagnostics are read by people and by matchers; the verdict tag is
       // a classification channel and does not belong in either.
-      this.#cfcState.diagnostics.push(...reasons.map(plainReason));
+      for (const reason of reasons) {
+        this.#cfcState.diagnostics.push(plainReason(reason));
+      }
       return "";
     }
     const digest = this.#preparedDigest();
@@ -3643,7 +3645,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #clearPostCommitOutbox(handedOff = false): void {
     if (!handedOff) {
-      this.#abandonableEffects.push(...this.#cfcState.outbox);
+      for (const effect of this.#cfcState.outbox) {
+        this.#abandonableEffects.push(effect);
+      }
     }
     this.#cfcState.outbox = [];
     this.#outboxIdempotencyKeys.clear();

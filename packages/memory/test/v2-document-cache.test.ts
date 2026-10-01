@@ -16,6 +16,7 @@ import { ensureDir } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 import { join, toFileUrl } from "@std/path";
 
+import { spliceAll } from "@commonfabric/utils/arrays";
 import {
   applyCommit,
   close,
@@ -698,12 +699,12 @@ describe("v2 document cache", () => {
           const index = draw(list.length + 1);
           const remove = Math.min(draw(3), list.length - index);
           const add = Array.from({ length: draw(3) }, entry);
-          list.splice(index, remove, ...add);
+          spliceAll(list, index, remove, add);
           return { op: "splice", path: "/value/list", index, remove, add };
         }
         case 2: {
           const values = [entry(), entry()];
-          list.push(...values);
+          for (const value of values) list.push(value);
           return { op: "append", path: "/value/list", values };
         }
         case 3: {

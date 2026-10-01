@@ -1,9 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
+import type { CfcCellLinkRefPayload } from "../../src/cfc/link-label-view.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
 import type { NormalizedFullLink } from "../../src/link-utils.ts";
@@ -89,6 +92,9 @@ describe("staged-reference-authorship", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: StorageManager.emulate({ as: alice }),
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+      cfcWriteFloor: "enforce",
     });
   });
 
@@ -97,6 +103,160 @@ describe("staged-reference-authorship", () => {
   });
 
   for (const kind of ["authored-by", "represents-principal"] as const) {
+    for (const replace of [false, true]) {
+      for (const order of ["bottom-up", "top-down", "stored"] as const) {
+        it(`rejects the container's ${kind} floor for a ${replace ? "replacement" : "new"} schema-less reference in ${order} order`, async () => {
+          const seed = runtime.edit();
+          actAs(seed, bob.did());
+          const leaf = runtime.getCell(
+            space,
+            "old-leaf",
+            claimSchema(kind),
+            seed,
+          );
+          leaf.set({ content: text });
+          recordTrustedWrite(seed, leaf.getAsNormalizedFullLink());
+          const plain = runtime.getCell(space, "plain", undefined, seed);
+          seedStoredEnvelope(seed, plain.getAsNormalizedFullLink(), {
+            value: { content: "unattributed content" },
+          });
+          expect((await seed.commit()).error).toBeUndefined();
+          expect(plain.withTx(runtime.readTx()).key("content").get()).toBe(
+            "unattributed content",
+          );
+          expect(
+            readStoredCfcMetadata(
+              runtime.readTx(),
+              plain.getAsNormalizedFullLink(),
+            ),
+          )
+            .toBeUndefined();
+
+          const wrapper = runtime.getCell(space, "wrapper", claimSchema(kind));
+          if (replace) {
+            const stored = runtime.edit();
+            actAs(stored, alice.did());
+            wrapper.withTx(stored).set({
+              next: leaf.withTx(stored),
+              own: "Alice's value",
+            });
+            recordReferencedArgumentFields(
+              stored,
+              wrapper.getAsNormalizedFullLink(),
+              ["next"],
+            );
+            recordTrustedWrite(stored, wrapper.getAsNormalizedFullLink());
+            expect((await stored.commit()).error).toBeUndefined();
+          }
+          const reference = linkRefFrom<CfcCellLinkRefPayload>({
+            ...linkRefPayload(plain.getAsLink()),
+            cfcLabelView: {
+              version: 1,
+              entries: [{
+                path: ["content"],
+                label: { confidentiality: ["carried-secret"] },
+              }],
+            },
+          });
+          const stageWrapper = (tx: IExtendedStorageTransaction) => {
+            actAs(tx, alice.did());
+            wrapper.withTx(tx).set({ next: reference, own: "Alice's value" });
+            recordReferencedArgumentFields(
+              tx,
+              wrapper.getAsNormalizedFullLink(),
+              ["next"],
+            );
+            recordTrustedWrite(tx, wrapper.getAsNormalizedFullLink());
+          };
+          if (order === "stored") {
+            const stored = runtime.edit();
+            stageWrapper(stored);
+            expect((await stored.commit()).error).toBeUndefined();
+          }
+
+          const tx = runtime.edit();
+          actAs(tx, alice.did());
+          const node = runtime.getCell(space, "node", {
+            type: "object",
+            ifc: { integrity: ["node-proof"] },
+          }, tx);
+          const stages = [
+            () => {
+              if (order !== "stored") stageWrapper(tx);
+            },
+            () => {
+              node.set({
+                argument: wrapper.withTx(tx).key("next"),
+                own: wrapper.withTx(tx).key("own"),
+              });
+              recordReferencedArgumentFields(
+                tx,
+                node.getAsNormalizedFullLink(),
+                ["argument", "own"],
+              );
+            },
+          ];
+          for (
+            const stage of order === "top-down" ? stages.toReversed() : stages
+          ) {
+            stage();
+          }
+          expect((await tx.commit()).error).toBeUndefined();
+          expect(
+            node.withTx(runtime.readTx()).key("argument").key("content").get(),
+          )
+            .toBe("unattributed content");
+
+          // The inline sibling retains the container's verified claim. Neither
+          // the reference nor its child may use it to satisfy a later floor.
+          for (const path of [["own"], ["argument"], ["argument", "content"]]) {
+            const consume = runtime.edit();
+            const source = node.withTx(consume).key(...path);
+            const sink = runtime.getCell(space, `sink-${path.join("-")}`, {
+              type: "object",
+              properties: {
+                slot: {
+                  ifc: { requiredIntegrity: [{ kind, subject: alice.did() }] },
+                },
+              },
+            }, consume);
+            sink.set({ slot: source });
+            recordReferencedArgumentFields(
+              consume,
+              sink.getAsNormalizedFullLink(),
+              ["slot"],
+            );
+            const result = await consume.commit();
+            if (path[0] === "own") {
+              expect(result.error).toBeUndefined();
+              expect(sink.withTx(runtime.readTx()).key("slot").get()).toBe(
+                "Alice's value",
+              );
+            } else {
+              expect(result.error?.message).toContain("write floor failed");
+            }
+          }
+          const entries = readStoredCfcMetadata(
+            runtime.readTx(),
+            node.getAsNormalizedFullLink(),
+          )!
+            .labelMap.entries;
+          expect(
+            entries.find((entry) => entry.path.join("/") === "argument")?.label
+              .integrity,
+          )
+            .toContainEqual(
+              expect.objectContaining({ type: CFC_ATOM_TYPE.LinkReference }),
+            );
+          expect(
+            entries.find((entry) => entry.path.join("/") === "argument/content")
+              ?.label.confidentiality,
+          )
+            .toContain("carried-secret");
+        });
+      }
+    }
+
     it(`keeps ${kind} on a stored field claim beneath a root claim`, async () => {
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, space);
@@ -212,13 +372,31 @@ describe("staged-reference-authorship", () => {
     });
 
     for (const confidentialSlot of [false, true]) {
-      for (const order of ["bottom-up", "top-down", "stored"] as const) {
+      for (
+        const order of [
+          "bottom-up",
+          "top-down",
+          "stored",
+          "replaced-bottom-up",
+          "replaced-top-down",
+        ] as const
+      ) {
         it(`keeps ${kind} on the referenced value with ${confidentialSlot ? "a confidential" : "an undeclared"} slot in ${order} order`, async () => {
           const seed = runtime.edit();
           actAs(seed, bob.did());
           const leaf = runtime.getCell(space, "leaf", claimSchema(kind), seed);
           leaf.set({ content: text });
           recordTrustedWrite(seed, leaf.getAsNormalizedFullLink());
+          const oldLeaf = runtime.getCell(
+            space,
+            "old-leaf",
+            claimSchema(kind),
+            seed,
+          );
+          if (order.startsWith("replaced-")) {
+            oldLeaf.set({ content: "Bob's previous content" });
+            recordTrustedWrite(seed, oldLeaf.getAsNormalizedFullLink());
+          }
           expect((await seed.commit()).error).toBeUndefined();
 
           const tx = runtime.edit();
@@ -237,11 +415,14 @@ describe("staged-reference-authorship", () => {
               : {}),
           } as const satisfies JSONSchema;
           const wrapper = runtime.getCell(space, "wrapper", wrapperSchema, tx);
-          const stageWrapper = (transaction: IExtendedStorageTransaction) => {
+          const stageWrapper = (
+            transaction: IExtendedStorageTransaction,
+            source = leaf,
+          ) => {
             actAs(transaction, alice.did());
             const target = wrapper.withTx(transaction);
             target.set({
-              next: leaf.withTx(transaction),
+              next: source.withTx(transaction),
               own: "Alice's value",
             });
             recordReferencedArgumentFields(
@@ -251,9 +432,9 @@ describe("staged-reference-authorship", () => {
             );
             recordTrustedWrite(transaction, target.getAsNormalizedFullLink());
           };
-          if (order === "stored") {
+          if (order === "stored" || order.startsWith("replaced-")) {
             const stored = runtime.edit();
-            stageWrapper(stored);
+            stageWrapper(stored, order === "stored" ? leaf : oldLeaf);
             expect((await stored.commit()).error).toBeUndefined();
           }
           const node = runtime.getCell(space, "node", {
@@ -300,7 +481,9 @@ describe("staged-reference-authorship", () => {
             },
           ];
           for (
-            const stage of order === "top-down" ? stages.toReversed() : stages
+            const stage of order.endsWith("top-down")
+              ? stages.toReversed()
+              : stages
           ) {
             stage();
           }

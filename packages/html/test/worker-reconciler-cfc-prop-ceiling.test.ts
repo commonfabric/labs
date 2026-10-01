@@ -134,7 +134,9 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
   ) => {
     const ops: VDomOp[] = [];
     const cancel = new WorkerReconciler({
-      onOps: (batch) => ops.push(...batch),
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
       ...options,
     }).mount(tree);
     await t.settle();

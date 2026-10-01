@@ -261,7 +261,7 @@ describe("collapseSupersededRunPatternSources()", () => {
 
     collapseSupersededRunPatternSources(transcript, preservedIn(transcript));
     const once = argumentsOf(transcript[0]).sourceText;
-    transcript.push(...attempt("call-3", "out-3"));
+    for (const message of attempt("call-3", "out-3")) transcript.push(message);
     collapseSupersededRunPatternSources(transcript, preservedIn(transcript));
 
     expect(argumentsOf(transcript[0]).sourceText).toBe(once);

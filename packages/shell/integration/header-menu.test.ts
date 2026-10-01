@@ -163,7 +163,9 @@ describe("header menu tests", () => {
         const results = Array.from(root.querySelectorAll(selector));
         for (const el of root.querySelectorAll("*")) {
           if (el.shadowRoot) {
-            results.push(...findInShadow(el.shadowRoot, selector));
+            for (const result of findInShadow(el.shadowRoot, selector)) {
+              results.push(result);
+            }
           }
         }
         return results;
@@ -206,23 +208,27 @@ describe("header menu tests", () => {
     const trigger = await pierce(page, ".header-piece-trigger");
     await trigger.click();
 
-    // Dropdown should appear, laid out rather than merely present
+    // Dropdown should appear, laid out rather than merely present, with the
+    // trigger reporting it expanded. Both are read from the page as it stands
+    // rather than through a held element.
     await waitForCondition(page, (probe) => {
       const dropdowns = probe.collect(".header-piece-dropdown");
       return dropdowns.length > 0 &&
-        dropdowns.every((el) => probe.isRendered(el));
+        dropdowns.every((el) => probe.isRendered(el)) &&
+        probe.collect(".header-piece-trigger").every((el) =>
+          el.getAttribute("aria-expanded") === "true"
+        );
     });
 
-    // Re-query trigger since Lit may have re-rendered
-    const updatedTrigger = await pierce(page, ".header-piece-trigger");
-    assertEquals(
-      await updatedTrigger.evaluate(
-        (el: Element) => el.getAttribute("aria-expanded"),
-      ),
-      "true",
-    );
-
-    // Close via Escape
+    // Close via Escape, pressed with focus outside the header, as it is in a
+    // browser that does not focus a clicked button, or after tabbing away.
+    await page.evaluate(() => {
+      let active = document.activeElement;
+      while (active?.shadowRoot?.activeElement) {
+        active = active.shadowRoot.activeElement;
+      }
+      if (active instanceof HTMLElement) active.blur();
+    });
     await page.keyboard.press("Escape");
 
     // Dropdown should be gone

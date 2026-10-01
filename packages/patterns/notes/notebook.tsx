@@ -369,7 +369,7 @@ const addSelectedToNotebook = handler<
     const note = notesList[idx];
     if (note) notesToAdd.push(note);
   }
-  targetNotebookNotes.push(...notesToAdd);
+  targetNotebookNotes.pushAll(notesToAdd);
 
   selectedNoteIndices.set([]);
   selectedAddNotebook.set("");
@@ -416,7 +416,7 @@ const moveSelectedToNotebook = handler<
 
   // Add to target notebook
   const targetNotebookNotes = notebooks.key(nbIndex).key("notes");
-  targetNotebookNotes.push(...notesToMove);
+  targetNotebookNotes.pushAll(notesToMove);
 
   // Remove from all notebooks except target
   removeFromAllNotebooks(notebooks, notesToMove, nbIndex);
@@ -706,8 +706,8 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
             parentNotebook: self,
           }));
         }
-        pieceRegistry.push(...created);
-        notes.push(...created);
+        pieceRegistry.pushAll(created);
+        notes.pushAll(created);
         return created;
       },
     );

@@ -1,8 +1,8 @@
 /**
- * The three states `Cell.push()` and `Cell.addUnique()` can find the stored
- * value in: absent, an array, or something else. Each method decides between
- * them before it has an array to work with, so all three are covered here for
- * both.
+ * The three states `Cell.push()`, `Cell.pushAll()` and `Cell.addUnique()` can
+ * find the stored value in: absent, an array, or something else. Each method
+ * decides between them before it has an array to work with, so all three are
+ * covered here for each.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -45,6 +45,10 @@ describe("array write guards", () => {
       {
         name: "push()",
         write: (cell: Cell<string[]>, v: string) => cell.push(v),
+      },
+      {
+        name: "pushAll()",
+        write: (cell: Cell<string[]>, v: string) => cell.pushAll([v]),
       },
       {
         name: "addUnique()",

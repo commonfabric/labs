@@ -17,6 +17,8 @@
  * functions below pull the concrete languages in.
  */
 
+import { maxOf } from "@commonfabric/utils/math";
+
 import type {
   Definition,
   Document,
@@ -489,7 +491,7 @@ export function createByteLanguageDetector(): {
   return {
     previewByteLimit: Math.max(
       0,
-      ...entries.map(({ input }) => input.previewByteLimit),
+      maxOf(entries.map(({ input }) => input.previewByteLimit)),
     ),
     write(bytes) {
       return entries.find(({ detector }) => detector.write(bytes))?.language;

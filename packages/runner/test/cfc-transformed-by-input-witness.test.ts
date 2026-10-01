@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { maxOf } from "@commonfabric/utils/math";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -1373,7 +1374,7 @@ describe("TransformedBy input witnesses", () => {
         const depths = storedIntegrity(runtime, input).map((atom) =>
           inputWitnessDepth(atom as CfcAtom)
         );
-        expect(Math.max(...depths)).toBe(INPUT_WITNESS_MAX_DEPTH);
+        expect(maxOf(depths)).toBe(INPUT_WITNESS_MAX_DEPTH);
       });
     });
 

@@ -5,6 +5,7 @@ import {
   type CfcStreamObservation,
   evaluateHarnessWriteFileAuthorization,
 } from "@commonfabric/runner/cfc";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -575,13 +576,13 @@ const nextSubagentSequence = (
     ).length;
   const retainedChildRunSequence = Math.max(
     0,
-    ...(runState.subagentRuns ?? []).flatMap((run) => {
+    maxOf((runState.subagentRuns ?? []).flatMap((run) => {
       const sequence = childRunSequenceFromId(
         runState.runId,
         run.childRunId,
       );
       return sequence === undefined ? [] : [sequence];
-    }),
+    })),
   );
   return Math.max(retainedDelegateOutputs, retainedChildRunSequence) + 1;
 };
@@ -4078,7 +4079,9 @@ export class CfHarnessPromptLoop {
         await Promise.allSettled(invocations);
         options.signal?.removeEventListener("abort", abortTurn);
         this.#subagentRunsAtTurnStart = undefined;
-        toolActivity.push(...turnActivities.flat());
+        for (const activities of turnActivities) {
+          for (const activity of activities) toolActivity.push(activity);
+        }
         options.signal?.throwIfAborted();
         if (turnFailure !== undefined) throw turnFailure.error;
         // Every invocation has settled, and none rejected: a rejection is
@@ -4118,12 +4121,15 @@ export class CfHarnessPromptLoop {
             transcript,
           });
           if (invokedToolCall.followupMessages !== undefined) {
-            followupMessages.push(...invokedToolCall.followupMessages);
+            for (const followupMessage of invokedToolCall.followupMessages) {
+              followupMessages.push(followupMessage);
+            }
           }
-          if (invokedToolCall.cfcModelContextObservations !== undefined) {
-            pendingCfcModelContextObservations.push(
-              ...invokedToolCall.cfcModelContextObservations,
-            );
+          const observations = invokedToolCall.cfcModelContextObservations;
+          if (observations !== undefined) {
+            for (const observation of observations) {
+              pendingCfcModelContextObservations.push(observation);
+            }
           }
         }
         for (const followupMessage of followupMessages) {
@@ -5988,7 +5994,9 @@ export class CfHarnessPromptLoop {
           runId: childRunId,
           activatedAt: childCreatedState.updatedAt,
         });
-        childActivations.push(...skillContext.activations.activations);
+        for (const activation of skillContext.activations.activations) {
+          childActivations.push(activation);
+        }
         childSkillContextMessages.push(skillContext.contextText);
       }
       if (options.resolvedSkill !== undefined) {

@@ -1,16 +1,12 @@
 /// <reference lib="deno.unstable" />
 
-import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-spread-arguments.ts";
 
-/** A file the rule applies to. */
-const IN_TASKS = join(import.meta.dirname!, "sample.ts");
-
 /** The source text of each spread the rule reports in `source`. */
-function reported(source: string, fileName = IN_TASKS): string[] {
-  return Deno.lint.runPlugin(plugin, fileName, source).map((diagnostic) =>
+function reported(source: string): string[] {
+  return Deno.lint.runPlugin(plugin, "sample.ts", source).map((diagnostic) =>
     source.slice(...diagnostic.range)
   );
 }
@@ -58,11 +54,5 @@ describe("lint-spread-arguments", () => {
       records[push](...more);
       const all = [...records, ...more];
     `)).toEqual([]);
-  });
-
-  it("returns nothing for a file outside `tasks/`", () => {
-    const outside = join(import.meta.dirname!, "..", "packages", "sample.ts");
-    expect(reported("records.push(...more);", outside)).toEqual([]);
-    expect(reported("records.push(...more);")).toEqual(["...more"]);
   });
 });

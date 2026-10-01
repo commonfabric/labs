@@ -192,7 +192,12 @@ wrong. These rules hold that agreement:
   records. No reading of the schema alone reproduces that, so at a view's
   child such a union is handed to the traverser from the hop, exactly the
   position the parent's eager traversal evaluates, and the merge mints the
-  handle. A reader gets the same `Cell` either way, carrying the same schema.
+  handle. A reader gets the same `Cell` either way, carrying the same schema,
+  and its commit carries the same conflict reads. The view reads nothing past
+  the hop that the traversal does not, and where every branch declares a
+  handle, the traversal's reads resolve a reference and stay out of the
+  conflict set, as they do in the eager descent. A union with a branch read as
+  a value keeps them, since they decide what the reader holds.
 - **Object property defaults follow filtering.** A missing or rejected
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.

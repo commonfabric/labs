@@ -251,7 +251,9 @@ export class EntityTriggers {
   ): void {
     if (!TRIGGER_EQUIVALENCE_CHECK) return;
     const registered: (readonly MemoryAddressPathComponent[])[] = [];
-    for (const paths of this.#pathsByAction.values()) registered.push(...paths);
+    for (const paths of this.#pathsByAction.values()) {
+      for (const path of paths) registered.push(path);
+    }
     const scans = triggerScanWork.scans;
     const pathsVisited = triggerScanWork.pathsVisited;
     const pathsMatched = triggerScanWork.pathsMatched;

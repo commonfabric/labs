@@ -133,7 +133,7 @@ refuses.
 
 ## Finish the migration: remove the read
 
-The compiler inspects `push`. It does not inspect `addUnique` or
+The compiler inspects `push` and `pushAll`. It does not inspect `addUnique` or
 `removeByValue`, because those are the recommended replacements. So swapping
 `push` for `addUnique` while keeping the `.get()` of the same list silences the
 diagnostic without changing what the handler does under contention: the

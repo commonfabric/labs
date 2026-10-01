@@ -57,7 +57,9 @@ async function renderedRows(page: Page) {
         ),
       }));
       for (const element of root.querySelectorAll("*")) {
-        if (element.shadowRoot) rows.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const row of collect(element.shadowRoot)) rows.push(row);
+        }
       }
       return rows;
     }
@@ -202,7 +204,9 @@ describe("rendered vote rows across replicas", () => {
                   .map((element) => element.textContent ?? "");
                 for (const element of root.querySelectorAll("*")) {
                   if (element.shadowRoot) {
-                    values.push(...collect(element.shadowRoot));
+                    for (const value of collect(element.shadowRoot)) {
+                      values.push(value);
+                    }
                   }
                 }
                 return values;

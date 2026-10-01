@@ -1213,10 +1213,9 @@ export const consoleHealthRows = (
     }
   }
   if (launch !== undefined && launch.connectors.length > 0) {
-    rows.push(...launch.connectors.map((row): ConsoleHealthRow => ({
-      ...row,
-      checkedAt: launch.checkedAt,
-    })));
+    for (const row of launch.connectors) {
+      rows.push({ ...row, checkedAt: launch.checkedAt });
+    }
   } else {
     rows.push({
       id: "connectors.inventory",
@@ -1232,16 +1231,18 @@ export const consoleHealthRows = (
       remedy:
         "Launch the console for its Loom instance to retain the full connector decision report.",
     });
-    rows.push(...config.connectorGrants.map((grant): ConsoleHealthRow => ({
-      id: `connector.granted.${grant.name}`,
-      group: "connectors",
-      label: connectorGrantName(grant.source),
-      value: `granted: ${connectorGrantLabel(grant)}`,
-      source: "console connector configuration",
-      detail: "CF_HARNESS_CONNECTOR_GRANTS",
-      state: "ok",
-      checkedAt,
-    })));
+    for (const grant of config.connectorGrants) {
+      rows.push({
+        id: `connector.granted.${grant.name}`,
+        group: "connectors",
+        label: connectorGrantName(grant.source),
+        value: `granted: ${connectorGrantLabel(grant)}`,
+        source: "console connector configuration",
+        detail: "CF_HARNESS_CONNECTOR_GRANTS",
+        state: "ok",
+        checkedAt,
+      });
+    }
   }
   if (modelOptions === undefined) {
     rows.push({

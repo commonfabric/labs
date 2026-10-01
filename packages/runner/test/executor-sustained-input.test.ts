@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { maxOf } from "@commonfabric/utils/math";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
 import {
@@ -44,7 +45,7 @@ describe("SpaceServer", () => {
       // nothing about an exhausted cycle.
       expect(stats.wavesBudgetExhausted).toBeGreaterThan(0);
       expect(covered.length).toBe(stream.inputs.length);
-      expect(Math.max(...covered.map((row) => row.cycles)))
+      expect(maxOf(covered.map((row) => row.cycles)))
         .toBeLessThanOrEqual(5);
       expect(stats.exhaustedAdvances).toBeGreaterThan(0);
     });

@@ -119,6 +119,42 @@ deno run -A packages/cli/mod.ts id derive -- passphrase.txt > .cf/shared-dev.key
 The file must be a PKCS8/PEM private key. `*.key` and `.cf/` are gitignored in
 this repository.
 
+## Loom Identity To Browser
+
+A browser can sign in as the identity a Loom holds by redeeming a pairing code.
+On the Mac that runs Loom, open Weaver Settings > Pair a device, or run
+`loom identity pair`. Loom shows a code such as `7KQ2M-XH4RD`, good for ten
+minutes and one use. Then either:
+
+- on the shell's login screen, choose `Login`, then `Pair with Loom`, and enter
+  the code and Loom's address (`http://localhost:9900` unless it runs
+  elsewhere); or
+- open a shell URL whose fragment carries the code: `…/#pair=7KQ2M-XH4RD`, or
+  `…/#pair=7KQ2M-XH4RD&loom=<URL-encoded Loom address>` for a Loom that is not
+  at `http://localhost:9900`.
+
+The shell posts the code to Loom's `/identity-pairing/redeem` from the page
+itself, so Loom has to admit a browser request from another origin on that
+route. The key goes from Loom to the browser directly and never passes through
+toolshed. The browser stores it in IndexedDB like an imported CLI key, and
+quick unlock offers it as an imported key.
+
+How much a link asks depends on where its Loom is. Loom mints codes only for a
+caller on its own machine, so a code for a Loom on this computer (`localhost`,
+`127.0.0.1`, `[::1]`) can only have come from this computer. Such a link signs
+in at once when nobody is signed in. When someone is, the shell asks whether to
+replace that identity before it redeems the code, because the redeem spends the
+code and Loom records this browser as holding the key. A Loom anywhere else may
+be someone else's, and a link to it could sign the browser in as them, so the
+shell redeems the code and then asks, showing the Loom's address and the
+identity it handed over. The one exception is a Loom that hands over the
+identity already signed in: nothing changes, so nothing is asked. A code typed into the login form signs in without a
+question, since the person entered both the code and the address. The
+link's fragment is removed from the address bar as soon as the shell reads it,
+and a shell running in a frame never acts on one.
+`packages/shell/src/lib/loom-pairing.ts` holds the code and fragment rules, and
+`loom-pairing-login.ts` beside it the sign-in.
+
 ## Verify Before Debugging
 
 Always compare DIDs before testing scoped behavior:

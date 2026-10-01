@@ -2202,12 +2202,14 @@ function buildAssistantMessage(
       text: content,
     });
   } else if (Array.isArray(content)) {
-    assistantContentParts.push(
-      ...content.filter((part) => part.type === "text") as BuiltInLLMTextPart[],
-    );
+    for (const part of content) {
+      if (part.type === "text") {
+        assistantContentParts.push(part);
+      }
+    }
   }
 
-  assistantContentParts.push(...toolCallParts);
+  for (const part of toolCallParts) assistantContentParts.push(part);
 
   return {
     role: "assistant",
@@ -4137,8 +4139,8 @@ async function startRequest(
       tx,
       messagesCell.getAsNormalizedFullLink(),
     );
-    messagesCell.withTx(tx).push(
-      ...messages.map((message) => {
+    messagesCell.withTx(tx).pushAll(
+      messages.map((message) => {
         const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
           base.space,
           { llmDialog: { message: cause, id: crypto.randomUUID() } },
@@ -4166,9 +4168,10 @@ async function startRequest(
     });
     // Record the stamping schema for each pushed message's own entity doc
     // (every message is appended as a link to a document of its own, so each
-    // one is separately addressable). The messages link carries its own schema, which wins over
-    // an `asSchema` handle inside `push()` (`resolvedLink.schema ?? ...`), so
-    // the stamp cannot ride the array handle — instead this mirrors the
+    // one is separately addressable). The messages link carries its own schema,
+    // which wins over an `asSchema` handle inside `pushAll()`
+    // (`resolvedLink.schema ?? ...`), so the stamp cannot ride the array
+    // handle — instead this mirrors the
     // split-entity idiom in data-updating.ts (`recordRelevantSchemaWrite-
     // PolicyInput` on the child doc), which also marks the transaction
     // CFC-relevant so `prepareTxForCommit` runs the persist pass that mints
