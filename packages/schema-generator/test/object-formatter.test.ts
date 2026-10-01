@@ -23,6 +23,47 @@ describe("object-formatter", () => {
     );
   }
 
+  it("classifies generic callable members from their instantiated arguments", async () => {
+    const schema = await schemaFor(`
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
+declare const h: () => Stream<void>;
+declare const plainFn: () => number;
+declare const subPattern: () => { value: string };
+type H = typeof h;
+interface Box<T> { value: T; n: number }
+type Guarded<H> = { action: H; value: WriteAuthorizedBy<string, H> };
+interface SchemaRoot {
+  handler: Box<typeof h>;
+  aliasedHandler: Box<H>;
+  plain: Box<typeof plainFn>;
+  subPattern: Box<typeof subPattern>;
+  guarded: Guarded<typeof h>;
+}
+`);
+
+    for (const name of ["handler", "aliasedHandler"]) {
+      const member = asObjectSchema(schema.properties![name]!);
+      expect(member.properties).toEqual({
+        value: { asCell: ["stream"] },
+        n: { type: "number" },
+      });
+      expect(member.required).toHaveLength(2);
+      expect(member.required).toEqual(expect.arrayContaining(["value", "n"]));
+    }
+    for (const name of ["plain", "subPattern"]) {
+      const member = asObjectSchema(schema.properties![name]!);
+      expect(member.properties).toEqual({ n: { type: "number" } });
+      expect(member.required).toEqual(["n"]);
+    }
+    const guarded = asObjectSchema(schema.properties!.guarded!);
+    expect(guarded.properties!.action).toEqual({ asCell: ["stream"] });
+    expect(asObjectSchema(guarded.properties!.value!).ifc?.writeAuthorizedBy)
+      .toEqual({
+        __ctWriterIdentityOf: { file: "test.ts", path: ["h"] },
+      });
+  });
+
   it("emits an open object schema for the bare `object` type", async () => {
     // The `object` type says a value is an object and nothing about its
     // properties, so the formatter claims it by name and emits a schema that

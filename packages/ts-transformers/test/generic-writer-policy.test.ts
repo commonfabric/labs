@@ -10,7 +10,7 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
-import { parseModule, patternSchemas } from "./transformed-ast.ts";
+import { callSchemas, parseModule, patternSchemas } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
 
 /** Resolves local references and the non-nullish arm of an optional value. */
@@ -40,6 +40,78 @@ function valueSchema(
 
 describe("generic writer policy", () => {
   for (const position of ["input", "output"] as const) {
+    for (
+      const [name, declaration] of [
+        ["an interface", "interface Box<T> { value: T; n: number }"],
+        ["an object alias", "type Box<T> = { value: T; n: number };"],
+      ] as const
+    ) {
+      it(`keeps callable member schemas through ${name} in the ${position} schema`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const output = await transformSource(
+          `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+const plainFn = () => 1;
+const subPattern = pattern(() => ({}));
+type H = typeof f;
+${declaration}
+type Guarded<H> = { action: H; value: WriteAuthorizedBy<string, H> };
+type Payload = {
+  handler: Box<typeof f>;
+  aliasedHandler: Box<H>;
+  plain: Box<typeof plainFn>;
+  subPattern: Box<typeof subPattern>;
+  guarded: Guarded<typeof f>;
+};
+export default ${
+            position === "input"
+              ? "pattern<Payload>(() => ({}))"
+              : "pattern<{}, Payload>(() => ({} as Payload))"
+          };`,
+          {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          },
+        );
+        expect(diagnostics.filter((item) => item.severity === "error")).toEqual(
+          [],
+        );
+        const schemas = callSchemas(parseModule(output), "pattern");
+        expect(schemas).toHaveLength(2);
+        const schema = schemas[position === "input" ? 0 : 1] as JSONSchemaObj;
+        const root = valueSchema(schema, schema);
+        for (const name of ["handler", "aliasedHandler"]) {
+          const member = valueSchema(root.properties?.[name], schema);
+          expect(member.properties).toEqual({
+            value: { asCell: ["stream"] },
+            n: { type: "number" },
+          });
+          expect(member.required).toHaveLength(2);
+          expect(member.required).toEqual(
+            expect.arrayContaining(["value", "n"]),
+          );
+        }
+        for (const name of ["plain", "subPattern"]) {
+          const member = valueSchema(root.properties?.[name], schema);
+          expect(member.properties).toEqual({ n: { type: "number" } });
+          expect(member.required).toEqual(["n"]);
+        }
+        const guarded = valueSchema(root.properties?.guarded, schema);
+        expect(guarded.properties?.action).toEqual({ asCell: ["stream"] });
+        expect(valueSchema(guarded.properties?.value, schema)).toMatchObject({
+          type: "string",
+          ifc: {
+            writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["f"] } },
+          },
+        });
+        expect(guarded.required).toHaveLength(2);
+        expect(guarded.required).toEqual(
+          expect.arrayContaining(["action", "value"]),
+        );
+      });
+    }
+
     for (
       const [name, declarations, spelling, field] of [
         ["a direct member", "", "{ value: POLICY }", "value"],

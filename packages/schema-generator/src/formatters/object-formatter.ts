@@ -303,6 +303,11 @@ export class ObjectFormatter implements TypeFormatter {
 
       if ((prop.flags & ts.SymbolFlags.Method) !== 0) continue;
 
+      const instantiatedPropType = instantiatedPropertyType(
+        context.instantiatedAs,
+        propName,
+        checker,
+      );
       // Get the actual property type and recursively delegate to the main schema generator
       const resolvedPropType = propTypeNode && context.boundTypeParameters &&
           holdsTypeParameter(
@@ -314,11 +319,12 @@ export class ObjectFormatter implements TypeFormatter {
         ? checker.getTypeFromTypeNode(propTypeNode)
         : safeGetPropertyType(prop, type, checker, propTypeNode);
 
-      if (isFunctionLike(resolvedPropType)) {
+      const callablePropType = instantiatedPropType ?? resolvedPropType;
+      if (isFunctionLike(callablePropType)) {
         // Special case: ModuleFactory/HandlerFactory types that return Stream or Cell
         // should generate { asCell: ["stream"] } or { asCell: ["cell"] } instead of being skipped
         const wrapperSchema = getWrapperSchemaFromCallable(
-          resolvedPropType,
+          callablePropType,
           checker,
         );
         if (wrapperSchema) {
@@ -353,7 +359,7 @@ export class ObjectFormatter implements TypeFormatter {
         resolvedPropType,
         context,
         propTypeNode,
-        instantiatedPropertyType(context.instantiatedAs, propName, checker),
+        instantiatedPropType,
       );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(

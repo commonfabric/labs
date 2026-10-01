@@ -33,29 +33,33 @@ interface Node<W> { value: W; next?: Sec<Identity<W>> }
 type Sec<W> = Confidential<Node<W>, readonly []>;
 type Protected = WriteAuthorizedBy<string, typeof f>;
 export interface Output {
-  plain: Box<Protected>;
+  plain: Box<WriteAuthorizedBy<string, typeof f>>;
   pair: Pair<typeof f, typeof g>;
-  record: Record<string, Protected>;
-  recursive: Sec<Protected>;
+  record: Record<string, WriteAuthorizedBy<string, typeof f>>;
+  recursive: Sec<WriteAuthorizedBy<string, typeof f>>;
+  named: Box<Protected>;
   fPlain: Stream<string>; gPlain: Stream<string>;
   fLeft: Stream<string>; gLeft: Stream<string>;
   fRight: Stream<string>; gRight: Stream<string>;
   fRecord: Stream<string>; gRecord: Stream<string>;
   fDeep: Stream<string>; gDeep: Stream<string>;
+  fNamed: Stream<string>; gNamed: Stream<string>;
 }
 export default pattern<{}, Output>(() => {
-  const plain = new Writable<Box<Protected>>({ value: "initial" });
+  const plain = new Writable<Box<WriteAuthorizedBy<string, typeof f>>>({ value: "initial" });
   const pair = new Writable<Pair<typeof f, typeof g>>({ left: "initial", right: "initial" });
-  const record = new Writable<Record<string, Protected>>({ entry: "initial" });
-  const recursive = new Writable<Sec<Protected>>({ value: "initial", next: { value: "initial", next: { value: "initial" } } });
+  const record = new Writable<Record<string, WriteAuthorizedBy<string, typeof f>>>({ entry: "initial" });
+  const recursive = new Writable<Sec<WriteAuthorizedBy<string, typeof f>>>({ value: "initial", next: { value: "initial", next: { value: "initial" } } });
+  const named = new Writable<Box<Protected>>({ value: "initial" });
   return {
-    plain, pair, record, recursive,
+    plain, pair, record, recursive, named,
     fPlain: f({ value: plain.key("value") }), gPlain: g({ value: plain.key("value") }),
     fLeft: f({ value: pair.key("left") }), gLeft: g({ value: pair.key("left") }),
     fRight: f({ value: pair.key("right") }), gRight: g({ value: pair.key("right") }),
     fRecord: f({ value: record.key("entry") }), gRecord: g({ value: record.key("entry") }),
     fDeep: f({ value: recursive.key("next").key("next").key("value") }),
     gDeep: g({ value: recursive.key("next").key("next").key("value") }),
+    fNamed: f({ value: named.key("value") }), gNamed: g({ value: named.key("value") }),
   };
 });`,
   }],
@@ -157,6 +161,7 @@ describe("compiled generic writer policy", () => {
               [["pair", "right"], "gRight", "fRight"],
               [["record", "entry"], "fRecord", "gRecord"],
               [["recursive", "next", "next", "value"], "fDeep", "gDeep"],
+              [["named", "value"], "fNamed", "gNamed"],
             ] as const
           ) {
             const accepted = `${phase}:${allowed}`;

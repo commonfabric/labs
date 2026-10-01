@@ -3037,7 +3037,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * an error here as well as in `WriteAuthorizedByValidationTransformer`,
    * which cannot see bindings passed through another alias's parameters. A
    * policy written through another alias whose binding has no node to read
-   * is also an error: its schema would carry no write restriction.
+   * is also an error: its schema would carry no write restriction. A generic
+   * member whose operator syntax erases its bound writer reports an error
+   * with a specific authoring remedy.
    */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
