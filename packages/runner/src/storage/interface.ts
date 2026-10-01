@@ -1204,6 +1204,14 @@ export interface IStorageTransaction {
   validateReactiveReads?: boolean;
 
   /**
+   * Whether this transaction's writes are derived from its reads, as a
+   * reactive computation's are, so that running it again reproduces them.
+   * A replica keeps such a write as a local fold when the space refuses it
+   * for lack of a grant, rather than reverting it.
+   */
+  derivedWrites?: boolean;
+
+  /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
    * resolve against when it is NOT the storage manager's own session
    * (server-execution v2 stage A — OW17's tx→replica identity seam,
