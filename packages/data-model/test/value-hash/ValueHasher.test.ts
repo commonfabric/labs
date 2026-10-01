@@ -771,12 +771,14 @@ describe("ValueHasher", () => {
 
           const pushShortString = (value: string) => {
             const encoded = enc.encode(value);
-            stream.push(0x24, encoded.length, ...encoded);
+            stream.push(0x24, encoded.length);
+            for (const byte of encoded) stream.push(byte);
           };
 
           const pushLongString = (value: string) => {
             const hashed = sha256(enc.encode(value));
-            stream.push(0xf0, ...hashed);
+            stream.push(0xf0);
+            for (const byte of hashed) stream.push(byte);
           };
 
           // Type tag.

@@ -107,11 +107,11 @@ describe("unread-type-diagnostics", () => {
       const original = logger.warn;
       const logged: string[] = [];
       logger.warn = (_key, ...messages) => {
-        logged.push(
-          ...messages.map((message) =>
-            String(typeof message === "function" ? message() : message)
-          ),
-        );
+        for (const message of messages) {
+          logged.push(
+            String(typeof message === "function" ? message() : message),
+          );
+        }
       };
       try {
         new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
@@ -142,11 +142,11 @@ describe("unread-type-diagnostics", () => {
       const original = logger.error;
       const logged: string[] = [];
       logger.error = (_key, ...messages) => {
-        logged.push(
-          ...messages.map((message) =>
-            String(typeof message === "function" ? message() : message)
-          ),
-        );
+        for (const message of messages) {
+          logged.push(
+            String(typeof message === "function" ? message() : message),
+          );
+        }
       };
       try {
         new SchemaGenerator().generateSchema(type, checker);

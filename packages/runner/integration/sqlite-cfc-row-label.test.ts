@@ -128,8 +128,10 @@ async function runTest(base: URL) {
         const conf: unknown[] = [];
         const integ: unknown[] = [];
         for (const entry of view?.entries ?? []) {
-          conf.push(...(entry.label.confidentiality ?? []));
-          integ.push(...(entry.label.integrity ?? []));
+          for (const atom of entry.label.confidentiality ?? []) {
+            conf.push(atom);
+          }
+          for (const atom of entry.label.integrity ?? []) integ.push(atom);
         }
         return { conf, integ };
       };

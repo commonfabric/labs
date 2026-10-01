@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { encodeBase64 } from "@std/encoding/base64";
 
 import { Identity } from "@commonfabric/identity";
 
@@ -263,7 +264,7 @@ Deno.test("login view signs in as the identity a Loom pairing code redeems", asy
     const { XLoginView } = await import("../src/views/LoginView.ts");
     const pkcs8 = await Identity.generatePkcs8();
     const did = (await Identity.fromPkcs8(pkcs8)).did();
-    const pkcs8Base64 = btoa(String.fromCharCode(...pkcs8));
+    const pkcs8Base64 = encodeBase64(pkcs8);
 
     await withLoomAndStorage(
       () => new Response(JSON.stringify({ pkcs8Base64, did })),

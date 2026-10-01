@@ -1,16 +1,17 @@
 /// <reference lib="deno.unstable" />
 
 /**
- * A lint rule that stops the CI tasks under `tasks/` from spreading a
- * collection into a call that takes one argument per element.
+ * A lint rule that stops code from spreading a collection into a call that
+ * takes one argument per element.
  *
  * `records.push(...more)` passes every element of `more` as a separate
  * argument, and V8 limits how many arguments one call can take: past roughly a
  * hundred thousand, the call throws `RangeError: Maximum call stack size
- * exceeded`. The tasks here hold collections that grow with the number of tests
- * a run has — test records, the findings about them, the objects a store
- * listing returns — so a spread that is safe on the day it is written fails
- * later, in CI, once a run grows past the limit.
+ * exceeded`. A collection that grows with data — test records, the changes a
+ * cell write makes, the lines of a file — makes a spread that is safe on the
+ * day it is written fail later, once the data grows past the limit. The rule
+ * cannot tell such a collection from one whose size the code fixes, so it
+ * reports both.
  *
  * The rule reports a spread argument to a method named `push`, `unshift`, or
  * `splice`, whatever it is called on, and to `Math.max`, `Math.min`,
@@ -18,7 +19,8 @@
  * purpose is to take a whole collection as arguments. A spread into any other
  * call, such as `path.join(root, ...segments)`, forwards a list whose length
  * the code fixes, and is left alone. So is a spread into an array literal,
- * which V8 builds without passing arguments.
+ * which V8 builds without passing arguments. A spread that has to stay
+ * carries a `deno-lint-ignore` comment saying why.
  */
 
 /** The methods reported whatever object they are called on. */
@@ -30,16 +32,15 @@ const FUNCTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["String", new Set(["fromCharCode", "fromCodePoint"])],
 ]);
 
-/** The directory this rule applies to, which is the one this file is in. */
-const TASKS = import.meta.dirname!;
-
 const MESSAGE =
   "Spreading a collection into this call passes each element as a separate " +
   "argument, and V8 throws `RangeError: Maximum call stack size exceeded` " +
   "once a call has more than about a hundred thousand of them. Append in a " +
-  "loop (`for (const item of items) out.push(item);`), and take the " +
-  "largest or smallest with `maxOf` or `minOf` from " +
-  "`@commonfabric/utils/math`. See docs/development/DEVELOPMENT.md, " +
+  "loop (`for (const item of items) out.push(item);`), or to an array cell " +
+  "with `pushAll(items)`; take the largest or smallest with `maxOf` or " +
+  "`minOf` from `@commonfabric/utils/math`; and replace a range with " +
+  "`spliceAll` from `@commonfabric/utils/arrays`. See " +
+  "docs/development/DEVELOPMENT.md, " +
   '"Spreading a collection into a call".';
 
 /** The name of an identifier, or undefined for any other node. */
@@ -60,11 +61,10 @@ function takesCollection(callee: Deno.lint.Node): boolean {
 }
 
 export default {
-  name: "cf-tasks",
+  name: "cf-spread",
   rules: {
     "no-spread-arguments": {
       create(context) {
-        if (!context.filename.startsWith(`${TASKS}/`)) return {};
         return {
           CallExpression(node) {
             if (!takesCollection(node.callee)) return;

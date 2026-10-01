@@ -20,7 +20,9 @@ function sourceModulesUnder(dir: URL): URL[] {
 
   for (const entry of Deno.readDirSync(dir)) {
     if (entry.isDirectory) {
-      result.push(...sourceModulesUnder(new URL(`${entry.name}/`, dir)));
+      for (const module of sourceModulesUnder(new URL(`${entry.name}/`, dir))) {
+        result.push(module);
+      }
     } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
       result.push(new URL(entry.name, dir));
     }

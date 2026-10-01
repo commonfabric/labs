@@ -1176,7 +1176,9 @@ export function buildRecordsFromCompiled(
       for (const n of direct.get(cur)?.names ?? []) {
         if (n !== "default") names.add(n);
       }
-      stack.push(...(direct.get(cur)?.starTargets ?? []));
+      for (const target of direct.get(cur)?.starTargets ?? []) {
+        stack.push(target);
+      }
     }
     const result = [...names];
     fullExportsMemo.set(identity, result);

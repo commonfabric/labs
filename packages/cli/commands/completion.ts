@@ -100,8 +100,10 @@ export function parseCompleteRequest(args: readonly string[]): CompleteRequest {
     else if (arg === "--line") line = args[++i] ?? "";
     else if (arg === "--point") point = Number(args[++i]);
     else if (arg === "--cword") cword = Number(args[++i]);
-    else if (arg === "--") words.push(...args.slice(i + 1)), i = args.length;
-    else if (!arg.startsWith("-")) words.push(arg);
+    else if (arg === "--") {
+      for (const word of args.slice(i + 1)) words.push(word);
+      break;
+    } else if (!arg.startsWith("-")) words.push(arg);
   }
 
   if (line !== undefined) {

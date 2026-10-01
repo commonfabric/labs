@@ -795,11 +795,13 @@ export function linkPathContracts(
         if (applicable.length === 0) {
           applicable.push(schema.additionalProperties ?? true);
         }
-        next.push(...applicable.map((child) => ({
-          schema: child,
-          root: root,
-          mayBeMissing,
-        })));
+        for (const child of applicable) {
+          next.push({
+            schema: child,
+            root: root,
+            mayBeMissing,
+          });
+        }
         continue;
       }
       if (arrayShaped) {
@@ -1047,7 +1049,7 @@ export function currentValuePathContracts(
       const baseArrayShaped = base.type === "array" ||
         base.items !== undefined || base.prefixItems !== undefined;
       if (baseObjectShaped || baseArrayShaped) {
-        contracts.push(...currentValuePathContracts(
+        const baseContracts = currentValuePathContracts(
           {
             ...contract,
             schema: base,
@@ -1057,7 +1059,8 @@ export function currentValuePathContracts(
           currentValue,
           candidateValue,
           active,
-        ));
+        );
+        for (const baseContract of baseContracts) contracts.push(baseContract);
       } else if (
         Object.keys(base).some((key) =>
           !LINK_PATH_NEUTRAL_ANCESTOR_KEYS.has(key)
@@ -1106,13 +1109,16 @@ export function currentValuePathContracts(
           ]),
         ];
         for (const branch of selected) {
-          contracts.push(...currentValuePathContracts(
+          const pathContracts = currentValuePathContracts(
             branchContract(branch),
             segment,
             currentValue,
             candidateValue,
             active,
-          ));
+          );
+          for (const pathContract of pathContracts) {
+            contracts.push(pathContract);
+          }
         }
       }
       if (Array.isArray(schema.allOf)) {
@@ -1122,13 +1128,16 @@ export function currentValuePathContracts(
               "current producer value does not satisfy an allOf write contract",
             );
           }
-          contracts.push(...currentValuePathContracts(
+          const pathContracts = currentValuePathContracts(
             branchContract(branch),
             segment,
             currentValue,
             candidateValue,
             active,
-          ));
+          );
+          for (const pathContract of pathContracts) {
+            contracts.push(pathContract);
+          }
         }
       }
       if (contracts.length === 0) throw originalError;
@@ -1770,7 +1779,7 @@ export function durableSourceContract(
     const unique = new Map(
       projected.map((entry) => [JSON.stringify(entry.path), entry]),
     );
-    schemas.push(...unique.values());
+    for (const schema of unique.values()) schemas.push(schema);
   }
   return schemas.length === 0 ? undefined : { schemas };
 }
@@ -1803,11 +1812,12 @@ function suppliedLinks(
 
   const links: SuppliedLink[] = [];
   for (const key of Object.keys(value)) {
-    links.push(...suppliedLinks(
+    const nestedLinks = suppliedLinks(
       (value as Record<string, unknown>)[key],
       [...path, key],
       seen,
-    ));
+    );
+    for (const link of nestedLinks) links.push(link);
   }
   seen.delete(value);
   return links;

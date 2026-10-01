@@ -80,7 +80,9 @@ Deno.test("worker reconciler CFC denials", async (t) => {
   const collectOps = () => {
     const all: VDomOp[] = [];
     return {
-      onOps: (ops: VDomOp[]) => all.push(...ops),
+      onOps: (ops: VDomOp[]) => {
+        for (const op of ops) all.push(op);
+      },
       all,
       propValue: (key: string): string | undefined => {
         for (const op of all) {

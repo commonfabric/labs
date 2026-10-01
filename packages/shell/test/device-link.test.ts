@@ -533,8 +533,11 @@ function handlersOf(value: any): Array<() => void> {
   if (Array.isArray(value)) return value.flatMap(handlersOf);
   const out: Array<() => void> = [];
   for (const v of value.values ?? []) {
-    if (typeof v === "function") out.push(v as () => void);
-    else out.push(...handlersOf(v));
+    if (typeof v === "function") {
+      out.push(v as () => void);
+    } else {
+      for (const handler of handlersOf(v)) out.push(handler);
+    }
   }
   return out;
 }

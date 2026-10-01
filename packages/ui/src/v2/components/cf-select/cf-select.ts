@@ -418,7 +418,9 @@ export class CFSelect extends BaseElement {
           </optgroup>
         `);
       } else {
-        templates.push(...items.map((i) => renderItem(i, runningIndex++)));
+        for (const item of items) {
+          templates.push(renderItem(item, runningIndex++));
+        }
       }
     });
 

@@ -2202,12 +2202,14 @@ function buildAssistantMessage(
       text: content,
     });
   } else if (Array.isArray(content)) {
-    assistantContentParts.push(
-      ...content.filter((part) => part.type === "text") as BuiltInLLMTextPart[],
-    );
+    for (const part of content) {
+      if (part.type === "text") {
+        assistantContentParts.push(part);
+      }
+    }
   }
 
-  assistantContentParts.push(...toolCallParts);
+  for (const part of toolCallParts) assistantContentParts.push(part);
 
   return {
     role: "assistant",

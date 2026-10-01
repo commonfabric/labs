@@ -9,6 +9,7 @@ import {
   tracePath,
   valueEqual,
 } from "@commonfabric/data-model";
+import { spliceAll } from "@commonfabric/utils/arrays";
 import { isInstance, isObjectNotArray } from "@commonfabric/utils/types";
 import { type EntityDocument, isEntityDocument, type PatchOp } from "../v2.ts";
 import { encodePointer, parsePointer } from "./path.ts";
@@ -317,7 +318,7 @@ const spliceAtPath = (
   if (index < 0 || remove < 0 || index > container.length) {
     throw new PatchApplyError(`invalid splice at ${encodePointer(path)}`);
   }
-  container.splice(index, remove, ...add.map((value) => cloneValue(value)));
+  spliceAll(container, index, remove, add.map((value) => cloneValue(value)));
   return newRoot;
 };
 

@@ -41,6 +41,7 @@ import {
   getLogger,
   getLoggerCountsBreakdown,
 } from "@commonfabric/utils/logger";
+import { maxOf } from "@commonfabric/utils/math";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { applyPatch } from "../../memory/v2/patch.ts";
@@ -187,7 +188,7 @@ type ResultRecord = {
 // The staleness-bearing top of a pending read's dependency set: the highest
 // listed layer (scalar reads are their own top).
 const localSeqTop = (read: { localSeq: number | number[] }): number =>
-  Array.isArray(read.localSeq) ? Math.max(...read.localSeq) : read.localSeq;
+  Array.isArray(read.localSeq) ? maxOf(read.localSeq) : read.localSeq;
 
 class ScriptedServerModel {
   connectionCount = 0;

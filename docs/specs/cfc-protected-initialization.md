@@ -93,6 +93,13 @@ checked against them. Inline data without a more specific label keeps its
 container's authorship. An empty declaration without a persistent gate does not
 shadow an ancestor during this derivation.
 
+A reference accepted through a carried label view also persists a root
+`LinkReference` entry when its source has no schema or stored CFC metadata.
+This entry bounds the container's principal claims even when the carried view
+labels only descendants. The descendants retain their carried labels; the
+reference's root evidence supplies no content authorship or represented
+principal.
+
 Each slot persists labels from its last recorded link matching the source it
 still holds: the same space, scope, document, and path. A raw write restoring an
 earlier reference therefore uses the last input for that source. A replacement

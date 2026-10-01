@@ -90,7 +90,9 @@ async function editorState(
       const found: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         found.push(element);
-        if (element.shadowRoot) found.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) found.push(nested);
+        }
       }
       return found;
     };
@@ -120,7 +122,9 @@ async function expectNoteFits(page: Page, width: number): Promise<void> {
       const found: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         found.push(element);
-        if (element.shadowRoot) found.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) found.push(nested);
+        }
       }
       return found;
     };

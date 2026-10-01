@@ -16,6 +16,8 @@
  * loop's exhaustion counters.
  */
 
+import { maxOf } from "@commonfabric/utils/math";
+
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { benchDiagnostic } from "./bench-diagnostics.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
@@ -69,9 +71,9 @@ Deno.bench({
           inputs: stream.inputs.length,
           coverageMsP50: Math.round(quantile(ms, 0.5)),
           coverageMsP90: Math.round(quantile(ms, 0.9)),
-          coverageMsMax: Math.round(Math.max(...ms)),
+          coverageMsMax: Math.round(maxOf(ms)),
           cyclesP50: quantile(rowCycles, 0.5),
-          cyclesMax: Math.max(...rowCycles),
+          cyclesMax: maxOf(rowCycles),
           wavesBudgetExhausted: stats.wavesBudgetExhausted,
           exhaustedAdvances: stats.exhaustedAdvances,
           waves: stats.waves,

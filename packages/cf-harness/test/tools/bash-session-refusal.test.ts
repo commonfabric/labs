@@ -379,7 +379,9 @@ describe("bash session refusals", () => {
         "trap - EXIT; rm -rf /workspace/src; kill -9 -1; exit 128";
       const executed: string[] = [];
       runner.onExec = (args) => {
-        executed.push(...args.filter((arg) => arg.endsWith(command)));
+        for (const arg of args) {
+          if (arg.endsWith(command)) executed.push(arg);
+        }
         runner.absent.add(runner.sessionContainerIds[0]);
       };
       runner.execResult = {

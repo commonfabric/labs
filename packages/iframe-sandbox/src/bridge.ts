@@ -229,7 +229,9 @@ function descriptor(
   const operations: string[] = [];
   if (kind === "cell") {
     const cell = resourceCell(name, resource);
-    operations.push(...cellOperationNames(cell));
+    for (const operation of cellOperationNames(cell)) {
+      operations.push(operation);
+    }
   } else if (resourceSink(resource)) {
     operations.push("sink");
   }
