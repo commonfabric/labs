@@ -669,24 +669,38 @@ Diagnostics emitted in all modes:
   - message instructs the author to move the use into a nested
     `computed(() => ...)` or module-scope `lift()`
 - **Error** `pattern-context:self-access`
+  - enforces the target-language matrix row "`x[SELF]` inside an explicit
+    computation callback, inside a reactive collection callback, or on anything
+    but the pattern's own input parameter" (Unsupported)
   - an element access keyed by `SELF` (`x[SELF]`) inside a compute callback —
     `computed(...)`, `action(...)`, `lift(...)`, a `handler(...)` body, an
     inline JSX event handler — or inside a reactive collection callback such as
-    `items.map((item) => ...)`. A standalone function definition is not
-    reported: it is ordinary code over whatever it is handed, and a
-    `pattern(...)` callback held in a `const` is one
+    `items.map((item) => ...)`
+  - in pattern context, an `x[SELF]` whose receiver is not the pattern's input
+    parameter: a value read off the input (`input.sub[SELF]`), another
+    pattern's result (`child[SELF]`), or a local bound to `input[SELF]`
+    (`self[SELF]`). The input parameter is the first parameter, bound to a
+    plain name, of a `pattern(...)` callback or of a standalone function
+    definition
   - `SELF` names the pattern's own result only on the reactive proxy a
     `pattern(...)` body receives as its input. A compute callback sees plain
-    values, and a reactive collection callback sees a captured reference to the
-    input, so `[SELF]` there is `undefined` at runtime, and the link it would
-    make names a cell that never holds a value
-  - the same access read directly in the pattern body, in its JSX, or bound
-    into a handler's state (`poke({ room: input[SELF] })`) is supported and
-    reports nothing (§9.7); so is one in a plain array callback, which runs
-    once during pattern construction
-  - message names the access and instructs the author to destructure
-    `[SELF]` in the pattern's parameter (`({ [SELF]: self }) => ...`) and
-    capture `self`, or hand it to the handler as state
+    values, a reactive collection callback sees a captured reference to the
+    input, and a value read off the input is not the input, so `[SELF]` on any
+    of them is `undefined` at runtime, and the link it would make names a cell
+    that never holds a value
+  - not reported: a receiver built from an object literal (`{ [SELF]: 1 }`,
+    or a name a declaration initializes with one), which holds whatever keys it
+    was given; anything in a standalone function definition, which is ordinary
+    code over whatever it is handed, and which a `pattern(...)` callback held
+    in a `const` also is; and `input[SELF]` read directly in the pattern body,
+    in its JSX, in a plain array callback, or bound into a handler's state
+    (`poke({ room: input[SELF] })`), which the matrix row for `input[SELF]`
+    makes Supported (§9.7)
+  - the message names the access. Inside a callback it instructs the author to
+    read `const self = input[SELF]` in the pattern body, or destructure
+    `[SELF]: self` in the pattern's parameter, and capture `self`, or hand it
+    to the handler as state; on another receiver it instructs the author to
+    read `input[SELF]` first and the rest of the path off it
   - `test/pattern-input-self.test.ts`
 - **Error** `pattern-context:optional-chaining`
   - optional property / element access that appears outside a supported
@@ -1660,15 +1674,33 @@ Primary behaviors:
   nested blocks) also receive `.key(...)` lowering
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
-- reads `input[SELF]` on a pattern's input in place, as the destructured
-  `[SELF]: self` binding is read: the data-flow analyzer counts a `SELF`
-  element key as static (`isSelfElementAccess` in `src/ast/dataflow.ts`), so
-  the access is not lifted, and the lowering emits `input[__cfHelpers.SELF]`
-  and keys any further path off it, so `input[SELF].title` becomes
-  `input[__cfHelpers.SELF].key("title")`. A computation over the read, such as
-  `input[SELF].title + "!"`, lifts with that keyed read as its capture
-  (golden `closures/pattern-input-self-index`). Other well-known keys (`UI`,
-  `NAME`, `FS`) keep their dynamic-access analysis
+- reads `input[SELF]` in place, as the destructured `[SELF]: self` binding is
+  read: the data-flow analyzer counts a `SELF` element key as static on any
+  receiver (`isSelfElementAccess` in `src/ast/dataflow.ts`), so the access is
+  not lifted. Outside a standalone function definition, validation has
+  already rejected every receiver but the pattern's input parameter (§6.5). A
+  `pattern(...)` callback held in a `const` is read as a standalone
+  definition, so there an `x[SELF]` on another receiver is not reported, and
+  lowers as written.
+  Every lowering that reads a path off a reactive value builds the read with
+  one helper, `createPathRead()` in
+  `src/transformers/destructuring-lowering.ts`: the pattern-body lowering,
+  the destructuring prologue, and the receiver of a lowered collection method.
+  It emits `input[__cfHelpers.SELF]` for a leading `SELF` segment and keys the
+  rest of the path off it, so `input[SELF].title` becomes
+  `input[__cfHelpers.SELF].key("title")` and `input[SELF].items.map(fn)`
+  becomes `input[__cfHelpers.SELF].key("items").mapWithPattern(...)`. A
+  `SELF` segment in any other position is keyed like any other segment, which
+  only a program §6.5 has rejected can reach. `const self = input[SELF]` and
+  `const { [SELF]: self } = input` in the body both lower to
+  `const self = input[__cfHelpers.SELF]`. A computation over the read, such as
+  `input[SELF].title + "!"`, lifts with the keyed read as its capture; a
+  receiver-method call over it, such as `input[SELF].title.toUpperCase()`,
+  lifts with the authored `input[SELF].title` as its capture, read off the
+  reactive input when the lift is applied (golden
+  `closures/pattern-input-self-index`). Other well-known keys (`UI`, `NAME`,
+  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` lifts and
+  reads `undefined`, where a destructured `self[NAME]` does not
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for
