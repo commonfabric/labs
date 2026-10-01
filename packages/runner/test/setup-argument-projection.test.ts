@@ -408,7 +408,7 @@ describe("setup-argument-projection", () => {
   describe("beside a binding a list builtin captures", () => {
     // A list builtin stages its callback's captured bindings at `params` as a
     // link to a record holding a write redirect to each captured cell, and
-    // records each link as a capture. The walk recording argument projections
+    // records each link as a capture. The walk recording binding projections
     // stops at that link, so the slot holds a capture alone.
 
     // The argument of a row whose callback captures the owner's list.
@@ -456,7 +456,7 @@ describe("setup-argument-projection", () => {
           ? [{ record: input.mode, path: input.target.path }]
           : input.kind === "structural-provenance" &&
               input.target.id === row.id &&
-              (input.claim === CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION ||
+              (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
                 input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION)
           ? [{ record: input.claim, path: input.target.path }]
           : []
