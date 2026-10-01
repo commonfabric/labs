@@ -13,6 +13,7 @@ import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   DEFAULT_GATEWAY_BASE_URL,
+  DEFAULT_HARNESS_MODEL,
   type HarnessGatewayAuthMode,
   type HarnessModelProviderId,
   type HarnessPatternIndexConfig,
@@ -172,7 +173,6 @@ import {
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
-const DEFAULT_MODEL = "gpt-5.6-sol";
 const DEFAULT_MAX_MODEL_TURNS = 8;
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
 const CLI_OUTPUT_MODES = ["operator", "batch"] as const;
@@ -550,7 +550,7 @@ Options:
                                 Execute skill scripts in sandbox or host (default: sandbox)
   --no-skill-catalog            Disable automatic skill catalog disclosure
   --no-docs-corpus              Resolve no documentation corpus for research
-  --model <name>                Model name (default: ${DEFAULT_MODEL})
+  --model <name>                Model name (default: ${DEFAULT_HARNESS_MODEL})
   --model-provider <provider>   openai-compatible-gateway | openai-codex
                                 (no default; select one here, through
                                 CF_HARNESS_MODEL_PROVIDER, or with config set)
@@ -559,7 +559,7 @@ Options:
                                 Reasoning effort for the research tool's own model
   --compact-threshold <n>       Token threshold for server-side compaction
                                 (default: 75% of the model input budget; 0 disables)
-  --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6 API gateway only)
+  --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6/GPT-6.1 Sol API gateway)
   --gateway-base-url <url>      OpenAI-compatible gateway URL
   --gateway-auth-mode <mode>    bearer | none (default: bearer)
   --artifact-root <path>        Host-side artifact directory
@@ -1999,7 +1999,9 @@ export const parseCfHarnessCliArgs = async (
     ...(typeof args.model === "string"
       ? { model: args.model }
       : resumeRun === undefined
-      ? { model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL }
+      ? {
+        model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_HARNESS_MODEL,
+      }
       : {}),
     ...(modelProvider !== undefined ? { modelProvider } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),

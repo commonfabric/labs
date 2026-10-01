@@ -55,9 +55,12 @@ export const assertPromptCacheModeSupported = (
   model: string,
   mode: "implicit" | "explicit" | undefined,
 ): void => {
-  if (mode !== undefined && !model.startsWith("gpt-5.6")) {
+  if (
+    mode !== undefined && !model.startsWith("gpt-5.6") &&
+    model !== "gpt-6.1-sol"
+  ) {
     throw new Error(
-      `prompt cache mode ${mode} requires a GPT-5.6 model; received ${model}`,
+      `prompt cache mode ${mode} requires a GPT-5.6 or GPT-6.1 Sol model; received ${model}`,
     );
   }
 };

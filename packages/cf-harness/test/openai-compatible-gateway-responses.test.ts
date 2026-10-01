@@ -496,7 +496,7 @@ Deno.test("GPT-5.6 cache controls fail before sending an older model", async () 
         promptCacheMode: "explicit",
       })),
     Error,
-    "prompt cache mode explicit requires a GPT-5.6 model",
+    "prompt cache mode explicit requires a GPT-5.6 or GPT-6.1 Sol model",
   );
   assertEquals(captured.length, 0);
 });

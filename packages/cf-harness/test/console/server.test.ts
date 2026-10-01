@@ -1656,6 +1656,15 @@ describe("console/server", () => {
       ).toBe(true);
     });
 
+    it("defaults new tasks and the health display to `gpt-6.1-sol`", async () => {
+      const configured = await config();
+      expect(harnessSessionEngineOptions(configured).model).toBe("gpt-6.1-sol");
+      expect(
+        consoleHealthRows(configured).find((row) => row.id === "config.model"),
+      )
+        .toMatchObject({ value: "gpt-6.1-sol" });
+    });
+
     it("sends every turn the reasoning effort the environment names, and reports where it came from", async () => {
       const configured = await resolveConsoleConfig(
         [

@@ -531,7 +531,7 @@ The current package provides:
 - per-turn and aggregate token/cache usage in run reports, operator output,
   batch metadata, and interactive turn-completion events;
 - stable interactive prompt-cache affinity, configurable reasoning effort, and
-  opt-in GPT-5.6 gateway cache controls; the ChatGPT/Codex subscription backend
+  opt-in GPT-5.6/GPT-6.1 Sol gateway cache controls; the subscription backend
   uses implicit caching because it rejects the API `prompt_cache_options` field;
 - interactive NDJSON stdio sessions with optional SQLite session, turn, event,
   replay, cancellation, and restore state; a session's durable transcript
@@ -1003,8 +1003,8 @@ mode.
   that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
   consumed when the agent result writer links or observes a retrieved row; there
   is no general-purpose value-handle dereference or release mechanism.
-- `estimatedCostUsd` is available only for known GPT-5.6 gateway models when the
-  response includes cache reads and writes. It uses public OpenAI pricing;
+- `estimatedCostUsd` is available for known GPT-5.6 and GPT-6.1 Sol models when
+  the response includes cache reads and writes. It uses public OpenAI pricing;
   gateway markup, subscription quota accounting, and provider invoices remain
   outside the harness. `estimateWithheldReason` distinguishes missing provider
   detail, unknown models, invalid counters, subscription pricing, and incomplete

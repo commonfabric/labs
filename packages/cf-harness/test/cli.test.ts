@@ -109,7 +109,7 @@ Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional promp
   }
   assertEquals(parsed.workspace, "/tmp/project");
   assertEquals(parsed.prompt, "Summarize this workspace");
-  assertEquals(parsed.model, "gpt-5.6-sol");
+  assertEquals(parsed.model, "gpt-6.1-sol");
   assertEquals(parsed.gatewayAuthMode, "bearer");
   assertEquals(parsed.outputMode, "operator");
   assertEquals(parsed.streamEvents, false);
@@ -1306,7 +1306,7 @@ Deno.test("parseCfHarnessCliArgs ignores blank gateway environment values", asyn
   }
   assertEquals(parsed.gatewayBaseUrl, "https://llm.stage.commontools.dev/");
   assertEquals(parsed.gatewayAuthMode, "bearer");
-  assertEquals(parsed.model, "gpt-5.6-sol");
+  assertEquals(parsed.model, "gpt-6.1-sol");
 });
 
 Deno.test("parseCfHarnessCliArgs supports batch output mode override", async () => {
