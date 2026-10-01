@@ -2,7 +2,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import type { PropertyValues } from "lit";
 
-import { $conn, type CellHandle } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  type CellHandle,
+  type CellRef,
+  TILE_UI,
+} from "@commonfabric/runtime-client";
 import { defer } from "@commonfabric/utils/defer";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
@@ -17,6 +22,7 @@ import {
   normalizeVariant,
   PIECE_CONTEXT_MENU_EVENT,
   type PieceContextMenuDetail,
+  variantPresenceSchema,
 } from "./index.ts";
 
 // NOTE: Full rendering lifecycle tests (cell swap cleanup, subscription
@@ -25,6 +31,23 @@ import {
 // runner. The tests below cover what's verifiable without DOM: property
 // handling, cell assignment, variant configuration, and disconnectedCallback
 // state reset. For full integration tests, use a browser-based test harness.
+
+/**
+ * Flattens a lit template to its static text interleaved with its bound
+ * values, so a test can read what a render produces without a DOM.
+ */
+function templateText(node: unknown): string {
+  const template = node as { strings?: unknown; values?: unknown[] };
+  if (!Array.isArray(template?.strings)) {
+    return node === null || node === undefined ? "" : String(node);
+  }
+  return template.strings.map((part, index) =>
+    part +
+    (index < (template.values?.length ?? 0)
+      ? templateText(template.values?.[index])
+      : "")
+  ).join("");
+}
 
 /** Record what a call logged as an error, leaving the console untouched. */
 function captureConsoleError(fn: () => void): unknown[][] {
@@ -990,12 +1013,15 @@ describe("normalizeVariant", () => {
 });
 
 describe("hasVariantValue", () => {
-  it("is true only when the key holds a renderable value", () => {
+  it("is true only when the presence read found a reference at the key", () => {
+    expect(
+      hasVariantValue({ "$CHIP_UI": createMockCellHandle({}) }, "$CHIP_UI"),
+    ).toBe(true);
     expect(hasVariantValue({ "$CHIP_UI": { type: "vnode" } }, "$CHIP_UI"))
-      .toBe(true);
-    expect(hasVariantValue({ "$UI": {} }, "$TILE_UI")).toBe(false);
+      .toBe(false);
+    expect(hasVariantValue({ "$UI": createMockCellHandle({}) }, "$TILE_UI"))
+      .toBe(false);
     expect(hasVariantValue({ "$TILE_UI": undefined }, "$TILE_UI")).toBe(false);
-    expect(hasVariantValue({ "$TILE_UI": null }, "$TILE_UI")).toBe(false);
   });
 
   it("is false for non-object / empty values (failover to default)", () => {
@@ -1003,6 +1029,167 @@ describe("hasVariantValue", () => {
     expect(hasVariantValue(null, "$CHIP_UI")).toBe(false);
     expect(hasVariantValue("nope", "$CHIP_UI")).toBe(false);
     expect(hasVariantValue({}, "$CHIP_UI")).toBe(false);
+  });
+});
+
+describe("CFRender variants", () => {
+  type Internals = {
+    _containerRef: { value?: HTMLDivElement };
+    _mount(container: HTMLElement, cell: CellHandle): () => void;
+    _renderCell(): Promise<void>;
+    _renderChipDefault(container: HTMLElement, cell: CellHandle): () => void;
+    _renderTileDefault(container: HTMLElement, cell: CellHandle): () => void;
+  };
+
+  /**
+   * A piece whose presence read answers `exported`, recording the schemas it
+   * is asked to read under and every read of the piece itself, which should
+   * not happen: what `cf-render` learns of a variant comes from the presence
+   * read alone.
+   */
+  function pieceAnswering(exported: Record<string, unknown> | undefined) {
+    const ref: Partial<CellRef> = {
+      id: "of:fid1:piece-abcdef" as CellRef["id"],
+      space: "did:key:zSpace" as CellRef["space"],
+    };
+    const piece = createMockCellHandle<unknown>(undefined, ref);
+    const presence = createMockCellHandle<Record<string, unknown>>(
+      undefined,
+      ref,
+    );
+    Object.assign(presence, { sync: () => Promise.resolve(exported) });
+    const schemas: unknown[] = [];
+    const reads: string[] = [];
+    Object.assign(piece, {
+      resolveAsCell: () => Promise.resolve(piece),
+      asSchema: (schema: unknown) => {
+        schemas.push(schema);
+        return presence;
+      },
+      sync: () => {
+        reads.push("sync");
+        return Promise.resolve(undefined);
+      },
+      get: () => {
+        reads.push("get");
+        return undefined;
+      },
+      subscribe: () => {
+        reads.push("subscribe");
+        return () => {};
+      },
+    });
+    return { piece, schemas, reads };
+  }
+
+  it("renders an exported tile from the piece's key, the same whatever the reference there leads to", async () => {
+    // A link at the key to a sealed view and one to a sealed empty value
+    // look alike to the presence read, so the host cannot tell them apart.
+
+    const outcomes = [];
+    for (const leadsTo of ["a sealed view", "a sealed empty value"]) {
+      const { piece, schemas, reads } = pieceAnswering({
+        [TILE_UI]: createMockCellHandle(leadsTo),
+      });
+      const element = new CFRender();
+      const internals = element as unknown as Internals;
+      const mounted: (readonly string[])[] = [];
+      let defaults = 0;
+      internals._containerRef = { value: {} as HTMLDivElement };
+      internals._mount = (_container, cell) => {
+        mounted.push(cell.ref().path);
+        return () => {};
+      };
+      internals._renderTileDefault = () => {
+        defaults++;
+        return () => {};
+      };
+      element.cell = piece;
+      element.variant = "tile";
+      await internals._renderCell();
+      outcomes.push({ mounted, defaults, schemas, reads });
+    }
+    expect(outcomes[0]).toEqual({
+      mounted: [[TILE_UI]],
+      defaults: 0,
+      schemas: [variantPresenceSchema(TILE_UI)],
+      reads: [],
+    });
+    expect(outcomes[1]).toEqual(outcomes[0]);
+  });
+
+  it("renders the platform default when the piece's own document holds no variant", async () => {
+    const { piece, reads } = pieceAnswering({});
+    const element = new CFRender();
+    const internals = element as unknown as Internals;
+    const defaults: CellHandle[] = [];
+    let mounts = 0;
+    internals._containerRef = { value: {} as HTMLDivElement };
+    internals._mount = () => {
+      mounts++;
+      return () => {};
+    };
+    internals._renderTileDefault = (_container, cell) => {
+      defaults.push(cell);
+      return () => {};
+    };
+    element.cell = piece;
+    element.variant = "tile";
+    await internals._renderCell();
+    expect(defaults).toEqual([piece]);
+    expect(mounts).toBe(0);
+    expect(reads).toEqual([]);
+  });
+
+  it("shows a chip's default name through a render of its own", () => {
+    const mockDocument = installMockDocument();
+    const create = mockDocument.document.createElement;
+    mockDocument.document.createElement = (tagName) =>
+      Object.assign(create(tagName), {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      });
+    try {
+      const { piece, reads } = pieceAnswering(undefined);
+      const element = new CFRender();
+      const internals = element as unknown as Internals;
+      const mounted: [string, readonly string[]][] = [];
+      internals._mount = (container, cell) => {
+        mounted.push([container.tagName, cell.ref().path]);
+        return () => {};
+      };
+      const container = createMockElement("div");
+      internals._renderChipDefault(
+        container as unknown as HTMLElement,
+        piece,
+      );
+      const [source] = container.children;
+      const [chip] = source.children;
+      expect([source.tagName, chip.tagName]).toEqual([
+        "cf-drag-source",
+        "cf-chip",
+      ]);
+      expect(chip.children.map((child) => child.textContent)).toEqual([
+        "",
+        " #abcdef",
+      ]);
+      expect(mounted).toEqual([["span", ["$NAME"]]]);
+      expect(reads).toEqual([]);
+    } finally {
+      mockDocument.restore();
+    }
+  });
+
+  it("shows a loading state only while it holds a cell", () => {
+    // A view's render policy withholds a cell the viewer may not see, and
+    // then no cell arrives.
+
+    const element = new CFRender();
+    const shown = () =>
+      templateText((element as unknown as { render(): unknown }).render());
+    expect(shown()).not.toContain("cf-loader");
+    element.cell = createMockCellHandle({});
+    expect(shown()).toContain("cf-loader");
   });
 });
 

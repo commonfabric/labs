@@ -5,6 +5,8 @@ import {
   type CellHandle,
   CHIP_UI,
   isCellHandle,
+  type JSONSchema,
+  NAME,
   TILE_UI,
   type VNode,
 } from "@commonfabric/runtime-client";
@@ -15,7 +17,8 @@ import { createRef, type Ref, ref } from "lit/directives/ref.js";
 import { BaseElement } from "../../core/base-element.ts";
 
 import "../cf-loader/index.ts";
-import "../cf-cell-link/index.ts";
+import "../cf-chip/index.ts";
+import "../cf-drag-source/index.ts";
 import "../cf-piece-menu/index.ts";
 
 import {
@@ -35,7 +38,7 @@ const DEBUG_LOGGING = false;
  *
  * - `full`   — the main [UI] export; standalone rendering (default).
  * - `chip`   — inline-block in text/lists. Key: [CHIP_UI].
- *              Default: a `cf-cell-link` bound to the piece (renders by [NAME]).
+ *              Default: a chip showing the piece's [NAME].
  * - `tile`   — gallery/grid card. Key: [TILE_UI].
  *              Default: the full [UI] rendered small at ~0.5 scale.
  */
@@ -92,13 +95,27 @@ export function normalizeVariant(variant: string | undefined): UIVariant {
 }
 
 /**
- * True when a piece output value carries a renderable variant at `key` (e.g.
- * `"$CHIP_UI"`). Used to decide whether to render the exported variant or fall
- * over to the platform default.
+ * The schema `cf-render` reads a piece with to learn whether it exports the
+ * variant at `key` (e.g. `"$CHIP_UI"`): the key read as a reference, which
+ * says whether the piece's own document holds a value there without following
+ * a link that value is. What the variant shows is the nested render's to
+ * decide, so whether it is present depends on nothing that render may hide.
+ */
+export function variantPresenceSchema(key: string): JSONSchema {
+  return {
+    type: "object",
+    properties: { [key]: { type: "unknown", asCell: ["cell"] } },
+  };
+}
+
+/**
+ * True when `value`, read under {@link variantPresenceSchema} for `key`,
+ * holds a reference at `key`: the piece exports that variant, so `cf-render`
+ * renders it rather than the platform default.
  */
 export function hasVariantValue(value: unknown, key: string): boolean {
-  return !!(value && typeof value === "object" &&
-    (value as Record<string, unknown>)[key]);
+  return !!value && typeof value === "object" &&
+    isCellHandle((value as Record<string, unknown>)[key]);
 }
 
 /**
@@ -118,7 +135,7 @@ export function hasVariantValue(value: unknown, key: string): boolean {
  * <cf-render .cell=${myPieceCell}></cf-render>
  *
  * @example
- * // Chip: inline, renders [CHIP_UI] or a cf-cell-link default
+ * // Chip: inline, renders [CHIP_UI] or a chip showing [NAME]
  * <cf-render .cell=${myPieceCell} variant="chip"></cf-render>
  *
  * @example
@@ -263,6 +280,11 @@ export class CFRender extends BaseElement {
       pointer-events: none;
     }
 
+    .chip-default {
+      display: inline-block;
+      vertical-align: middle;
+    }
+
     .loading-spinner {
       display: flex;
       align-items: center;
@@ -353,9 +375,12 @@ export class CFRender extends BaseElement {
 
   protected override render() {
     // Chip is inline and resolves to a lightweight default fast — a full-size
-    // spinner would reserve the wrong space, so skip it for chip.
+    // spinner would reserve the wrong space, so skip it for chip. A cell the
+    // view's render policy withholds never arrives, so with no cell there is
+    // nothing loading and nothing to show.
     return html`
-      ${!this._hasRendered && this.variant !== "chip"
+      ${this.cell !== undefined && !this._hasRendered &&
+          this.variant !== "chip"
         ? html`
           <div class="loading-spinner">
             <cf-loader size="lg"></cf-loader>
@@ -451,27 +476,25 @@ export class CFRender extends BaseElement {
       // Full is the universal floor: render the piece's [UI] chain directly.
       if (kind === "full") {
         this._log("rendering full [UI] into container");
-        this._cleanup = render(
-          container,
-          cell as CellHandle<VNode>,
-          this.#renderErrorOptions(generation),
-        );
+        this._cleanup = this._mount(container, cell, generation);
         this._hasRendered = true;
         return;
       }
 
-      // Chip and tile inspect exported variant keys before falling back.
-      await currentTarget.sync();
-      if (cancelled()) return;
-
+      // Chip and tile render an exported variant when the piece's own
+      // document holds one, and fall back otherwise.
       const variantKey = kind === "chip" ? CHIP_UI : TILE_UI;
-      if (this._cellHasKey(currentTarget, variantKey)) {
+      const presence = currentTarget.asSchema<Record<string, unknown>>(
+        variantPresenceSchema(variantKey),
+      );
+      const exported = await presence.sync();
+      if (cancelled()) return;
+      if (hasVariantValue(exported, variantKey)) {
         this._log(`rendering exported ${variantKey}`);
-        this._cleanup = render(
+        this._cleanup = this._mount(
           container,
-          (currentTarget as CellHandle<Record<string, VNode>>)
-            .key(variantKey) as CellHandle<VNode>,
-          this.#renderErrorOptions(generation),
+          presence.key(variantKey),
+          generation,
         );
         this._hasRendered = true;
         return;
@@ -594,26 +617,62 @@ export class CFRender extends BaseElement {
     unsubscribe?.();
   }
 
-  /** True when the piece output exports a value at `key` (e.g. a variant UI). */
-  private _cellHasKey(cell: CellHandle, key: string): boolean {
-    try {
-      return hasVariantValue(cell.get(), key);
-    } catch {
-      return false;
-    }
+  /**
+   * Mounts `cell` into `container` as the root of a render of its own, which
+   * decides under the viewer's render policy what reaches the page.
+   */
+  private _mount(
+    container: HTMLElement,
+    cell: CellHandle,
+    generation: number,
+  ): () => void {
+    return render(
+      container,
+      cell as CellHandle<VNode>,
+      this.#renderErrorOptions(generation),
+    );
   }
 
-  /** Chip default: a cf-cell-link bound to the piece (renders by [NAME]). */
+  /**
+   * Chip default: a chip holding the piece's [NAME] and the short form of its
+   * id, which drags the piece and navigates to it like a cell link. The name
+   * is a render of its own, so the chip shows only what the viewer's render
+   * policy admits.
+   */
   private _renderChipDefault(
     container: HTMLElement,
     cell: CellHandle,
   ): () => void {
-    const link = globalThis.document.createElement(
-      "cf-cell-link",
-    ) as HTMLElement & { cell?: CellHandle };
-    link.cell = cell;
-    container.appendChild(link);
-    return () => link.remove();
+    const source = globalThis.document.createElement(
+      "cf-drag-source",
+    ) as HTMLElement & { cell?: CellHandle; type?: string };
+    source.className = "chip-default";
+    source.cell = cell;
+    source.type = "cell-link";
+    const chip = globalThis.document.createElement("cf-chip") as
+      & HTMLElement
+      & { color?: string; interactive?: boolean };
+    chip.color = "primary";
+    chip.interactive = true;
+    const name = globalThis.document.createElement("span");
+    const handle = globalThis.document.createElement("span");
+    handle.textContent = ` #${cell.id().slice(-6)}`;
+    chip.appendChild(name);
+    chip.appendChild(handle);
+    source.appendChild(chip);
+    container.appendChild(source);
+    const named = cell.asSchema<Record<string, unknown>>({
+      type: "object",
+      properties: { [NAME]: { type: "string" } },
+    });
+    const inner = this._mount(name, named.key(NAME), this._renderGeneration);
+    const onClick = (e: MouseEvent) => this._navigateToPiece(e);
+    chip.addEventListener("click", onClick);
+    return () => {
+      chip.removeEventListener("click", onClick);
+      inner();
+      source.remove();
+    };
   }
 
   /**
@@ -631,11 +690,7 @@ export class CFRender extends BaseElement {
     scaler.className = "tile-default";
     clip.appendChild(scaler);
     container.appendChild(clip);
-    const inner = render(
-      scaler,
-      cell as CellHandle<VNode>,
-      this.#renderErrorOptions(this._renderGeneration),
-    );
+    const inner = this._mount(scaler, cell, this._renderGeneration);
     const onClick = (e: MouseEvent) => this._navigateToPiece(e);
     clip.addEventListener("click", onClick);
     return () => {
@@ -735,7 +790,7 @@ export class CFRender extends BaseElement {
     if (this.hasUpdated) this.requestUpdate();
   }
 
-  /** Navigate to the rendered piece (same behavior as cf-cell-link). */
+  /** Navigate to the rendered piece, as a cell link does. */
   private _navigateToPiece(e: MouseEvent) {
     e.stopPropagation();
     try {
