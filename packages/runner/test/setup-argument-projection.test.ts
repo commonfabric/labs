@@ -452,11 +452,10 @@ describe("setup-argument-projection", () => {
         .getArgumentCell()!.getAsNormalizedFullLink();
 
       const records = tx.getCfcState().writePolicyInputs.flatMap((input) =>
-        input.target.id !== row.id
-          ? []
-          : input.kind === "initialization"
+        input.kind === "initialization" && input.target.id === row.id
           ? [{ record: input.mode, path: input.target.path }]
           : input.kind === "structural-provenance" &&
+              input.target.id === row.id &&
               (input.claim === CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION ||
                 input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION)
           ? [{ record: input.claim, path: input.target.path }]
