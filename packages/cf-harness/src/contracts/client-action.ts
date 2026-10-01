@@ -65,7 +65,13 @@ const hasExactlyKeys = (
 
 /** An http or https address, or undefined for anything else. */
 const readHttpUrl = (value: string): string | undefined => {
-  if (!URL.canParse(value)) return undefined;
+  // URL parsing percent-encodes a space in a path rather than refusing it, so
+  // whitespace is refused on the string as given; Loom's edge and the Weaver
+  // refuse the same.
+  if (/\s/.test(value) || !URL.canParse(value)) return undefined;
+  // A host must follow the scheme as written: URL parsing reads
+  // `https:///path` as host `path`, where Loom and the Weaver see none.
+  if (!/^https?:\/\/[^/?#]/i.test(value)) return undefined;
   const { protocol } = new URL(value);
   return protocol === "http:" || protocol === "https:" ? value : undefined;
 };

@@ -59,6 +59,30 @@ Deno.test("a command or url that spans lines is not a client action", () => {
   assertEquals(readHarnessClientAction(command), command);
 });
 
+Deno.test("a url with whitespace, a bad port, or no host is not a client action", () => {
+  // Loom's edge and the Weaver refuse the same set, so the three agree.
+  for (
+    const url of [
+      "https://exa mple.com",
+      "https://example.com/a b",
+      "https://example.com/a\tb",
+      "https://example.com:bad",
+      "https://example.com:99999",
+      "https://",
+      "https:///path",
+    ]
+  ) {
+    assertEquals(readHarnessClientAction({ kind: "open_url", url }), undefined);
+  }
+  assertEquals(
+    readHarnessClientAction({
+      kind: "open_url",
+      url: "https://example.com:8080/x",
+    }),
+    { kind: "open_url", url: "https://example.com:8080/x" },
+  );
+});
+
 Deno.test("a url longer than the client accepts is not a client action", () => {
   // The Weaver refuses an address over HARNESS_CLIENT_URL_MAX_LENGTH; the
   // harness reads actions with the same limit so the two edges agree.
