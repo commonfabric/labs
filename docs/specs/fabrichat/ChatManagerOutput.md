@@ -32,7 +32,12 @@ interface ChatManagerOutput {
   }[];
 
   openDirect: Stream<{ requestId: string; counterpart: string }>;
-  createGroup: Stream<{ requestId: string; members: string[]; title: string }>;
+  createGroup: Stream<{
+    requestId: string;
+    members: string[];
+    title: string;
+    joinableByLink?: boolean;
+  }>;
   accept: Stream<{
     requestId: string;
     room: Cell<ChatRoomOutput>;
@@ -131,7 +136,7 @@ These rules hold for every stream:
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
 | [`openDirect`](#opendirectrequestid-string-counterpart-string) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
-| [`createGroup`](#creategrouprequestid-string-members-string-title-string) | `ChatStartSurface` | a new group room |
+| [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
 | [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
@@ -161,7 +166,7 @@ outward act when it creates a room.
 It is the only way a direct room is created, which is what keeps one person's
 conversation from splitting.
 
-### `createGroup(requestId: string, members: string[], title: string)`
+### `createGroup(requestId: string, members: string[], title: string, joinableByLink?: boolean)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
@@ -172,6 +177,12 @@ conversation from splitting.
   through the space's own tools.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
+- `joinableByLink?: boolean` — Whether the room admits anyone who has its
+  link. When true, the room's space grants every principal WRITE (the `"*"`
+  wildcard) besides its members, so the room's address is all that keeps it
+  private: whoever holds it can read and write the room, and add it to their
+  chats from the room itself. Absent or false, the room admits its members
+  alone.
 
 Creates a group room. This is an outward act: it grants other people access.
 

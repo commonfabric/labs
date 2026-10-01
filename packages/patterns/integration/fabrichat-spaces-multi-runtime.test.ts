@@ -61,8 +61,7 @@ describe("fabrichat spaces across runtimes", () => {
 
   /**
    * Has the starter send `event` on the manager's `stream`, checks that the
-   * request was done, and returns the address of the room it produced, the
-   * one of its kind in the manager's index.
+   * request was done, and returns the address of the room it produced.
    */
   async function start(
     stream: "openDirect" | "createGroup",
@@ -72,11 +71,7 @@ describe("fabrichat spaces across runtimes", () => {
     await harness.settle();
     expect(await starter.read(["requests", event.requestId, "status"]))
       .toBe("done");
-    const kind = stream === "openDirect" ? "direct" : "group";
-    const rooms = await starter.read(["rooms"]) as { kind: string }[];
-    const index = rooms.findIndex((entry) => entry.kind === kind);
-    expect(index).not.toBe(-1);
-    return await starter.link(["rooms", index, "room"]);
+    return await starter.link(["requests", event.requestId, "entry", "room"]);
   }
 
   it("lets a group room's member read it, and refuses a stranger", async () => {
@@ -91,6 +86,18 @@ describe("fabrichat spaces across runtimes", () => {
       .toBe("Team");
     await expect(stranger.read(["about", "title"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
+  });
+
+  it("lets anyone read a group room made joinable by its link", async () => {
+    const room = await start("createGroup", {
+      requestId: "g-open",
+      title: "Open team",
+      members: [member.identity.did()],
+      joinableByLink: true,
+    });
+
+    expect(await stranger.read(["about", "title"], { piece: room }))
+      .toBe("Open team");
   });
 
   it("lets a direct room's counterpart read it, and refuses a stranger", {

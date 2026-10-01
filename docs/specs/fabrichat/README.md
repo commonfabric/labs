@@ -277,7 +277,8 @@ from this design, as below.
 
 - **Membership is set at creation, then the space's.** The manager creates a
   space for a conversation with `FabriChatRoom.inSpace()`, naming grants: the
-  creator OWNER, each other member WRITE. After that, who is in it changes only
+  creator OWNER, each other member WRITE, and everyone WRITE for a group made
+  joinable by its link. After that, who is in it changes only
   through the space's own tools. The room's participants come from the space's
   default pattern, which a host creates the first time someone opens the
   space, so until then they are only the room's authors.

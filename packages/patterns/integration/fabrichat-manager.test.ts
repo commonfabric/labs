@@ -157,4 +157,26 @@ describe("fabrichat-manager", () => {
       [CAROL]: "WRITE",
     });
   });
+
+  it("grants everyone WRITE on a group room made joinable by its link", async () => {
+    const { send, rooms } = await startManager();
+
+    await send("createGroup", {
+      requestId: "g-1",
+      title: "Open team",
+      members: [CAROL],
+      joinableByLink: true,
+    });
+    const space = rooms()[0].room.getAsNormalizedFullLink().space;
+    expect(
+      (await server.readDocument(
+        space as Parameters<typeof server.readDocument>[0],
+        aclDocId(space) as Parameters<typeof server.readDocument>[1],
+      ))?.value,
+    ).toEqual({
+      [home]: "OWNER",
+      [CAROL]: "WRITE",
+      "*": "WRITE",
+    });
+  });
 });

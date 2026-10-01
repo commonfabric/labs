@@ -73,7 +73,9 @@ sender offers the room there, and the recipient's manager reads its offers, is
 readmitted to the room's space, and accepts the room. Nothing delivers one end
 to end today: no offer names a room yet, the manager reads none, and an inbox
 exists only where a host outside this repository creates one. A space's access
-list can admit any writer, but that is the `"*"` grant a room must not have.
+list can admit any writer, but that is the `"*"` grant a room has only when its
+creator makes a group joinable by its link, and then its address, sent some
+other way, is the notice.
 
 That is why step 3 hands notices to a client through `outgoingNotices` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers

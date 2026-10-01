@@ -95,6 +95,12 @@ export interface ManagerStreamEvent {
   /** A new group room's title. */
   title?: string;
 
+  /**
+   * Whether a new group room admits anyone who has its link; absent for a room
+   * admitting its members alone.
+   */
+  joinableByLink?: boolean;
+
   /** A room to accept or forget. */
   room?: Cell<ChatRoomLink>;
 
@@ -112,10 +118,17 @@ export interface GroupDraft {
 
   /** The other members' DIDs, one per line or separated by spaces. */
   members: string;
+
+  /** Whether the room admits anyone who has its link. */
+  joinableByLink: boolean;
 }
 
 /** An empty group draft. */
-const EMPTY_DRAFT = { title: "", members: "" } satisfies GroupDraft;
+const EMPTY_DRAFT = {
+  title: "",
+  members: "",
+  joinableByLink: false,
+} satisfies GroupDraft;
 
 /** The manager's records, and a rendered control's bindings. */
 export interface ManagerActState {
@@ -230,6 +243,21 @@ function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
   return room.key("about").key("record");
 }
 
+/** How a room `createRoom()` makes differs by its kind. */
+interface RoomOptions {
+  /** A group room's title. */
+  title?: string;
+
+  /** A direct room's other member. */
+  counterpart?: string;
+
+  /**
+   * Whether the room's space admits anyone with its link, with WRITE: its
+   * address is then all that keeps it private.
+   */
+  joinableByLink?: boolean;
+}
+
 /**
  * Creates a room in a space of its own, and its notices, and records its
  * entry, all in one transaction: the space's grants are part of creating it,
@@ -241,14 +269,15 @@ const createRoom = (
   requestId: string,
   kind: ChatRoomKind,
   members: readonly DID[],
-  title?: string,
-  counterpart?: string,
+  { title, counterpart, joinableByLink = false }: RoomOptions = {},
 ): ChatIndexEntry => {
   const createdAt = epochNsecFromMsec(Date.now());
-  // The room's space grants this user OWNER and each other member WRITE.
-  const grants = Object.fromEntries(
-    members.map((member) => [member, "WRITE"]),
-  ) as InSpaceGrants;
+  // The room's space grants this user OWNER, each other member WRITE, and,
+  // for a room joinable by its link, everyone WRITE.
+  const grants = Object.fromEntries([
+    ...members.map((member) => [member, "WRITE"]),
+    ...(joinableByLink ? [["*", "WRITE"]] : []),
+  ]) as InSpaceGrants;
   const room = roomLinkOf(
     FabriChatRoom.inSpace(undefined, { grants })({
       about: {
@@ -356,14 +385,9 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         recordOutcome(state, requestId, { status: "done", entry: known });
         return;
       }
-      const entry = createRoom(
-        state,
-        requestId,
-        "direct",
-        [counterpart],
-        undefined,
+      const entry = createRoom(state, requestId, "direct", [counterpart], {
         counterpart,
-      );
+      });
       direct.key(counterpart).set(entry);
       recordOutcome(state, requestId, { status: "done", entry });
       return;
@@ -394,7 +418,12 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         return;
       }
       const members = otherMembers(listed, self ?? "");
-      const entry = createRoom(state, requestId, "group", members, title);
+      const joinableByLink = event?.joinableByLink ??
+        draft?.joinableByLink ?? false;
+      const entry = createRoom(state, requestId, "group", members, {
+        title,
+        joinableByLink,
+      });
       if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
       recordOutcome(state, requestId, { status: "done", entry });
       return;
@@ -709,6 +738,9 @@ export const FabriChatManagerCore = pattern<
                 $value={draft.key("members")}
                 placeholder="Members' chat addresses, one per line"
               />
+              <cf-checkbox $checked={draft.key("joinableByLink")}>
+                Anyone with its link can join
+              </cf-checkbox>
               <cf-button
                 data-ui-action={CHAT_START_ACTION}
                 disabled={cannotStart}
