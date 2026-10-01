@@ -60,16 +60,16 @@ describe("CFDragSource", () => {
       .toMatchObject({ left: "50px", top: "70px" });
   });
 
-  it("carries no teardown when the preview is a static pill", () => {
-    // A cell with nothing cached renders no piece, so there is no render to
-    // tear down and the drag state carries no cleanup.
+  it("carries the teardown of the render that names the cell in its preview", () => {
+    // A cell with nothing cached renders no piece; its preview names it
+    // through a render of its own, which the drag state tears down.
     const { cell } = createRenderableCellHandle(undefined);
     const element = new CFDragSource() as any;
     element._resolvedCell = cell;
 
     element._startDrag(pointerEvent(0, 0));
 
-    expect(getCurrentDrag()!.previewCleanup).toBeUndefined();
+    expect(getCurrentDrag()!.previewCleanup).toBeDefined();
   });
 
   it("runs the preview teardown once when the drag ends", () => {

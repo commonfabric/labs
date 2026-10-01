@@ -6,7 +6,6 @@ import {
   CHIP_UI,
   isCellHandle,
   type JSONSchema,
-  NAME,
   TILE_UI,
   type VNode,
 } from "@commonfabric/runtime-client";
@@ -15,9 +14,9 @@ import { state } from "lit/decorators.js";
 import { createRef, type Ref, ref } from "lit/directives/ref.js";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { createNameChip } from "../../core/name-chip.ts";
 
 import "../cf-loader/index.ts";
-import "../cf-chip/index.ts";
 import "../cf-drag-source/index.ts";
 import "../cf-piece-menu/index.ts";
 
@@ -634,43 +633,35 @@ export class CFRender extends BaseElement {
   }
 
   /**
-   * Chip default: a chip holding the piece's [NAME] and the short form of its
-   * id, which drags the piece and navigates to it like a cell link. The name
-   * is a render of its own, so the chip shows only what the viewer's render
-   * policy admits.
+   * Chip default: a chip naming the piece, through a render of its own (see
+   * `createNameChip()`), which drags the piece and navigates to it as a cell
+   * link does.
    */
   private _renderChipDefault(
     container: HTMLElement,
     cell: CellHandle,
   ): () => void {
-    const source = globalThis.document.createElement(
-      "cf-drag-source",
-    ) as HTMLElement & { cell?: CellHandle; type?: string };
+    const source = globalThis.document.createElement("cf-drag-source");
     source.className = "chip-default";
     source.cell = cell;
     source.type = "cell-link";
-    const chip = globalThis.document.createElement("cf-chip") as
-      & HTMLElement
-      & { color?: string; interactive?: boolean };
-    chip.color = "primary";
-    chip.interactive = true;
-    const name = globalThis.document.createElement("span");
-    const handle = globalThis.document.createElement("span");
-    handle.textContent = ` #${cell.id().slice(-6)}`;
-    chip.appendChild(name);
-    chip.appendChild(handle);
+    const { chip, cleanup } = createNameChip(
+      cell,
+      this.#renderErrorOptions(this._renderGeneration),
+    );
+    Object.assign(chip, { interactive: true });
     source.appendChild(chip);
     container.appendChild(source);
-    const named = cell.asSchema<Record<string, unknown>>({
-      type: "object",
-      properties: { [NAME]: { type: "string" } },
-    });
-    const inner = this._mount(name, named.key(NAME), this._renderGeneration);
     const onClick = (e: MouseEvent) => this._navigateToPiece(e);
+    // The chip is the drag source for its piece, as a cell link is, so a drag
+    // source around the `cf-render` does not start a second drag.
+    const onPointerDown = (e: Event) => e.stopPropagation();
     chip.addEventListener("click", onClick);
+    source.addEventListener("pointerdown", onPointerDown);
     return () => {
       chip.removeEventListener("click", onClick);
-      inner();
+      source.removeEventListener("pointerdown", onPointerDown);
+      cleanup();
       source.remove();
     };
   }

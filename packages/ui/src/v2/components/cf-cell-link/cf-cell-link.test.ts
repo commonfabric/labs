@@ -452,7 +452,7 @@ describe("CFCellLink drag preview", () => {
       .toMatchObject({ left: "40px", top: "50px" });
   });
 
-  it("carries no teardown when the preview is a static pill", () => {
+  it("carries the teardown of the render that names the cell in its preview", () => {
     const { cell } = createRenderableCellHandle(undefined);
     const element = new CFCellLink() as any;
     withClassList(element);
@@ -460,7 +460,7 @@ describe("CFCellLink drag preview", () => {
 
     element._beginDrag(pointerEvent(0, 0));
 
-    expect(getCurrentDrag()!.previewCleanup).toBeUndefined();
+    expect(getCurrentDrag()!.previewCleanup).toBeDefined();
   });
 
   it("does not begin a drag before a cell resolves", () => {

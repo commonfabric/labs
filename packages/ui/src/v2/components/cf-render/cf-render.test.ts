@@ -12,6 +12,7 @@ import { defer } from "@commonfabric/utils/defer";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
+import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import {
   createMockElement,
   installMockDocument,
@@ -1143,40 +1144,72 @@ describe("CFRender variants", () => {
     expect(reads).toEqual([]);
   });
 
-  it("shows a chip's default name through a render of its own", () => {
+  it("shows a chip's default name through a render of its own, in a chip that takes its own drags as a cell link", async () => {
     const mockDocument = installMockDocument();
+    const listeners = new Map<string, (event: Event) => void>();
     const create = mockDocument.document.createElement;
     mockDocument.document.createElement = (tagName) =>
       Object.assign(create(tagName), {
-        addEventListener: () => {},
+        addEventListener: (type: string, listener: (event: Event) => void) => {
+          listeners.set(`${tagName} ${type}`, listener);
+        },
         removeEventListener: () => {},
       });
     try {
-      const { piece, reads } = pieceAnswering(undefined);
+      const { cell: piece, log } = createRenderableCellHandle<unknown>(
+        undefined,
+        { id: "of:fid1:piece-abcdef" as CellRef["id"] },
+      );
+      const reads: string[] = [];
+      Object.assign(piece, {
+        sync: () => {
+          reads.push("sync");
+          return Promise.resolve(undefined);
+        },
+        get: () => {
+          reads.push("get");
+          return undefined;
+        },
+        subscribe: () => {
+          reads.push("subscribe");
+          return () => {};
+        },
+      });
       const element = new CFRender();
       const internals = element as unknown as Internals;
-      const mounted: [string, readonly string[]][] = [];
-      internals._mount = (container, cell) => {
-        mounted.push([container.tagName, cell.ref().path]);
-        return () => {};
-      };
       const container = createMockElement("div");
       internals._renderChipDefault(
         container as unknown as HTMLElement,
         piece,
       );
+      await Promise.resolve();
+      await Promise.resolve();
+
       const [source] = container.children;
       const [chip] = source.children;
       expect([source.tagName, chip.tagName]).toEqual([
         "cf-drag-source",
         "cf-chip",
       ]);
+      expect([source.type, source.cell, chip.interactive]).toEqual([
+        "cell-link",
+        piece,
+        true,
+      ]);
       expect(chip.children.map((child) => child.textContent)).toEqual([
         "",
         " #abcdef",
       ]);
-      expect(mounted).toEqual([["span", ["$NAME"]]]);
+      expect(log.mounted.map((reference) => reference.path)).toEqual([
+        ["$NAME"],
+      ]);
       expect(reads).toEqual([]);
+
+      let stopped = 0;
+      listeners.get("cf-drag-source pointerdown")?.({
+        stopPropagation: () => stopped++,
+      } as unknown as Event);
+      expect(stopped).toBe(1);
     } finally {
       mockDocument.restore();
     }

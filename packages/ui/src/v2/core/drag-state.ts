@@ -1,6 +1,7 @@
 import { type CellHandle, UI, type VNode } from "@commonfabric/runtime-client";
 import { render } from "@commonfabric/html/client";
-import "../components/cf-cell-link/index.ts";
+
+import { createNameChip } from "./name-chip.ts";
 
 /**
  * State information for an active drag operation.
@@ -189,11 +190,12 @@ export interface DragPreview {
 /**
  * Create a drag preview element for a cell.
  * Uses the cell's [UI] property if available, otherwise falls back to
- * a static cf-cell-link pill.
+ * a chip naming the cell.
  *
- * The preview renders the cell's `[UI]` through the same renderer the page
- * uses, so the confidentiality policy that decides what a piece may show
- * decides what its drag preview shows.
+ * The preview renders the cell's `[UI]`, or the name in the chip, through the
+ * same renderer the page uses, so the confidentiality policy that decides
+ * what a piece may show decides what its drag preview shows. When even the
+ * name cannot be rendered, the preview shows the short form of the cell's id.
  *
  * @param cell - The CellHandle to create a preview for
  * @returns The preview element and its teardown
@@ -217,8 +219,7 @@ export function createDragPreview(cell: CellHandle): DragPreview {
 
   const cellValue = cell.get();
   if (!cellValue || typeof cellValue !== "object" || !(UI in cellValue)) {
-    _addFallbackPreview(preview, cell);
-    return { preview };
+    return { preview, cleanup: _addFallbackPreview(preview, cell) };
   }
 
   try {
@@ -234,16 +235,31 @@ export function createDragPreview(cell: CellHandle): DragPreview {
     return { preview, cleanup };
   } catch (error) {
     console.warn("[drag-state] Failed to render [UI] preview:", error);
-    _addFallbackPreview(preview, cell);
-    return { preview };
+    return { preview, cleanup: _addFallbackPreview(preview, cell) };
   }
 }
 
-function _addFallbackPreview(container: HTMLElement, cell: CellHandle) {
-  const link = document.createElement("cf-cell-link");
-  link.cell = cell;
-  link.isStatic = true;
-  container.appendChild(link);
+/**
+ * Adds a chip naming `cell` to `container` and returns the teardown of its
+ * render, or shows the short form of the cell's id when the name cannot be
+ * rendered.
+ */
+function _addFallbackPreview(
+  container: HTMLElement,
+  cell: CellHandle,
+): (() => void) | undefined {
+  const onError = (error: unknown) => {
+    console.warn("[drag-state] Failed to render the name preview:", error);
+  };
+  try {
+    const { chip, cleanup } = createNameChip(cell, { onError });
+    container.appendChild(chip);
+    return cleanup;
+  } catch (error) {
+    onError(error);
+    container.textContent = `#${cell.id().slice(-6)}`;
+    return undefined;
+  }
 }
 
 /**
