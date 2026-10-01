@@ -155,61 +155,70 @@ describe("CFOwnerView", () => {
   });
 
   describe("an origin whose label is not readable at the first check", () => {
-    // The label is read from what the store holds, which can lag the
-    // binding: the origin's document may not be loaded yet, or may be rolled
-    // back while the piece's start is retried. The element follows the
-    // origin, so the label arriving later decides the presentation.
+    // The label is what the store holds, which can lag the binding: the
+    // origin's document may not be loaded yet, or may be rolled back while
+    // the piece's start is retried. The element follows the origin, so the
+    // label its subscription delivers later decides the presentation.
 
-    const aliceAttestation: CfcLabelView = {
+    const attestationOf = (subject: string): CfcLabelView => ({
       version: 1,
       entries: [{
         path: [],
         label: {
-          integrity: [{
-            kind: "represents-principal",
-            subject: "did:key:alice",
-          }],
+          integrity: [{ kind: "represents-principal", subject }],
         },
       }],
-    };
+    });
+    const aliceAttestation = attestationOf("did:key:alice");
 
     const followedOrigin = (element: HeadlessOwnerView) => {
       let label: CfcLabelView | undefined;
-      let notify: (() => void) | undefined;
+      let notifyOrigin:
+        | ((value: unknown, cfcLabel?: CfcLabelView) => void)
+        | undefined;
+      let notifyResult: ((value: boolean | null) => void) | undefined;
       const writes: (boolean | null)[] = [];
-      let wrote = Promise.withResolvers<void>();
       element.runtime = {
         actingPrincipalDid: () => "did:key:bob",
       } as unknown as RuntimeClient;
       element.originator = {
-        getCfcLabel: () => Promise.resolve(label),
-        subscribe: (callback: () => void) => {
-          notify = callback;
-          callback();
+        // A read answers a label that would decide otherwise, so a decision
+        // taken from a read instead of from the subscription shows.
+        getCfcLabel: () => Promise.resolve(attestationOf("did:key:bob")),
+        subscribe: (
+          callback: (value: unknown, cfcLabel?: CfcLabelView) => void,
+        ) => {
+          notifyOrigin = callback;
+          callback(undefined, label);
           return () => {
-            notify = undefined;
+            notifyOrigin = undefined;
           };
         },
       } as unknown as CellHandle;
       element.result = {
         setStrict: (value: boolean | null) => {
           writes.push(value);
-          wrote.resolve();
-          wrote = Promise.withResolvers<void>();
           return Promise.resolve();
+        },
+        subscribe: (callback: (value: boolean | null) => void) => {
+          notifyResult = callback;
+          return () => {
+            notifyResult = undefined;
+          };
         },
       } as unknown as CellHandle<boolean | null>;
       return {
         writes,
-        followed: () => notify !== undefined,
-        // Updates the origin's label and resolves once the element has
-        // written in answer.
+        followed: () => notifyOrigin !== undefined,
+        // Delivers the origin's label through its subscription. The element
+        // decides as the update arrives, so a write it makes in answer is
+        // already recorded when this returns.
         arrive: (view: CfcLabelView | undefined) => {
-          const written = wrote.promise;
           label = view;
-          notify?.();
-          return written;
+          notifyOrigin?.(undefined, view);
         },
+        // Delivers a value of `result` through its subscription.
+        resultBecomes: (value: boolean | null) => notifyResult?.(value),
       };
     };
 
@@ -220,7 +229,7 @@ describe("CFOwnerView", () => {
       await element.refresh();
       expect(origin.writes).toEqual([null]);
       expect(origin.followed()).toBe(true);
-      await origin.arrive(aliceAttestation);
+      origin.arrive(aliceAttestation);
 
       expect(origin.writes).toEqual([null, false]);
     });
@@ -229,12 +238,24 @@ describe("CFOwnerView", () => {
       const element = new HeadlessOwnerView();
       const origin = followedOrigin(element);
       await element.refresh();
-      expect(origin.followed()).toBe(true);
-      await origin.arrive(aliceAttestation);
+      origin.arrive(aliceAttestation);
 
-      await origin.arrive(undefined);
+      origin.arrive(undefined);
 
       expect(origin.writes).toEqual([null, false, null]);
+    });
+
+    it("writes the decision again when the result is rolled back", async () => {
+      const element = new HeadlessOwnerView();
+      const origin = followedOrigin(element);
+      await element.refresh();
+      origin.arrive(aliceAttestation);
+      origin.resultBecomes(false);
+      expect(origin.writes).toEqual([null, false]);
+
+      origin.resultBecomes(null);
+
+      expect(origin.writes).toEqual([null, false, false]);
     });
 
     it("stops following the origin once disconnected", async () => {
@@ -259,7 +280,7 @@ describe("CFOwnerView", () => {
       element.connectedCallback();
 
       expect(origin.followed()).toBe(true);
-      await origin.arrive(aliceAttestation);
+      origin.arrive(aliceAttestation);
       expect(origin.writes).toEqual([null, false]);
     });
   });
