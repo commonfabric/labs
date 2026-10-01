@@ -15,6 +15,7 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -61,7 +62,7 @@ describe("fabrichat spaces across runtimes", () => {
    */
   async function start(
     stream: "openDirect" | "createGroup",
-    event: Record<string, unknown> & { requestId: string },
+    event: Record<string, FabricValue> & { requestId: string },
   ): Promise<PieceAddress> {
     await starter.send(stream, event);
     await harness.settle();
