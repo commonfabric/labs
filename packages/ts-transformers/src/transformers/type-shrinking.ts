@@ -15,6 +15,7 @@ import {
 import {
   entityNameRight,
   readAuthoredTypeNode,
+  readMemberAnnotation,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
 import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
@@ -1241,6 +1242,12 @@ function shrinkTypeToNode(
         typeToNodeFlags,
       );
 
+    // A node built from the type of a member whose declaration writes that
+    // type narrows the value the declaration spells, which a print of the
+    // type may not, as with a `typeof` writer binding in a label.
+    const declared = prop && readMemberAnnotation(prop, propType, checker);
+    if (declared) recordNarrowing(propTypeNode, propType, declared, state);
+
     properties.push(
       factory.createPropertySignature(
         undefined,
@@ -1606,6 +1613,18 @@ function carryNarrowing(
     }
   } else if (ts.isArrayTypeNode(from) && ts.isArrayTypeNode(to)) {
     carry(from.elementType, to.elementType);
+  } else if (ts.isUnionTypeNode(from) && ts.isUnionTypeNode(to)) {
+    // A value that may be missing is rebuilt as its one value member beside
+    // the nullish ones, which narrows what the value member it rebuilds does.
+    const value = (union: ts.UnionTypeNode) => {
+      const members = union.types.filter((member) =>
+        !isNullishTypeNode(member)
+      );
+      return members.length === 1 ? members[0] : undefined;
+    };
+    const fromValue = value(from);
+    const toValue = value(to);
+    if (fromValue && toValue) carry(fromValue, toValue);
   }
 }
 

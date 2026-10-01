@@ -286,6 +286,29 @@ export function detectNewExpressionKind(
   return { kind: "cell-factory", factoryName };
 }
 
+/**
+ * The cell kind `call` constructs, where it calls a cell constructor's static
+ * factory (`Writable.of<T>(…)`), or `undefined` for any other call.
+ */
+export function detectCellFactoryCallKind(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): Extract<CallKind, { kind: "cell-factory" }> | undefined {
+  const callee = stripWrappers(call.expression);
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    !CELL_FACTORY_NAMES.has(callee.name.text)
+  ) {
+    return undefined;
+  }
+  const factoryName = detectCellConstructorExpressionName(
+    callee.expression,
+    checker,
+    new Set(),
+  );
+  return factoryName ? { kind: "cell-factory", factoryName } : undefined;
+}
+
 export function detectDirectBuilderCall(
   call: ts.CallExpression,
   checker: ts.TypeChecker,

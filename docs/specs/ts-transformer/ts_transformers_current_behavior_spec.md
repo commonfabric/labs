@@ -1972,20 +1972,24 @@ adjustments:
   mapping spec's §13). A capture leaf printed from its type stands for the value
   its declaration spells, which the print may not, as with a `typeof` binding in
   a label. A leaf written as a shorthand property (`{ x }`) has the declaration
-  of the binding `x` names, not that of the object literal's property. A
-  declaration that writes no type spells a constructed cell's value with the
-  type arguments its constructor is given (`getConstructedCellTypeNode`), which
-  the leaf capturing the cell is written with; a leaf rebuilt from its type, as
-  a closure's narrowed capture is, prints a `typeof` writer binding among them
-  as a structural type, so that leaf stands for the value the arguments spell. A
-  node built from part of a narrowed node or of such a print, rebuilt from one
-  by a later pass, or built from the type of one narrows the same value, its
-  parts matched by property name and array element (`recordNarrowedFrom` and
-  `recordDeclaredValue` in `core/cross-stage-state.ts`; `recordNarrowing` and
-  `carryNarrowing` in `transformers/type-shrinking.ts`;
-  `test/narrowed-capture-labels.test.ts`, `test/protected-cell-policy.test.ts`).
-  A rest binding (`{ ...rest }`), and a binding under a computed key, reads no
-  one property, so no property's declaration spells its value
+  of the binding `x` names, not that of the object literal's property. A node
+  built from the type of a member whose declaration writes that type, by the
+  type-driven shrink, narrows the value the declaration spells
+  (`readMemberAnnotation`), as a field read out of a wished result does. A
+  constructed cell's node, written with its constructor's type arguments
+  (`getConstructedCellTypeNode`, §12), records itself as the value it spells
+  where it is built (`expressionToTypeNode`), and a node a later pass rebuilds
+  it into from its type, which prints a `typeof` writer binding among those
+  arguments as a structural type, narrows that value. A node built from part of
+  a narrowed node or of such a print, rebuilt from one by a later pass, or built
+  from the type of one narrows the same value, its parts matched by property
+  name, array element, and the one value member of a union beside nullish
+  members (`recordNarrowedFrom` and `recordDeclaredValue` in
+  `core/cross-stage-state.ts`; `recordNarrowing` and `carryNarrowing` in
+  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`,
+  `test/protected-cell-policy.test.ts`). A rest binding (`{ ...rest }`), and a
+  binding under a computed key, reads no one property, so no property's
+  declaration spells its value
 - a capture leaf printed from its type is read as the annotation of the member
   it holds the value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does (`namesValueBinding` in
@@ -2376,12 +2380,17 @@ carry a repeated source-metadata helper implementation.
 ## 12. Schema Generation
 
 Cell constructors whose authored type arguments name a `typeof` value binding
-retain those arguments when their result is lowered into a lift
-(`getConstructedCellTypeNode`). Recovery follows `.for()` and unannotated
-`const` aliases, and also preserves the declaration in an inferred
+retain those arguments when their result is lowered into a lift or captured
+(`getConstructedCellTypeNode`), whether the cell is made by `new` or by the
+constructor's static `of()`. Recovery follows `.for()`, unannotated `const`
+aliases, and a binding an unannotated `const` destructures straight out of an
+object literal, and also preserves the declaration in an inferred
 object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
 writer instead of an inferred structural function type. Explicit variable
-annotations remain authoritative; mutable aliases are not followed.
+annotations remain authoritative; mutable aliases, and a property of an object
+held elsewhere, which a write can replace, are not followed. Two writers of the
+same signature give a policy one type, so a cell reached any other way has no
+syntax that names its writer.
 Pattern-local object value aliases retain their definitions in each generated
 schema.
 
