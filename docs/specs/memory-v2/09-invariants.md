@@ -516,6 +516,19 @@ details and is refused). The self-removal exception to the capability check
 is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
 the client that sends one.
 
+The served plane has no writer of the ACL document, and refuses one outright,
+in every mode, `off` included. A serving wave commits engine-direct, so
+`#validateAclCommit` never sees its commits, and neither its `derived` lease
+admission nor its foreign batches' delegated admission checks this rule or
+the acting user's level. So the wave's seal refuses a run that writes
+`of:<space>` of any space, failing that run alone
+(`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
+refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
+and the wave sink refuses a foreign batch carrying one
+(`packages/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
+the run is in
+[`serving-loop.md` §3d](../server-side-execution/serving-loop.md#3d-transactions-the-action-tx-seals-into-the-wave).
+
 Soundness direction: none — an exact admission predicate, with a real cost on
 each side. Over-rejection is not merely a retry: a client that cannot produce
 the accepted shape has no route to change the ACL at all, which is what
@@ -537,7 +550,11 @@ adds a document field, keeps its own entry at another level, removes someone
 else's entry, or is sent under a `"*"` entry).
 Client side, `packages/runner/test/memory-v2-acl-mutation.test.ts` asserts the
 emitted operation *shape and count* against a real server, not just the
-resulting value.
+resulting value. Served plane,
+`packages/runner/test/executor-acl-document-write.test.ts` drives a served
+handler's cell-shaped and whole-document writes under `off` and `enforce`,
+and `packages/runner/test/executor-wave.test.ts` hands the engine and the
+sink batches built directly, past the seal.
 
 ### INV-13 — ACL genesis precedence and authority
 

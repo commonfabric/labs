@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
-import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
@@ -21,8 +21,8 @@ import type { Cell } from "../../src/cell.ts";
 import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
-import type { SessionFactory } from "../../src/storage/v2.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
+import { RecordingSessionFactory } from "../support/recording-session-factory.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
 const AUDIENCE = "did:key:z6Mk-runner-space-access-change-audience";
@@ -111,62 +111,6 @@ function gesture(payload: Record<string, unknown>): Record<string, unknown> {
   };
   markRendererTrustedEvent(event);
   return event;
-}
-
-/**
- * A loopback session factory recording the ids each commit it sends writes,
- * one list per commit, in the order they were sent. `beforeNextAclCommit`, when
- * set, runs once before the next commit that writes an access list is sent,
- * and a rejection from it takes the place of that commit's result.
- */
-class RecordingSessionFactory implements SessionFactory {
-  readonly supportsAclBootstrap = true;
-  readonly commits: string[][] = [];
-  beforeNextAclCommit: (() => Promise<void>) | undefined;
-
-  readonly #server: Server;
-
-  constructor(server: Server) {
-    this.#server = server;
-  }
-
-  async create(
-    space: MemorySpace,
-    signer?: Signer,
-    requested: MemoryV2Client.MountOptions = {},
-  ) {
-    const client = await MemoryV2Client.connect({
-      transport: MemoryV2Client.loopback(this.#server),
-    });
-    const session = await client.mount(
-      space,
-      requested,
-      (_space, _session, context) => ({
-        invocation: {
-          aud: context.audience,
-          challenge: context.challenge.value,
-        },
-        authorization: { principal: signer?.did() },
-      }),
-    );
-    const transact = session.transact.bind(session);
-    (session as { transact: typeof transact }).transact = async (
-      commit,
-      beforeIssue,
-    ) => {
-      const ids = commit.operations.flatMap((operation) =>
-        "id" in operation ? [operation.id] : []
-      );
-      this.commits.push(ids);
-      const before = this.beforeNextAclCommit;
-      if (before !== undefined && ids.includes(`of:${space}`)) {
-        this.beforeNextAclCommit = undefined;
-        await before();
-      }
-      return await transact(commit, beforeIssue);
-    };
-    return { client, session };
-  }
 }
 
 describe("space-access-change", () => {
@@ -513,11 +457,11 @@ describe("space-access-change", () => {
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
       const result = await runAccessPattern(runtime, space);
       const before = aclCommitCount(factory, space);
-      factory.beforeNextAclCommit = () =>
+      factory.beforeNextCommitTo(`of:${space}`, () =>
         writeAclAs(alice, space, {
           [alice.did()]: "OWNER",
           [carol.did()]: "READ",
-        });
+        }));
 
       await send(runtime, result, "grant", gesture({ principal: bob.did() }));
 
@@ -537,12 +481,12 @@ describe("space-access-change", () => {
       const { runtime, factory, errors } = clientRuntime(alice);
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
       const result = await runAccessPattern(runtime, space);
-      factory.beforeNextAclCommit = () =>
+      factory.beforeNextCommitTo(`of:${space}`, () =>
         Promise.reject(
           Object.assign(new Error("refused for the test"), {
             name: "AuthorizationError",
           }),
-        );
+        ));
 
       await send(runtime, result, "grant", gesture({ principal: bob.did() }));
 
@@ -558,12 +502,12 @@ describe("space-access-change", () => {
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
       const result = await runAccessPattern(runtime, space);
       const before = aclCommitCount(factory, space);
-      factory.beforeNextAclCommit = () =>
+      factory.beforeNextCommitTo(`of:${space}`, () =>
         Promise.reject(
           Object.assign(new Error("connection lost for the test"), {
             name: "ConnectionError",
           }),
-        );
+        ));
 
       await send(runtime, result, "grant", gesture({ principal: bob.did() }));
 

@@ -1366,6 +1366,23 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
+   * Asks the memory server once more for `space`, if it refused this
+   * runtime's session there, and resolves once the server has decided. An
+   * admission runs again every computation whose `spaceAccess(target)`
+   * answer turned on the refusal, and repeats the loads the refusal failed; a
+   * refusal leaves the space refused. It is for a host with word that the
+   * runtime's principal was granted access, such as a notice naming the
+   * space, and does nothing for a space the runtime has not opened. It
+   * rejects on any failure other than a refusal.
+   */
+  async retrySpaceAccess(space: DID): Promise<void> {
+    await this.#conn.request<RequestType.RetrySpaceAccess>({
+      type: RequestType.RetrySpaceAccess,
+      space,
+    });
+  }
+
+  /**
    * Wait for convergence across EVERY space this worker has opened.
    * Spaceless by design (like idle) — for quiescence checks that don't
    * care about any particular space, e.g. test/debug harnesses.

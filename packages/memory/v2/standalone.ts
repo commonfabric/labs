@@ -123,6 +123,7 @@ export class StandaloneMemoryServer {
       acl?: {
         mode: MemoryServer.MemoryAclMode;
         serviceDids?: readonly string[];
+        delegatingDids?: readonly string[];
       };
 
       /** Answers the non-websocket requests this address receives. Anything

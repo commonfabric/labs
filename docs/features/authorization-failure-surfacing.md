@@ -153,11 +153,15 @@ recover from that error.
 Two properties follow from terminating rather than looping:
 
 - **No in-process auto-heal after a later grant.** A terminated session does not
-  reopen on its own, so a holder that wants to pick up an ACL granted moments
-  later recreates the session (or the storage manager). Retrying a denied reopen
-  until an administrator acts is the retry-loop the engineering principles
-  forbid; the CLI reports the error and exits. A genuinely transient or
-  recoverable condition — a token-refresh window, a challenge race, every
+  reopen on its own. A holder that wants to pick up an ACL granted later asks
+  once, on an event saying the grant may have happened:
+  `StorageManager.retrySpaceAccess(space)`, which `Runtime` and `RuntimeClient`
+  pass through, opens the session again through the same admission. If it is
+  admitted, it repeats the loads the refusal failed; if it is refused, the
+  refusal is recorded where the first one was. Retrying a denied reopen on a
+  schedule until an administrator acts is the retry-loop the engineering
+  principles forbid; the CLI reports the error and exits. A genuinely transient
+  or recoverable condition — a token-refresh window, a challenge race, every
   transport blip — still heals, because it is classified retriable.
 - **A wedged-but-reachable backend still waits.** With no wall-clock guard, a
   backend that completes the handshake but then never answers the authenticated
