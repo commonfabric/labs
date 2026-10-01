@@ -3048,11 +3048,12 @@ function handlePatternSchemaInjection(
     ? unwrapExpression(patternReturnExpr)
     : undefined;
 
+  // A pattern lowered from an array method's callback takes captures and an
+  // element as its argument: views of documents that exist already.
+  const lowersArrayCallback = context.isArrayMethodCallback(builderFunction) ||
+    isMapWithPatternCallbackPatternCall(node);
   const argumentCapabilityMode: CapabilitySummaryApplicationMode =
-    context.isArrayMethodCallback(builderFunction) ||
-      isMapWithPatternCallbackPatternCall(node)
-      ? "full"
-      : "defaults_only";
+    lowersArrayCallback ? "full" : "defaults_only";
 
   // Helper to build final call with function-first argument order
   const buildCallExpression = (
@@ -3287,6 +3288,11 @@ function handlePatternSchemaInjection(
   if (inputType && typeRegistry) {
     typeRegistry.set(inputSchemaCall, inputType);
   }
+  // An authored pattern's argument document stores the policy envelope its
+  // input schema carries.
+  if (!lowersArrayCallback) {
+    context.state.markDocumentSchemaCall(inputSchemaCall);
+  }
 
   const resultSchemaCall = createSchemaCallWithRegistryTransfer(
     context,
@@ -3298,6 +3304,13 @@ function handlePatternSchemaInjection(
     resultSchemaCall,
     node.expression,
   );
+  // Its result document stores the envelope its result schema carries, where
+  // the author wrote the result type. A result inferred from the callback is
+  // read from a type alone: a view of the documents its fields link to, which
+  // store their own.
+  if (!lowersArrayCallback && typeArgs && typeArgs.length >= 2) {
+    context.state.markDocumentSchemaCall(resultSchemaCall);
+  }
   if (
     unwrappedPatternReturnExpr &&
     ts.isObjectLiteralExpression(unwrappedPatternReturnExpr)
@@ -3478,6 +3491,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           );
 
           if (schemaCall) {
+            context.state.markDocumentSchemaCall(schemaCall);
             // Schema must always be the second argument. If no value was
             // provided, add undefined as the first argument.
             const newArgs = args.length === 0
@@ -4204,6 +4218,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         );
 
         if (schemaCall) {
+          context.state.markDocumentSchemaCall(schemaCall);
           // Schema must always be the second argument. If no value was provided,
           // add undefined as the first argument.
           const newArgs = args.length === 0

@@ -1020,11 +1020,12 @@ Mechanics:
   alias for `typeof writer` passed through another alias's parameter: its type
   does not stand in for the written binding. A parameter bound only to a type,
   with no argument node, remains a type-only read rather than an authored
-  indirect binding and is not reported by this check. A payload that is itself a
-  CFC alias therefore lowers as it would if written on its own: a generic alias
-  keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
-  `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
-  `AnyOf` clauses. A named type in the payload stays a `$ref` to its
+  indirect binding and is not reported by this check, except in a schema that
+  defines a document (the writer no syntax names, below). A payload that is
+  itself a CFC alias therefore lowers as it would if written on its own: a
+  generic alias keeps its argument (`Integrity<Sec<string>, I>` is a string), a
+  nested `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label
+  keeps its `AnyOf` clauses. A named type in the payload stays a `$ref` to its
   definition.
 - A policy's type can lose its alias name. A payload member its metadata
   carrier cannot intersect is reduced away: `Confidential<string | null, L>` is
@@ -1040,7 +1041,8 @@ Mechanics:
   types spell it (`cfcCarriedParts`), provided every value in it reads. A writer
   binding, which only a `typeof` node names, does not, and a policy read in part
   could claim what its author never wrote together, such as an `ownerPrincipal`
-  without its `writeAuthorizedBy`. Then the value is its payload alone. The
+  without its `writeAuthorizedBy`. Then the value is its payload alone, and in
+  a schema that defines a document its writer is reported (below). The
   `null` the checker dropped is in the schema neither way.
 - A default-library alias that maps an object's members (`Readonly`,
   `Partial`, `Required`, `Pick`, `Omit`) does not keep a labelled operand's
@@ -1350,7 +1352,10 @@ Mechanics:
   the legacy fallback (backslashes → `/`, first path segment stripped by
   `normalizeWriterIdentityFile`). The transformer also handles the direct-root
   `toSchema<WriteAuthorizedBy<T, typeof b>>` form specially so the wrapper's
-  value schema remains the root while the same identity marker is attached.
+  value schema remains the root while the same identity marker is attached:
+  it mints the claim and hands the generator the payload's node, and the
+  generator's report that it cannot read the root writer at that node is the
+  transformer's to answer.
   The writer identity is update-volatile in the piece compat checker in two
   ways, and `assertPatternSchemasBackwardCompatible` normalizes both out of the
   `ifc` comparison. The content-addressed hash (`moduleIdentity`, and the
@@ -1367,6 +1372,24 @@ Mechanics:
   package emits none of those keywords, so nothing it produces exercises that
   today. The checker sees schemas from elsewhere as well, and holds them to the
   same reading.
+- A writer read where no syntax names it leaves the schema without its write
+  claim: a declaration parameter bound to an argument with no node, a policy
+  reached through an index signature or a tuple element, or a carrier's
+  metadata read from a type alone (bare, under a default-library alias, or
+  folded into an object as a member). In a schema that defines a document
+  (`definesDocument`, §14) that would be a document stored with no write
+  restriction, writable by any writer, so each is the
+  `cfc-write-authorized-by:unread` error, naming the policy
+  (`WriteAuthorizedBy`, or `WritePolicyAnyOf` for a carrier holding a set).
+  Any other schema views a document whose stored envelope binds its writers
+  already, and reports nothing. It reads the policy whole or not at all: where
+  the writer went unread, the principal claims the runtime enforces only
+  beside a writer, an `ownerPrincipal` and `integrity` or `addIntegrity` atoms
+  naming the current principal, are left out with it, since either alone
+  refuses every write against it, its own writer's included
+  (`#withPolicyReadWhole()`). A claim whose type holds no writer stays as
+  written. A writer the type no longer carries at all, as a mapped type the
+  generator does not follow can drop it, is not reported either way.
 - `SchemaGeneratorTransformer.resolvePolicyOfMarkers` replaces a valid policy
   marker with the compiled module identity, exported symbol, and policy digest.
   If it cannot match a compiler-verified exported `exchangeRules()` binding,
@@ -1529,7 +1552,9 @@ supports `onDiagnostic` for recoverable generation problems (§7),
 `isDefaultLibrarySourceFile` for the program's own word on whether a
 declaration file is the default library's (the transformer supplies
 `program.isSourceFileDefaultLibrary`; without it, file names decide —
-`src/typescript/default-library.ts`), and `widenLiterals`.
+`src/typescript/default-library.ts`), `definesDocument` for a schema a
+document's stored policy envelope is made from, in which a writer no syntax
+names is an error (§11), and `widenLiterals`.
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);

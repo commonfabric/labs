@@ -111,6 +111,20 @@ export interface SchemaGenerationOptions {
    * the caller built.
    */
   readonly printedFrom?: (node: ts.TypeNode) => ts.Type | undefined;
+
+  /**
+   * Whether the schema defines a document: it is the schema a document's
+   * stored policy envelope is made from, as a pattern's argument schema or a
+   * created cell's is. A writer policy whose writer the generator cannot read
+   * there is an error (`cfc-write-authorized-by:unread`), since the document
+   * would store no write restriction and admit every writer. Any other schema
+   * views a document whose stored envelope binds its writers already, and a
+   * writer it cannot read leaves only that view without the claim, and
+   * without the principal claims the runtime enforces only beside a writer.
+   * A writer the type no longer carries, as a mapped type the generator does
+   * not follow can lose it, is not reported either way.
+   */
+  readonly definesDocument?: boolean;
 }
 
 /**
@@ -204,6 +218,12 @@ export interface GenerationContext {
 
   /** The type a printed node stands for (`SchemaGenerationOptions`). */
   printedFrom?: (node: ts.TypeNode) => ts.Type | undefined;
+
+  /**
+   * Whether the schema being generated defines a document
+   * (`SchemaGenerationOptions.definesDocument`).
+   */
+  definesDocument?: boolean;
 
   /** Schema hints for overriding default behavior (keyed by TypeNode) */
   schemaHints?: SchemaHints;
