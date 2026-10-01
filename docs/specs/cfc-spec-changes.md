@@ -1630,14 +1630,19 @@ CFC spec owner ruled on 2026-10-01 that a prompt caveat says only that the
 content must not be trusted as instructions to a model, so it has nothing to
 do with a display, and that the ceiling should admit the whole family rather
 than a list of kinds. Proposed edit: §8.10.6 admits every prompt-caveat kind
-§10.1 lists (the legacy single-risk form, the screening-gradient tiers and
-`prompt-influence`) by family, keeps an enumerated, deployment-declared
-allow-list for other caveat kinds, and says admission is not discharge: the
-caveat stays on the value and every non-display sink evaluates it as before.
+§10.1 lists (the screening-gradient tiers and `prompt-influence`) by family,
+keeps an enumerated, deployment-declared allow-list for other caveat kinds,
+and says admission is not discharge: the caveat stays on the value and every
+non-display sink evaluates it as before.
 §10.1 gains a line saying a display boundary admits the family, which leaves
 its `InjectionSafe` requirement for discharge untouched. A channel that reads
 rendered output back into a model (a screenshot, an accessibility tree, the
 page's text) is a model sink and a new boundary context (§8.10.5.2), not a
 display. Implemented in `packages/runner/src/cfc/prompt-caveat-kinds.ts`
 (`PROMPT_CAVEAT_FAMILY_KINDS`), which `defaultRenderConfidentialityCeiling` in
-`packages/lib-shell/src/runtime.ts` admits.
+`packages/lib-shell/src/runtime.ts` admits: the family expands into the
+ceiling's enumerated `caveatKinds` from that one constant, so the wire carries
+kinds, not a family token. Labs admits the screening-gradient tiers and
+`prompt-influence` in both spellings, and not the unsuffixed
+`prompt-injection-risk` form §10.1 still lists as legacy, which labs retired
+(#5661); the spec edit should say whether §10.1 retires it too.
