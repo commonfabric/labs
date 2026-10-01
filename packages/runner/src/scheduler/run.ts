@@ -1239,11 +1239,12 @@ function finalizeReactiveActionCommit(
             args.retryRegistration.token &&
           (state.nodes.isEffect(args.action) ||
             state.nodes.isComputation(args.action)))),
-    awaitRetryReadiness: (error) =>
-      state.runtime.awaitCommitRetryReadiness(
+    awaitRetryReadiness: async (error) => {
+      await state.runtime.awaitCommitRetryReadiness(
         error,
         state.runtime.writeTeardownSignal,
-      ),
+      );
+    },
     action: args.action,
     tx: args.tx,
     log: committedLog,

@@ -311,26 +311,45 @@ const NAMING_PROBE_BUDGET = 256;
 const PIECE_RUN_START_MAX_RETRIES = 5;
 
 /**
- * Whether a commit refusal names a module-policy manifest document among the
- * documents whose basis moved: a stale-read conflict listing one, or a local
- * inconsistency at one. A manifest is content-addressed and never rewritten,
- * so such a refusal is the transaction's own install meeting a manifest
- * another participant installed first, and once the replica has caught up
- * the install reads it as present and writes nothing.
+ * The ids of the documents whose basis moved, as a commit refusal names them:
+ * a stale-read conflict's documents, or a local inconsistency's. Any other
+ * refusal names none.
  */
-const refusalNamesPolicyManifest = (error: CommitError): boolean => {
-  const named = (id: unknown) =>
-    typeof id === "string" && id.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX);
+const refusedDocumentIds = (error: CommitError): unknown[] => {
   if (isStorageTransactionInconsistent(error)) {
-    return named((error as { address?: { id?: unknown } }).address?.id);
+    return [(error as { address?: { id?: unknown } }).address?.id];
   }
-  if (!isStaleReadConflict(error)) return false;
+  if (!isStaleReadConflict(error)) return [];
   const { conflict, conflicts } = error as {
     conflict?: { of?: unknown };
     conflicts?: readonly { of?: unknown }[];
   };
-  return named(conflict?.of) ||
-    (conflicts ?? []).some((entry) => named(entry?.of));
+  return [conflict?.of, ...(conflicts ?? []).map((entry) => entry?.of)]
+    .filter((id) => id !== undefined);
+};
+
+const isPolicyManifestId = (id: unknown): boolean =>
+  typeof id === "string" && id.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX);
+
+/**
+ * Whether a commit refusal names a module-policy manifest document among the
+ * documents whose basis moved. A manifest is content-addressed and never
+ * rewritten, so such a refusal is the transaction's own install meeting a
+ * manifest another participant installed first, and once the replica has
+ * caught up the install reads it as present and writes nothing.
+ */
+const refusalNamesPolicyManifest = (error: CommitError): boolean =>
+  refusedDocumentIds(error).some(isPolicyManifestId);
+
+/**
+ * Whether every document a commit refusal names is a module-policy manifest,
+ * which is a lost install ({@link refusalNamesPolicyManifest}) and nothing
+ * else. A refusal that also names other documents is a stale read over them,
+ * whatever the manifest beside them.
+ */
+const refusalNamesOnlyPolicyManifests = (error: CommitError): boolean => {
+  const ids = refusedDocumentIds(error);
+  return ids.length > 0 && ids.every(isPolicyManifestId);
 };
 
 /**
@@ -4651,9 +4670,18 @@ export class Runner {
             active && startLifecycleEpoch === this.#lifecycleEpoch &&
             registrations.get(key) === cancel && cancelNodes === nodeCancel &&
             currentPatternKey === patternKeyAtInstantiation;
+          // `refusal` is how the commit was lost: its basis to the serving
+          // side, a policy manifest install to another participant, or
+          // neither, which is terminal. One retry is enough for a lost
+          // install: a manifest never changes once present, so once the
+          // catch-up has loaded it the install reads it as present and writes
+          // nothing, and the same refusal cannot recur. A named piece's run
+          // start takes up to `PIECE_RUN_START_MAX_RETRIES` instead, because
+          // its refusal may also name the piece's own documents, whose basis
+          // other writers can keep moving.
           const recoverInstantiationOnce = async (
             error: unknown,
-            recoverable = true,
+            refusal: "basis" | "manifest" | "terminal",
           ) => {
             if (!exactNodesAreCurrent()) {
               // A stop, a runtime cycle, or a newer instantiation retired
@@ -4666,7 +4694,7 @@ export class Runner {
               ]);
               return;
             }
-            if (!recoverOnce || !recoverable) {
+            if (!recoverOnce || refusal === "terminal") {
               // Either the one retry lost the same way, or this failure was
               // never the recoverable class. The graph's setup does not
               // become durable and the load has genuinely failed.
@@ -4680,8 +4708,12 @@ export class Runner {
             // would report a loss that the retry below goes on to repair,
             // and a routine race would read as a health regression.
             logger.warn("piece-start-commit-recovering", () => [
-              `piece-start commit ${instantiateActionId} lost its basis to ` +
-              "the serving side; re-instantiating once from the caught-up view",
+              `piece-start commit ${instantiateActionId} ` + (refusal ===
+                  "manifest"
+                ? "lost a policy manifest install to another participant; " +
+                  "re-instantiating once the manifest has loaded"
+                : "lost its basis to the serving side; re-instantiating once " +
+                  "from the caught-up view"),
               error,
             ]);
 
@@ -4693,7 +4725,7 @@ export class Runner {
             // cancellation handle.
             nodeCancel();
             if (cancelNodes === nodeCancel) cancelNodes = undefined;
-            await this.#runtime.awaitCommitRetryReadiness(
+            const unloaded = await this.#runtime.awaitCommitRetryReadiness(
               error,
               retryReadinessTeardown.signal,
             );
@@ -4711,6 +4743,28 @@ export class Runner {
             ) {
               return;
             }
+            // A retry reads the manifest the catch-up loaded. One that could
+            // not be loaded would read as absent and be installed again, so
+            // the start fails here, with the reason the load gave.
+            if (refusal === "manifest" && unloaded.length > 0) {
+              this.#reportPieceStartCommitFailure(
+                instantiateActionId,
+                new Error(
+                  `piece-start commit ${instantiateActionId} lost a policy ` +
+                    "manifest install, and its catch-up could not load " +
+                    unloaded.map(({ id }) => id).join(", "),
+                  {
+                    cause: unloaded.length === 1
+                      ? unloaded[0].error
+                      : new AggregateError(
+                        unloaded.map(({ error }) => error),
+                      ),
+                  },
+                ),
+              );
+              teardownRegistrationIfCurrent();
+              return;
+            }
             try {
               instantiatePattern(pattern, undefined, false);
             } catch (retryError) {
@@ -4723,11 +4777,19 @@ export class Runner {
           };
           const commitWork = actualTx.commit().then(async ({ error }) => {
             if (error !== undefined) {
+              // A lost manifest install recovers in every posture, for the
+              // reason `refusalNamesOnlyPolicyManifests` gives.
+              if (refusalNamesOnlyPolicyManifests(error)) {
+                await recoverInstantiationOnce(error, "manifest");
+                return;
+              }
+              // A stale read recovers only where a serving side supplies the
+              // view the retry reads.
               if (
                 this.#runtime.experimental.serverExecution === true &&
                 isStaleReadConflict(error)
               ) {
-                await recoverInstantiationOnce(error);
+                await recoverInstantiationOnce(error, "basis");
                 return;
               }
               this.#reportPieceStartCommitFailure(instantiateActionId, error);
@@ -4760,7 +4822,9 @@ export class Runner {
             // second failure takes.
             await recoverInstantiationOnce(
               settled.error,
-              waveWithdrawalCause === "contribution-dropped",
+              waveWithdrawalCause === "contribution-dropped"
+                ? "basis"
+                : "terminal",
             );
           }).catch((error) => {
             this.#reportPieceStartCommitFailure(instantiateActionId, error);
