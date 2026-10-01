@@ -741,3 +741,254 @@ describe("asCell scope cap, through definitions", () => {
     expect(capped.resolveAsCell().get()).toBeUndefined();
   });
 });
+
+describe("asCell scope cap, on a compiled handle beside `null` or `undefined`", () => {
+  // A scoped cell beside `null` or `undefined` compiles to an `anyOf` holding
+  // the handle, with the slot's scope at the top and the cap in the handle's
+  // `asCell` entry. The cap has to hold however the handle is reached, as it
+  // does for the handle alone.
+
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let tx: IExtendedStorageTransaction;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit();
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  /** The argument schema the compiler writes for a `handle` of `declaration`. */
+  const compiledSchema = async (declaration: string): Promise<JSONSchema> =>
+    (await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { pattern, type Cell, type PerSpace } from 'commonfabric';",
+          "interface Inner { field: string }",
+          `export default pattern<{ handle: ${declaration} }>(`,
+          "  ({ handle }) => ({ handle }),",
+          ");",
+        ].join("\n"),
+      }],
+    }, { space })).argumentSchema;
+
+  /**
+   * The input schema the compiler writes for a lift capturing `handle`, a
+   * local declared as `declaration` that is a space-scoped cell or `nullish`.
+   */
+  const compiledCaptureSchema = async (
+    declaration: string,
+    nullish: string,
+  ): Promise<JSONSchema> => {
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { computed, pattern, Writable, type Confidential, type PerSpace } from 'commonfabric';",
+          "interface Inner { field: string }",
+          "export default pattern<{ enabled: boolean }>(({ enabled }) => {",
+          `  const handle: ${declaration} = enabled`,
+          "    ? Writable.perSpace.of<Inner>({ field: '' })",
+          `    : ${nullish};`,
+          "  return { out: computed(() => handle?.get().field) };",
+          "});",
+        ].join("\n"),
+      }],
+    }, { space });
+    const nodes = (compiled as unknown as {
+      nodes: { module: { argumentSchema?: JSONSchema } }[];
+    }).nodes;
+    return nodes.map((node) => node.module.argumentSchema).find((schema) =>
+      typeof schema === "object" &&
+      "handle" in ((schema as { properties?: object }).properties ?? {})
+    )!;
+  };
+
+  /**
+   * The input schema the compiler writes for a lift capturing `handle`, a
+   * pattern input declared as `declaration`, that reads it as `read`.
+   */
+  const compiledInputCaptureSchema = async (
+    declaration: string,
+    read: string,
+  ): Promise<JSONSchema> => {
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { computed, pattern, type Cell, type Confidential, type PerSpace } from 'commonfabric';",
+          "interface Inner { field: string }",
+          "type Extra = { readonly __extra: true };",
+          `export default pattern<{ handle: ${declaration} }>(({ handle }) => ({`,
+          "  handle,",
+          `  out: computed(() => ${read}),`,
+          "}));",
+        ].join("\n"),
+      }],
+    }, { space });
+    const nodes = (compiled as unknown as {
+      nodes: { module: { argumentSchema?: JSONSchema } }[];
+    }).nodes;
+    return nodes.map((node) => node.module.argumentSchema).find((schema) =>
+      typeof schema === "object" &&
+      "handle" in ((schema as { properties?: object }).properties ?? {})
+    )!;
+  };
+
+  /**
+   * The handle, stored as a link to a cell in `targetScope`, read as a value
+   * projection, by a key() chain past it, and as a property of a whole-object
+   * read, with whether that property is read as a cell.
+   */
+  const routes = (
+    schema: JSONSchema,
+    label: string,
+    targetScope: "space" | "session",
+  ) => {
+    const inner = runtime.getCell(
+      space,
+      `compiled-inner-${label}`,
+      innerSchema,
+      tx,
+      targetScope,
+    );
+    inner.set({ field: "secret" });
+    const outer = runtime.getCell(space, `compiled-outer-${label}`, schema, tx);
+    outer.set({ handle: inner } as never);
+    const read = (value: unknown) =>
+      isCell(value) ? (value as { get(): unknown }).get() : value;
+    const whole = ((outer.get() ?? {}) as { handle?: unknown }).handle;
+    return {
+      projection: read(outer.key("handle").get()),
+      through: outer.key("handle", "field").get(),
+      whole: read(whole),
+      wholeIsCell: isCell(whole),
+    };
+  };
+
+  for (
+    const [label, declaration] of [
+      ["alone", "PerSpace<Cell<Inner>>"],
+      ["beside null", "PerSpace<Cell<Inner>> | null"],
+      ["beside undefined", "PerSpace<Cell<Inner>> | undefined"],
+    ] as const
+  ) {
+    it(`blocks every route to a narrower link through a space-capped handle ${label}`, async () => {
+      const r = routes(
+        await compiledSchema(declaration),
+        `blocked-${label}`,
+        "session",
+      );
+
+      expect(r.projection).toBeUndefined();
+      expect(r.through).toBeUndefined();
+      expect(r.whole).toBeUndefined();
+    });
+
+    it(`allows every route to a link the cap admits through a space-capped handle ${label}`, async () => {
+      const r = routes(
+        await compiledSchema(declaration),
+        `allowed-${label}`,
+        "space",
+      );
+
+      expect(r.projection).toEqual({ field: "secret" });
+      expect(r.through).toBe("secret");
+      expect(r.whole).toEqual({ field: "secret" });
+    });
+  }
+
+  for (const nullish of ["null", "undefined"]) {
+    for (
+      const [label, declaration] of [
+        ["scoped cell", `PerSpace<Writable<Inner>> | ${nullish}`],
+        [
+          "labelled scoped cell",
+          `PerSpace<Confidential<Writable<Inner>, readonly ["owner"]>> | ${nullish}`,
+        ],
+      ] as const
+    ) {
+      it(`blocks every route to a narrower link through the capture of a ${label} beside ${nullish}`, async () => {
+        const r = routes(
+          await compiledCaptureSchema(declaration, nullish),
+          `capture-blocked-${label}-${nullish}`,
+          "session",
+        );
+
+        expect(r.projection).toBeUndefined();
+        expect(r.through).toBeUndefined();
+        expect(r.whole).toBeUndefined();
+      });
+
+      it(`allows every route to a link the cap admits through the capture of a ${label} beside ${nullish}`, async () => {
+        const r = routes(
+          await compiledCaptureSchema(declaration, nullish),
+          `capture-allowed-${label}-${nullish}`,
+          "space",
+        );
+
+        expect(r.projection).toEqual({ field: "secret" });
+        expect(r.through).toBe("secret");
+        expect(r.whole).toEqual({ field: "secret" });
+      });
+    }
+  }
+
+  for (
+    const [label, declaration, read] of [
+      [
+        "labelled scoped cell intersected with another type",
+        'PerSpace<Confidential<Cell<Inner> & Extra, readonly ["owner"]>>',
+        "handle.get().field",
+      ],
+      [
+        "scoped cell intersected with another type beside null",
+        "PerSpace<Cell<Inner> & Extra> | null",
+        "handle?.get().field",
+      ],
+      [
+        "labelled scoped cell intersected with another type beside undefined",
+        'PerSpace<Confidential<Cell<Inner> & Extra, readonly ["owner"]>> | undefined',
+        "handle?.get().field",
+      ],
+    ] as const
+  ) {
+    it(`blocks every route to a narrower link through the capture of a ${label} input`, async () => {
+      const r = routes(
+        await compiledInputCaptureSchema(declaration, read),
+        `input-capture-blocked-${label}`,
+        "session",
+      );
+
+      expect(r.projection).toBeUndefined();
+      expect(r.through).toBeUndefined();
+      expect(r.whole).toBeUndefined();
+    });
+
+    it(`reads a link the cap admits as a cell on every route through the capture of a ${label} input`, async () => {
+      const r = routes(
+        await compiledInputCaptureSchema(declaration, read),
+        `input-capture-allowed-${label}`,
+        "space",
+      );
+
+      expect(r.projection).toEqual({ field: "secret" });
+      expect(r.through).toBe("secret");
+      expect(r.whole).toEqual({ field: "secret" });
+      expect(r.wholeIsCell).toBe(true);
+    });
+  }
+});

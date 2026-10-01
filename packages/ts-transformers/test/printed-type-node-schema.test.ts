@@ -2281,6 +2281,71 @@ export default pattern<Record<string, never>>(() => {
         });
     });
 
+    it("writes a scoped value's print as its scope wrapper", async () => {
+      // A scope wrapper resolves to a type with no alias, so the print is
+      // written as the wrapper around its payload rather than as the payload
+      // intersected with the brand. The payload is printed whole, joining the
+      // `false` and `true` the brand was distributed over. Assignment narrows
+      // the declared type to the wrapper alone.
+      const output = await transformSource(
+        `import { computed, pattern, UI, type PerUser } from "commonfabric";
+export default pattern<{ owner: string; me: string }>(({ owner, me }) => {
+  const isOwner: PerUser<boolean> | null = computed(() => owner === me);
+  const label = computed(() => (isOwner ? "yes" : "no"));
+  return { [UI]: <div>{label}</div> };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const captures = callsNamed(root, "lift")
+        .map((lift) => lift.typeArguments![0]! as ts.TypeLiteralNode)
+        .flatMap((literal) => literal.members.filter(ts.isPropertySignature))
+        .find((member) => member.name.getText(root) === "isOwner")!;
+
+      expect(captures.type!.getText(root)).toBe(
+        "__cfHelpers.PerUser<boolean>",
+      );
+    });
+
+    it("writes a nullable scoped boolean's capture as the wrapper around the whole payload", async () => {
+      // `PerUser<boolean> | null` resolves to `null` beside the brand
+      // distributed over `false` and `true`. The shrunk capture rejoins the
+      // literals and keeps `null` inside the wrapper, where its scope sits at
+      // the top of the slot.
+      const output = await transformSource(
+        `import { computed, pattern, UI, Writable, type PerUser } from "commonfabric";
+export default pattern<Record<string, never>>(() => {
+  const ownerState = new Writable.perUser<boolean | null>(null);
+  const isOwner: PerUser<boolean> | null = computed(
+    (): PerUser<boolean> | null => ownerState.get(),
+  );
+  const label = computed(() => (isOwner !== false ? "yes" : "no"));
+  return { [UI]: <div>{label}</div> };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const capture = callsNamed(root, "lift")
+        .flatMap((lift) =>
+          (lift.typeArguments![0]! as ts.TypeLiteralNode).members
+        )
+        .find((member) =>
+          member.name?.getText(root) === "isOwner"
+        ) as ts.PropertySignature;
+      const schema = callSchemas(root, "lift").find((schema) =>
+        (schema.properties as Schema | undefined)?.isOwner
+      )!;
+
+      expect(capture.type!.getText(root)).toBe(
+        "__cfHelpers.PerUser<boolean | null>",
+      );
+      expect((schema.properties as Schema).isOwner)
+        .toEqual({
+          anyOf: [{ type: "boolean" }, { type: "null" }],
+          scope: "user",
+        });
+    });
+
     it("reads a scoped cell inside a printed value by its type", async () => {
       // The optional member prints as a union holding the scoped cell: the
       // union unfolds, and the scoped cell is kept whole rather than taken

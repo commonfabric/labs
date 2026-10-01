@@ -348,14 +348,15 @@ these holds:
 - the type is a **generic interface/class instantiation** without an alias name
   (`typeParameters` + `typeArguments` on the reference target).
 
-Apart from `getNamedTypeKey`, the generator gives no name to a type whose
-alias is, or leads through a chain of aliases to, a scope wrapper
-(`scopeOfAliasChain`, §10): `type Rec = PerUser<Inner>` formats inline, as
-`PerUser<Inner>` does, so the scope stays at the top level of the slot's own
-schema. A recursive one around a value still needs a definition; it is
-written under the cycle's synthetic name without its scope, and every
-reference to it carries the scope beside the `$ref` (`{ $ref:
-"#/$defs/AnonymousType_1", scope: "user" }`). One around a cell is a wrapper,
+Apart from `getNamedTypeKey`, the generator gives no name to a type that is a
+scope wrapper, by its alias chain or by its brand (`scopeOfScopeWrapper`,
+§10): `type Rec = PerUser<Inner>` formats inline, as `PerUser<Inner>` does, so
+the scope stays at the top level of the slot's own schema. A recursive one
+around a value still needs a definition; it is written under the cycle's
+synthetic name without its scope, and every reference to it carries the scope
+beside the `$ref` (`{ $ref: "#/$defs/AnonymousType_1", scope: "user" }`), the
+schema's root among them where the root is promoted to a reference to its
+definition. One around a cell is a wrapper,
 and a wrapper is never a cycle's entry: the cycle is found at the cell's
 value, as for `Cell<T>`, and each reference is the capped handle inline
 (`{ $ref: "#/$defs/AnonymousType_1", asCell: [{ kind: "cell", scope: "user"
@@ -596,7 +597,12 @@ pre-cleanup schemas.
 - Wrapper unions: a union whose non-null/undefined members are **all** wrappers
   formats member-wise, preserving `{ type: "undefined" }` / `{ type: "null" }`,
   skipping conditional/type-parameter members, deduping identical member
-  schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`).
+  schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`). A
+  labelled cell among them, which holds its CFC metadata carriers beside the
+  cell, carries their labels on its own branch, as a labelled value does:
+  `Confidential<Cell<A>, ["r1"]> | null` → `{ anyOf: [{ type: "null" },
+  { $ref: "#/$defs/A", asCell: ["cell"], ifc: { confidentiality: ["r1"] } }]
+  }`, each of several labelled cells with its own labels (cfc-authoring.test.ts).
   Mixed unions fall to `UnionFormatter`. Primitive alternatives merge only
   when both schemas contain exclusively `type` and `enum`; metadata-bearing
   alternatives, including Cell wrappers, remain separate even when their
@@ -812,7 +818,9 @@ Default paths of §7:
     is an alternative of its own, in the order written. Its members are
     otherwise read by their types: `boolean` stands for `true` and `false`,
     `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
-    §10's.
+    §10's, whichever way its node is read: beside only `null` or `undefined`
+    the union is itself the wrapper, and beside any other value its scope
+    lands in a branch and throws.
 - The checker can also collapse several written CFC alternatives into a
   single semantic member. Each remains an alternative of its own, including
   `Confidential<A, [PolicyOf<typeof readers>]> |
@@ -851,17 +859,35 @@ Default paths of §7:
 
 ## 10. Scope Wrappers
 
-`PerSpace` / `PerUser` / `PerSession` / `PerAny` (api: optional
-`SCOPE_BRAND`-typed intersections, `packages/api/index.ts`) lower to a
-`scope` key with values `"space" | "user" | "session" | "any"`
+`PerSpace` / `PerUser` / `PerSession` / `PerAny` (api: `Scoped<T, S>`, an
+optional `SCOPE_BRAND`-typed intersection for a `T` other than `null` or
+`undefined`, which it keeps outside the brand, `packages/api/index.ts`) lower
+to a `scope` key with values `"space" | "user" | "session" | "any"`
 (`SCOPE_WRAPPER_SCOPES`, `common-fabric-formatter.ts`). Detection is by
-node name or aliasSymbol name, and otherwise by following the aliasSymbol's
-declaration down a chain of aliases, each the whole body of the one before, to
-a scope wrapper (`scopeOfAliasChain`). The checker reports the outermost alias
-as a type's aliasSymbol, so `type Rec = PerUser<Inner>` reads as `Rec`, and
-only the chain finds the wrapper. The chain ends at a wrapper's name, so
-`Scoped<T, S>`, the type the four are declared with, is not read as one
-written directly. The payload of a wrapper found that way is
+node name or aliasSymbol name, by following a chain of aliases, each the whole
+body of the one before, to a scope wrapper (`scopeOfAliasChain`, and from a
+reference node its declaration's chain, a synthetic reference's name resolved
+in the module's scope), and otherwise by the brand the type carries
+(`getScopeBrand`, `src/typescript/scope-brand.ts`). `Scoped` is a conditional
+type, and the checker reports no aliasSymbol for the type it resolves to, so a
+type with no node or alias to name its wrapper is read by its brand, as is
+`Scoped<T, S>` written directly. Where the payload holds a type parameter the
+checker defers the conditional, and the type is read by its alias's arguments,
+the payload and the scope, whatever that alias names (`Scoped<T, "user">`
+reached through a generic interface's property, say). The payload of a wrapper
+read by its brand is its branded members with the brand taken off, each
+alternative a member intersected with the brand read as that member
+(`scopePayloadType`, `GenerationContext.scopeBrandRead`). A payload the
+checker cannot intersect again without the brand, as `A & B` in
+`PerUser<A & B>`, is the wrapper's own type, and is read in place rather than
+as a type met again inside itself: by `CommonFabricFormatter` where it claims
+the type for more than the brand, as for the labels of
+`PerUser<Confidential<T, […]>>`, whose CFC parts pass over the brand
+(`cfcCarriedParts`), and otherwise by the formatters after it
+(`formatStructure`), with the labels of any CFC metadata carrier it holds, as
+`Confidential<A & B, […]>` does, alone or as an alternative beside `null` or
+`undefined`. Such a payload that is a cell, as `Cell<A> & Cell<B>`, is read as
+the cell, with those labels. The payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):
@@ -880,9 +906,34 @@ non-empty `asCell`, the scope merges into the **first** entry, turning a
 string entry into the object form (`applyScopeToAsCellEntry`) —
 `PerUser<Cell<string>>` → `{ asCell: [{ kind: "cell", scope: "user" }], type:
 "string" }`; otherwise a bare sibling key — `PerUser<string>` →
-`{ type: "string", scope: "user" }`. A nested scope **without an intervening
+`{ type: "string", scope: "user" }`. A wrapper around a cell beside `null` or
+`undefined`, written outside it or inside, puts the cell in an `anyOf` branch
+and declares the scope twice: at the top, the slot's own scope, which the
+write path reads, and in the cell's `asCell` entry, the cap on following its
+handle, which a read applies however it reaches the handle
+(`ContextualFlowControl.getAsCellFollowScopeCap`).
+`PerSpace<Cell<T>> | null` and `PerSpace<Cell<T> | null>` →
+`{ anyOf: [{ type: "null" }, { …, asCell: [{ kind: "cell", scope: "space" }]
+}], scope: "space" }`; the scope-placement walk accepts that one declaration
+in a branch, a cell's cap naming the slot's own scope. Inside a cell, the
+value is a slot of its own, whose scope is declared beside the cell's entry, so
+a nullable scoped cell nested in another is checked against its own scope:
+`PerUser<Cell<PerSession<Cell<T>> | null>> | null` keeps both. Beside anything else a
+wrapper around a cell **throws** (`A scope wrapper around a cell cannot hold
+anything beside the cell`): beside a value, one scope cannot be the value's
+slot scope and the cell's cap both, and beside another cell, as in
+`PerSpace<Cell<T> | Cell<U>>`, a read's value projection resolves no handle
+out of the union, so no read can show the cap holding. An optional property keeps the
+cell alone (`handle?: PerSpace<Cell<T>>` → `{ …, asCell: [{ kind: "cell",
+scope: "space" }] }`). Tested end to end in the runtime:
+`packages/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
-scopes.`; tested, scope-wrappers.test.ts). With a cell boundary
+scopes.`; tested, scope-wrappers.test.ts), and so does a type carrying two
+scopes' brands on one value, as an inferred `PerUser<PerSession<T>>` resolves
+to. Around a cell, the outer wrapper's scope would replace the cap the inner
+one puts on the handle, so `PerSession<PerUser<Cell<T>>>` throws too, written
+out or through an alias. Two brands of one scope fold into one, so a wrapper
+nested in one of its own scope is that wrapper alone. With a cell boundary
 both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).
@@ -921,17 +972,23 @@ declared value. Tested: scope-wrappers.test.ts, and
 end-to-end in ts-transformers `aliased-binding-declared-type.test.ts` and
 `scoped-interface-schema.test.ts` (local, exported, and imported interfaces).
 
-A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
-member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
+A scope wrapper **as a union member beside another value throws** (`A scope
+wrapper cannot be a member of a union.`; tested, scope-wrappers.test.ts), as
+in `PerUser<string> | number`. The runtime reads a
 slot's scope from that slot's own schema — its top level, or the definition a
 `$ref` there names (`ContextualFlowControl.getSchemaScopeCap`) — and from no
 compound branch, so a declaration that lands in an
 `anyOf` branch is invisible to the write path: no narrowing redirect is
 written, the value lands on the shared space row, and every principal reads
 the same instance. Write the union inside the wrapper
-(`PerUser<string | undefined>` → `{ type: ["string", "undefined"], scope:
-"user" }`) or make the property optional (`draft?: PerUser<string>` →
-`{ type: "string", scope: "user" }`) — both keep the scope at the top level.
+(`PerUser<string | number>`) to keep the scope at the top level. Beside
+`null` or `undefined` alone, a wrapper is one type with the wrapper around
+them, since `Scoped` keeps them outside the brand, and scopes the whole slot as
+that does: `PerUser<string> | undefined` and `PerUser<string | undefined>` →
+`{ type: ["string", "undefined"], scope: "user" }`, and `PerUser<boolean> |
+null` → `{ anyOf: [{ type: "boolean" }, { type: "null" }], scope: "user" }`.
+An optional property keeps the scope at the top level too
+(`draft?: PerUser<string>` → `{ type: "string", scope: "user" }`).
 
 Two detection points enforce this, because a wrapper around a cell loses its
 scope before the schema is built. `formatWrapperUnion`
@@ -1509,7 +1566,8 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` without object target/default | `DeepDefault must be unioned with an object type …` | `union-formatter.ts` |
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
-| Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| Scope wrapper around a cell beside anything but `null` or `undefined` | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

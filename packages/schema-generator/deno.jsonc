@@ -11,6 +11,7 @@
     "./property-optionality": "./src/typescript/property-optionality.ts",
     "./property-name": "./src/typescript/property-name.ts",
     "./scope-brand": "./src/typescript/scope-brand.ts",
+    "./cfc-carrier": "./src/typescript/cfc-carrier.ts",
     "./numeric-expression": "./src/typescript/numeric-expression.ts",
     "./type-node": "./src/typescript/type-node.ts",
     "./writer-binding": "./src/typescript/writer-binding.ts"

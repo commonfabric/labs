@@ -32,7 +32,7 @@ import {
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
 import { unwrapTypeParentheses } from "../typescript/type-node.ts";
-import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
+import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
 import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 

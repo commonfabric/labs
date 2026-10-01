@@ -1,14 +1,15 @@
 /**
  * Recognizes the brand a scope wrapper leaves on the type it resolves to.
- * `PerUser<T>` is `T & { readonly [SCOPE_BRAND]?: "user" }` (`Scoped` in
- * `packages/api/index.ts`), so a resolved type carries its scope in that
+ * `PerUser<T>` is `T & { readonly [SCOPE_BRAND]?: "user" }` for a `T` that is
+ * not `null` or `undefined`, and `T` itself for one that is (`Scoped` in
+ * `packages/api/index.ts`). So a resolved type carries its scope in that
  * member however the wrapper was reached: written in place, or through any
- * chain of aliases, whose outermost alias is all the checker reports.
+ * chain of aliases. `Scoped` is a conditional type, and the checker reports no
+ * alias for the type it resolves to, so the brand is what names the wrapper.
  *
- * The transformer reads a wrapper this way where it holds only a resolved type.
- * Schema generation recognizes a wrapper by name instead
- * (`ts_to_json_schema_mapping.md` §10), so `Scoped<T, S>` written directly is
- * read as a scope wrapper by neither.
+ * The transformer reads a wrapper this way where it holds only a resolved type,
+ * and schema generation where no node or alias names the wrapper
+ * (`ts_to_json_schema_mapping.md` §10).
  */
 
 import type { SchemaScope } from "@commonfabric/api";
@@ -44,7 +45,9 @@ export interface ScopeBrand {
   /**
    * The payload's alternatives, one per member of a union the brand was
    * distributed over, and one for any other payload. Each lists the members
-   * the brand is intersected with, which intersect to that alternative.
+   * the brand is intersected with, which intersect to that alternative, except
+   * a `null` or `undefined` alternative, which `Scoped` keeps outside the brand
+   * and which lists itself alone.
    */
   readonly payload: readonly (readonly ts.Type[])[];
 }
@@ -52,21 +55,29 @@ export interface ScopeBrand {
 /**
  * The scope wrapper `type` resolves to, or `undefined` for a type that carries
  * no `commonfabric` `SCOPE_BRAND`. A wrapper around a union resolves to a union
- * of branded members, which is read as one wrapper when every member carries
- * the same scope.
+ * of branded members, beside any `null` or `undefined` it holds, which carry no
+ * brand. It is read as one wrapper when every other member carries the same
+ * scope. A wrapper whose payload holds a type parameter is `Scoped<T, S>` the
+ * checker defers, which is read by its arguments.
  */
 export function getScopeBrand(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): ScopeBrand | undefined {
   if (!type.isUnion()) {
-    const brand = brandOfIntersection(type, checker);
+    const brand = brandOfIntersection(type, checker) ??
+      brandOfDeferredScoped(type);
     return brand && { scope: brand.scope, payload: [brand.members] };
   }
   const payload: (readonly ts.Type[])[] = [];
   let scope: SchemaScope | undefined;
   for (const member of type.types) {
-    const brand = brandOfIntersection(member, checker);
+    if ((member.flags & NULLISH) !== 0) {
+      payload.push([member]);
+      continue;
+    }
+    const brand = brandOfIntersection(member, checker) ??
+      brandOfDeferredScoped(member);
     if (!brand || (scope !== undefined && brand.scope !== scope)) {
       return undefined;
     }
@@ -75,6 +86,64 @@ export function getScopeBrand(
   }
   return scope === undefined ? undefined : { scope, payload };
 }
+
+/**
+ * The type `type`, which the scope wrapper `brand` resolves to, holds: each
+ * alternative of its payload, the one member it has where it has one, and
+ * otherwise the branded member itself, whose other members the checker cannot
+ * intersect again without the brand. A reader takes a brand still held there
+ * as no part of the value (`GenerationContext.scopeBrandRead`).
+ */
+export function scopePayloadType(
+  type: ts.Type,
+  brand: ScopeBrand,
+  checker: ts.TypeChecker,
+): ts.Type {
+  const branded = type.isUnion() ? type.types : [type];
+  const alternatives = brand.payload.map((members, index) =>
+    members.length === 1 ? members[0]! : branded[index]!
+  );
+  if (alternatives.length === 1) return alternatives[0]!;
+  const getUnionType = (checker as ts.TypeChecker & {
+    getUnionType?: (types: readonly ts.Type[]) => ts.Type;
+  }).getUnionType;
+  return getUnionType?.(alternatives) ?? type;
+}
+
+/**
+ * Whether `type` carries the brands of two different scopes on one value, as
+ * the checker resolves `PerUser<PerSession<T>>` to: a scope wrapper nested in
+ * another with no cell between them, which `getScopeBrand()` reads as no
+ * wrapper at all. The checker folds two brands of one scope into one, so a
+ * wrapper nested in one of its own scope is the wrapper alone.
+ */
+export function hasNestedScopeBrands(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  return (type.isUnion() ? type.types : [type]).some((member) =>
+    member.isIntersection() &&
+    new Set(
+        member.types.map((part) => scopeOfBrandMember(part, checker)).filter(
+          (scope) => scope !== undefined,
+        ),
+      ).size > 1
+  );
+}
+
+/**
+ * Whether `member`, a member of an intersection, is a scope wrapper's brand
+ * `{ readonly [SCOPE_BRAND]?: S }`, which holds no part of the value.
+ */
+export function isScopeBrandMember(
+  member: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  return scopeOfBrandMember(member, checker) !== undefined;
+}
+
+/** The flags of a member `Scoped` keeps outside the brand. */
+const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
 
 /**
  * Helper for `getScopeBrand()`, which returns the scope an intersection's
@@ -99,6 +168,29 @@ function brandOfIntersection(
     }
   }
   return scope === undefined ? undefined : { scope, members: payload };
+}
+
+/**
+ * Helper for `getScopeBrand()`, which returns the scope and payload of `type`
+ * where it is `Scoped<T, S>` the checker defers, as it does while `T` holds a
+ * type parameter, or `undefined` for any other type. Such a type is the
+ * conditional `Scoped` declares, with `Scoped` for its alias and the payload
+ * and the scope for its arguments.
+ */
+function brandOfDeferredScoped(
+  type: ts.Type,
+): { scope: SchemaScope; members: readonly ts.Type[] } | undefined {
+  if ((type.flags & ts.TypeFlags.Conditional) === 0) return undefined;
+  const alias = type.aliasSymbol;
+  const [payload, scope] = type.aliasTypeArguments ?? [];
+  if (
+    alias?.getName() !== "Scoped" || !isCommonFabricSymbol(alias) ||
+    !payload || !scope?.isStringLiteral() ||
+    !Object.hasOwn(SCOPE_WRAPPER_FOR_SCOPE, scope.value)
+  ) {
+    return undefined;
+  }
+  return { scope: scope.value as SchemaScope, members: [payload] };
 }
 
 /**

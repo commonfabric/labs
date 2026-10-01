@@ -661,6 +661,41 @@ describe("Schema: CFC authoring aliases", () => {
     expect(labeled.ifc?.confidentiality).toEqual(["prompt-influence"]);
   });
 
+  it("keeps each labelled cell's labels on its own branch beside `null` or `undefined`", async () => {
+    // A labelled cell holds its metadata carrier beside the cell, which the
+    // reading of the cell passes over.
+    const code = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      interface A { a: string }
+      interface B { b: number }
+
+      interface SchemaRoot {
+        nullable: Confidential<Writable<A>, readonly ["r1"]> | null;
+        optional: Confidential<Writable<A>, readonly ["r1"]> | undefined;
+        both: Confidential<Writable<A>, readonly ["r1"]> | Confidential<Writable<B>, readonly ["r2"]> | null;
+      }
+    `;
+
+    const { type, checker } = await getTypeFromCode(code, "SchemaRoot");
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+    const cellOf = (name: string, reader: string) => ({
+      $ref: `#/$defs/${name}`,
+      asCell: ["cell"],
+      ifc: { confidentiality: [reader] },
+    });
+
+    expect(schema.properties).toEqual({
+      nullable: { anyOf: [{ type: "null" }, cellOf("A", "r1")] },
+      optional: { anyOf: [{ type: "undefined" }, cellOf("A", "r1")] },
+      both: {
+        anyOf: [{ type: "null" }, cellOf("A", "r1"), cellOf("B", "r2")],
+      },
+    });
+  });
+
   it("lowers the remaining canonical metadata aliases and merges nested Cfc metadata", async () => {
     // The collection/opaque aliases below are NOT canonical (the helpers were
     // removed from @commonfabric/api/cfc because the runner rejects those ifc
@@ -1998,12 +2033,13 @@ describe("Schema: CFC authoring aliases", () => {
     });
 
     it("leaves a scope wrapper that stands for several members to the rules for a scope wrapper in a union", async () => {
-      // `PerUser<boolean>` distributes over `true` and `false`. Where a scope
-      // lands in a union is `scope-placement.ts`'s to decide, so the wrapper
-      // is not read whole as one alternative, which would put its scope
-      // inside an `anyOf` branch.
+      // `PerUser<boolean>` distributes over `true` and `false`. It is not read
+      // whole as one alternative, which would put its scope inside an `anyOf`
+      // branch: beside `null` alone it is one type with
+      // `PerUser<boolean | null>`, whose scope is the whole slot's.
       await expect(fieldSchema("PerUser<boolean> | null")).resolves.toEqual({
-        anyOf: [{ type: "null" }, { type: "boolean" }],
+        anyOf: [{ type: "boolean" }, { type: "null" }],
+        scope: "user",
       });
     });
 
