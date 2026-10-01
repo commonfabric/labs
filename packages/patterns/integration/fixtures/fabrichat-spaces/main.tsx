@@ -2,32 +2,27 @@
  * A FabriChat manager with a profile of its own, for
  * `fabrichat-spaces-multi-runtime.test.ts`. The real manager resolves its
  * user's profile with `#profile`, which no session of a multi-runtime harness
- * has, and starts no chat without one; this hands its core a stand-in.
+ * has, and starts no chat without one; this hands its core a stand-in. Its
+ * records are its own inputs, defaulted, as the real manager's are.
  */
 
 import { pattern, Writable } from "commonfabric";
 import {
   FabriChatManagerCore,
+  type FabriChatManagerInput,
   type FabriChatManagerOutput,
 } from "../../../fabrichat/manager.tsx";
-import {
-  type ChatIndexEntry,
-  type ChatManagerNotice,
-  type ChatProfile,
-  type ChatRequestOutcome,
-} from "../../../fabrichat/schemas.tsx";
+import { type ChatProfile } from "../../../fabrichat/schemas.tsx";
 
-type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
-
-export default pattern<Record<PropertyKey, never>, FabriChatManagerOutput>(
-  () => {
+export default pattern<FabriChatManagerInput, FabriChatManagerOutput>(
+  ({ rooms, direct, requests, outgoingNotices }) => {
     const profile = Writable.of<ChatProfile>({ name: "Starter" });
     return FabriChatManagerCore({
       myProfile: profile,
-      rooms: Writable.of<ChatIndexEntry[]>([]),
-      direct: Writable.of<Record<string, ChatIndexEntry>>({}),
-      requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
-      outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
-    } as ManagerArg);
+      rooms,
+      direct,
+      requests,
+      outgoingNotices,
+    });
   },
 );
