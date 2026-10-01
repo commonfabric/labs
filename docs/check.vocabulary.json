@@ -45,6 +45,7 @@
     "navigateTo",
     "noticeSpaceAccess",
     "pattern",
+    "principalOf",
     "revokeSpaceAccess",
     "schema",
     "spaceAccess",

@@ -12,10 +12,9 @@ import { ownedCell } from "./runtime-owned-store.ts";
 import { resolvedCellScope } from "./scope-policy.ts";
 
 // Inv-12 Stage 2 (spec §4.6.4.1; docs/specs/cfc-label-metadata-confidentiality
-// .md §3): `inspectConfLabel` — the ONLY pattern-facing surface for
+// .md §3): `inspectConfLabel` — one of the pattern-facing surfaces for
 // label-metadata introspection. It is a builtin node (not a Cell method, not
-// an IPC seam) deliberately: builtins are the one channel pattern code has
-// into runtime capability, the node runs inside the scheduler's transaction —
+// an IPC seam) deliberately: the node runs inside the scheduler's transaction —
 // so the observations it consumes are journaled/recorded in the SAME
 // transaction whose writes the flow derivation labels — and the surface stays
 // additive (nothing existing gains a new power; the display path
