@@ -72,7 +72,9 @@ const readHttpUrl = (value: string): string | undefined => {
   // A host must follow the scheme as written: URL parsing reads
   // `https:///path` as host `path`, where Loom and the Weaver see none.
   if (!/^https?:\/\/[^/?#]/i.test(value)) return undefined;
-  const { protocol } = new URL(value);
+  const { protocol, port } = new URL(value);
+  // Port 0 parses but names no service; Loom and the Weaver refuse it too.
+  if (port === "0") return undefined;
   return protocol === "http:" || protocol === "https:" ? value : undefined;
 };
 

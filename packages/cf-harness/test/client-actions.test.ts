@@ -68,6 +68,7 @@ Deno.test("a url with whitespace, a bad port, or no host is not a client action"
       "https://example.com/a\tb",
       "https://example.com:bad",
       "https://example.com:99999",
+      "https://example.com:0",
       "https://",
       "https:///path",
     ]
