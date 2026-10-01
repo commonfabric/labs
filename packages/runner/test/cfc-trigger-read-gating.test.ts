@@ -498,4 +498,81 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
     expect(await run(false)).not.toContain("requiredIntegrity failed");
     expect(await run(true)).toContain("requiredIntegrity failed");
   });
+
+  it("gates a trigger read of a payload field named `value` at that field", async () => {
+    // The source's `secret` carries [medical] and its field `value` carries
+    // nothing. Gated at the payload root instead, the read would consume
+    // `secret` and miss the target's ceiling. The trigger read of `secret` is
+    // the control: it shows the ceiling refuses what it should.
+    const run = async (field: string) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        cfcTriggerReadGating: true,
+      });
+      try {
+        const seed = runtime.edit();
+        const srcCell = runtime.getCell(
+          signer.did(),
+          "h5-value-field-src",
+          undefined,
+          seed,
+        );
+        const srcId = srcCell.getAsNormalizedFullLink().id;
+        writeSeedEnvelopeDoc(seed, signer.did());
+        seedStoredEnvelope(seed, {
+          space: signer.did(),
+          scope: "space",
+          id: srcId,
+          path: [],
+        }, {
+          value: { value: "plain", secret: "rosebud" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["secret"],
+                label: { confidentiality: ["medical"] },
+              }],
+            },
+          },
+        });
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        const sink = runtime.getCell(
+          signer.did(),
+          "h5-value-field-sink",
+          {
+            type: "object",
+            properties: {
+              out: {
+                type: "string",
+                ifc: { maxConfidentiality: ["internal"] },
+              },
+            },
+            required: ["out"],
+          } as const satisfies JSONSchema,
+          tx,
+        );
+        sink.set({ out: "derived" });
+        tx.addCfcTriggerReads([{
+          space: signer.did(),
+          id: srcId as `${string}:${string}`,
+          type: "application/json",
+          path: ["value", field],
+        }]);
+        tx.prepareCfc();
+        const result = await tx.commit();
+        return String((result.error as Error | undefined)?.message ?? "");
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+    expect(await run("value")).not.toContain("maxConfidentiality failed");
+    expect(await run("secret")).toContain("maxConfidentiality failed");
+  });
 });

@@ -6484,8 +6484,7 @@ const verifyInputRequirements = (
   // transaction writes the document. The activity list stays live so newly
   // recorded reads remain visible to later targets.
   let clockLessReads = 0;
-  // Read activities carry document-rooted paths; trigger reads arrive with
-  // logical ones. `form` says which, for the gate path computed below.
+  // Every read here carries a document-rooted path, as a read activity does.
   const currentReads = [
     ...[
       ...(tx.getPotentiallyExternalReadActivities?.() ??
@@ -6496,7 +6495,6 @@ const verifyInputRequirements = (
       }
       return {
         ...read,
-        form: "document" as const,
         // A read without a clock position (journal-less backend) is treated
         // as preceding every write: it joins every prefix — conservative.
         journalIndex: read.journalIndex ?? -Infinity,
@@ -6509,10 +6507,11 @@ const verifyInputRequirements = (
     // scheduled the run, so they logically precede every write in the attempt
     // and sit at -Infinity, joining EVERY protected write's prefix (doc §4);
     // anything else would let the scheduling channel escape the per-write
-    // gate.
+    // gate. A trigger read names a payload path, so its document path is that
+    // path under `value`.
     ...triggerReadSources(tx).map((read) => ({
       ...read,
-      form: "logical" as const,
+      path: toDocumentPath(["value", ...read.path]),
       journalIndex: -Infinity,
     })),
   ];
@@ -6531,13 +6530,7 @@ const verifyInputRequirements = (
   const sourceMetadata = currentReads.map((read) => {
     // Gate paths are captured before resolving an envelope: backend reads may
     // mutate a caller-owned path array. Ungated targets only need the address.
-    if (needsReadLabels) {
-      gatePaths.push(
-        read.form === "document"
-          ? canonicalizeDocumentPath(read.path)
-          : canonicalizeLogicalPath(read.path),
-      );
-    }
+    if (needsReadLabels) gatePaths.push(canonicalizeDocumentPath(read.path));
     return metadataResolver.read(
       read.space,
       read.id,
@@ -6555,7 +6548,7 @@ const verifyInputRequirements = (
   // declaring `requiredIntegrity` or `maxConfidentiality` reads the result,
   // so the set is assembled on first ask and kept for the rest of the call.
   const buildGatedReads = () => {
-    const gatedReads = currentReads.map(({ form: _form, ...read }, index) => ({
+    const gatedReads = currentReads.map((read, index) => ({
       ...read,
       path: gatePaths[index],
       label: effectiveReadLabel(
