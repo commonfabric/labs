@@ -16,7 +16,7 @@ import type {
 import { attachUiContract, getUiContractHint } from "./ui-contract.ts";
 import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
 import {
-  getWrapperSchemaFromCallable,
+  classifyCallableProperty,
   ObjectFormatter,
 } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
@@ -55,7 +55,6 @@ import {
   instantiatedElementType,
   instantiatedPropertyType,
   instantiatedValueType,
-  isFunctionLike,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
   soleNonNullishMember,
@@ -2868,25 +2867,6 @@ export class SchemaGenerator {
             continue;
           }
 
-          // A print reads as the property would in the object type it was
-          // printed from, where a callable is left out unless it makes a
-          // stream, cell or database.
-          const printedType = context.printedFrom?.(member.type);
-          if (printedType && isFunctionLike(printedType)) {
-            const wrapperSchema = getWrapperSchemaFromCallable(
-              printedType,
-              checker,
-            );
-            if (wrapperSchema) {
-              const uiContract = getUiContractHint(context, member.type);
-              properties[propName] = uiContract
-                ? attachUiContract(wrapperSchema, uiContract)
-                : wrapperSchema;
-              if (!member.questionToken) required.push(propName);
-            }
-            continue;
-          }
-
           // Get the property type - check typeRegistry first, then resolve from node
           let propType: ts.Type;
           if (typeRegistry && typeRegistry.has(member.type)) {
@@ -2895,13 +2875,35 @@ export class SchemaGenerator {
             propType = checker.getTypeFromTypeNode(member.type);
           }
 
+          const instantiatedPropType = instantiatedPropertyType(
+            context.instantiatedAs,
+            propName,
+            checker,
+          );
+          const callable = classifyCallableProperty(
+            instantiatedPropType ?? context.printedFrom?.(member.type) ??
+              propType,
+            checker,
+            context.boundTypeParameters,
+          );
+          if (callable) {
+            if (callable.kind === "wrapper") {
+              const uiContract = getUiContractHint(context, member.type);
+              properties[propName] = uiContract
+                ? attachUiContract(callable.schema, uiContract)
+                : callable.schema;
+              if (!member.questionToken) required.push(propName);
+            }
+            continue;
+          }
+
           // Use formatChildType - it will auto-detect whether to use type-based
           // or node-based analysis depending on whether propType is reliable
           const propSchema = this.formatChildType(
             propType,
             context,
             member.type,
-            instantiatedPropertyType(context.instantiatedAs, propName, checker),
+            instantiatedPropType,
           );
 
           properties[propName] = propSchema;

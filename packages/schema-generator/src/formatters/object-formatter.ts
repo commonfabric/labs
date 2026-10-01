@@ -12,7 +12,12 @@ import {
   getDeclDocs,
   symbolHasDeprecatedTag,
 } from "../doc-utils.ts";
-import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import type {
+  BoundTypeArgument,
+  BoundTypeParameters,
+  GenerationContext,
+  TypeFormatter,
+} from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import {
   cloneSchemaDefinition,
@@ -33,6 +38,7 @@ import {
 } from "../typescript/property-optionality.ts";
 import {
   holdsTypeParameter,
+  typeParameterOfType,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
@@ -46,36 +52,50 @@ const logger = getLogger("schema-generator.object", {
 });
 
 /**
- * Check if a callable type (like ModuleFactory or HandlerFactory) returns a wrapper type.
- * ModuleFactory<T, R> when called returns Reactive<R>.
- * If R is Stream<T>, we should generate { asCell: ["stream"] } instead of skipping.
- * If R is Cell<T>, we should generate { asCell: ["cell"] } instead of skipping.
- *
- * Returns the schema definition for the wrapper if detected, undefined otherwise.
+ * A callable property's emission: its wrapper schema, or omission for a
+ * callable that returns no supported wrapper.
  */
-export function getWrapperSchemaFromCallable(
+type CallableProperty =
+  | { readonly kind: "wrapper"; readonly schema: MutableJSONSchemaObj }
+  | { readonly kind: "omit" };
+
+/**
+ * Returns how a callable property is emitted, or `undefined` for a data
+ * property. A declared type parameter reads its bound argument when no
+ * instantiated property type is available. Calls returning `Stream`, `Cell`
+ * or `SqliteDb` carry their wrapper marker; other callables are omitted.
+ */
+export function classifyCallableProperty(
   type: ts.Type,
   checker: ts.TypeChecker,
-): MutableJSONSchemaObj | undefined {
+  bound?: BoundTypeParameters,
+): CallableProperty | undefined {
+  const seen = new Set<BoundTypeArgument>();
+  while (bound) {
+    const parameter = typeParameterOfType(type);
+    const argument = parameter && bound.arguments.get(parameter);
+    if (!argument || seen.has(argument)) break;
+    seen.add(argument);
+    type = argument.type;
+    bound = argument.bound;
+  }
+  if (!isFunctionLike(type)) return undefined;
   const callSignatures = type.getCallSignatures();
-  if (callSignatures.length === 0) return undefined;
+  if (callSignatures.length === 0) return { kind: "omit" };
 
-  // Get the return type of the first call signature
   const callReturnType = callSignatures[0]!.getReturnType();
-
-  // Check if the return type is a wrapper (Stream<T>, Cell<T>, or Reactive<...>)
   const wrapperInfo = getCellWrapperInfo(callReturnType, checker);
   if (wrapperInfo?.kind === "Stream") {
-    return { asCell: ["stream"] };
+    return { kind: "wrapper", schema: { asCell: ["stream"] } };
   }
   if (wrapperInfo?.kind === "Cell") {
-    return { asCell: ["cell"] };
+    return { kind: "wrapper", schema: { asCell: ["cell"] } };
   }
   if (wrapperInfo?.kind === "SqliteDb") {
-    return { asCell: ["sqlite"] };
+    return { kind: "wrapper", schema: { asCell: ["sqlite"] } };
   }
 
-  return undefined;
+  return { kind: "omit" };
 }
 
 /**
@@ -319,16 +339,14 @@ export class ObjectFormatter implements TypeFormatter {
         ? checker.getTypeFromTypeNode(propTypeNode)
         : safeGetPropertyType(prop, type, checker, propTypeNode);
 
-      const callablePropType = instantiatedPropType ?? resolvedPropType;
-      if (isFunctionLike(callablePropType)) {
-        // Special case: ModuleFactory/HandlerFactory types that return Stream or Cell
-        // should generate { asCell: ["stream"] } or { asCell: ["cell"] } instead of being skipped
-        const wrapperSchema = getWrapperSchemaFromCallable(
-          callablePropType,
-          checker,
-        );
-        if (wrapperSchema) {
-          // This is a factory that returns a wrapper type (Stream or Cell)
+      const callable = classifyCallableProperty(
+        instantiatedPropType ?? resolvedPropType,
+        checker,
+        context.boundTypeParameters,
+      );
+      if (callable) {
+        if (callable.kind === "wrapper") {
+          const wrapperSchema = callable.schema;
           if (
             !isOptionalSymbol(prop) &&
             !isDefaultNodeWithUndefined(propTypeNode, checker)

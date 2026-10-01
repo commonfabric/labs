@@ -42,6 +42,112 @@ describe("generic writer policy", () => {
   for (const position of ["input", "output"] as const) {
     for (
       const [name, declaration] of [
+        [
+          "a nested literal",
+          "interface Box<T> { inner: { value: T; n: number } }",
+        ],
+        [
+          "a nested union",
+          "interface Box<T> { inner: { value: T; n: number } | { other: string } }",
+        ],
+        ["an intersection", "type Box<T> = { value: T } & { n: number };"],
+        [
+          "an array element",
+          "interface Box<T> { list: Array<{ value: T; n: number }> }",
+        ],
+        [
+          "an optional nested member",
+          "interface Box<T> { inner?: { value?: T; n: number } }",
+        ],
+      ] as const
+    ) {
+      it(`keeps callable member schemas through ${name} in the ${position} schema`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const output = await transformSource(
+          `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+const plainFn = () => 1;
+const subPattern = pattern(() => ({}));
+${declaration}
+interface Guarded<H> { inner: { action: H; value: WriteAuthorizedBy<string, H> } }
+type Payload = {
+  handler: Box<typeof f>;
+  plain: Box<typeof plainFn>;
+  subPattern: Box<typeof subPattern>;
+  guarded: Guarded<typeof f>;
+};
+export default ${
+            position === "input"
+              ? "pattern<Payload>(() => ({}))"
+              : "pattern<{}, Payload>(() => ({} as Payload))"
+          };`,
+          {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          },
+        );
+        expect(diagnostics.filter((item) => item.severity === "error")).toEqual(
+          [],
+        );
+        const schemas = callSchemas(parseModule(output), "pattern");
+        expect(schemas).toHaveLength(2);
+        const schema = schemas[position === "input" ? 0 : 1] as JSONSchemaObj;
+        const root = valueSchema(schema, schema);
+        for (const key of ["handler", "plain", "subPattern"]) {
+          let leaf = valueSchema(root.properties?.[key], schema);
+          if (name === "an array element") {
+            leaf = valueSchema(
+              valueSchema(leaf.properties?.list, schema).items,
+              schema,
+            );
+          } else if (name === "a nested union") {
+            const union = leaf.properties?.inner as JSONSchemaObj;
+            expect(union.anyOf).toHaveLength(2);
+            const arms = union.anyOf!.map((arm) => valueSchema(arm, schema));
+            expect(arms.filter((arm) => arm.properties?.other)).toEqual([
+              {
+                type: "object",
+                properties: { other: { type: "string" } },
+                required: ["other"],
+              },
+            ]);
+            leaf = arms.find((arm) => arm.properties?.n)!;
+            expect(leaf).toBeDefined();
+          } else if (name !== "an intersection") {
+            if (name === "an optional nested member") {
+              expect(leaf.required ?? []).not.toContain("inner");
+            }
+            leaf = valueSchema(leaf.properties?.inner, schema);
+          }
+          expect(leaf.properties).toEqual(
+            key === "handler"
+              ? { value: { asCell: ["stream"] }, n: { type: "number" } }
+              : { n: { type: "number" } },
+          );
+          const required =
+            key === "handler" && name !== "an optional nested member"
+              ? ["value", "n"]
+              : ["n"];
+          expect(leaf.required).toHaveLength(required.length);
+          expect(leaf.required).toEqual(expect.arrayContaining(required));
+        }
+        const guarded = valueSchema(root.properties?.guarded, schema);
+        const inner = valueSchema(guarded.properties?.inner, schema);
+        expect(inner.properties?.action).toEqual({ asCell: ["stream"] });
+        expect(valueSchema(inner.properties?.value, schema)).toMatchObject({
+          type: "string",
+          ifc: { writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["f"] } } },
+        });
+        expect(inner.required).toHaveLength(2);
+        expect(inner.required).toEqual(
+          expect.arrayContaining(["action", "value"]),
+        );
+      });
+    }
+
+    for (
+      const [name, declaration] of [
         ["an interface", "interface Box<T> { value: T; n: number }"],
         ["an object alias", "type Box<T> = { value: T; n: number };"],
       ] as const

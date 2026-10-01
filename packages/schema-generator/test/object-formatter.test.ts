@@ -99,6 +99,45 @@ interface SchemaRoot {
     ]);
   });
 
+  it("keeps all factory wrapper kinds through nested generic members", async () => {
+    const schema = await schemaFor(`
+declare const h: () => Stream<void>;
+declare const cellFactory: () => Cell<string>;
+declare const sqliteFactory: () => SqliteDb;
+declare const plainFn: () => number;
+declare const subPattern: () => { value: string };
+interface Box<T> { inner: { value: T; n: number } }
+interface SchemaRoot {
+  handler: Box<typeof h>;
+  cell: Box<typeof cellFactory>;
+  sqlite: Box<typeof sqliteFactory>;
+  plain: Box<typeof plainFn>;
+  subPattern: Box<typeof subPattern>;
+}
+`);
+    for (
+      const [name, kind] of [["handler", "stream"], ["cell", "cell"], [
+        "sqlite",
+        "sqlite",
+      ]] as const
+    ) {
+      const box = asObjectSchema(schema.properties![name]!);
+      const inner = asObjectSchema(box.properties!.inner!);
+      expect(inner.properties).toEqual({
+        value: { asCell: [kind] },
+        n: { type: "number" },
+      });
+      expect(inner.required).toHaveLength(2);
+      expect(inner.required).toEqual(expect.arrayContaining(["value", "n"]));
+    }
+    for (const name of ["plain", "subPattern"]) {
+      const box = asObjectSchema(schema.properties![name]!);
+      const inner = asObjectSchema(box.properties!.inner!);
+      expect(inner.properties).toEqual({ n: { type: "number" } });
+      expect(inner.required).toEqual(["n"]);
+    }
+  });
+
   it("emits an open object schema for the bare `object` type", async () => {
     // The `object` type says a value is an object and nothing about its
     // properties, so the formatter claims it by name and emits a schema that
