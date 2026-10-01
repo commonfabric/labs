@@ -7,6 +7,7 @@ import {
   hashStringOf,
   isDeepFrozen,
   isFabricSpecialObject,
+  isKeyableObjectNotArray,
   isKeyableObjectOrArray,
   isWalkableObjectNotArray,
   toIndentedDebugString,
@@ -2029,7 +2030,13 @@ export function mergeAnyOfMatches<T>(
     // special object among them sends the whole set to the first-match return
     // below: it has no properties for `Object.assign` to copy, so merging one
     // yields `{}` and the value is lost.
-    if (matches.every((v) => isWalkableObjectNotArray(v))) {
+    //
+    // That includes a `FabricInstance`, which a read hands back as a leaf, as
+    // it does a `FabricPrimitive`, and only when it holds nothing traversal
+    // would follow. The first-match return carries it whole where a merge
+    // would lose it, which is why this asks the question that answers `false`
+    // for one rather than the one that refuses it.
+    if (matches.every((v) => isKeyableObjectNotArray(v))) {
       const unified: Record<string, T> = {};
       for (const match of matches) {
         for (const [key, value] of Object.entries(match as object)) {

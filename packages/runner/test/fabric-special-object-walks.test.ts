@@ -137,7 +137,8 @@ const SPECIAL_OBJECTS: readonly SpecialObjectKind[] = [
 /**
  * The walks below carry a leaf through and refuse a container, so every case
  * that asserts carrying runs over the primitives. The instances get one suite
- * of their own, at the bottom, asserting the refusal instead.
+ * of their own, at the bottom, asserting the refusal instead. The exception is
+ * `mergeAnyOfMatches()`, which carries both kinds without reading either.
  */
 const signer = await Identity.fromPassphrase("fabric walks operator");
 const space = signer.did();
@@ -202,8 +203,12 @@ describe("fabric special objects through the runner's walks", () => {
   });
 
   describe("mergeAnyOfMatches()", () => {
+    // Every kind, instances included: a special object among the matches sends
+    // them to the first-match return, which hands the value back without
+    // reading it. Whether an instance may be a match at all was decided by the
+    // traversal that produced it, which refuses one it cannot carry.
     forEachSpecialObject(
-      FABRIC_PRIMITIVES,
+      SPECIAL_OBJECTS,
       (name) => `returns a \`${name}\` matched by two branches whole`,
       (_kind, special) => {
         expect(mergeAnyOfMatches([special, special])).toBe(special);
@@ -363,13 +368,6 @@ describe("fabric special objects through the runner's walks", () => {
     // instance rather than a view over one (the identity case below).
 
     for (const kind of FABRIC_INSTANCES) {
-      it(`is refused by \`mergeAnyOfMatches()\` for a \`${kind.name}\``, () => {
-        const special = kind.make();
-        expect(() => mergeAnyOfMatches([special, special])).toThrow(
-          "`FabricInstance`) in a structural walk",
-        );
-      });
-
       it(`is refused by \`setValueAtPath()\` for a \`${kind.name}\``, () => {
         const obj: Record<string, unknown> = { a: kind.make() };
         expect(() => setValueAtPath(obj, ["a", "b"], 1)).toThrow(

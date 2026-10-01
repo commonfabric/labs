@@ -597,6 +597,42 @@ describe("schema-view", () => {
         for (const reader of readers) await reader.tx.commit();
       }
     });
+
+    for (const combinator of ["anyOf", "allOf"] as const) {
+      it(`returns a stored \`FabricError\` that more than one \`${combinator}\` branch matches as itself`, async () => {
+        // Every branch matches, so the branch results are merged, and a merge
+        // that reads its matches by property name has none to read on an
+        // instance.
+        const read = await seeded(
+          `instance-${combinator}-merge`,
+          { err: new Error("boom") },
+          {
+            type: "object",
+            properties: {
+              err: {
+                [combinator]: [
+                  { type: "object" },
+                  { type: "object", required: ["message"] },
+                ],
+              },
+            },
+          } as JSONSchema,
+        );
+
+        const lazy = read(true);
+        const eager = read(false);
+        try {
+          for (const reader of [lazy, eager]) {
+            const err = (reader.get() as { err: unknown }).err;
+            expect(err).toBeInstanceOf(FabricError);
+            expect((err as FabricError).message).toBe("boom");
+          }
+        } finally {
+          await lazy.tx.commit();
+          await eager.tx.commit();
+        }
+      });
+    }
   });
 
   describe("handles", () => {
