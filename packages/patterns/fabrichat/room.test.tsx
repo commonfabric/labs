@@ -23,7 +23,6 @@ import {
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
-  type RosterValue,
   type SentActivity,
   type UsedTime,
 } from "./room.tsx";
@@ -37,7 +36,6 @@ import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   type ChatProfile,
-  type ChatRoomNotice,
   epochNsecFromMsec,
   nsecOf,
 } from "./schemas.tsx";
@@ -122,10 +120,6 @@ export default pattern(() => {
   const pendingProfile = Writable.of<TestProfile | undefined>(undefined);
   const records = {
     about: { kind: "group" as const, title: "Team" },
-    roster: Writable.of<RosterValue>({}),
-    left: Writable.of<string[]>([]),
-    notices: Writable.of<ChatRoomNotice[]>([]),
-    ownSpace: true,
     messages,
     reactionLists,
     requests,

@@ -28,7 +28,6 @@ import {
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
-  type RosterValue,
   type SentActivity,
   type UsedTime,
 } from "./room.tsx";
@@ -38,7 +37,6 @@ import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   type ChatProfile,
-  type ChatRoomNotice,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
@@ -71,16 +69,12 @@ export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const records = {
     about: { kind: "group" as const, title: "Team" },
-    ownSpace: true,
     messages,
     reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
     requests: Writable.of<RequestMemo[]>([]),
     usedTimes: Writable.of<UsedTime[]>([]),
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters[]>([]),
-    roster: Writable.of<RosterValue>({}),
-    left: Writable.of<string[]>([]),
-    notices: Writable.of<ChatRoomNotice[]>([]),
   };
   const room = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,

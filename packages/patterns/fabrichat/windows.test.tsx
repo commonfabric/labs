@@ -1,8 +1,7 @@
 /**
- * A FabriChat room's windows and membership: how a session opens, moves, and
- * closes windows onto the main conversation, and how showing a profile,
- * adding a member, reporting a notice delivered, and leaving change the
- * room's record.
+ * A FabriChat room's windows and participants: how a session opens, moves,
+ * and closes windows onto the main conversation, and who the room lists as
+ * taking part.
  */
 import {
   type AddIntegrity,
@@ -20,7 +19,6 @@ import {
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
-  type RosterValue,
   type SentActivity,
   type UsedTime,
 } from "./room.tsx";
@@ -28,7 +26,6 @@ import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   type ChatProfile,
-  type ChatRoomNotice,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
@@ -71,33 +68,18 @@ const windowText = (window: ChatMessageWindow | undefined): string =>
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
-  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
-  const roster = Writable.of<RosterValue>({});
   const activity = Writable.of<SentActivity[]>([]);
-  const left = Writable.of<string[]>([]);
-  const notices = Writable.of<ChatRoomNotice[]>([]);
   const records = {
     about: { kind: "group" as const },
-    ownSpace: true,
     messages,
     reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
     requests: Writable.of<RequestMemo[]>([]),
     usedTimes: Writable.of<UsedTime[]>([]),
     activity,
     counters: Writable.of<ActivityCounters[]>([]),
-    roster,
-    left,
-    notices,
   };
   const alice = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,
-  );
-  const bob = FabriChatRoomCore(
-    { myProfile: bobProfile, ...records } as RoomArg,
-  );
-  // The same room as a space's own chat, which nobody leaves.
-  const bobInSpaceChat = FabriChatRoomCore(
-    { myProfile: bobProfile, ...records, ownSpace: false } as RoomArg,
   );
 
   return {
@@ -180,26 +162,12 @@ export default pattern(() => {
         ),
       },
 
-      // Showing a profile lists it once, however often it is shown.
-      { action: alice.showProfile, event: { requestId: "show-a" } },
-      { action: bob.showProfile, event: { requestId: "show-b" } },
-      { action: bob.showProfile, event: { requestId: "show-b2" } },
+      // With no default pattern listing anyone, the room's participants are
+      // its authors: Alice, who sent every message.
       {
         assertion: assert(() =>
-          alice.roster.length === 2 && equals(alice.roster[1], bobProfile)
-        ),
-      },
-
-      // Leaving takes the member's roster entry with it, from a room of its
-      // own; a space's own chat is left by leaving the space.
-      { action: bobInSpaceChat.leave, event: { requestId: "leave-0" } },
-      { assertion: assert(() => alice.roster.length === 2) },
-      { action: bob.leave, event: { requestId: "leave-1" } },
-      {
-        assertion: assert(() =>
-          alice.roster.length === 1 && equals(alice.roster[0], aliceProfile) &&
-          (left.get() ?? []).length === 1 &&
-          (left.get() ?? [])[0].startsWith("did:")
+          alice.participants.length === 1 &&
+          equals(alice.participants[0], aliceProfile)
         ),
       },
     ],

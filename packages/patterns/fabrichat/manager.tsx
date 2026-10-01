@@ -212,7 +212,6 @@ const createRoom = (
         createdAt,
         ...(title === undefined ? {} : { title }),
       },
-      ownSpace: true,
     }),
   );
   members.forEach((recipient) => {

@@ -20,7 +20,6 @@ import FabriChatRoom, {
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
-  type RosterValue,
   type SentActivity,
   type UsedTime,
 } from "./room.tsx";
@@ -31,7 +30,6 @@ import {
   CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatReaction,
-  type ChatRoomNotice,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
@@ -59,9 +57,6 @@ interface Records {
   usedTimes: Writable<UsedTime[]>;
   activity: Writable<SentActivity[]>;
   counters: Writable<ActivityCounters[]>;
-  roster: Writable<RosterValue>;
-  left: Writable<string[]>;
-  notices: Writable<ChatRoomNotice[]>;
 }
 
 /** What every session receives from the setup. */
@@ -99,9 +94,6 @@ export const setup = pattern(() => ({
     usedTimes: Writable.of<UsedTime[]>([]),
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters[]>([]),
-    roster: Writable.of<RosterValue>({}),
-    left: Writable.of<string[]>([]),
-    notices: Writable.of<ChatRoomNotice[]>([]),
   },
 }));
 
@@ -110,16 +102,12 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const room = FabriChatRoomCore({
     myProfile: profile,
     about: { kind: "group" as const },
-    ownSpace: false,
     messages: setup.records.messages,
     reactionLists: setup.records.reactionLists,
     requests: setup.records.requests,
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   } as RoomArg);
 
   return {
@@ -164,23 +152,18 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const room = FabriChatRoomCore({
     myProfile: profile,
     about: { kind: "group" as const },
-    ownSpace: false,
     messages: setup.records.messages,
     reactionLists: setup.records.reactionLists,
     requests: setup.records.requests,
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   } as RoomArg);
   const onFirst = FabriChatMessageRow({
     message: setup.records.messages.key(0),
     myProfile: profile,
     inThread: false,
     kind: "group" as const,
-    ownSpace: false,
     composer: Writable.of({}),
     messages: setup.records.messages,
     reactionLists: setup.records.reactionLists,
@@ -188,9 +171,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   } as RowArg);
 
   return {

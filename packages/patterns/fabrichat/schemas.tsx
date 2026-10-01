@@ -55,12 +55,6 @@ export const CHAT_REACT_ACTION = "ChatReact";
 /** The reviewed action removing a reaction is, on `CHAT_REACT_SURFACE`. */
 export const CHAT_UNREACT_ACTION = "ChatUnreact";
 
-/** The reviewed surface members are added and removed from. */
-export const CHAT_MEMBERS_SURFACE = "ChatMembersSurface";
-
-/** The reviewed action adding or removing a member is, on its surface. */
-export const CHAT_MEMBERS_ACTION = "ChatMembers";
-
 /** The reviewed surface a conversation is started from. */
 export const CHAT_START_SURFACE = "ChatStartSurface";
 
@@ -273,15 +267,6 @@ export interface WindowEvent {
 
   /** The most messages to show, capped by the room's `maxWindowCount`. */
   count?: number;
-}
-
-/** A notice from `add`, waiting for a client to deliver it. */
-export interface ChatRoomNotice {
-  /** The notice's id, unique in the room. */
-  id: string;
-
-  /** The DID of the person admitted. */
-  recipient: string;
 }
 
 //

@@ -1,9 +1,9 @@
 /**
- * A FabriChat group room of its own, as its space's access list decides who
- * may do what in it: its OWNER adds and removes members, reports notices
- * delivered, and obliterates anyone's messages; a member with WRITE sends but
- * does none of those; a reader with READ can't send; and someone the list
- * leaves out sees a placement of the room as not theirs.
+ * A FabriChat group room, as its space's access list decides who may do what
+ * in it: its OWNER obliterates anyone's messages; a member with WRITE sends
+ * but can't obliterate someone else's; a reader with READ can't send; and
+ * someone the list leaves out sees a placement of the room as not theirs.
+ * Who is in the space is the space's business, not the room's.
  *
  * The test lane doesn't enforce the list, so what this checks is what the room
  * decides from the level `spaceAccess()` reports, not what the memory server
@@ -27,20 +27,15 @@ import {
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
-  type RosterValue,
   type SentActivity,
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MEMBERS_ACTION,
-  CHAT_MEMBERS_SURFACE,
   CHAT_OBLITERATE_ACTION,
   CHAT_OBLITERATE_SURFACE,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   type ChatProfile,
-  type ChatRoomActivity,
-  type ChatRoomNotice,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
@@ -53,16 +48,10 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const CAROL = "did:key:z6MkCarol";
-
 const sendGesture = { surface: CHAT_SEND_SURFACE, action: CHAT_SEND_ACTION };
 const obliterateGesture = {
   surface: CHAT_OBLITERATE_SURFACE,
   action: CHAT_OBLITERATE_ACTION,
-};
-const membersGesture = {
-  surface: CHAT_MEMBERS_SURFACE,
-  action: CHAT_MEMBERS_ACTION,
 };
 
 const typed = (text: string) => ({ type: "click", target: { value: text } });
@@ -75,9 +64,6 @@ interface Records {
   usedTimes: Writable<UsedTime[]>;
   activity: Writable<SentActivity[]>;
   counters: Writable<ActivityCounters[]>;
-  roster: Writable<RosterValue>;
-  left: Writable<string[]>;
-  notices: Writable<ChatRoomNotice[]>;
 }
 
 /** What every session receives from the setup. */
@@ -91,23 +77,9 @@ const bodies = (messages: Writable<MessagesValue>): string =>
     typeof message?.body === "string" ? message.body : "<gone>"
   ).join(" | ");
 
-const noticeCount = (notices: Writable<ChatRoomNotice[]>): number =>
-  (notices.get() ?? []).length;
-
-const activityCount = (activity: Writable<SentActivity[]>): number =>
-  (activity.get() ?? []).length;
-
-// Whether the newest activity entry's `what` reads as a list.
-const newestLinksList = (activity: Writable<SentActivity[]>): boolean => {
-  const entries = (activity.get() ?? []) as ChatRoomActivity[];
-  const newest = entries[entries.length - 1];
-  return Array.isArray(newest?.what?.get());
-};
-
 /** What makes the shared room a group room of its own. */
 const groupRoom = {
   about: { kind: "group" as const, title: "Team" },
-  ownSpace: true,
 };
 
 export const setup = pattern(() => ({
@@ -118,9 +90,6 @@ export const setup = pattern(() => ({
     usedTimes: Writable.of<UsedTime[]>([]),
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters[]>([]),
-    roster: Writable.of<RosterValue>({}),
-    left: Writable.of<string[]>([]),
-    notices: Writable.of<ChatRoomNotice[]>([]),
   },
 }));
 
@@ -134,9 +103,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   };
   const room = FabriChatRoomCore(
     { myProfile: profile, ...groupRoom, ...records } as RoomArg,
@@ -146,7 +112,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     myProfile: profile,
     inThread: false,
     kind: "group" as const,
-    ownSpace: true,
     composer: Writable.of({}),
     ...records,
   } as RowArg);
@@ -160,41 +125,12 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       },
       { label: "alice-sent" },
       { await: "bob-tried" },
-      // Bob, with WRITE, could neither obliterate her message nor add anyone.
+      // Bob, with WRITE, couldn't obliterate her message.
       {
         assertion: assert(() =>
-          bodies(setup.records.messages) === "From Alice | From Bob" &&
-          noticeCount(setup.records.notices) === 0
+          bodies(setup.records.messages) === "From Alice | From Bob"
         ),
       },
-      // Adding a member grants them access, and leaves a notice for them.
-      {
-        action: room.add,
-        event: { requestId: "add-c", principal: CAROL, access: "WRITE" },
-        trustedUi: membersGesture,
-      },
-      {
-        assertion: assert(() =>
-          noticeCount(setup.records.notices) === 1 &&
-          (setup.records.notices.get() ?? [])[0]?.recipient === CAROL
-        ),
-      },
-      // No profile has been shown yet, and the add's activity entry links the
-      // roster's list all the same, which the add creates.
-      { assertion: assert(() => newestLinksList(setup.records.activity)) },
-      {
-        action: room.delivered,
-        event: { requestId: "del-c", id: JSON.stringify([CAROL, "add-c"]) },
-      },
-      { assertion: assert(() => noticeCount(setup.records.notices) === 0) },
-      // Removing revokes the access, and records it: the two sends and the
-      // add are the three entries before it.
-      {
-        action: room.remove,
-        event: { requestId: "rm-c", principal: CAROL },
-        trustedUi: membersGesture,
-      },
-      { assertion: assert(() => activityCount(setup.records.activity) === 4) },
       // The OWNER may obliterate anyone's message in a group room.
       {
         action: onBobs.obliterateMessage,
@@ -222,9 +158,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   };
   const room = FabriChatRoomCore(
     { myProfile: profile, ...groupRoom, ...records } as RoomArg,
@@ -234,7 +167,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     myProfile: profile,
     inThread: false,
     kind: "group" as const,
-    ownSpace: true,
     composer: Writable.of({}),
     ...records,
   } as RowArg);
@@ -254,14 +186,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: obliterateGesture,
       },
       {
-        action: room.add,
-        event: { requestId: "add-b", principal: CAROL, access: "WRITE" },
-        trustedUi: membersGesture,
-      },
-      {
         assertion: assert(() =>
-          bodies(setup.records.messages) === "From Alice | From Bob" &&
-          noticeCount(setup.records.notices) === 0
+          bodies(setup.records.messages) === "From Alice | From Bob"
         ),
       },
       { label: "bob-tried" },
@@ -280,9 +206,6 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   };
   const room = FabriChatRoomCore(
     { myProfile: profile, ...groupRoom, ...records } as RoomArg,
@@ -305,9 +228,6 @@ export const stranger = pattern<{ setup: Setup }>(({ setup }) => {
     usedTimes: setup.records.usedTimes,
     activity: setup.records.activity,
     counters: setup.records.counters,
-    roster: setup.records.roster,
-    left: setup.records.left,
-    notices: setup.records.notices,
   };
   const room = FabriChatRoomCore(
     { myProfile: profile, ...groupRoom, ...records } as RoomArg,

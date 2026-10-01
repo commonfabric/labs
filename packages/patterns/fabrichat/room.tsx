@@ -14,6 +14,11 @@
  * reaction handlers add to and remove from that list, and a deletion or an
  * obliteration clears it and drops the link.
  *
+ * The room keeps no membership of its own. Who takes part is its space's
+ * business: the space's access list decides who may read and write, and its
+ * default pattern lists the participants' profiles (`wish("#default")`), which
+ * the room shows alongside every author.
+ *
  * `FabriChatRoomCore` takes the viewer's profile as an input, so a test can
  * supply a stand-in. The default export, `FabriChatRoom`, resolves the real
  * one with `#profile`.
@@ -30,13 +35,10 @@ import {
   eventKey,
   type FabricEpochNsec,
   getEntityId,
-  grantSpaceAccess,
   handler,
-  isWellFormedDID,
   NAME,
   pattern,
   type PerSession,
-  revokeSpaceAccess,
   spaceAccess,
   Stream,
   type TrustedActionWrite,
@@ -65,8 +67,6 @@ import {
   CHAT_DELETE_SURFACE,
   CHAT_EDIT_ACTION,
   CHAT_EDIT_SURFACE,
-  CHAT_MEMBERS_ACTION,
-  CHAT_MEMBERS_SURFACE,
   CHAT_OBLITERATE_ACTION,
   CHAT_OBLITERATE_SURFACE,
   CHAT_REACT_ACTION,
@@ -81,7 +81,6 @@ import {
   type ChatRoomAbout,
   type ChatRoomActivity,
   type ChatRoomKind,
-  type ChatRoomNotice,
   type ChatRoomPolicy,
   CLOCK_TICK_NSEC,
   durationNsec,
@@ -283,11 +282,6 @@ export type StoredRequestMemo = WritePolicyAnyOf<RequestMemo, [
   WriteAuthorizedBy<unknown, typeof commitObliterate>,
   WriteAuthorizedBy<unknown, typeof commitSendReaction>,
   WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-  WriteAuthorizedBy<unknown, typeof commitLeave>,
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof commitRemove>,
-  WriteAuthorizedBy<unknown, typeof commitDelivered>,
 ]>;
 
 /** The requests the room has acted on, each addressed by its key. */
@@ -307,10 +301,6 @@ export type StoredUsedTime = WritePolicyAnyOf<UsedTime, [
   WriteAuthorizedBy<unknown, typeof commitObliterate>,
   WriteAuthorizedBy<unknown, typeof commitSendReaction>,
   WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-  WriteAuthorizedBy<unknown, typeof commitLeave>,
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof commitRemove>,
 ]>;
 
 /** The times the room has used, each addressed by its nanoseconds. */
@@ -329,10 +319,6 @@ export type SentActivity = WritePolicyAnyOf<ChatRoomActivity, [
   WriteAuthorizedBy<unknown, typeof commitObliterate>,
   WriteAuthorizedBy<unknown, typeof commitSendReaction>,
   WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-  WriteAuthorizedBy<unknown, typeof commitLeave>,
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof commitRemove>,
 ]>;
 
 /** The room's recent activity, in `seq` order. */
@@ -361,10 +347,6 @@ export type StoredActivityCounters = WritePolicyAnyOf<ActivityCounters, [
   WriteAuthorizedBy<unknown, typeof commitObliterate>,
   WriteAuthorizedBy<unknown, typeof commitSendReaction>,
   WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-  WriteAuthorizedBy<unknown, typeof commitLeave>,
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof commitRemove>,
 ]>;
 
 /**
@@ -378,39 +360,6 @@ export type ActivityCountersCell = Writable<
 
 /** The key of the activity numbering's one record. */
 const NUMBERING_KEY = "numbering";
-
-/**
- * The room's roster: members' profiles, as claims. It changes only through
- * the membership handlers, and `items` is absent until the first of them
- * writes it.
- */
-export interface RosterValue {
-  /** The profiles, in the order they were shown. */
-  items?: WritePolicyAnyOf<ProfileCell[], [
-    WriteAuthorizedBy<unknown, typeof commitShowProfile>,
-    WriteAuthorizedBy<unknown, typeof commitLeave>,
-    WriteAuthorizedBy<unknown, typeof commitAdd>,
-  ]>;
-}
-
-/** The cell holding the roster; a room nobody has joined yet holds `{}`. */
-export type RosterCell = Writable<
-  RosterValue | Default<Record<PropertyKey, never>>
->;
-
-/** The principals of members who have left. */
-export type LeftCell = Writable<
-  WriteAuthorizedBy<string, typeof commitLeave>[] | Default<[]>
->;
-
-/** A notice, written by `add` and removed by `delivered`. */
-export type StoredNotice = WritePolicyAnyOf<ChatRoomNotice, [
-  WriteAuthorizedBy<unknown, typeof commitAdd>,
-  WriteAuthorizedBy<unknown, typeof commitDelivered>,
-]>;
-
-/** Notices from `add`, waiting for a client to deliver them. */
-export type NoticesCell = Writable<StoredNotice[] | Default<[]>>;
 
 /** A run of consecutive messages from one view of a conversation. */
 export interface ChatMessageWindow {
@@ -692,18 +641,6 @@ export interface RoomStreamEvent {
   /** A single emoji. */
   emoji?: string;
 
-  /** The DID of the person to add or remove. */
-  principal?: string;
-
-  /**
-   * The access requested for the person added. A pattern can't grant it: the
-   * host that serves the room's space has to.
-   */
-  access?: "WRITE" | "OWNER";
-
-  /** The id of a notice delivered. */
-  id?: string;
-
   /** A rendered control's text. */
   readonly target?: { readonly value?: string };
 }
@@ -728,9 +665,6 @@ export type ComposerCell = Writable<
 /** The acts on a message, each performed by a handler of its own. */
 type MessageAct = "send" | "edit" | "delete" | "obliterate";
 
-/** The acts on the room's membership, each performed by a handler of its own. */
-type MembershipAct = "showProfile" | "leave" | "add" | "remove" | "delivered";
-
 /**
  * The room's records, and a rendered control's bindings, as every handler
  * that changes the room is bound to them.
@@ -741,9 +675,6 @@ export interface RoomActState {
 
   /** The room's kind. */
   kind: ChatRoomKind;
-
-  /** Whether the room lives in a space of its own. */
-  ownSpace: boolean;
 
   /** The room's messages. */
   messages: MessagesCell;
@@ -762,15 +693,6 @@ export interface RoomActState {
 
   /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
-
-  /** The members' profiles, as claims. */
-  roster: RosterCell;
-
-  /** The principals of members who have left. */
-  left: LeftCell;
-
-  /** Notices from `add`, waiting for a client to deliver them. */
-  notices: NoticesCell;
 
   /** A rendered control's message: the one acted on, or replied to. */
   message?: MessageCell;
@@ -798,9 +720,6 @@ export interface RoomActState {
 
   /** Whether this binding closes `pickerOpen`, which only a picker binds. */
   closesPicker?: boolean;
-
-  /** A rendered control's notice id. */
-  id?: string;
 }
 
 /**
@@ -1043,137 +962,6 @@ const performReactionAct = (
   rememberRequest(requests, requestKey, clock);
 };
 
-/**
- * Performs one membership act: showing the sender's profile, leaving, adding
- * or removing a member, or reporting a notice delivered.
- *
- * `add` and `remove` grant and revoke access to the room's space, which the
- * runtime admits only from an OWNER's trusted gesture on a client runtime.
- * `leave` gives up no access, which no pattern can yet do, and records what
- * it can: the roster, and the members who left.
- */
-const performMembershipAct = (
-  op: MembershipAct,
-  event: RoomStreamEvent,
-  state: RoomActState,
-): void => {
-  const {
-    myProfile,
-    kind,
-    ownSpace,
-    messages,
-    roster,
-    left,
-    notices,
-    requests,
-    usedTimes,
-    activity,
-    counters,
-  } = state;
-  const profile = myProfile?.resolveAsCell();
-  if (profile?.get() === undefined) return;
-  const sender = currentPrincipal();
-  if (sender === undefined) return;
-  const requestId = event?.requestId ?? eventKey();
-  const requestKey = requestKeyOf(sender, requestId);
-  if (actedOn(requests, requestKey)) return;
-  const clock = clockNsec();
-
-  if (op === "showProfile") {
-    const listed = ((roster.get() as RosterValue | undefined)?.items ?? [])
-      .some((shown) => equals(shown, profile));
-    // A profile already shown changes nothing, so it records no activity.
-    if (listed) {
-      rememberRequest(requests, requestKey, clock);
-      return;
-    }
-    roster.key("items").addUnique(profile);
-    appendActivity(
-      activity,
-      counters,
-      usedTimes,
-      clock,
-      requestId,
-      roster.key("items"),
-    );
-    rememberRequest(requests, requestKey, clock);
-    return;
-  }
-
-  if (ownSpace !== true || kind !== "group") return;
-
-  if (op === "leave") {
-    roster.key("items").removeByValue(profile);
-    if (!(left.get() ?? []).includes(sender)) left.push(sender);
-    appendActivity(
-      activity,
-      counters,
-      usedTimes,
-      clock,
-      requestId,
-      roster.key("items"),
-    );
-    rememberRequest(requests, requestKey, clock);
-    return;
-  }
-
-  if (!isOwnerOf(messages)) return;
-
-  if (op === "delivered") {
-    const id = event?.id ?? state.id;
-    if (typeof id !== "string") return;
-    notices.removeByValue(notices.elementById(id));
-    const cleared: Writable<ChatRoomNotice | undefined> = notices.elementById(
-      id,
-    );
-    cleared.set(undefined);
-    rememberRequest(requests, requestKey, clock);
-    return;
-  }
-
-  const principal = event?.principal ?? event?.target?.value?.trim();
-  if (!isWellFormedDID(principal)) return;
-
-  if (op === "remove") {
-    // The runtime refuses what the design refuses too (the room's last OWNER,
-    // the sender themself), before staging anything.
-    try {
-      revokeSpaceAccess(messages, principal);
-    } catch {
-      return;
-    }
-  } else {
-    // Someone who left isn't added back without their own say.
-    if ((left.get() ?? []).includes(principal)) return;
-    const access = event?.access ?? "WRITE";
-    if (access !== "WRITE" && access !== "OWNER") return;
-    try {
-      grantSpaceAccess(messages, principal, access);
-    } catch {
-      return;
-    }
-    // The adding client knows the id without reading it back: the person
-    // added, and its own request.
-    const id = JSON.stringify([principal, requestId]);
-    const notice = notices.elementById(id);
-    notice.set({ id, recipient: principal });
-    notices.addUnique(notice);
-  }
-  // The entry links the roster's list, which may not exist yet.
-  if ((roster.get() as RosterValue | undefined)?.items === undefined) {
-    roster.key("items").set([]);
-  }
-  appendActivity(
-    activity,
-    counters,
-    usedTimes,
-    clock,
-    requestId,
-    roster.key("items"),
-  );
-  rememberRequest(requests, requestKey, clock);
-};
-
 /** Sends a message, from `ChatSendSurface`. */
 export const commitSend = handler<RoomStreamEvent, RoomActState>(
   (event, state) => performMessageAct("send", event, state),
@@ -1202,31 +990,6 @@ export const commitSendReaction = handler<RoomStreamEvent, RoomActState>(
 /** Removes the sender's reaction, from `ChatReactSurface`. */
 export const commitDeleteReaction = handler<RoomStreamEvent, RoomActState>(
   (event, state) => performReactionAct("remove", event, state),
-);
-
-/** Adds the sender's profile to the roster. */
-export const commitShowProfile = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMembershipAct("showProfile", event, state),
-);
-
-/** Records the sender as having left. */
-export const commitLeave = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMembershipAct("leave", event, state),
-);
-
-/** Adds a member, from `ChatMembersSurface`. */
-export const commitAdd = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMembershipAct("add", event, state),
-);
-
-/** Removes a member, from `ChatMembersSurface`. */
-export const commitRemove = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMembershipAct("remove", event, state),
-);
-
-/** Reports a notice from `add` delivered. */
-export const commitDelivered = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMembershipAct("delivered", event, state),
 );
 
 /** What `commitWindow` is bound to. */
@@ -1362,12 +1125,12 @@ const compareTimes = (a: FabricEpochNsec, b: FabricEpochNsec): number =>
   nsecOf(a) < nsecOf(b) ? -1 : nsecOf(a) > nsecOf(b) ? 1 : 0;
 
 /**
- * The room's participants: the roster, plus every author with no roster
- * entry, in the order each first appears. Two are the same person when their
- * profiles are the same cell.
+ * The room's participants: those its space lists, plus every author it
+ * doesn't, in the order each first appears. Two are the same person when
+ * their profiles are the same cell.
  */
 export const participantsOf = (
-  roster: readonly ProfileCell[],
+  listed: readonly ProfileCell[],
   entries: readonly MessageEntry[],
 ): ProfileCell[] =>
   [...entries].sort(compareEntries).reduce<ProfileCell[]>(
@@ -1378,7 +1141,7 @@ export const participantsOf = (
         ? found
         : [...found, author];
     },
-    [...roster],
+    [...listed],
   );
 
 /** How a message's body reads, for a quote or a deleted message. */
@@ -1416,9 +1179,6 @@ export interface FabriChatMessageRowInput {
   /** The room's kind. */
   kind: ChatRoomKind;
 
-  /** Whether the room lives in a space of its own. */
-  ownSpace: boolean;
-
   /** The session's composer state. */
   composer: PerSession<ComposerCell>;
 
@@ -1439,15 +1199,6 @@ export interface FabriChatMessageRowInput {
 
   /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
-
-  /** The members' profiles, as claims. */
-  roster: RosterCell;
-
-  /** The principals of members who have left. */
-  left: LeftCell;
-
-  /** Notices from `add`, waiting for a client to deliver them. */
-  notices: NoticesCell;
 }
 
 /** What a message row provides: its rendering, and its controls' streams. */
@@ -1496,7 +1247,6 @@ export const FabriChatMessageRow = pattern<
     myProfile,
     inThread,
     kind,
-    ownSpace,
     composer,
     messages,
     reactionLists,
@@ -1504,13 +1254,9 @@ export const FabriChatMessageRow = pattern<
     usedTimes,
     activity,
     counters,
-    roster,
-    left,
-    notices,
   } = input;
   const records = {
     kind,
-    ownSpace,
     composer,
     messages,
     reactionLists,
@@ -1518,9 +1264,6 @@ export const FabriChatMessageRow = pattern<
     usedTimes,
     activity,
     counters,
-    roster,
-    left,
-    notices,
   };
   const pickerOpen = new Writable.perSession(false);
   const togglePicker = action(() => pickerOpen.set(!pickerOpen.get()));
@@ -1747,7 +1490,6 @@ export const FabriChatMessageRow = pattern<
                       onClick={commitSendReaction({
                         myProfile,
                         kind,
-                        ownSpace,
                         composer,
                         messages,
                         reactionLists,
@@ -1755,9 +1497,6 @@ export const FabriChatMessageRow = pattern<
                         usedTimes,
                         activity,
                         counters,
-                        roster,
-                        left,
-                        notices,
                         message,
                         emoji: tally.emoji,
                       })}
@@ -1778,7 +1517,6 @@ export const FabriChatMessageRow = pattern<
                       onClick={commitDeleteReaction({
                         myProfile,
                         kind,
-                        ownSpace,
                         composer,
                         messages,
                         reactionLists,
@@ -1786,9 +1524,6 @@ export const FabriChatMessageRow = pattern<
                         usedTimes,
                         activity,
                         counters,
-                        roster,
-                        left,
-                        notices,
                         message,
                         emoji: tally.emoji,
                       })}
@@ -1836,7 +1571,6 @@ export const FabriChatMessageRow = pattern<
                   onClick={commitSendReaction({
                     myProfile,
                     kind,
-                    ownSpace,
                     composer,
                     messages,
                     reactionLists,
@@ -1844,9 +1578,6 @@ export const FabriChatMessageRow = pattern<
                     usedTimes,
                     activity,
                     counters,
-                    roster,
-                    left,
-                    notices,
                     message,
                     emoji,
                     pickerOpen,
@@ -1989,16 +1720,16 @@ export interface ChatRoomView {
   /** The highest `seq` dropped from `recentActivity` for age; 0 for none. */
   recentActivityExpiredThrough: number;
 
-  /** Members' profiles, as claims. */
-  roster: ProfileCell[];
-
-  /** `roster`, plus any author with no roster entry. */
+  /**
+   * The participants of the room's space, as its default pattern lists them
+   * (`wish("#default")`), plus any author it doesn't list.
+   */
   participants: ProfileCell[];
 
   /** The room's messages. */
   messages: ChatMessageList;
 
-  /** Whether this reader can send, edit, delete, react, and show a profile. */
+  /** Whether this reader can send, edit, delete, and react. */
   canSend: boolean;
 
   /** Sends a message. */
@@ -2018,35 +1749,6 @@ export interface ChatRoomView {
 
   /** Removes the sender's reaction to a message. */
   deleteReaction: Stream<RoomStreamEvent>;
-
-  /** Adds the sender's profile to `roster`. */
-  showProfile: Stream<RoomStreamEvent>;
-
-  /**
-   * Leaves a group room of its own: removes the sender's roster entry and
-   * records them as having left. It gives up no access, which no pattern can
-   * yet do.
-   */
-  leave: Stream<RoomStreamEvent>;
-
-  /**
-   * Admits a person to a group room of its own, granting them access from an
-   * OWNER's trusted gesture on a client runtime, and adds a notice for a
-   * client to deliver.
-   */
-  add: Stream<RoomStreamEvent>;
-
-  /**
-   * Removes a person from a group room of its own, revoking their access, from
-   * an OWNER's trusted gesture on a client runtime.
-   */
-  remove: Stream<RoomStreamEvent>;
-
-  /** Reports a notice from `add` delivered. */
-  delivered: Stream<RoomStreamEvent>;
-
-  /** Notices from `add` that no one has delivered yet. */
-  outgoingNotices: ChatRoomNotice[];
 }
 
 /** What a room offers everyone its space admits: `ChatRoomOutput`. */
@@ -2069,9 +1771,6 @@ export interface FabriChatRoomCoreInput {
   /** What the room says about itself, as its creator wrote it. */
   about: AboutRecord;
 
-  /** Whether the room lives in a space of its own. */
-  ownSpace: boolean;
-
   /** The room's messages. */
   messages: MessagesCell;
 
@@ -2089,15 +1788,6 @@ export interface FabriChatRoomCoreInput {
 
   /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
-
-  /** The members' profiles, as claims. */
-  roster: RosterCell;
-
-  /** The principals of members who have left. */
-  left: LeftCell;
-
-  /** Notices from `add`, waiting for a client to deliver them. */
-  notices: NoticesCell;
 }
 
 /**
@@ -2124,22 +1814,17 @@ export const FabriChatRoomCore = pattern<
   const {
     myProfile,
     about,
-    ownSpace,
     messages,
     reactionLists,
     requests,
     usedTimes,
     activity,
     counters,
-    roster,
-    left,
-    notices,
   } = input;
   const composer = new Writable.perSession<ComposerState>({});
   const kind = computed((): ChatRoomKind => about?.kind ?? "group");
   const records = {
     kind,
-    ownSpace,
     composer,
     messages,
     reactionLists,
@@ -2147,9 +1832,6 @@ export const FabriChatRoomCore = pattern<
     usedTimes,
     activity,
     counters,
-    roster,
-    left,
-    notices,
   };
   const alsoToMain = new Writable.perSession(false);
   const windows = new Writable.perSession<WindowsValue>();
@@ -2170,10 +1852,15 @@ export const FabriChatRoomCore = pattern<
   const newestAt = computed(() =>
     sortedEntries[sortedEntries.length - 1]?.record.sentAt
   );
-  const rosterItems = computed(
-    () => [...((roster.get() as RosterValue | undefined)?.items ?? [])],
+  // The space's participants, as its default pattern lists them; a space
+  // whose default pattern isn't there yet lists none.
+  const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
+  const spaceParticipants = computed(
+    () => [...(space.result?.participants ?? [])],
   );
-  const participants = computed(() => participantsOf(rosterItems, entries));
+  const participants = computed(() =>
+    participantsOf(spaceParticipants, entries)
+  );
   // A reader sends once their profile resolves and the room's space grants
   // them WRITE or OWNER; `undefined` (not known yet) is not a grant.
   const canSend = computed(() => {
@@ -2193,10 +1880,6 @@ export const FabriChatRoomCore = pattern<
   const expiredThrough = computed(() =>
     ((counters.get() ?? [])[0] ?? NO_ACTIVITY).expiredThrough
   );
-  const groupOfItsOwn = computed(() => ownSpace === true && kind === "group");
-  const viewerIsOwner = computed(() =>
-    myProfile?.get() !== undefined && isOwnerOf(messages)
-  );
   const title = computed(() =>
     about?.title ?? (kind === "direct" ? "Direct chat" : "Chat")
   );
@@ -2209,13 +1892,9 @@ export const FabriChatRoomCore = pattern<
   // different tree (see `FabriChatMessageRow`).
   const replyDisplay = computed(() => (replyingTo ? "flex" : "none"));
   const threadDisplay = computed(() => (hasThread ? "flex" : "none"));
-  const ownerDisplay = computed(() => (viewerIsOwner ? "block" : "none"));
   const isEmpty = computed(() => mainEntries.length === 0);
   const threadShownIn = computed((): ShownIn =>
     alsoToMain.get() ? "both" : "thread"
-  );
-  const noticeList = computed(
-    () => [...((notices.get() ?? []) as ChatRoomNotice[])],
   );
 
   const sendMessage = commitSend({ myProfile, ...records });
@@ -2252,26 +1931,6 @@ export const FabriChatRoomCore = pattern<
       myProfile,
       ...records,
     }),
-    showProfile: commitShowProfile({
-      myProfile,
-      ...records,
-    }),
-    leave: commitLeave({
-      myProfile,
-      ...records,
-    }),
-    add: commitAdd({
-      myProfile,
-      ...records,
-    }),
-    remove: commitRemove({
-      myProfile,
-      ...records,
-    }),
-    delivered: commitDelivered({
-      myProfile,
-      ...records,
-    }),
   };
   const messageList = {
     count,
@@ -2286,11 +1945,9 @@ export const FabriChatRoomCore = pattern<
     about: aboutView,
     recentActivity: activity,
     recentActivityExpiredThrough: expiredThrough,
-    roster: rosterItems,
     participants,
     messages: messageList,
     canSend,
-    outgoingNotices: noticeList,
     ...streams,
   };
   const closeThread = action(() => composer.key("thread").set(undefined));
@@ -2320,14 +1977,6 @@ export const FabriChatRoomCore = pattern<
           {participants.map((participant) => (
             <cf-profile-badge variant="chip" $profile={participant} />
           ))}
-          <cf-button
-            size="sm"
-            variant="ghost"
-            disabled={cannotSend}
-            onClick={streams.showProfile}
-          >
-            Show me as a member
-          </cf-button>
         </div>
 
         <cf-vstack
@@ -2341,7 +1990,6 @@ export const FabriChatRoomCore = pattern<
               inThread={false}
               myProfile={myProfile}
               kind={kind}
-              ownSpace={ownSpace}
               composer={composer}
               messages={messages}
               reactionLists={reactionLists}
@@ -2349,9 +1997,6 @@ export const FabriChatRoomCore = pattern<
               usedTimes={usedTimes}
               activity={activity}
               counters={counters}
-              roster={roster}
-              left={left}
-              notices={notices}
             />
           ))}
           {isEmpty
@@ -2400,7 +2045,6 @@ export const FabriChatRoomCore = pattern<
               inThread
               myProfile={myProfile}
               kind={kind}
-              ownSpace={ownSpace}
               composer={composer}
               messages={messages}
               reactionLists={reactionLists}
@@ -2408,9 +2052,6 @@ export const FabriChatRoomCore = pattern<
               usedTimes={usedTimes}
               activity={activity}
               counters={counters}
-              roster={roster}
-              left={left}
-              notices={notices}
             />
           ))}
           <cf-checkbox $checked={alsoToMain}>
@@ -2430,78 +2071,6 @@ export const FabriChatRoomCore = pattern<
             />
           </div>
         </cf-vstack>
-
-        {groupOfItsOwn
-          ? (
-            <cf-vstack
-              id="fabrichat-members"
-              gap="2"
-              style={{
-                borderTop: "1px solid var(--cf-theme-color-border)",
-                paddingTop: "0.75rem",
-              }}
-            >
-              <cf-heading level={4}>Members</cf-heading>
-              <div
-                data-ui-pattern={CHAT_MEMBERS_SURFACE}
-                data-ui-event-integrity={CHAT_MEMBERS_SURFACE}
-                style={{ display: ownerDisplay }}
-              >
-                <cf-vstack gap="2">
-                  <cf-submit-input
-                    data-ui-action={CHAT_MEMBERS_ACTION}
-                    placeholder="did:key:… to add"
-                    buttonText="Add"
-                    onClick={streams.add}
-                  />
-                  <cf-submit-input
-                    data-ui-action={CHAT_MEMBERS_ACTION}
-                    placeholder="did:key:… to remove"
-                    buttonText="Remove"
-                    onClick={streams.remove}
-                  />
-                </cf-vstack>
-              </div>
-              {noticeList.map((notice) => (
-                <cf-hstack gap="2" align="center">
-                  <cf-text variant="caption">
-                    Tell {notice.recipient} about this room
-                  </cf-text>
-                  <cf-button
-                    size="sm"
-                    variant="ghost"
-                    onClick={commitDelivered({
-                      myProfile,
-                      kind,
-                      ownSpace,
-                      composer,
-                      messages,
-                      reactionLists,
-                      requests,
-                      usedTimes,
-                      activity,
-                      counters,
-                      roster,
-                      left,
-                      notices,
-                      id: notice.id,
-                    })}
-                  >
-                    Done
-                  </cf-button>
-                </cf-hstack>
-              ))}
-              <cf-button
-                size="sm"
-                variant="ghost"
-                disabled={cannotSend}
-                onClick={streams.leave}
-              >
-                Leave this room
-              </cf-button>
-            </cf-vstack>
-          )
-          : null}
       </cf-vstack>
     ),
     [VIEWS]: { room: view },
@@ -2518,9 +2087,6 @@ export interface FabriChatRoomInput {
    * space's own chat is a group room with no title.
    */
   about?: AboutRecord | Default<typeof SPACE_CHAT_ABOUT>;
-
-  /** Whether the room lives in a space of its own. */
-  ownSpace?: boolean | Default<false>;
 
   /** The room's messages. */
   messages?: MessagesCell;
@@ -2539,15 +2105,6 @@ export interface FabriChatRoomInput {
 
   /** Where the activity's numbering stands. */
   counters?: ActivityCountersCell;
-
-  /** The members' profiles, as claims. */
-  roster?: RosterCell;
-
-  /** The principals of members who have left. */
-  left?: LeftCell;
-
-  /** Notices from `add`, waiting for a client to deliver them. */
-  notices?: NoticesCell;
 }
 
 /**
@@ -2566,16 +2123,12 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       {
         myProfile: profileWish.result,
         about: input.about,
-        ownSpace: input.ownSpace,
         messages: input.messages,
         reactionLists: input.reactionLists,
         requests: input.requests,
         usedTimes: input.usedTimes,
         activity: input.activity,
         counters: input.counters,
-        roster: input.roster,
-        left: input.left,
-        notices: input.notices,
       } as Parameters<typeof FabriChatRoomCore>[0],
     );
 
@@ -2585,7 +2138,6 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       about: room.about,
       recentActivity: room.recentActivity,
       recentActivityExpiredThrough: room.recentActivityExpiredThrough,
-      roster: room.roster,
       participants: room.participants,
       messages: room.messages,
       canSend: room.canSend,
@@ -2595,12 +2147,6 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       obliterateMessage: room.obliterateMessage,
       sendReaction: room.sendReaction,
       deleteReaction: room.deleteReaction,
-      showProfile: room.showProfile,
-      leave: room.leave,
-      add: room.add,
-      remove: room.remove,
-      delivered: room.delivered,
-      outgoingNotices: room.outgoingNotices,
       [UI]: (
         <cf-screen>
           {room[UI]}
