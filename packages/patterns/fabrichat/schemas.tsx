@@ -1,9 +1,9 @@
 /**
  * The FabriChat records, and the parts of the contracts that don't depend on
  * how a room stores its messages: the reviewed surfaces, recorded times,
- * profiles, a room's records and requests, and the manager's records.
- * `docs/specs/fabrichat/` states each of them, and the names here are the
- * spec's. `room.tsx` defines the room's own output types, over the
+ * profiles, a room's records and requests, how a message's reactions tally,
+ * and the manager's records. `docs/specs/fabrichat/` states each of them, and
+ * the names here are the spec's. `room.tsx` defines the room's own output types, over the
  * records it stores.
  *
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
@@ -11,6 +11,7 @@
  */
 import {
   type Cell,
+  equals,
   FabricDurationNsec,
   FabricEpochNsec,
   VIEWS,
@@ -87,6 +88,10 @@ export const durationNsec = (nsec: bigint): FabricDurationNsec =>
 /** A handler clock reading, in milliseconds, as a recorded time. */
 export const epochNsecFromMsec = (msec: number): FabricEpochNsec =>
   epochNsec(BigInt(Math.floor(msec)) * NSEC_PER_MSEC);
+
+/** Compares two recorded times, earliest first. */
+export const compareTimes = (a: FabricEpochNsec, b: FabricEpochNsec): number =>
+  nsecOf(a) < nsecOf(b) ? -1 : nsecOf(a) > nsecOf(b) ? 1 : 0;
 
 //
 // Profiles
@@ -266,6 +271,54 @@ export interface WindowEvent {
   /** The most messages to show, capped by the room's `maxWindowCount`. */
   count?: number;
 }
+
+//
+// Reaction tallies
+//
+
+/** How one emoji stands on one message. */
+export interface ChatReactionTally {
+  /** The emoji. */
+  emoji: string;
+
+  /** How many people reacted with it. */
+  count: number;
+
+  /** Whether the viewer is one of them. */
+  mine: boolean;
+
+  /** Their profiles, in the order they reacted. */
+  reactors: ProfileCell[];
+}
+
+/**
+ * The emoji `reactions` hold, in the order each was first used, each with the
+ * profiles that used it. A reaction is the viewer's when its profile is
+ * `viewer`, compared with `equals()`.
+ */
+export const reactionTalliesOf = (
+  reactions: readonly ChatReaction[],
+  viewer: ProfileCell | undefined,
+): ChatReactionTally[] => {
+  const ordered = [...reactions]
+    .filter((reaction) => reaction?.sentAt !== undefined)
+    .sort((a, b) => compareTimes(a.sentAt, b.sentAt));
+  const emoji = ordered.reduce<string[]>(
+    (found, reaction) =>
+      found.includes(reaction.emoji) ? found : [...found, reaction.emoji],
+    [],
+  );
+  return emoji.map((each) => {
+    const onThis = ordered.filter((reaction) => reaction.emoji === each);
+    return {
+      emoji: each,
+      count: onThis.length,
+      mine: viewer !== undefined &&
+        onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
+      reactors: onThis.map((reaction) => reaction.reactorProfile),
+    };
+  });
+};
 
 //
 // Manager records

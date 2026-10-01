@@ -78,6 +78,7 @@ import {
   type ChatMessageVersion,
   type ChatProfile,
   type ChatReaction,
+  type ChatReactionTally,
   type ChatRoomAbout,
   type ChatRoomActivity,
   type ChatRoomKind,
@@ -88,6 +89,7 @@ import {
   epochNsecFromMsec,
   nsecOf,
   type ProfileCell,
+  reactionTalliesOf,
   type WindowEvent,
 } from "./schemas.tsx";
 
@@ -1082,20 +1084,8 @@ export const commitWindow = handler<RoomWindowEvent, WindowActState>(
 // Derived facts
 //
 
-/** How one emoji stands on one message. */
-export interface ReactionTally {
-  /** The emoji. */
-  emoji: string;
-
-  /** How many people reacted with it. */
-  count: number;
-
-  /** Whether the viewer is one of them. */
-  mine: boolean;
-
-  /** Their profiles, in the order they reacted. */
-  reactors: ProfileCell[];
-
+/** How one emoji stands on one message, and the card listing its reactors. */
+export interface ReactionTally extends ChatReactionTally {
   /**
    * An id for the card that lists them, unique on the page, so the count can
    * name the card as its description.
@@ -1104,39 +1094,18 @@ export interface ReactionTally {
 }
 
 /**
- * The emoji `reactions` hold, in the order each was first used, each with the
- * profiles that used it. A reaction is the viewer's when its profile is the
- * viewer's profile cell.
+ * `reactions` tallied as `reactionTalliesOf()` does, each tally with a card id
+ * made from `cardIdPrefix`.
  */
 export const reactionTallies = (
   reactions: readonly ChatReaction[],
   viewer: ProfileCell | undefined,
   cardIdPrefix: string,
-): ReactionTally[] => {
-  const ordered = [...reactions]
-    .filter((reaction) => reaction?.sentAt !== undefined)
-    .sort((a, b) => compareTimes(a.sentAt, b.sentAt));
-  const emoji = ordered.reduce<string[]>(
-    (found, reaction) =>
-      found.includes(reaction.emoji) ? found : [...found, reaction.emoji],
-    [],
-  );
-  return emoji.map((each, index) => {
-    const onThis = ordered.filter((reaction) => reaction.emoji === each);
-    return {
-      emoji: each,
-      count: onThis.length,
-      mine: viewer !== undefined &&
-        onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
-      reactors: onThis.map((reaction) => reaction.reactorProfile),
-      cardId: `${cardIdPrefix}-${index}`,
-    };
-  });
-};
-
-/** Earliest first. */
-const compareTimes = (a: FabricEpochNsec, b: FabricEpochNsec): number =>
-  nsecOf(a) < nsecOf(b) ? -1 : nsecOf(a) > nsecOf(b) ? 1 : 0;
+): ReactionTally[] =>
+  reactionTalliesOf(reactions, viewer).map((tally, index) => ({
+    ...tally,
+    cardId: `${cardIdPrefix}-${index}`,
+  }));
 
 /**
  * The room's participants: those its space lists, plus every author it

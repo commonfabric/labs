@@ -19,25 +19,12 @@ import {
 } from "commonfabric";
 import {
   type ChatReaction,
+  type ChatReactionTally,
   type ChatRoomAbout,
   type ChatRoomActivity,
   type ProfileCell,
+  reactionTalliesOf,
 } from "./schemas.tsx";
-
-/** How one emoji stands on one message, as a placement offers it. */
-export interface PlacedTally {
-  /** The emoji. */
-  emoji: string;
-
-  /** How many people reacted with it. */
-  count: number;
-
-  /** Whether the viewer is one of them. */
-  mine: boolean;
-
-  /** Their profiles. */
-  reactors: ProfileCell[];
-}
 
 /** One message's reaction tallies. */
 export interface PlacedTallies {
@@ -45,7 +32,7 @@ export interface PlacedTallies {
   message: Cell<unknown>;
 
   /** Its reactions, by emoji, in the order each was first used. */
-  tallies: PlacedTally[];
+  tallies: ChatReactionTally[];
 }
 
 /** A message as a placement reads it: only its reactions. */
@@ -90,7 +77,10 @@ export interface PlacedRoom {
 /** Whether the viewer can read a placed room. */
 export type PlacementState = "member" | "not-member" | "unavailable";
 
-/** A placement's data face: what a placed chat holds, and what the viewer may see. */
+/**
+ * A placement's data face: what a placed chat holds, and what the viewer may
+ * see.
+ */
 export interface FabriChatPlacementView {
   /** Whether the viewer can read the room. */
   state: PlacementState;
@@ -136,39 +126,6 @@ export interface FabriChatPlacementOutput {
 }
 
 /**
- * `reactions`, by emoji, in the order each was first used, with whether
- * `viewer` is among each emoji's reactors.
- */
-export const talliesOf = (
-  reactions: readonly ChatReaction[],
-  viewer: ProfileCell | undefined,
-): PlacedTally[] => {
-  const ordered = [...reactions]
-    .filter((reaction) => reaction?.sentAt !== undefined)
-    .sort((a, b) =>
-      a.sentAt.value < b.sentAt.value
-        ? -1
-        : a.sentAt.value > b.sentAt.value
-        ? 1
-        : 0
-    );
-  return ordered.reduce<string[]>(
-    (found, reaction) =>
-      found.includes(reaction.emoji) ? found : [...found, reaction.emoji],
-    [],
-  ).map((emoji) => {
-    const onThis = ordered.filter((reaction) => reaction.emoji === emoji);
-    return {
-      emoji,
-      count: onThis.length,
-      mine: viewer !== undefined &&
-        onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
-      reactors: onThis.map((reaction) => reaction.reactorProfile),
-    };
-  });
-};
-
-/**
  * A room placed in a container. The viewer's own access decides what it
  * offers: a viewer who can't read the room sees that there is one, and
  * nothing of it.
@@ -212,7 +169,7 @@ const FabriChatPlacement = pattern<
     );
     return distinct.map((message) => ({
       message,
-      tallies: talliesOf(message.get()?.reactions ?? [], viewer),
+      tallies: reactionTalliesOf(message.get()?.reactions ?? [], viewer),
     }));
   });
   const chat = {
