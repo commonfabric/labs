@@ -652,8 +652,8 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       derivedConfidentiality(outShape.getAsNormalizedFullLink().id),
     ).not.toContainEqual("tmpl-only-atom");
 
-    // Raw ["cfc"] envelope read: flow-excluded (flowReadExcluded), so not
-    // even the payload label taints through it.
+    // Raw ["cfc"] envelope read: a member of the document, not payload, so
+    // not even the payload label taints through it.
     const txRaw = rt.edit();
     txRaw.readOrThrow({
       space,

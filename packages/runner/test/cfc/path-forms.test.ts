@@ -19,6 +19,7 @@ import {
 import {
   canonicalizeDocumentPath,
   canonicalizeLogicalPath,
+  cfcRecordPath,
   logicalPathToPointer,
 } from "../../src/cfc/canonical.ts";
 import { ConsumedLabelIndex } from "../../src/cfc/consumed-label-index.ts";
@@ -118,19 +119,42 @@ describe("path-forms", () => {
 
   it("converts a document path once and preserves a payload field named `value`", () => {
     const document = toDocumentPath(["value", "value", "field"]);
-    const logical: ValuePath = canonicalizeDocumentPath(document);
-    const canonical: ValuePath = canonicalizeLogicalPath(logical);
-
+    const logical = canonicalizeDocumentPath(document);
     expect(logical).toEqual(["value", "field"]);
+    const canonical: ValuePath = canonicalizeLogicalPath(logical!);
+
     expect(canonical).toEqual(["value", "field"]);
     expect(logicalPathToPointer(canonical)).toBe("/value/field");
     expect(Object.isFrozen(logical)).toBe(true);
     expect(document).toEqual(["value", "value", "field"]);
   });
 
-  it("returns a frozen path outside the document's `value` as it stands", () => {
+  it("returns the payload root for the document root", () => {
+    expect(canonicalizeDocumentPath(toDocumentPath([]))).toEqual([]);
+  });
+
+  it("returns no payload path for one of the document's own members", () => {
+    expect(canonicalizeDocumentPath(toDocumentPath(["source"])))
+      .toBeUndefined();
+    expect(canonicalizeDocumentPath(toDocumentPath(["slug"])))
+      .toBeUndefined();
+    expect(canonicalizeDocumentPath(toDocumentPath(["cfc", "labels"])))
+      .toBeUndefined();
+  });
+
+  it("records a payload path unmarked and a member's path marked document-rooted", () => {
+    expect(cfcRecordPath(toDocumentPath(["value", "slug"]))).toEqual({
+      path: ["slug"],
+    });
+    expect(cfcRecordPath(toDocumentPath(["slug"]))).toEqual({
+      path: ["slug"],
+      root: "document",
+    });
+  });
+
+  it("records a frozen member path as it stands", () => {
     const meta = toDocumentPath(Object.freeze(["cfc", "labels"]));
 
-    expect(canonicalizeDocumentPath(meta)).toBe(meta);
+    expect(cfcRecordPath(meta).path).toBe(meta);
   });
 });

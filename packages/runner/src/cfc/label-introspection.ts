@@ -3,17 +3,13 @@ import {
   type FabricValue,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
-import { toDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import {
-  canonicalizeDocumentPath,
-  canonicalizeLogicalPath,
-} from "./canonical.ts";
+import { canonicalizeLogicalPath } from "./canonical.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
@@ -155,19 +151,17 @@ export type ConfLabelQueryEvaluation = {
 /**
  * Parse the application-facing payload pointer of §4.6.4.1 into the canonical
  * entry path. `/body` addresses the payload label stored at the `/value/body`
- * envelope entry, whose labelMap path is the logical `["body"]`; an explicit
- * `/value` prefix is accepted as the envelope spelling of the same path, so the
- * pointer is read as a document path (`canonicalizeDocumentPath`). A payload
- * field literally named `value` at the root is consequently reached only
- * through that envelope spelling: `/value/x` names payload `x`, and
- * `/value/value/x` names payload `value.x`.
+ * envelope entry, whose labelMap path is the logical `["body"]`. An explicit
+ * `/value` prefix is accepted as the envelope spelling of the same path, so
+ * `/value/body` names payload `body` as well. A payload field literally named
+ * `value` or `cfc` at the root is reached through that envelope spelling:
+ * `/value/value/x` names payload `value.x`, and `/value/cfc` names payload
+ * `cfc`.
  *
  * Returns `undefined` — the caller collapses to `notAvailable` — for the
  * envelope metadata subtree (`/cfc/...`): labels attached to label metadata
  * are runtime-enforced metadata, not introspectable payload (the §4.6.4.1
- * first-layer rule). A payload field literally named `cfc` at the root is
- * consequently not addressable through this API; the collision with the
- * metadata sibling fails closed.
+ * first-layer rule).
  */
 export const parseConfLabelTargetPath = (
   pointer: string,
@@ -178,11 +172,12 @@ export const parseConfLabelTargetPath = (
   } catch {
     return undefined;
   }
-  const canonical = canonicalizeDocumentPath(toDocumentPath(segments));
-  if (canonical[0] === "cfc") {
+  if (segments[0] === "cfc") {
     return undefined;
   }
-  return canonical;
+  return canonicalizeLogicalPath(
+    segments[0] === "value" ? segments.slice(1) : segments,
+  );
 };
 
 // The §4.6.4.2 population rule: persisted templates as the carrier, the

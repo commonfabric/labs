@@ -292,20 +292,17 @@ The strict-only delta is:
   declared-monotonicity gates too. Recorded in
   [`cfc-spec-changes.md`](./cfc-spec-changes.md) SC-39.
 
-  The raw meta seam is outside the check at EVERY rung, so a meta path
+  The raw meta seam is outside the check at EVERY rung, so a meta write
   raises neither a strict reject nor a persist-and-flag diagnostic. The
-  measurement quantifies over paths a schema could have declared a policy
-  at, and no value schema describes the document-root siblings of `value`
-  that `setMetaRaw` addresses. One route does reach a ceiling there: a
-  document-root declared entry resolves at every meta path by longest
-  prefix. It is skipped anyway. That entry sits at logical `[]`, the
-  payload root, and reaches the seam only because canonicalization strips a
-  leading `value` — so it is not a declaration about the seam, and honoring
-  it would make a piece updatable or not according to whether its pattern
-  carries a root `ifc`. Declaring on a single result field, which is how a
-  pattern normally labels one, leaves the seam's ceiling empty, and the
-  piece is then un-updatable under strict because the pattern updater,
-  `setsrc`, and setup over an existing piece all stamp meta.
+  document-root siblings of `value` that `setMetaRaw` addresses are the
+  document's own members rather than payload, so a write to one names no
+  payload path (spec §4.6.5): it is no flow stamp target, and nothing is
+  measured for it. No declared entry reaches it either, since a
+  document-root declared entry labels the payload root. Measuring the seam
+  would leave a piece un-updatable under strict whenever its pattern
+  declares on a single result field, which is how a pattern normally labels
+  one, because the pattern updater, `setsrc`, and setup over an existing
+  piece all write meta.
 
   Two id classes are outside the check at every rung too, and that is the
   same rule over a document rather than over a path. A computed cell is the
@@ -326,10 +323,10 @@ The strict-only delta is:
   entries document refuses every mark a served run writes to record that it
   handled an event, and every entry a same-space served emission carries into
   the document on its own transaction. Both are ordinary operation rather
-  than edge cases. One predicate covers those two classes, the marked class
-  below, and the meta seam above (`isDeclarablePolicyPath` in `prepare.ts`),
-  because all of them answer one question: could a schema have declared a
-  policy here.
+  than edge cases. One predicate covers those two classes and the marked
+  class below (`isDeclarablePolicyStore` in `prepare.ts`), because all of
+  them answer one question: could a schema have declared a policy on this
+  document.
 
   Two id classes is what this is, rather than a rule about documents the
   runtime mints. The runtime mints many more and route 2 below is what most
@@ -479,14 +476,13 @@ The strict-only delta is:
   stamp.
 
   A declared entry can still reach one of these documents, from a
-  schema-carrying write to it, and the skip is unconditional over that route
-  as it is over the meta seam's document-root route. Honoring it would make a
-  derivation admit its own inputs' taint or refuse it according to whether
-  the schema behind it happens to carry an `ifc`, while the atoms arriving in
-  the join come from what the transaction read rather than from anything that
-  schema describes. The residual is that a declaration which did reach such a
-  document stops being a write ceiling; it stays a read floor, and the
-  persisted stamp is unaffected.
+  schema-carrying write to it, and the skip is unconditional over that route.
+  Honoring it would make a derivation admit its own inputs' taint or refuse it
+  according to whether the schema behind it happens to carry an `ifc`, while
+  the atoms arriving in the join come from what the transaction read rather
+  than from anything that schema describes. The residual is that a declaration
+  which did reach such a document stops being a write ceiling; it stays a read
+  floor, and the persisted stamp is unaffected.
 
   What the skip does NOT do is release the value. A derivation's result
   leaves the fabric only through a sink, and a sink measures the join it is

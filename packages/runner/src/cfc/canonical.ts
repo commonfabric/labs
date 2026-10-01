@@ -15,6 +15,7 @@ import type {
   CfcExternalContentObservation,
   CfcLabelMetadataObservation,
   CfcMetadata,
+  CfcRecordAddress,
   ConsultedGrant,
   ConsultedPolicyManifest,
   ConsumedRead,
@@ -45,20 +46,44 @@ export const canonicalizeLogicalPath = (path: NonDocumentPath): ValuePath => {
 };
 
 /**
- * Returns the canonical logical path for a path rooted at the stored document,
- * as a transaction's read and write addresses are. The document keeps its
- * payload under `value`, so `["value", "x"]` becomes `["x"]`, and `["value"]`
- * becomes `[]`, the whole payload.
+ * Returns the payload path that a path rooted at the stored document names,
+ * as a transaction's read and write addresses are, or `undefined` when the
+ * path names one of the document's own members instead. The document keeps
+ * its payload under `value`, so `["value", "x"]` becomes `["x"]` and
+ * `["value"]` becomes `[]`, the whole payload. The document root `[]` holds
+ * the payload too, and also becomes `[]`.
  *
- * A path that does not start with `"value"` names one of the document's own
- * members, such as `cfc` or `source`, and is returned as it stands. It then
- * shares a logical path with a payload field of the same name, so a caller
- * that must keep the two apart checks the raw path first.
+ * Any other path, such as `["source"]` or `["cfc", "labelMap"]`, is envelope
+ * metadata, which is never matched as a payload path (spec §4.6.5): a member
+ * named `source` and a payload field named `source` are different places. A
+ * record that has to keep a member's address uses {@link cfcRecordPath}.
  */
-export const canonicalizeDocumentPath = (path: DocumentPath): ValuePath =>
+export const canonicalizeDocumentPath = (
+  path: DocumentPath,
+): ValuePath | undefined =>
   path[0] === "value"
     ? Object.freeze(path.slice(1)) as ValuePath
-    : canonicalizeLogicalPath(path as readonly string[]);
+    : path.length === 0
+    ? canonicalizeLogicalPath(path as readonly string[])
+    : undefined;
+
+/**
+ * The path a transaction record binds for `path`, which is rooted at the
+ * stored document: the payload path {@link canonicalizeDocumentPath} returns,
+ * or, for one of the document's own members, a frozen copy of `path` marked
+ * `root: "document"`. The record keeps the member's address that way without
+ * its being taken for the payload field of the same name.
+ */
+export const cfcRecordPath = (
+  path: DocumentPath,
+): { path: ValuePath } | { path: readonly string[]; root: "document" } => {
+  const payload = canonicalizeDocumentPath(path);
+  if (payload !== undefined) return { path: payload };
+  return {
+    path: Object.isFrozen(path) ? path : Object.freeze(path.slice()),
+    root: "document",
+  };
+};
 
 /**
  * WeakMap cache mapping a path-array identity to its JSON-pointer
@@ -93,6 +118,21 @@ const compareAddress = (left: CfcAddress, right: CfcAddress): number => {
   const leftPointer = logicalPathToPointer(left.path);
   const rightPointer = logicalPathToPointer(right.path);
   return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
+};
+
+/**
+ * {@link compareAddress}, then the record's `root`: a record of a payload path
+ * and a record of the document member at the same path name different places.
+ */
+const compareRecordAddress = (
+  left: CfcRecordAddress,
+  right: CfcRecordAddress,
+): number => {
+  const byAddress = compareAddress(left, right);
+  if (byAddress !== 0) return byAddress;
+  const leftRoot = left.root ?? "";
+  const rightRoot = right.root ?? "";
+  return leftRoot < rightRoot ? -1 : leftRoot > rightRoot ? 1 : 0;
 };
 
 /**
@@ -436,12 +476,12 @@ export const canonicalizePreparedDigestInput = (
   input: PreparedDigestInput,
 ): PreparedDigestInput => ({
   consumedReads: [...input.consumedReads].map(canonicalizeConsumedRead).sort(
-    compareAddress,
+    compareRecordAddress,
   ),
   attemptedWrites: [...input.attemptedWrites].map(canonicalizeAttemptedWrite)
-    .sort(compareAddress),
+    .sort(compareRecordAddress),
   writes: [...input.writes].map(canonicalizeAttemptedWrite).sort(
-    compareAddress,
+    compareRecordAddress,
   ),
   // ORDER-PRESERVING on purpose (sorted by journalIndex, which is unique
   // per record, so this is a total order): the log exists to bind the

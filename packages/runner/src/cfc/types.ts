@@ -455,8 +455,17 @@ export type CfcAddress = Immutable<{
   path: string[];
 }>;
 
+/**
+ * The address a transaction record binds. Its `path` is a payload path unless
+ * `root` is `"document"`, which marks a path rooted at the stored document
+ * that names one of the document's own members, such as `source`. Such a
+ * record binds the member without being matched as the payload field of the
+ * same name.
+ */
+export type CfcRecordAddress = CfcAddress & Immutable<{ root?: "document" }>;
+
 export type ConsumedRead =
-  & CfcAddress
+  & CfcRecordAddress
   & Immutable<{
     meta?: Metadata;
     nonRecursive?: boolean;
@@ -474,7 +483,7 @@ export type ConsumedRead =
     journalIndex?: number;
   }>;
 
-export type AttemptedWrite = CfcAddress;
+export type AttemptedWrite = CfcRecordAddress;
 
 /**
  * One applied write attempt in transaction order (§6 of
