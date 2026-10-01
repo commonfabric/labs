@@ -1,0 +1,1824 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "A group room's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ActivityCounters": {
+        "properties": {
+          "expiredThrough": {
+            "description": "The highest `seq` dropped for age; 0 for none.",
+            "type": "number"
+          },
+          "nextSeq": {
+            "description": "The `seq` the next entry takes.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "nextSeq",
+          "expiredThrough"
+        ],
+        "type": "object"
+      },
+      "ChatDeletedBody": {
+        "properties": {
+          "deleted": {
+            "description": "Always `true`: the marker of a deleted message.",
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first: the\nlatest edit or deletion. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "description": "Everyone's reactions to this message, in no particular order.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply",
+            "description": "What this message replies to, and where it is shown; absent for none."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "description": "The version's text.",
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the room recorded this version; in a send or an edit, the time the\nsender proposes.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "description": "A single emoji.",
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the reactor reacted under."
+          },
+          "sentAt": {
+            "description": "When the room recorded the reaction. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ChatReplyShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatReplyShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "description": "When the room recorded it. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "description": "The `requestId` of the event it records.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The entry's place in the room's activity: 1, 2, 3, … with no gaps.",
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message the event changed or added."
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "group",
+          "direct"
+        ]
+      },
+      "MessageRecord": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "$ref": "#/$defs/ReactionList",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message's reactions; absent once the message is deleted."
+          },
+          "replyTo": {
+            "$ref": "#/$defs/StoredReply",
+            "description": "What this message replies to, and where it is shown."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions"
+        ],
+        "type": "object"
+      },
+      "MessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentMessage"
+        },
+        "type": "array"
+      },
+      "ReactionList": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentReaction"
+        },
+        "type": "array"
+      },
+      "RequestMemo": {
+        "properties": {
+          "at": {
+            "description": "When the room acted on it.",
+            "type": "FabricEpochNsec"
+          },
+          "key": {
+            "description": "The request's key: its sender and its `requestId`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "at"
+        ],
+        "type": "object"
+      },
+      "SentActivity": {
+        "$ref": "#/$defs/ChatRoomActivity",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "SentMessage": {
+        "$ref": "#/$defs/MessageRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "SentReaction": {
+        "$ref": "#/$defs/ChatReaction",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatUnreact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
+      "StoredAbout": {
+        "$ref": "#/$defs/AboutRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/manager.tsx",
+              "moduleIdentity": "Ig05ssoMdZAz6dquRTxHRBEBlwge3S8PTLhw8R5oLIg",
+              "path": [
+                "commitManager"
+              ]
+            }
+          }
+        }
+      },
+      "StoredActivityCounters": {
+        "$ref": "#/$defs/ActivityCounters",
+        "ifc": {
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/MessageRecord",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "StoredRequestMemo": {
+        "$ref": "#/$defs/RequestMemo",
+        "ifc": {
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredUsedTime": {
+        "$ref": "#/$defs/UsedTime",
+        "ifc": {
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "UsedTime": {
+        "properties": {
+          "at": {
+            "description": "The time.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What a room stores. Each record but `about` has a default, so a space's own\nchat starts with none of them.",
+    "properties": {
+      "about": {
+        "$ref": "#/$defs/StoredAbout",
+        "description": "What the room says about itself, written once by the manager that creates\nit. A space's own chat has none, and reads as a group room with no title."
+      },
+      "activity": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The room's recent activity.",
+        "items": {
+          "$ref": "#/$defs/SentActivity"
+        },
+        "type": "array"
+      },
+      "counters": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Where the activity's numbering stands.",
+        "items": {
+          "$ref": "#/$defs/StoredActivityCounters"
+        },
+        "type": "array"
+      },
+      "messages": {
+        "$ref": "#/$defs/MessagesValue",
+        "asCell": [
+          "cell"
+        ],
+        "description": "The room's messages."
+      },
+      "reactionLists": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Every message's reaction list.",
+        "items": {
+          "$ref": "#/$defs/ReactionList"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The requests the room has acted on.",
+        "items": {
+          "$ref": "#/$defs/StoredRequestMemo"
+        },
+        "type": "array"
+      },
+      "usedTimes": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The times the room has recorded something at.",
+        "items": {
+          "$ref": "#/$defs/StoredUsedTime"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "fabrichat/room.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "A group room's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ChatDeletedBody": {
+        "properties": {
+          "deleted": {
+            "description": "Always `true`: the marker of a deleted message.",
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first: the\nlatest edit or deletion. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "description": "Everyone's reactions to this message, in no particular order.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply",
+            "description": "What this message replies to, and where it is shown; absent for none."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageList": {
+        "properties": {
+          "closeWindow": {
+            "$ref": "#/$defs/RoomWindowEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Closes a window."
+          },
+          "count": {
+            "description": "How many messages the room holds, obliterated tombstones included.",
+            "type": "number"
+          },
+          "latest": {
+            "description": "The newest messages of the main conversation, kept current.",
+            "properties": {
+              "hasOlder": {
+                "description": "Whether the main conversation has older messages than these.",
+                "type": "boolean"
+              },
+              "messages": {
+                "description": "Up to `maxWindowCount` of them, oldest first.",
+                "items": {
+                  "$ref": "#/$defs/MessageRecord"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "messages",
+              "hasOlder"
+            ],
+            "type": "object"
+          },
+          "newestAt": {
+            "description": "The newest message's `sentAt`; absent while there are none.",
+            "type": "FabricEpochNsec"
+          },
+          "oldestAt": {
+            "description": "The oldest message's `sentAt`; absent while there are none.",
+            "type": "FabricEpochNsec"
+          },
+          "openWindow": {
+            "$ref": "#/$defs/RoomWindowEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Opens a window, or moves one already open."
+          },
+          "windows": {
+            "$ref": "#/$defs/WindowsValue",
+            "description": "This session's open windows, by the `windowId` its client chose."
+          }
+        },
+        "required": [
+          "count",
+          "latest",
+          "windows",
+          "openWindow",
+          "closeWindow"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "description": "The version's text.",
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the room recorded this version; in a send or an edit, the time the\nsender proposes.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatMessageWindow": {
+        "properties": {
+          "hasNewer": {
+            "description": "Whether the view has messages newer than the window's last.",
+            "type": "boolean"
+          },
+          "hasOlder": {
+            "description": "Whether the view has messages older than the window's first.",
+            "type": "boolean"
+          },
+          "messages": {
+            "description": "The messages in the window, oldest first.",
+            "items": {
+              "$ref": "#/$defs/MessageRecord"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "description": "The `openWindow` request that set the window as it is now.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/MessageRecord",
+            "description": "For a thread's window, the thread's root; absent for the main one."
+          }
+        },
+        "required": [
+          "requestId",
+          "messages",
+          "hasOlder",
+          "hasNewer"
+        ],
+        "type": "object"
+      },
+      "ChatMessageWindows": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatMessageWindow"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "description": "A single emoji.",
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "description": "The profile the reactor reacted under."
+          },
+          "sentAt": {
+            "description": "When the room recorded the reaction. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ChatReplyShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatReplyShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created; absent for a space's own chat.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "`\"direct\"` if created as a direct room; `\"group\"` otherwise."
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "description": "The room's policy, stated correctly, in a document of its own."
+          },
+          "record": {
+            "$ref": "#/$defs/AboutRecord",
+            "description": "The record the room's creator wrote, whose label names them; absent for a\nspace's own chat, which no one created as a room."
+          },
+          "title": {
+            "description": "A group room's title. A direct room, and a space's own chat, have none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "description": "When the room recorded it. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "description": "The `requestId` of the event it records.",
+            "type": "string"
+          },
+          "seq": {
+            "description": "The entry's place in the room's activity: 1, 2, 3, … with no gaps.",
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage",
+            "description": "The message the event changed or added."
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "group",
+          "direct"
+        ]
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "description": "Whether a sender's deletion of their own message obliterates it.",
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "description": "Whether an edit or a plain deletion keeps the version it replaces.",
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "description": "The most message windows a session can have open.",
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "description": "The most messages a message window holds.",
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "description": "Whether an OWNER may obliterate messages.",
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "description": "How far before the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "description": "How far after the room's clock a proposed time is accepted, in ns.",
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "description": "How long an entry stays in `recentActivity`, in ns.",
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "ChatRoomView": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself."
+          },
+          "canSend": {
+            "description": "Whether this reader can send, edit, delete, and react.",
+            "type": "boolean"
+          },
+          "deleteMessage": {
+            "$ref": "#/$defs/RoomStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Records one of the sender's messages as deleted."
+          },
+          "deleteReaction": {
+            "$ref": "#/$defs/RoomStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Removes the sender's reaction to a message."
+          },
+          "editMessage": {
+            "$ref": "#/$defs/RoomStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Records a new version of one of the sender's messages."
+          },
+          "messages": {
+            "$ref": "#/$defs/ChatMessageList",
+            "description": "The room's messages."
+          },
+          "obliterateMessage": {
+            "$ref": "#/$defs/RoomStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Reduces a message to a tombstone."
+          },
+          "participants": {
+            "description": "The participants of the room's space, as its default pattern lists them\n(`wish(\"#default\")`), plus any author it doesn't list.",
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "tags": [
+              "default"
+            ],
+            "type": "array"
+          },
+          "recentActivity": {
+            "description": "What the room recorded recently, in `seq` order.",
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          },
+          "recentActivityExpiredThrough": {
+            "description": "The highest `seq` dropped from `recentActivity` for age; 0 for none.",
+            "type": "number"
+          },
+          "sendMessage": {
+            "$ref": "#/$defs/RoomStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Sends a message."
+          },
+          "sendReaction": {
+            "$ref": "#/$defs/RoomStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds the sender's reaction to a message."
+          }
+        },
+        "required": [
+          "about",
+          "recentActivity",
+          "recentActivityExpiredThrough",
+          "participants",
+          "messages",
+          "canSend",
+          "sendMessage",
+          "editMessage",
+          "deleteMessage",
+          "obliterateMessage",
+          "sendReaction",
+          "deleteReaction"
+        ],
+        "type": "object"
+      },
+      "MessageRecord": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "$ref": "#/$defs/ReactionList",
+            "description": "The message's reactions; absent once the message is deleted."
+          },
+          "replyTo": {
+            "$ref": "#/$defs/StoredReply",
+            "description": "What this message replies to, and where it is shown."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions"
+        ],
+        "type": "object"
+      },
+      "ReactionList": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentReaction"
+        },
+        "type": "array"
+      },
+      "RoomStreamEvent": {
+        "properties": {
+          "emoji": {
+            "description": "A single emoji.",
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/MessageRecord",
+            "description": "The message acted on."
+          },
+          "replyTo": {
+            "$ref": "#/$defs/StoredReply",
+            "description": "What a sent message replies to."
+          },
+          "requestId": {
+            "description": "Chosen by the sender, and unique among its requests.",
+            "type": "string"
+          },
+          "target": {
+            "description": "A rendered control's text.",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "version": {
+            "$ref": "#/$defs/ChatMessageVersion",
+            "description": "The version to send or record."
+          }
+        },
+        "type": "object"
+      },
+      "RoomWindowEvent": {
+        "properties": {
+          "count": {
+            "description": "The most messages to show, capped by the room's `maxWindowCount`.",
+            "type": "number"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "properties": {
+                  "before": {
+                    "anyOf": [
+                      {
+                        "type": "FabricEpochNsec"
+                      },
+                      {
+                        "enum": [
+                          "end"
+                        ],
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "before"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "after": {
+                    "anyOf": [
+                      {
+                        "type": "FabricEpochNsec"
+                      },
+                      {
+                        "enum": [
+                          "start"
+                        ],
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "after"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "around": {
+                    "type": "FabricEpochNsec"
+                  }
+                },
+                "required": [
+                  "around"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Where the window sits; required to open one."
+          },
+          "requestId": {
+            "description": "Chosen by the client; shown in the window once an open is fulfilled.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/MessageRecord",
+            "description": "The root of the thread to show; absent for the main conversation."
+          },
+          "windowId": {
+            "description": "The window to set or close, chosen by the client.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "windowId"
+        ],
+        "type": "object"
+      },
+      "SentReaction": {
+        "$ref": "#/$defs/ChatReaction",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatUnreact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
+      "StoredReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/MessageRecord",
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "WindowsValue": {
+        "$ref": "#/$defs/ChatMessageWindows",
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/room-records.tsx",
+              "moduleIdentity": "h_ZM57fKZX-k_M0zOwVBLRC4PaCtwipQxH3SXZNfUeY",
+              "path": [
+                "commitWindow"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "What a room offers everyone its space admits: `ChatRoomOutput`.",
+    "properties": {
+      "$NAME": {
+        "description": "The room's name, for lists of pieces.",
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "The room's own rendering, with its reviewed surfaces."
+      },
+      "$VIEWS": {
+        "description": "The room's data face, as one group.",
+        "properties": {
+          "room": {
+            "$ref": "#/$defs/ChatRoomView"
+          }
+        },
+        "required": [
+          "room"
+        ],
+        "type": "object"
+      },
+      "about": {
+        "$ref": "#/$defs/ChatRoomAbout",
+        "description": "What the room says about itself."
+      },
+      "canSend": {
+        "description": "Whether this reader can send, edit, delete, and react.",
+        "type": "boolean"
+      },
+      "deleteMessage": {
+        "$ref": "#/$defs/RoomStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Records one of the sender's messages as deleted."
+      },
+      "deleteReaction": {
+        "$ref": "#/$defs/RoomStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Removes the sender's reaction to a message."
+      },
+      "editMessage": {
+        "$ref": "#/$defs/RoomStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Records a new version of one of the sender's messages."
+      },
+      "messages": {
+        "$ref": "#/$defs/ChatMessageList",
+        "description": "The room's messages."
+      },
+      "obliterateMessage": {
+        "$ref": "#/$defs/RoomStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Reduces a message to a tombstone."
+      },
+      "participants": {
+        "description": "The participants of the room's space, as its default pattern lists them\n(`wish(\"#default\")`), plus any author it doesn't list.",
+        "items": {
+          "$ref": "#/$defs/ChatProfile"
+        },
+        "tags": [
+          "default"
+        ],
+        "type": "array"
+      },
+      "recentActivity": {
+        "description": "What the room recorded recently, in `seq` order.",
+        "items": {
+          "$ref": "#/$defs/ChatRoomActivity"
+        },
+        "type": "array"
+      },
+      "recentActivityExpiredThrough": {
+        "description": "The highest `seq` dropped from `recentActivity` for age; 0 for none.",
+        "type": "number"
+      },
+      "sendMessage": {
+        "$ref": "#/$defs/RoomStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Sends a message."
+      },
+      "sendReaction": {
+        "$ref": "#/$defs/RoomStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds the sender's reaction to a message."
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "$VIEWS",
+      "about",
+      "recentActivity",
+      "recentActivityExpiredThrough",
+      "participants",
+      "messages",
+      "canSend",
+      "sendMessage",
+      "editMessage",
+      "deleteMessage",
+      "obliterateMessage",
+      "sendReaction",
+      "deleteReaction"
+    ],
+    "type": "object"
+  }
+}
