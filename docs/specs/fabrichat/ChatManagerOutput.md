@@ -176,9 +176,9 @@ conversation from splitting.
 Creates a group room. This is an outward act: it grants other people access.
 
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
-- **Effect:** always creates a new space, with a new room as its chat, even
-  when another group room has the same members. Grants each member access, produces a notice for each, and
-  records the entry in `rooms`.
+- **Effect:** always creates a new space, with a new room as its chat, even when
+  another group room has the same members. Grants each member access, produces a
+  notice for each, and records the entry in `rooms`.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string)`

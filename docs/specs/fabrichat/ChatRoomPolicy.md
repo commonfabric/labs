@@ -64,9 +64,9 @@ The policy document is labeled `authored-by` the principal who wrote it (see
   message obliterates it, removing its history and its author, as
   `obliterateMessage` does (see [obliterated
   messages](ChatMessage.md#obliterated-messages)). This is the only way a member
-  of a group room takes back what they said completely. It governs `deleteMessage` only: a direct room MUST let either
-  person obliterate their own messages with `obliterateMessage`, whatever its
-  policy.
+  of a group room takes back what they said completely. It governs
+  `deleteMessage` only: a direct room MUST let either person obliterate their
+  own messages with `obliterateMessage`, whatever its policy.
 - **`proposedTimeMaxAgeNsec`**: how far before the room's handler clock a
   sender's proposed time is accepted, and recorded as proposed. It covers
   network delay, retries, and sends queued offline, so it can be generous.

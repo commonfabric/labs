@@ -138,8 +138,9 @@ What works today:
   - `edit_file`
   - `write_file`
   - `delegate_task`
-  - `finish_task` (parent-only question or reason the task cannot proceed; ends
-    the turn through ordinary policy and artifacts)
+  - `finish_task` (parent-only answer with optional client actions, question, or
+    reason the task cannot proceed; ends the turn through ordinary policy and
+    artifacts)
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the
     host-owned result file)
@@ -497,12 +498,15 @@ time through its terminal event. Unreported usage fields stay absent, and a call
 without usage prevents a partial dollar cost from being shown as a total. There
 is no estimate of tokens still being generated within a provider call.
 
-For an ordinary task with a configured Fabric session, the parent completes only
-after `assign_slug` successfully names a UI piece in that run. A text answer
-becomes a small pattern that renders the answer, created through the ordinary
-authoring and tool policy path. Data-only probes stay unnamed. An existing piece
-can keep its address: after a revision, `assign_slug` confirms the same piece
-under its existing slug. Its pending-read and UI checks apply in either case.
+For an ordinary task with a configured Fabric session, the parent completes
+either after `assign_slug` successfully names a UI piece in that run or through
+`finish_task` with outcome `completed`. A task that builds or shows something
+leaves a piece, created through the ordinary authoring and tool policy path.
+Data-only probes stay unnamed. An existing piece can keep its address: after a
+revision, `assign_slug` confirms the same piece under its existing slug. Its
+pending-read and UI checks apply in either case. A task whose answer is words
+ends with `finish_task` completed and the answer as its message, without a
+pattern built to hold it.
 
 Outside a budget-finalizing turn, a plain-text final answer without that receipt
 gets a host correction within the existing model-turn bound. Exhausting a strict
@@ -524,11 +528,25 @@ requests keep their schema-based document return contract, including on resume.
 Child return contracts are unchanged. A budget-finalized give-up can still
 report partial findings without a piece.
 
-When a missing input or choice blocks the goal, the parent calls `finish_task`
-with `{ "outcome": "question", "message": "…" }`; when it cannot proceed, it
-uses `"gave-up"` and a concrete reason. The call must stand alone in its model
-turn. An admitted call persists its ordinary policy decision, artifact, and
-paired transcript result, then ends the loop without another provider request.
+The parent ends a task in words with `finish_task`. When the task is done, it
+calls `{ "outcome": "completed", "message": "…" }` with the answer the person
+reads. A completed call may add `actions`, at most eight, for the person's
+client to perform in order:
+
+- `{ "kind": "open_loom", "loomId": "loom-…" }` opens a loom the run composed;
+  the id is `loom-` and sixteen lowercase hex digits.
+- `{ "kind": "command", "line": "/…" }` runs a client slash command of at most
+  500 characters.
+- `{ "kind": "open_url", "url": "https://…" }` opens an http or https address.
+
+The harness checks their shape and carries them; the client decides whether and
+how each runs. Actions with any other outcome, an unknown kind, an extra field,
+or a malformed value refuse the call. When a missing input or choice blocks the
+goal, the parent calls `finish_task` with
+`{ "outcome": "question", "message": "…" }`; when it cannot proceed, it uses
+`"gave-up"` and a concrete reason. The call must stand alone in its model turn.
+An admitted call persists its ordinary policy decision, artifact, and paired
+transcript result, then ends the loop without another provider request.
 Malformed or withheld calls remain recoverable tool errors. Children retain
 their failure-return contract and cannot call `finish_task`.
 
@@ -566,13 +584,15 @@ reference behind the attachment remains private.
 These dispositions keep the run lifecycle `completed` and the conversation
 reusable. `run-report.json` records `taskOutcome`, a union discriminated by
 `outcome: "completed" | "question" | "gave-up"`; only a question carries
-`question: { text }`, and only a give-up carries `reason`. The human sentence
-remains in `finalAssistantText`, read from the admitted tool result before
-model-bound handle substitution. The transcript's tool result still carries
-tokens for model context. Older reports without `taskOutcome` mean `completed`.
-The console projects that union into its HTTP 200 result and `turn_completed`
-event, with the session identity and current continuation availability described
-in [the console contract](console/README.md). Execution errors and cancellation
+`question: { text }`, only a give-up carries `reason`, and only a completion
+through `finish_task` carries `answer` and, when it named any, `actions`. A
+completion by final assistant text carries neither. The human sentence remains
+in `finalAssistantText`, read from the admitted tool result before model-bound
+handle substitution. The transcript's tool result still carries tokens for model
+context. Older reports without `taskOutcome` mean `completed`. The console
+projects that union into its HTTP 200 result and `turn_completed` event, with
+the session identity and current continuation availability described in
+[the console contract](console/README.md). Execution errors and cancellation
 keep their distinct lifecycle and HTTP results.
 
 Missing-input discovery uses the current grants and safe handle metadata.

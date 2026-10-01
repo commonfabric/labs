@@ -129,9 +129,8 @@ space.
   make one.
 - **`recentActivity`** is a log of what the room recorded recently: each message
   sent, edited, deleted, or obliterated, and each reaction added or removed, as
-  a
-  [`ChatRoomActivity`](ChatRoomActivity.md), in `seq` order. A client follows a
-  room by reading it, rather than by comparing messages with what it had, and
+  a [`ChatRoomActivity`](ChatRoomActivity.md), in `seq` order. A client follows
+  a room by reading it, rather than by comparing messages with what it had, and
   finds the message a send of its own produced there. It holds entries within
   the room's `recentActivityWindowNsec`.
 - **`recentActivityExpiredThrough`** is the highest `seq` the room has dropped
@@ -150,9 +149,8 @@ plus one value computed for each reader, and the difference matters to a client:
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
   room's space admits. That is nearly everything: `about`, the messages,
   `recentActivity` and `recentActivityExpiredThrough`, `participants`, and the
-  streams. These are the room: a link to the room
-  names them, and passing the link around, to another component or another
-  person, passes the room.
+  streams. These are the room: a link to the room names them, and passing the
+  link around, to another component or another person, passes the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
   only `messages.windows`, the windows a session has opened onto the messages
   (see [`ChatMessageList`](ChatMessageList.md#scope)). Passing the room's link
@@ -211,9 +209,9 @@ These rules hold for every stream:
   from when it recorded the request. By then a repeated `sendMessage` or
   `editMessage` is refused anyway, since its proposal is outside the window. For
   other streams, a repeat later than that could undo a later request, such as a
-  reaction removed and then restored. So a room
-  relies on its runtime finishing or dropping every event well within that time
-  (see [`FabriChatRoom`](FabriChatRoom.md#prerequisites)).
+  reaction removed and then restored. So a room relies on its runtime finishing
+  or dropping every event well within that time (see
+  [`FabriChatRoom`](FabriChatRoom.md#prerequisites)).
 
 - A stream that names a reviewed surface admits an event only as a trusted
   gesture on that surface (see
@@ -522,4 +520,4 @@ person obliterate their own messages.
 
 - **Membership's open questions belong to the space.** Returning after leaving,
   and being added without consent, are questions about a space's access list
-  and its tools, which a room no longer changes.
+  and its tools, and a room changes neither.

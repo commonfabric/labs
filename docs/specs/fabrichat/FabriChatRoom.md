@@ -21,6 +21,7 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 - The times the room has used, so it can make each new one unique, each kept
   as long as a request is remembered: no new time is chosen from before the
   proposed-time window, which that span covers.
+
 `participants` is computed from the participants the space's default pattern
 lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
 profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
@@ -108,11 +109,11 @@ to check.
 handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves.
 
-Every handler that changes the room's own record appends its
-`recentActivity` entry in the same transaction as the change, so the log never
-disagrees with the messages. Entries older than the window are dropped as new ones
-are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
-remove the message's earlier entries.
+Every handler that changes the room's own record appends its `recentActivity`
+entry in the same transaction as the change, so the log never disagrees with the
+messages. Entries older than the window are dropped as new ones are appended.
+`commitObliterate`, and `commitDelete` when it obliterates, also remove the
+message's earlier entries.
 
 The message list keeps `windows` as a `PerSession` keyed collection, and
 fulfills `openWindow` and `closeWindow` by setting and removing entries in it. A

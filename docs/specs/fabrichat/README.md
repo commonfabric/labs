@@ -153,10 +153,9 @@ provide, the document says so, under the heading "Prerequisites".
 ## Decisions
 
 1. **A conversation lives in a shared space**, as that space's chat (decision
-   7). A container shows a
-   room by linking to it, never by copying it. A link carries its target's label
-   across the space boundary, and copied bytes do not ([cross-space
-   integrity](../cfc-cross-space-integrity.md), §1).
+   7). A container shows a room by linking to it, never by copying it. A link
+   carries its target's label across the space boundary, and copied bytes do not
+   ([cross-space integrity](../cfc-cross-space-integrity.md), §1).
 2. **Membership is the room space's.** Its access list decides who can read and
    write, and its default pattern lists the profiles its participants
    contributed. The room keeps nothing beside them.
@@ -283,10 +282,9 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
   address still derives from its reactor's profile, as the design says.
 - **Creation takes one transaction.** The space comes with its grants, so
   writing the room, the manager's notices, and its index entry happens in one
-  commit,
-  rather than in the design's resumable steps, and a request's outcome is
-  `done` or `refused` from the start. A request already
-  decided changes nothing when it arrives again.
+  commit, rather than in the design's resumable steps, and a request's outcome
+  is `done` or `refused` from the start. A request already decided changes
+  nothing when it arrives again.
 - **No container creates placements.** A client does. A placement reads its
   viewer's access to the room's space, so `"none"` shows as `"not-member"`,
   and a level not known yet as `"unavailable"`.
@@ -294,11 +292,10 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
 ### Writers and labels
 
 - **Every record names its writers.** Beyond what the design requires of
-  messages and reactions, each of the room's records (its request memory,
-  used times, activity and its numbering, and each session's windows) has a
-  write policy listing the handlers that write
-  it (`WritePolicyAnyOf`), so no other code can write it, even code a member
-  runs in the room's space.
+  messages and reactions, each of the room's records (its request memory, used
+  times, activity and its numbering, and each session's windows) has a write
+  policy listing the handlers that write it (`WritePolicyAnyOf`), so no other
+  code can write it, even code a member runs in the room's space.
 - **Starts are not gesture-checked.** `openDirect` and `createGroup` are sent
   from controls marked `ChatStartSurface`, but no write policy requires the
   gesture, since the manager's records are also written by acts with none.
@@ -339,10 +336,9 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
    typed in.
 2. **Each person is displayed** with `cf-profile-badge`, bound to the profile
    link on their messages and in their space's participants, and read when
-   drawn. FabriChat
-   stores no names or avatars, so a changed name shows everywhere, history
-   included. A profile that can't be read shows as a neutral placeholder (see
-   [`ChatProfile.md`](ChatProfile.md)).
+   drawn. FabriChat stores no names or avatars, so a changed name shows
+   everywhere, history included. A profile that can't be read shows as a neutral
+   placeholder (see [`ChatProfile.md`](ChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's. The manager's index is in
    the user's home space. Drafts are `PerSession`, kept by the room's own
