@@ -10,6 +10,8 @@ import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
+import type { Signer } from "@commonfabric/memory/interface";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
@@ -17,8 +19,8 @@ import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
+import type { SessionFactory } from "../src/storage/v2.ts";
 import { TestStorageManager } from "./memory-v2-test-utils.ts";
-import { RecordingSessionFactory } from "./support/recording-session-factory.ts";
 
 const owner = await Identity.fromPassphrase("profile space access owner");
 const visitor = await Identity.fromPassphrase("profile space access visitor");
@@ -50,6 +52,47 @@ const PROGRAM: RuntimeProgram = {
     { name: "/profile-home.tsx", contents: read("profile-home.tsx") },
   ],
 };
+
+/** Opens each session as the principal its signer is, over one server. */
+class PrincipalSessionFactory implements SessionFactory {
+  /** Always `true`: the loopback server takes a genesis access list. */
+  readonly supportsAclBootstrap = true;
+
+  readonly #server: MemoryV2Server.Server;
+
+  /** Constructs an instance which opens its sessions on `server`. */
+  constructor(server: MemoryV2Server.Server) {
+    this.#server = server;
+  }
+
+  /** @inheritDoc */
+  async create(
+    space: MemorySpace,
+    signer?: Signer,
+    requested: MemoryV2Client.MountOptions = {},
+  ) {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(this.#server),
+    });
+    try {
+      const session = await client.mount(
+        space,
+        requested,
+        (_space, _session, context) => ({
+          invocation: {
+            aud: context.audience,
+            challenge: context.challenge.value,
+          },
+          authorization: { principal: signer?.did() },
+        }),
+      );
+      return { client, session };
+    } catch (error) {
+      await client.close();
+      throw error;
+    }
+  }
+}
 
 const profileLinkListSchema = {
   type: "array",
@@ -84,7 +127,7 @@ describe("profile-space-access", () => {
       acl: { mode: "enforce" },
       subscriptionRefreshDelayMs: 0,
     });
-    const factory = new RecordingSessionFactory(server);
+    const factory = new PrincipalSessionFactory(server);
     const memoryHost = new URL("memory://");
     const runtimeAs = (as: Identity) =>
       new Runtime({
