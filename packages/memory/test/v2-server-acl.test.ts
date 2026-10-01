@@ -1507,6 +1507,45 @@ describe("v2-server-acl", () => {
         }
       });
 
+      it('returns `AuthorizationError` and keeps the list for a session with no principal, opened under a `"*"` entry', async () => {
+        // Such a session has no entry of its own to remove; the `"*"` entry is
+        // what lets it open the space at all.
+
+        const server = createAclServer("memory://acl-leave-anonymous", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-acl-leave-anonymous";
+        const acl = { [ALICE]: "OWNER", "*": "WRITE" } as const;
+        try {
+          await initializeSpaceAcl(server, space, acl);
+          const harness = await connect(server);
+          const opened = await openSession(
+            harness,
+            space,
+            undefined as unknown as string,
+          );
+          expectExists(opened.ok);
+          const response = await transactOperation(
+            harness,
+            space,
+            opened.ok.sessionId,
+            {
+              op: "set",
+              id: `of:${space}`,
+              value: { value: { [ALICE]: "OWNER" } },
+            },
+            1,
+          );
+
+          expect(response.error?.name).toBe("AuthorizationError");
+          expect(await server.readDocument(space, `of:${space}`)).toEqual({
+            value: acl,
+          });
+        } finally {
+          await server.close();
+        }
+      });
+
       for (
         const [description, acl, value] of [
           [
