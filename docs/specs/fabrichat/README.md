@@ -330,6 +330,11 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
 - **Notices.** A manager's notice id is `[recipient, requestId]` as JSON.
+  The manager also sends each other member of a room it creates a notice
+  through their DID inbox, with `noticeSpaceAccess()`, where the runtime can,
+  and queues the notice in `outgoingNotices` either way. A serving runtime
+  refuses the send, so under server execution the queue is the only notice,
+  and nothing reads an inbox yet.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.
