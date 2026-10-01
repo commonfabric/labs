@@ -96,12 +96,13 @@ describe("fabrichat spaces across runtimes", () => {
   it("lets a direct room's counterpart read it, and refuses a stranger", {
     ignore: SERVER_EXECUTION,
   }, async () => {
-    // TODO(danfuzz): Remove the `ignore` once a served `openDirect` creates
-    // a room its counterpart can read. Served, the counterpart's read finds
-    // "No data at cell", and the serving loop's writes into the new room's
-    // space are refused as foreign writes the serving identity holds no
-    // grant for (`foreign-write-refused`, `seal-space-commit-failed`); the
-    // group room's case passes.
+    // TODO(danfuzz): Remove the `ignore` once a refused reader's read no
+    // longer starves the serving loop. Served, the group case's stranger read
+    // starts the room's lifts running as the stranger, whose writes into the
+    // room's space are refused (`foreign-write-refused`) and retried without
+    // end, each failed seal skipping its wave's other spaces; this case's
+    // new room then never gets its first writes, and its counterpart reads
+    // "No data at cell". Run alone, this case passes.
 
     const room = await start("openDirect", {
       requestId: "d-1",
