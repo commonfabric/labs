@@ -776,7 +776,9 @@ structurally representable.
   it explicit with `pattern<Input, Output>(...)`
 
 This inference runs through `collectFunctionSchemaTypeNodes` via
-`inferReturnType`, object-literal recovery, and direct projection recovery.
+`inferReturnType`, object-literal recovery, and direct projection recovery. The
+inferred return type is printed under the flags §10.1 names, so a result type
+holding `[]` anywhere is printed whole.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1686,6 +1688,16 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - otherwise infers from signatures/contextual types
 - `_param` convention implies `never` schema for that parameter
 - failed inference falls back to `unknown`
+- every print of a type as a type node allows the empty tuple, without which
+  the checker prints nothing at all for a type holding `[]` anywhere, so an
+  inferred result holding an alias given `readonly []` reads as its
+  instantiation. The shared flag set is `TYPE_NODE_FLAGS`
+  (`src/ast/type-inference.ts`); `DEFAULT_TYPE_NODE_FLAGS` adds
+  `UseAliasDefinedOutsideCurrentScope` to it for an annotation printed into
+  the output, and `typeToTypeNodeWithRegistry()` adds `AllowEmptyTuple` to
+  whatever flags its caller passes. `test/type-node-print-flags.test.ts`
+  checks that every raw `checker.typeToTypeNode()` call in the package names
+  `AllowEmptyTuple` or one of the two sets
 - `typeRegistry` is consulted first for synthetic nodes/types
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
