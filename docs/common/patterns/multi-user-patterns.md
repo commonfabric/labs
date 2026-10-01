@@ -331,6 +331,44 @@ use the CFC wrappers `AuthoredByCurrentUser<T>` / `RepresentsCurrentUser<T>` and
 render with `cf-cfc-authorship`. Read-only display works today; note that
 owner-protected profile *writes* are currently constrained (see CT-1665).
 
+An `AuthoredByCurrentUser` position names the handler that writes it, and the
+runtime labels each write that handler makes `authored-by` the user it acts
+for. No gesture is needed:
+
+```tsx
+// Shown at module scope.
+import type { AuthoredByCurrentUser, WriteAuthorizedBy } from "commonfabric";
+
+type Order = AuthoredByCurrentUser<
+  WriteAuthorizedBy<{ glaze: string }, typeof placeOrder>
+>;
+
+interface Orders {
+  orders: Writable<Order[]>;
+}
+
+const placeOrder = handler<{ glaze: string }, Orders>(
+  ({ glaze }, { orders }) => {
+    orders.push({ glaze });
+  },
+);
+```
+
+- The label is _authority_, as `currentPrincipal()` is: the write ran for that
+  user, through the named handler, whether their click or another pattern's
+  `send()` reached it. Wrap a `TrustedActionWrite` instead where each write
+  must also come with the person's gesture on the named surface.
+- A handler the position does not name cannot write it, and a position naming
+  no writer cannot carry the label. Nor can a handler run that acts for no one,
+  where `currentPrincipal()` returns `undefined`: its write is refused.
+- A new value of the type that any handler creates, with
+  `new Writable<Order>(…)`, is labeled for the user that handler acts for as
+  well, with no writer and no gesture. That too is authority: the user's run
+  made it.
+- Give the handler's state a name of its own, as `Orders` is above. Written
+  inline in `handler<…>`, it makes `Order` refer to itself through
+  `typeof placeOrder`, which TypeScript refuses.
+
 ### Checking a DID read from data
 
 A DID a pattern reads from its data — a member list, a message's author, an

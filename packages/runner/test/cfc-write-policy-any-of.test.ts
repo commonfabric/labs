@@ -355,7 +355,7 @@ describe("cfc-write-policy-any-of", () => {
       });
     });
 
-    it("refuses an authored-by label when an alternative names no gesture", async () => {
+    it("admits an authored-by label when an alternative names no gesture, and holds the others to theirs", async () => {
       const schema: JSONSchemaObj = {
         type: "string",
         ifc: {
@@ -366,8 +366,10 @@ describe("cfc-write-policy-any-of", () => {
         },
       };
       await withFixture(async (f) => {
-        expect(await f.write("send", "Send", { schema })).toContain(
-          "requires uiContract on every writePolicyAnyOf alternative",
+        expect(await f.write("tidy", undefined, { schema })).toBeUndefined();
+        expect(await f.write("send", "Send", { schema })).toBeUndefined();
+        expect(await f.write("send", undefined, { schema })).toContain(
+          "writePolicyAnyOf failed",
         );
       });
     });

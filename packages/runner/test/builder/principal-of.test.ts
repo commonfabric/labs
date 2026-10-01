@@ -90,8 +90,9 @@ const PROBE_PATTERN = [
 
 /**
  * A document whose `body` carries a principal claim of `kind` naming
- * `subject`, with the writer and gesture such a claim needs to commit, so the
- * only thing that can refuse the write is the check on the claim itself.
+ * `subject`, with the writer such a claim needs and a gesture its contract
+ * needs to commit, so the only thing that can refuse the write is the check on
+ * the claim itself.
  */
 const claimedSchema = (kind: PrincipalClaimKind, subject: unknown) =>
   ({

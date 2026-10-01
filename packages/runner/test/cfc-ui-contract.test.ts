@@ -73,39 +73,6 @@ describe("CFC UI contract matching", () => {
     expect(isTrustedGesture(native)).toBe(false);
   });
 
-  it("terminates across interned recursive schema views", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        message: { $ref: "#/$defs/ChatMessage", asCell: ["cell"] },
-      },
-      $defs: {
-        ChatMessage: {
-          type: "object",
-          properties: { replyTo: { $ref: "#/$defs/ChatReply" } },
-        },
-        ChatReply: {
-          type: "object",
-          properties: {
-            message: { $ref: "#/$defs/ChatMessage", asCell: ["cell"] },
-          },
-        },
-      },
-    } as const;
-    // Resolved views can precede the containing schema in the intern cache.
-    for (const name of ["ChatMessage", "ChatReply"] as const) {
-      const copy = structuredClone(schema);
-      internSchema({
-        ...copy.$defs[name],
-        $defs: copy.$defs,
-        ...(name === "ChatMessage" ? { asCell: ["cell"] } : {}),
-      });
-    }
-    const frozen = internSchema(schema);
-    expect(uiContractsFromSchema(frozen)).toEqual([]);
-    expect(uiContractFromSchema(frozen)).toBeUndefined();
-  });
-
   it("matches UiAction contracts against trusted DOM dataset markers", () => {
     const contract = uiContractFromSchema({
       ...uiActionSchema,
@@ -523,6 +490,51 @@ describe("CFC UI contract matching", () => {
     }
   });
 
+  it("collects a contract below a local pointer inside an external document that the referring document also used", () => {
+    // A contract a ref site resolves to is read apart from the refs the walk
+    // has followed, so one sitting on `Panel` itself is found either way. The
+    // contract here is a property of the external document's `Panel`, which
+    // the walk reaches only by descending below that pointer.
+
+    const release = acquireSchemaRegistryLease();
+    try {
+      const document = {
+        type: "object",
+        properties: { action: { $ref: "#/$defs/Panel" } },
+        $defs: {
+          Panel: {
+            type: "object",
+            properties: { submit: trustedPatternUiActionSchema },
+          },
+        },
+      } as unknown as JSONSchema;
+      const hash = internSchemaAsTaggedHashString(document);
+      registerSchemaDocument(hash, document);
+
+      const contracts = uiContractsFromSchema({
+        $ref: "#/$defs/Panel",
+        $defs: {
+          Panel: {
+            type: "object",
+            properties: { inner: { $ref: `cid:${hash}` } },
+          },
+        },
+      } as unknown as JSONSchema);
+
+      expect(contracts).toEqual([{
+        path: ["inner", "action", "submit"],
+        contract: {
+          helper: "UiAction",
+          action: "SubmitDirectCommand",
+          trustedPattern: "TrustedDirectCommandSurface",
+          requiredEventIntegrity: ["TrustedDirectCommandSurface"],
+        },
+      }]);
+    } finally {
+      release();
+    }
+  });
+
   it("resolves one definition name in two external documents to each document's own", () => {
     // `Panel` is a submit action in one document and a disclosure in the
     // other. Read as siblings, and read with the second nested inside the
@@ -568,6 +580,54 @@ describe("CFC UI contract matching", () => {
     } finally {
       release();
     }
+  });
+
+  it("terminates on a recursive schema whose resolved views were interned before it", () => {
+    // Resolving a ref site interns the view it builds, and interning returns
+    // the instance already held for that content. Each definition's view is
+    // interned here ahead of the schema, carrying a definition map of its
+    // own, so every hop of the recursion resolves into another document than
+    // the one its pointer was read in, and the walk alternates between two
+    // documents for as long as it runs.
+
+    const recursive = () =>
+      ({
+        type: "object",
+        properties: {
+          message: { $ref: "#/$defs/ChatMessage", asCell: ["cell"] },
+        },
+        $defs: {
+          ChatMessage: {
+            type: "object",
+            properties: {
+              send: {
+                type: "string",
+                ifc: { uiContract: { helper: "UiAction", action: "Send" } },
+              },
+              replyTo: { $ref: "#/$defs/ChatReply" },
+            },
+          },
+          ChatReply: {
+            type: "object",
+            properties: {
+              message: { $ref: "#/$defs/ChatMessage", asCell: ["cell"] },
+            },
+          },
+        },
+      }) as const;
+    for (const name of ["ChatMessage", "ChatReply"] as const) {
+      const { $defs } = recursive();
+      internSchema({
+        ...$defs[name],
+        $defs,
+        ...(name === "ChatMessage" ? { asCell: ["cell"] } : {}),
+      });
+    }
+
+    expect(uiContractsFromSchema(internSchema(recursive()))).toEqual([{
+      path: ["message", "send"],
+      contract: { helper: "UiAction", action: "Send" },
+    }]);
   });
 });
 
