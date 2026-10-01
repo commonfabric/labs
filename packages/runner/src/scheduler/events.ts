@@ -2509,7 +2509,10 @@ export async function dispatchQueuedEvent(state: {
       // requeue only once its readiness resolves. Register the handled chain
       // too, so the pending-commit barrier cannot release in the gap between
       // a rejection settling and its retry being requeued.
-      state.runtime.storageManager.trackPendingCommit(handled);
+      state.runtime.storageManager.trackPendingCommit(handled, () => ({
+        kind: "event-disposition",
+        spaces: [queuedEvent.eventLink.space],
+      }));
     };
 
     try {

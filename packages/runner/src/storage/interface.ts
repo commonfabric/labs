@@ -90,6 +90,12 @@ import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
+import type {
+  PendingCommitContext,
+  SpaceStorageDiagnostic,
+  StorageDiagnostics,
+} from "./diagnostics.ts";
+
 export type {
   ACL,
   DID,
@@ -473,7 +479,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * invisible to the barrier. The registration must tolerate rejection and
    * drop the promise once it settles.
    */
-  trackPendingCommit(promise: Promise<unknown>): void;
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void;
+
+  /** Snapshot pending work without waiting for durability or starting I/O. */
+  getDiagnostics?(): StorageDiagnostics;
 
   /**
    * Whether any registered commit is still unconfirmed. Every write flows
@@ -3015,6 +3027,9 @@ export interface ViewInterestLease {
 }
 
 export interface ISpaceReplica extends ISpace {
+  /** Existing session progress without starting I/O or awaiting commits. */
+  getDiagnostics?(): SpaceStorageDiagnostic;
+
   /**
    * Return a state for the requested entry or returns `undefined` if replica
    * does not have it. The state carries `since`, the commit sequence the

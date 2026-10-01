@@ -39,6 +39,7 @@ import {
   CompilerStackLoadError,
   entityIdFrom,
   type EventIntentOutcome,
+  type IExtendedStorageTransaction,
   parseLink,
   popFrame,
   pushFrame,
@@ -90,6 +91,7 @@ import {
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { buildProcessor } from "./build-processor.ts";
@@ -161,6 +163,145 @@ const createRuntime = (
 const fid = (seed: string) => taggedHashStringOf(seed);
 
 describe("runtime-processor", () => {
+  it("reports pending storage work without waiting for it to settle", async () => {
+    const { runtime, storageManager } = createRuntime();
+    const pending = Promise.withResolvers<void>();
+    try {
+      storageManager.trackPendingCommit(pending.promise, () => ({
+        kind: "event-intent",
+        spaces: [cfcSigner.did()],
+      }));
+      const processor = buildProcessor({ runtime });
+      const result = await processor.handleRequest({
+        type: RequestType.GetStorageDiagnostics,
+      });
+      expect(result).toMatchObject({
+        diagnostics: {
+          pendingCommitCount: 1,
+          pendingCommits: [{ kind: "event-intent", spaces: [cfcSigner.did()] }],
+        },
+      });
+    } finally {
+      pending.resolve();
+      await storageManager.pendingCommitsSettled();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  describe("render-readiness pulls", () => {
+    it("demands a stale lazy producer while unrelated writes remain pending", async () => {
+      const { runtime, storageManager } = createRuntime();
+      const release = Promise.withResolvers<void>();
+      try {
+        const source = runtime.getCell<number>(
+          cfcSigner.did(),
+          "render-source",
+          { type: "number" },
+        );
+        const output = runtime.getCell<number>(
+          cfcSigner.did(),
+          "render-output",
+          { type: "number" },
+        );
+        const seed = runtime.edit();
+        source.withTx(seed).set(1);
+        await seed.commit();
+        let runs = 0;
+        const action = (tx: IExtendedStorageTransaction) => {
+          runs++;
+          output.withTx(tx).set(source.withTx(tx).get() * 2);
+        };
+        const setup = runtime.edit();
+        action(setup);
+        const log = txToReactivityLog(setup);
+        await setup.commit();
+        runtime.scheduler.subscribe(action, log, { isEffect: false });
+        const edit = runtime.edit();
+        source.withTx(edit).set(3);
+        await edit.commit();
+        await runtime.scheduler.idleWithPendingCommits();
+        const beforePull = runs;
+        expect(output.withTx().get()).toBe(2);
+        storageManager.trackPendingCommit(release.promise);
+        const result = await buildProcessor({ runtime }).handleCellPull({
+          type: RequestType.CellPull,
+          cell: createCellRef(output),
+          awaitCommit: false,
+        });
+        expect(result).toMatchObject({ value: 6 });
+        expect(runs).toBeGreaterThan(beforePull);
+        expect(storageManager.hasPendingCommits()).toBe(true);
+      } finally {
+        release.resolve();
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    for (const awaitCommit of [false, true, undefined]) {
+      it(
+        awaitCommit === undefined
+          ? "waits for pending commits by default"
+          : awaitCommit
+          ? "holds a durable pull until pending commits settle"
+          : "returns readable state while an unrelated commit is pending",
+        async () => {
+          const { runtime, storageManager } = createRuntime();
+          const releaseCommit = Promise.withResolvers<void>();
+          const barrierEntered = Promise.withResolvers<void>();
+          let pull: Promise<unknown> | undefined;
+          const originalBarrier = storageManager.pendingCommitsSettled.bind(
+            storageManager,
+          );
+          try {
+            const cell = runtime.getCell<number>(
+              cfcSigner.did(),
+              "render-readiness",
+              { type: "number" },
+            );
+            await cell.sync();
+            const tx = runtime.edit();
+            cell.withTx(tx).set(7);
+            expect((await tx.commit()).error).toBeUndefined();
+            await runtime.scheduler.idleWithPendingCommits();
+
+            storageManager.trackPendingCommit(releaseCommit.promise);
+            using _barrier = stub(
+              storageManager,
+              "pendingCommitsSettled",
+              () => {
+                barrierEntered.resolve();
+                return originalBarrier();
+              },
+            );
+            const processor = buildProcessor({ runtime });
+            pull = processor.handleCellPull({
+              type: RequestType.CellPull,
+              cell: createCellRef(cell),
+              awaitCommit,
+            });
+            const first = await Promise.race([
+              pull.then(() => "read"),
+              barrierEntered.promise.then(() => "commit-barrier"),
+            ]);
+            expect(first).toBe(
+              awaitCommit === false ? "read" : "commit-barrier",
+            );
+            expect(storageManager.hasPendingCommits()).toBe(true);
+            releaseCommit.resolve();
+            await expect(pull).resolves.toMatchObject({ value: 7 });
+          } finally {
+            releaseCommit.resolve();
+            await pull;
+            await runtime.dispose();
+            await storageManager.close();
+          }
+        },
+      );
+    }
+  });
+
   describe("renderConfidentialityResolverFor()", () => {
     it("returns `undefined` when no ceiling is configured", async () => {
       const { runtime, storageManager } = createRuntime();

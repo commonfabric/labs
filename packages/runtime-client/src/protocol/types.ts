@@ -38,6 +38,7 @@ import type {
   SchedulerGraphSnapshot,
   SettleStats,
   SettleStatsHistoryEntry,
+  StorageDiagnostics,
   TriggerTraceEntry,
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
@@ -316,6 +317,9 @@ export enum RequestType {
    * round trip covering all four.
    */
   GetLoggerCounts = "runtime:getLoggerCounts",
+
+  /** Snapshot storage work without waiting for the durability barrier. */
+  GetStorageDiagnostics = "runtime:getStorageDiagnostics",
 
   /**
    * Answers with the pattern coverage collector's data, or `null` where this
@@ -1117,6 +1121,13 @@ export type CellPullRequest = BaseRequest & {
    * The cell whose producers to demand before reading its current value.
    */
   cell: CellRef;
+
+  /**
+   * Wait for runtime-wide commit durability after demanding producers.
+   * Defaults to `true`. Rendering can pass `false` to read reactive state
+   * while writes remain unconfirmed.
+   */
+  awaitCommit?: boolean;
 };
 
 /** The {@link RequestType.CellInitialize} request. */
@@ -1920,8 +1931,18 @@ export type GetGraphSnapshotRequest = BaseRequest & {
 };
 
 /**
- * The {@link RequestType.GetLoggerCounts} request, which carries no payload.
+ * The {@link RequestType.GetStorageDiagnostics} request, which carries no payload.
  */
+export type GetStorageDiagnosticsRequest = BaseRequest & {
+  type: RequestType.GetStorageDiagnostics;
+};
+
+/** The pending-storage snapshot, or null for a manager without diagnostics. */
+export type StorageDiagnosticsResponse = {
+  diagnostics: StorageDiagnostics | null;
+};
+
+/** The {@link RequestType.GetLoggerCounts} request, which carries no payload. */
 export type GetLoggerCountsRequest = BaseRequest & {
   type: RequestType.GetLoggerCounts;
 };
@@ -3255,6 +3276,7 @@ export type IPCClientRequest =
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
+  | GetStorageDiagnosticsRequest
   | GetLoggerCountsRequest
   | GetPatternCoverageRequest
   | SetLoggerLevelRequest
@@ -3929,6 +3951,7 @@ export type RemoteResponse =
   | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
+  | StorageDiagnosticsResponse
   | LoggerCountsResponse
   | PatternCoverageResponse
   | SettleStatsResponse
@@ -4028,6 +4051,10 @@ export type Commands = {
   [RequestType.GetGraphSnapshot]: {
     request: GetGraphSnapshotRequest;
     response: GraphSnapshotResponse;
+  };
+  [RequestType.GetStorageDiagnostics]: {
+    request: GetStorageDiagnosticsRequest;
+    response: StorageDiagnosticsResponse;
   };
   [RequestType.GetLoggerCounts]: {
     request: GetLoggerCountsRequest;

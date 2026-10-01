@@ -36,7 +36,8 @@ import {
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
-import { getCommitSeq } from "./commit-identity.ts";
+import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
+import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
 import type {
   Activity,
   ChangeGroup,
@@ -2509,12 +2510,32 @@ export class V2StorageTransaction implements IStorageTransaction {
     // registers its own entry spanning its disposition handling, which
     // chains on the WRAPPER's promise and trails this one by the
     // verdict-time effect run.)
-    this.#storage.trackPendingCommit(promise);
+    this.#storage.trackPendingCommit(
+      promise,
+      () => this.#pendingCommitContext("transaction"),
+    );
     return promise;
   }
 
   commitVerdict(): Promise<Result<Unit, CommitError>> {
     return this.#verdict.promise;
+  }
+
+  #pendingCommitContext(
+    kind: "transaction" | "transaction-seal",
+  ): PendingCommitContext {
+    const spaces = diagnosticPrefix(this.#writtenSpaces);
+    return {
+      kind,
+      spaces,
+      spacesOmitted: this.#writtenSpaces.length - spaces.length,
+      transactionStatus: this.status().status,
+      commits: spaces.map((space) => ({
+        space,
+        localSeq: getCommitLocalSeq(this, space),
+        seq: getCommitSeq(this, space),
+      })),
+    };
   }
 
   async #commitImpl(
@@ -2832,7 +2853,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     // Same durability-barrier registration as commit(): by the time
     // sealInto() returns, the in-flight close is visible to
     // hasPendingCommits().
-    this.#storage.trackPendingCommit(promise);
+    this.#storage.trackPendingCommit(
+      promise,
+      () => this.#pendingCommitContext("transaction-seal"),
+    );
     return promise;
   }
 

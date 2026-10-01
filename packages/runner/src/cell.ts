@@ -2103,6 +2103,7 @@ export class CellImpl<T extends FabricValue>
           // intents: an event queued offline is an unacked write.
           this.#runtime.storageManager.trackPendingCommit(
             outcome as Promise<unknown>,
+            () => ({ kind: "event-intent", spaces: [space] }),
           );
           // The durable-ack coupling (verdict blocker, 2026-08-12): the
           // caller's settle callback must NEVER settle from the

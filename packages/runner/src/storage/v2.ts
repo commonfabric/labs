@@ -85,6 +85,12 @@ import {
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
+import {
+  diagnosticPrefix,
+  type PendingCommitContext,
+  type SpaceStorageDiagnostic,
+  type StorageDiagnostics,
+} from "./diagnostics.ts";
 import type { Cell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import {
@@ -1211,7 +1217,13 @@ export class StorageManager implements IStorageManager {
    * carries cross-space _read_ work (link-target loads) and so must not gate
    * questions of whether there are unconfirmed writes.
    */
-  #pendingCommits = new Set<Promise<unknown>>();
+  #pendingCommits = new Map<Promise<unknown>, {
+    id: number;
+    startedAt: number;
+    context?: () => PendingCommitContext;
+  }>();
+
+  #nextPendingCommitId = 1;
 
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
@@ -2135,11 +2147,18 @@ export class StorageManager implements IStorageManager {
     return () => this.#spaceAccessChangeObservers.delete(observer);
   }
 
-  trackPendingCommit(promise: Promise<unknown>): void {
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void {
     // Normalize so a rejected commit settles the barrier instead of leaking an
     // unhandled rejection; the caller keeps the original promise for results.
     const tracked = promise.then(() => {}, () => {});
-    this.#pendingCommits.add(tracked);
+    this.#pendingCommits.set(tracked, {
+      id: this.#nextPendingCommitId++,
+      startedAt: performance.now(),
+      context,
+    });
     if (this.#pendingCommits.size === 1) {
       this.#notifyPendingCommits(true);
     }
@@ -2151,12 +2170,35 @@ export class StorageManager implements IStorageManager {
     });
   }
 
+  /** @inheritDoc */
+  getDiagnostics(): StorageDiagnostics {
+    const now = performance.now();
+    const pendingCommits = diagnosticPrefix(this.#pendingCommits.values()).map(
+      ({ id, startedAt, context }) => ({
+        ...context?.() ?? { kind: "unknown" as const },
+        id,
+        ageMs: Math.max(0, now - startedAt),
+      }),
+    );
+    const spaces = diagnosticPrefix(this.#providers.values()).map(
+      (provider) => provider.replica.getDiagnostics(),
+    );
+    return {
+      pendingCommitCount: this.#pendingCommits.size,
+      pendingCommits,
+      pendingCommitsOmitted: this.#pendingCommits.size - pendingCommits.length,
+      pendingCrossSpaceCount: this.pendingCrossSpacePromiseCount(),
+      spaces,
+      spacesOmitted: this.#providers.size - spaces.length,
+    };
+  }
+
   hasPendingCommits(): boolean {
     return this.#pendingCommits.size > 0;
   }
 
   async pendingCommitsSettled(): Promise<void> {
-    await Promise.allSettled([...this.#pendingCommits]);
+    await Promise.allSettled(this.#pendingCommits.keys());
   }
 
   /**
@@ -4135,6 +4177,23 @@ export class SpaceReplica
 
   did(): MemorySpace {
     return this.#space;
+  }
+
+  /** Current session progress without starting I/O or waiting for commits. */
+  getDiagnostics(): SpaceStorageDiagnostic {
+    return {
+      space: this.#space,
+      sessionId: this.#sessionSession?.sessionId,
+      caughtUpLocalSeq: this.#caughtUpLocalSeq,
+      pendingCommitCount: this.#commitPromises.size,
+      pendingReadCount: this.#syncPromises.size,
+      unsettledLocalSeqs: diagnosticPrefix(this.#commitOutcomeBySeq.keys()),
+      unsettledCount: this.#commitOutcomeBySeq.size,
+      repairLocalSeqs: diagnosticPrefix(this.#rejectedPendingLayers.keys()),
+      repairCount: this.#rejectedPendingLayers.size,
+      parkedAcceptLocalSeqs: diagnosticPrefix(this.#parkedAccepts.keys()),
+      parkedAcceptCount: this.#parkedAccepts.size,
+    };
   }
 
   /**

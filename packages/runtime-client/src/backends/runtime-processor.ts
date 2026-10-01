@@ -1566,12 +1566,12 @@ export class RuntimeProcessor {
     request: CellPullRequest,
   ): Promise<CellGetResponse> {
     await getCell(this.#runtime, request.cell).pull();
-    // A client pull is the freshness barrier, not a cache sample. Reactive
-    // quiescence can expose a lazy scoped target before the commit that creates
-    // its value has registered or landed. Cross the commit-aware fixpoint in
-    // the same request so the returned value and subsequent operations observe
-    // all work causally demanded by this pull.
-    await this.#runtime.scheduler.idleWithPendingCommits();
+    // The durable pull crosses the commit-aware fixpoint so subsequent
+    // operations observe all work causally demanded here. Rendering can read
+    // reactive state while the host continues to report unconfirmed writes.
+    if (request.awaitCommit !== false) {
+      await this.#runtime.scheduler.idleWithPendingCommits();
+    }
     return this.handleCellGet({
       type: RequestType.CellGet,
       cell: request.cell,
@@ -3618,6 +3618,10 @@ export class RuntimeProcessor {
         return await this.handleRetrySpaceAccess(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
+      case RequestType.GetStorageDiagnostics:
+        return {
+          diagnostics: this.#runtime.storageManager.getDiagnostics?.() ?? null,
+        };
       case RequestType.GetLoggerCounts:
         return this.getLoggerCounts(request);
       case RequestType.GetPatternCoverage:

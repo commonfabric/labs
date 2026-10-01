@@ -2,6 +2,36 @@
 
 `RuntimeClient` connects a host to the Common Fabric runtime and renderer.
 
+## Reading render state
+
+`CellHandle.pull()` demands lazy producers and waits for runtime-wide commit
+durability before returning their value. Renderers can use
+`pull({ awaitCommit: false })` to demand producers and read reactive state while
+writes remain unconfirmed. This option still waits for reactive work and
+required loads; it cannot bypass a blocked producer or storage read.
+
+A rendered value does not confirm that a write was saved. Hosts using this
+option should continue observing `RuntimeClient.hasPendingWrites()` and
+`pendingwriteschange` to show unsaved state and guard navigation. Operations
+that require durability should retain the default pull.
+
+## Diagnosing pending writes
+
+`RuntimeClient.getStorageDiagnostics()` asks the worker for a current storage
+snapshot without waiting for idle or durability. It reports registration kind,
+age, affected spaces, transaction state and known local/store sequence numbers.
+Per-space snapshots include the existing session ID, replica catch-up marker,
+unsettled sequences, conflict repairs and accepted writes waiting for coverage.
+These identifiers can be correlated with memory-server traces without exporting
+cell values or credentials. Reading the snapshot starts no storage I/O.
+
+The pending count measures promise registrations, not distinct writes. A write
+and its scheduler disposition can both appear. Lists contain at most 64 entries;
+counts include omitted entries. Completed registrations are discarded. A `null`
+result means the storage manager does not implement diagnostics. This request
+still needs a responsive worker; `getPendingRequests()` remains available on the
+host when the worker cannot answer.
+
 ## Presence rooms
 
 `RuntimeClient.joinPresenceRoom(cell, { room? })` joins the presence room of the
