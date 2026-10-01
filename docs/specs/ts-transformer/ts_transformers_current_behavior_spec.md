@@ -1548,9 +1548,12 @@ Result shape:
   it, is written out as the properties it copies when the capture is a `const`
   declared outside module scope whose keys are known where it is declared
   (`staticKeysOfInitializer`): an object literal whose properties all have
-  static keys (identifiers, string literals, or numeric literals; no method,
-  accessor, or computed key), a spread inside that literal of another such
-  object, or a `const` that names one, at any depth. A `__proto__:` assignment
+  static keys (identifiers, string literals, or numeric literals, a numeric
+  one read under its decimal name; no method, accessor, or computed key), a
+  spread inside that literal of another such object, or a `const` that names
+  one, at any depth, an object two spreads share being read each time. The
+  operand is read through any parentheses, `as`, `satisfies`, or `!` around
+  it. A `__proto__:` assignment
   sets the prototype and contributes no key; the shorthand `{ __proto__ }`
   makes an own property and is written back as `["__proto__"]`:
   `{ ...records, id: item.id }` ->
@@ -1564,9 +1567,11 @@ Result shape:
   `pattern-context:computation`: "Spread of the captured value `records`
   copies nothing…" (`reportUnexpandedSpread`). The report is made once per
   spread: the pattern-context check of §9.7 reports the same spread when the
-  capture is a tracked opaque value, and `reportComputationError` lets the
-  earlier report stand (`reportDiagnosticOnce`;
-  `test/closures/captured-object-spread.test.ts`)
+  capture is a tracked opaque value, and both go through `reportSpreadError`
+  (`reportDiagnosticOnce`), where the earlier report stands. Only spread
+  reports share that key, so two different computation errors on one node, a
+  non-static default and a rest element of one parameter say, are each made
+  (`test/closures/captured-object-spread.test.ts`)
 
 ### 9.5 Lift-applied strategy
 
