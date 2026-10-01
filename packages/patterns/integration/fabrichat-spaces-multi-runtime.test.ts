@@ -1,12 +1,14 @@
 /**
  * FabriChat's rooms under an enforced access list, across runtimes and under
  * either server-execution posture: a manager creates each room in a space of
- * its own, and the room's members, and no one else, can read it.
+ * its own, and the room's members, and no one else, can read it, unless it is
+ * a group made joinable by its link, which anyone can read.
  *
  * Three sessions share the harness's space, where the manager lives: the
  * starter, who creates the rooms; a member, named in each; and a stranger,
  * named in none. A room's space grants its members at creation, so the member
- * reads it with nothing more to do, and the stranger's read is refused.
+ * reads it with nothing more to do, and the stranger's read is refused, except
+ * of a joinable group's.
  * `fabrichat-manager.test.ts` checks the access list each room's space holds.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).

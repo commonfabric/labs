@@ -6,7 +6,8 @@
  *
  * It creates each room in a space of its own with `inSpace()`, which grants its
  * creator OWNER and each other member named at creation WRITE, and no one
- * else. After that, who is in the space is the space's business, changed
+ * else, except that a group made joinable by its link grants everyone WRITE
+ * as well. After that, who is in the space is the space's business, changed
  * through the space's own tools and never through the manager or the room.
  */
 import {
