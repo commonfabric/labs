@@ -728,10 +728,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     usedTimes,
     activity,
     counters,
-    // The room itself, the link another member's manager lists it by. It is
-    // destructured here so that it is the room's result. `input[SELF]`
-    // written inside the rendering compiles to a computation over the input,
-    // and that computation's output is a cell holding nothing.
+    // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
     const profileWish = wish<ChatProfile>({ query: "#profile" });
