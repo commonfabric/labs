@@ -1402,12 +1402,14 @@ function getScopedCell(
     !isNullish(members)
   );
   // A labelled cell holds its CFC carriers beside it, whose labels the
-  // capture's schema keeps (`SchemaHint.narrowedFrom`).
+  // capture's schema keeps (`SchemaHint.narrowedFrom`). A cell intersected
+  // with other members, as `Cell<A> & Extra`, is that cell, as schema
+  // generation reads it.
   const [cell, ...rest] = (alternative ?? []).filter((member) =>
-    !cfcCarrierProperty(member)
+    !cfcCarrierProperty(member) && isCellLikeType(member, checker)
   );
   if (rest.length > 0 || others.length > 0) return undefined;
-  return brand && cell && isCellLikeType(cell, checker)
+  return brand && cell
     ? {
       name: SCOPE_WRAPPER_FOR_SCOPE[brand.scope],
       cell,
@@ -3599,14 +3601,20 @@ function applyCellCapabilityPathsToTypeNode(
       checker,
       typeRegistry,
     );
-    const inner = extractCellLikeInnerTypeNode(
-      cellNode,
-      checker,
-      sourceFile,
-      factory,
-      typeRegistry,
-      state,
-    );
+    // A cell in a scope it is not taken apart from keeps the type it was
+    // declared with: rebuilt from its value, it would lose the scope, and the
+    // cap on its handle, that only the wrapper names.
+    const inner = !scopedCell && memberSemanticType &&
+        getScopeBrand(memberSemanticType, checker)
+      ? undefined
+      : extractCellLikeInnerTypeNode(
+        cellNode,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
+        state,
+      );
     if (inner) {
       const capability = selectCellPathCapability(childPaths);
       if (capability) {

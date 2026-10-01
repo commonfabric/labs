@@ -1705,6 +1705,13 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
   which can differ from the arguments of its underlying reference type.
+- a printed type that a scope wrapper resolved to, which carries the scope's
+  brand and no alias, is written as the wrapper around its payload,
+  `__cfHelpers.PerUser<...>`, each member of the payload printed afresh. A
+  recursive one is written once: where the print of its payload holds the type
+  again, that print is kept as the printer wrote it
+  (`qualifyCommonFabricTypeRefs` in `ast/type-building.ts`;
+  `test/scope-wrapper-alias-schema.test.ts`).
 
 ### 10.2 `pattern(...)`
 
@@ -2034,11 +2041,17 @@ adjustments:
   directly: its cell, printed afresh, is narrowed inside a rebuilt scope wrapper
   registered with the scoped cell's type, through which node-driven shrinking
   and identity-only paths then reach the cell. A scoped cell may hold CFC
-  carriers beside it, whose labels the capture's schema keeps. A scoped cell
-  beside `null` or `undefined` is rebuilt with them inside the wrapper,
+  carriers beside it, whose labels the capture's schema keeps, and other
+  members, as `PerSpace<Cell<A> & Extra>` does, beside which the cell is
+  rebuilt alone, as schema generation reads it. A scoped cell beside `null` or
+  `undefined` is rebuilt with them inside the wrapper,
   `PerSession<ReadonlyCell<boolean> | null>`
-  (`test/scope-wrapper-alias-schema.test.ts`). Schema generation reads the scope from the wrapper's name and
-  the cell from the node inside it. Capability narrowing does not reach a scoped
+  (`test/scope-wrapper-alias-schema.test.ts`). A cell in a scope that the
+  narrowing of cells cannot take it apart from, as in
+  `PerSpace<Cell<A> & Cell<B>> | null`, keeps the type it was declared with:
+  rebuilt from its value, it would lose the scope, and the cap on its handle,
+  that only the wrapper names. Schema generation reads the scope from the
+  wrapper's name and the cell from the node inside it. Capability narrowing does not reach a scoped
   cell through the printed union of an optional member, so that cell keeps its
   authored capability and value shape. Node-driven shrinking keeps the print of
   a scoped cell whole. Two rules keep what a print says through the unfolding: a

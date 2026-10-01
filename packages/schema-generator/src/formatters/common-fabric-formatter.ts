@@ -1017,12 +1017,21 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     // A labelled payload of several members, as `Confidential<A & B, …>` in
-    // a scope, has no one member for the carrier reading below, so its
-    // structure is read by the formatters after this one, and its labels from
-    // its carriers.
+    // a scope, has no one member for the carrier reading below. Its labels
+    // are read from its carriers, and its structure as the wrapper reading
+    // below reads a cell among its members, as `Cell<A> & Extra`, and
+    // otherwise by the formatters after this one.
     if (this.#isLabelledScopePayload(type, context)) {
+      const wrapperInfo = getCellWrapperInfo(type, context.typeChecker);
       return this.#withCarriedLabels(
-        this.#schemaGenerator.formatStructure(type, context),
+        wrapperInfo
+          ? this.#formatWrapperType(
+            wrapperInfo.typeRef,
+            undefined,
+            context,
+            wrapperInfo.kind,
+          )
+          : this.#schemaGenerator.formatStructure(type, context),
         cfcCarrierMetadata(type, context.typeChecker),
         context,
       );
@@ -4047,11 +4056,18 @@ export class CommonFabricFormatter implements TypeFormatter {
           ? resolveWrapperNode(memberNode, context.typeChecker)
           : undefined;
 
-        const schema = this.#formatWrapperType(
-          wrapperInfo.typeRef,
-          wrapperNodeInfo?.node, // Pass node if available for proper name hoisting
+        // A labelled cell, as `Confidential<Cell<T>, …>` resolves to, holds
+        // its CFC metadata carriers beside the cell, and its branch carries
+        // their labels, as a labelled value's does.
+        const schema = this.#withCarriedLabels(
+          this.#formatWrapperType(
+            wrapperInfo.typeRef,
+            wrapperNodeInfo?.node, // Pass node if available for proper name hoisting
+            context,
+            wrapperInfo.kind,
+          ),
+          cfcCarrierMetadata(memberType, context.typeChecker),
           context,
-          wrapperInfo.kind,
         );
         schemas.push(schema);
       } else {

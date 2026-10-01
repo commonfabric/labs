@@ -359,14 +359,30 @@ export function qualifyCommonFabricTypeRefs(
     return node;
   };
 
+  // The types `writeScopeWrapper()` is writing. Each member is printed afresh,
+  // so the print of a recursive type's member holds the type again, which the
+  // printer has not seen in that print. It is left there as printed.
+  const writing = new Set<ts.Type>();
+
   // `__cfHelpers.PerUser<A | B & C>` for a type the scope wrapper `PerUser`
   // resolves to, over the alternatives `A` and `B & C`, or `undefined` for a
-  // type that is not a scope wrapper's, or that names an alias of its own,
-  // which the printer writes instead.
+  // type that is not a scope wrapper's, that names an alias of its own, which
+  // the printer writes instead, or that is being written already.
   const writeScopeWrapper = (
     type: ts.Type | undefined,
   ): ts.TypeNode | undefined => {
-    const brand = type && !type.aliasSymbol && context.print &&
+    if (!type || writing.has(type)) return undefined;
+    writing.add(type);
+    try {
+      return writeScopeWrapperOf(type);
+    } finally {
+      writing.delete(type);
+    }
+  };
+
+  /** Helper for `writeScopeWrapper()`, which writes `type`. */
+  const writeScopeWrapperOf = (type: ts.Type): ts.TypeNode | undefined => {
+    const brand = !type.aliasSymbol && context.print &&
       getScopeBrand(type, context.checker);
     if (!brand) return undefined;
     // A payload of one type per alternative is printed whole, which joins the

@@ -272,6 +272,55 @@ export default pattern<{ enabled: boolean }>(({ enabled }) => {
       });
     });
 
+    it("keeps the cell, the scope, the cap, and the labels of a labelled scoped cell intersected with another type in its capture", async () => {
+      // `Cell<A> & Extra` is the cell, as schema generation reads it.
+      const module = await transformed(
+        `import { computed, pattern, type Cell, type Confidential, type PerSpace } from "commonfabric";
+interface A { a: string }
+declare const EXTRA: unique symbol;
+type Extra = { readonly [EXTRA]: true };
+type Handle = PerSpace<Confidential<Cell<A> & Extra, readonly ["owner"]>>;
+export default pattern<{ handle: Handle }>(({ handle }) => ({
+  handle,
+  out: computed(() => handle.get().a),
+}));`,
+      );
+      const captures = callsNamed(module, "lift").at(-1)!.typeArguments![0]!;
+      const [input] = callSchemas(module, "lift");
+
+      expect(captures.getText(module).replace(/\s+/g, " ")).toBe(
+        "{ handle: __cfHelpers.PerSpace<__cfHelpers.ReadonlyCell<A>>; }",
+      );
+      expect((input!.properties as Record<string, unknown>).handle).toEqual({
+        $ref: "#/$defs/A",
+        asCell: [{ kind: "readonly", scope: "space" }],
+        ifc: { confidentiality: ["owner"] },
+      });
+    });
+
+    it("keeps the cell, the scope, the cap, and the labels of a labelled scoped payload of two cells in its capture", async () => {
+      // Narrowing cannot take the scoped cell apart, so the capture keeps the
+      // type it was declared with, whose payload member is labelled and holds
+      // several members.
+      const module = await transformed(
+        `import { computed, pattern, type Cell, type Confidential, type PerSpace } from "commonfabric";
+interface A { a: string }
+interface B { b: number }
+type Handle = PerSpace<Confidential<Cell<A> & Cell<B>, readonly ["owner"]>>;
+export default pattern<{ handle: Handle }>(({ handle }) => ({
+  handle,
+  out: computed(() => handle.get().a),
+}));`,
+      );
+      const [input] = callSchemas(module, "lift");
+
+      expect((input!.properties as Record<string, unknown>).handle).toEqual({
+        $ref: "#/$defs/A",
+        asCell: [{ kind: "cell", scope: "space" }],
+        ifc: { confidentiality: ["owner"] },
+      });
+    });
+
     it("reads a nullable labelled intersection in a scope alike written outside the wrapper and inside", async () => {
       const schemaOf = async (argument: string) =>
         emittedSchemas(
@@ -412,6 +461,148 @@ export default pattern<{ enabled: boolean }>(({ enabled }) => {
             ],
             scope: "session",
           });
+      });
+
+      it(`keeps the scope, the cap, the labels, and \`${nullish}\` of a nullable scoped cell intersected with another type's capture`, async () => {
+        const module = await transformed(
+          `import { computed, pattern, type Cell, type Confidential, type PerSpace } from "commonfabric";
+interface A { a: string }
+declare const EXTRA: unique symbol;
+type Extra = { readonly [EXTRA]: true };
+type Handle = PerSpace<Confidential<Cell<A> & Extra, readonly ["owner"]>> | ${nullish};
+export default pattern<{ handle: Handle }>(({ handle }) => ({
+  handle,
+  out: computed(() => handle?.get().a),
+}));`,
+        );
+        const capture = callsNamed(module, "lift")
+          .flatMap((lift) =>
+            (lift.typeArguments![0]! as ts.TypeLiteralNode).members
+          )
+          .find((member) =>
+            member.name?.getText(module) === "handle"
+          ) as ts.PropertySignature;
+        const [input] = callSchemas(module, "lift");
+
+        expect(capture.type!.getText(module)).toBe(
+          `__cfHelpers.PerSpace<__cfHelpers.ReadonlyCell<A> | ${nullish}>`,
+        );
+        expect((input!.properties as Record<string, unknown>).handle).toEqual({
+          anyOf: [
+            {
+              $ref: "#/$defs/A",
+              asCell: [{ kind: "readonly", scope: "space" }],
+            },
+            { type: nullish },
+          ],
+          scope: "space",
+          ifc: { confidentiality: ["owner"] },
+        });
+      });
+    }
+
+    it("keeps the scope and the cap of a nullable scoped cell's capture that narrowing cannot take apart", async () => {
+      // The scoped cell's payload holds two cells, which narrowing does not
+      // take apart, so the capture keeps the type it was declared with.
+      const module = await transformed(
+        `import { computed, pattern, type Cell, type PerSpace } from "commonfabric";
+interface A { a: string }
+interface B { b: number }
+type Handle = PerSpace<Cell<A> & Cell<B>> | null;
+export default pattern<{ handle: Handle }>(({ handle }) => ({
+  handle,
+  out: computed(() => handle?.get().a),
+}));`,
+      );
+      const [input] = callSchemas(module, "lift");
+
+      expect((input!.properties as Record<string, unknown>).handle).toEqual({
+        anyOf: [
+          { type: "null" },
+          { $ref: "#/$defs/A", asCell: [{ kind: "cell", scope: "space" }] },
+        ],
+        scope: "space",
+      });
+    });
+
+    for (
+      const [shape, declaration, read] of [
+        [
+          "a cell around a recursive scoped value",
+          "type Tree = PerUser<{ label: string; kids: Tree[] }>;\ntype Input = { handle: PerSession<Writable<Tree>> };",
+          "handle.get().label",
+        ],
+        [
+          "a recursive scoped cell",
+          "type Tree = PerUser<Writable<{ label: string; next?: Tree }>>;\ntype Input = { handle: Tree };",
+          "handle.get().label",
+        ],
+      ] as const
+    ) {
+      it(`keeps every scope of the capture of ${shape}`, async () => {
+        // Each member of a scope wrapper is printed afresh, and the print of a
+        // recursive one holds the wrapper again.
+        const module = await transformed(
+          `import { computed, pattern, Writable, type PerSession, type PerUser } from "commonfabric";
+${declaration}
+export default pattern<Input>(({ handle }) => ({
+  out: computed(() => ${read}),
+}));`,
+        );
+        const [input] = callSchemas(module, "lift");
+        const [name] = Object.keys(input!.$defs as object);
+        const reference = `#/$defs/${name}`;
+
+        expect(input).toEqual(
+          shape === "a recursive scoped cell"
+            ? {
+              type: "object",
+              properties: {
+                handle: {
+                  $ref: reference,
+                  asCell: [{ kind: "readonly", scope: "user" }],
+                },
+              },
+              required: ["handle"],
+              $defs: {
+                [name!]: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string" },
+                    next: {
+                      $ref: reference,
+                      asCell: [{ kind: "cell", scope: "user" }],
+                    },
+                  },
+                  required: ["label"],
+                },
+              },
+            }
+            : {
+              type: "object",
+              properties: {
+                handle: {
+                  $ref: reference,
+                  scope: "user",
+                  asCell: [{ kind: "readonly", scope: "session" }],
+                },
+              },
+              required: ["handle"],
+              $defs: {
+                [name!]: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string" },
+                    kids: {
+                      type: "array",
+                      items: { $ref: reference, scope: "user" },
+                    },
+                  },
+                  required: ["label", "kids"],
+                },
+              },
+            },
+        );
       });
     }
   });

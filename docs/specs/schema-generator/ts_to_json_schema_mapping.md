@@ -597,7 +597,12 @@ pre-cleanup schemas.
 - Wrapper unions: a union whose non-null/undefined members are **all** wrappers
   formats member-wise, preserving `{ type: "undefined" }` / `{ type: "null" }`,
   skipping conditional/type-parameter members, deduping identical member
-  schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`).
+  schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`). A
+  labelled cell among them, which holds its CFC metadata carriers beside the
+  cell, carries their labels on its own branch, as a labelled value does:
+  `Confidential<Cell<A>, ["r1"]> | null` → `{ anyOf: [{ type: "null" },
+  { $ref: "#/$defs/A", asCell: ["cell"], ifc: { confidentiality: ["r1"] } }]
+  }`, each of several labelled cells with its own labels (cfc-authoring.test.ts).
   Mixed unions fall to `UnionFormatter`. Primitive alternatives merge only
   when both schemas contain exclusively `type` and `enum`; metadata-bearing
   alternatives, including Cell wrappers, remain separate even when their
@@ -881,7 +886,8 @@ the type for more than the brand, as for the labels of
 (`cfcCarriedParts`), and otherwise by the formatters after it
 (`formatStructure`), with the labels of any CFC metadata carrier it holds, as
 `Confidential<A & B, […]>` does, alone or as an alternative beside `null` or
-`undefined`. The payload of a wrapper found by name is
+`undefined`. Such a payload that is a cell, as `Cell<A> & Cell<B>`, is read as
+the cell, with those labels. The payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):
