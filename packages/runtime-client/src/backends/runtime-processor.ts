@@ -1509,10 +1509,7 @@ export class RuntimeProcessor {
     let cell = getCell(this.#runtime, request.cell);
     if (request.meta !== undefined) {
       const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-      if (
-        request.meta === "pattern" || request.meta === "argument" ||
-        request.meta === "result"
-      ) {
+      if (request.meta === "argument" || request.meta === "result") {
         // For the meta link fields, use the meta linked cell instead
         const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
         const link = getMetaLink(rootCell, request.meta);
@@ -2835,8 +2832,7 @@ export class RuntimeProcessor {
           path: [],
         });
       await landing.sync();
-      const hasPattern = getPatternIdentityRef(landing) !== undefined ||
-        landing.getMetaRaw("pattern") !== undefined;
+      const hasPattern = getPatternIdentityRef(landing) !== undefined;
       const viewScoped = this.#runtime.viewScopedReplicationRequested &&
         await this.#runtime.viewReplication.enable(target.space);
       if (viewScoped && (!hasPattern || targetLink.path.length > 0)) {

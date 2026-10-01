@@ -269,6 +269,34 @@ describe("computeEntryIdentity (light, drift-free)", () => {
     expect(identity).not.toBe(computeEntryIdentity("/entry.ts", files));
   });
 
+  it("matches the engine with attached roots and data files together", async () => {
+    const program: RuntimeProgram = {
+      main: "/entry.tsx",
+      sourceRoots: ["/attached%20root.ts"],
+      dataFiles: ["/payload.txt"],
+      files: [
+        { name: "/entry.tsx", contents: ENTRY },
+        { name: "/shared.ts", contents: SHARED },
+        {
+          name: "/attached%20root.ts",
+          contents: 'import { dataFile } from "commonfabric";\n' +
+            'export const attached = () => dataFile("./payload.txt");\n',
+        },
+        { name: "/payload.txt", contents: 'import "./missing.ts";\r\n' },
+      ],
+    };
+    const light = computeEntryIdentity(program.main, program.files, program);
+    const compiled = await engine.compileToRecordGraph(program);
+    expect(light).toBe(compiled.entryIdentity);
+    expect(light).not.toBe(computeEntryIdentity(program.main, program.files));
+    const changedData = program.files.map((file) =>
+      file.name === "/payload.txt" ? { ...file, contents: "changed\n" } : file
+    );
+    expect(computeEntryIdentity(program.main, changedData, program)).not.toBe(
+      light,
+    );
+  });
+
   it("throws for a source root whose closure is incomplete", () => {
     const files = [
       { name: "/entry.ts", contents: "export default 1;\n" },

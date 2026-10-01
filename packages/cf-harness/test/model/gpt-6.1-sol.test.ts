@@ -188,9 +188,9 @@ describe("GPT-6.1 Sol", () => {
         store: false,
       });
       if (effort === undefined) {
-        expect(requests[0]).not.toHaveProperty("reasoning");
+        expect(requests[0].reasoning).toEqual({ summary: "auto" });
       } else {
-        expect(requests[0].reasoning).toEqual({ effort });
+        expect(requests[0].reasoning).toEqual({ effort, summary: "auto" });
       }
       expect(requests[0]).not.toHaveProperty("prompt_cache_options");
     });

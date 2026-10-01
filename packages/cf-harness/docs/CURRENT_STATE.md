@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-29\
-Revision: `37971c23cd`
+Last verified: 2026-10-01\
+Revision: `28544790e8`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -29,6 +29,7 @@ The runtime has four main boundaries:
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
    [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
    constrained host-adjacent profile whose typed `browser` tool the harness
+   sends to a browser host attached to the run, such as the Weaver, or else
    binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
    is a distinct trusted-host path whose Fabric identity stays outside the
    sandbox. It runs pieces in the configured space and admits input references
@@ -926,7 +927,15 @@ host.
 
 Loom also has an opt-in adapter for the interactive NDJSON protocol. It is not
 the default interactive harness, and browser automation is not yet wired into
-that interactive product path.
+that interactive product path. The console's interactive path does browse: on a
+console launched with `--allow-browser-host`, a task that declares a browser
+host has its browser children drive the page that host shows the owner, under
+the confinements the [browser host section](../README.md#a-browser-host)
+describes. What a host shows enters the model's context under the unscreened
+prompt-injection caveat, sourced to the page's origin, and is withheld from a
+run whose read ceiling does not admit it. A child's return brings the child's
+model-context label into its parent's, for every child, so the caveat reaches
+the parent with whatever crosses.
 
 Loom currently forces autonomous `cf-harness` runs to `observe` mode while
 trusted `runsc-cfc` observation metadata is not wired through every local tool

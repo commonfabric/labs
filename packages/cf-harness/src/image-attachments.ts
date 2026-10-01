@@ -1,4 +1,4 @@
-import { encodeBase64 } from "@std/encoding/base64";
+import { decodeBase64, encodeBase64 } from "@std/encoding/base64";
 import { extname, isAbsolute, join, relative, resolve } from "@std/path";
 import {
   HARNESS_IMAGE_ATTACHMENT_TYPE,
@@ -244,6 +244,59 @@ export const createHarnessImageAttachment = async (
     bytes: bytes.byteLength,
     digest,
     ...(snapshotPath === undefined ? {} : { snapshotPath }),
+  };
+};
+
+/**
+ * Makes an attachment of base64-encoded image bytes a tool produced rather
+ * than read from the workspace — a browser host's screenshot, say. The bytes
+ * are written into `snapshotDir` under their digest, and the attachment
+ * materializes from there for the rest of the run. An encoding longer than
+ * the largest attachment could need is refused before it is decoded.
+ *
+ * @throws Error when the bytes are empty, larger than an attachment may be,
+ * not base64, or not an image of the declared type.
+ */
+export const createHarnessImageAttachmentFromBase64 = async (
+  options: {
+    snapshotDir: string;
+    base64: string;
+    mediaType: HarnessImageMediaType;
+  },
+): Promise<HarnessImageAttachment> => {
+  const { base64, mediaType, snapshotDir } = options;
+  if (base64.length > Math.ceil(MAX_IMAGE_ATTACHMENT_BYTES / 3) * 4) {
+    throw new Error(
+      `the image is too large (max ${MAX_IMAGE_ATTACHMENT_BYTES} bytes)`,
+    );
+  }
+  const bytes = decodeBase64(base64);
+  if (bytes.byteLength === 0) {
+    throw new Error("the image is empty");
+  }
+  if (bytes.byteLength > MAX_IMAGE_ATTACHMENT_BYTES) {
+    throw new Error(
+      `the image is too large (${bytes.byteLength} bytes, max ${MAX_IMAGE_ATTACHMENT_BYTES})`,
+    );
+  }
+  // No path to fall back on: only the bytes' own signature decides.
+  if (detectImageMediaType(bytes, "") !== mediaType) {
+    throw new Error(`the image is not ${mediaType}`);
+  }
+  const digest = await sha256Digest(bytes);
+  const snapshotPath = await writeImageAttachmentSnapshot(
+    snapshotDir,
+    bytes,
+    digest,
+    mediaType,
+  );
+  return {
+    type: HARNESS_IMAGE_ATTACHMENT_TYPE,
+    hostPath: snapshotPath,
+    mediaType,
+    bytes: bytes.byteLength,
+    digest,
+    snapshotPath,
   };
 };
 

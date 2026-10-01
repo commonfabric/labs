@@ -18,6 +18,7 @@ import {
   describeTerminalFailure,
   normalizeTerminalResponse,
   providerRunAffinityKey,
+  REASONING_SUMMARY,
   toResponsesInput,
   toResponsesTools,
 } from "./responses-protocol.ts";
@@ -547,9 +548,13 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       text: { verbosity: "low" },
       include: ["reasoning.encrypted_content"],
       prompt_cache_key: affinityKey,
-      ...(request.reasoningEffort !== undefined
-        ? { reasoning: { effort: request.reasoningEffort } }
-        : {}),
+      // Every model Codex serves reasons, so every turn asks for a summary.
+      reasoning: {
+        ...(request.reasoningEffort !== undefined
+          ? { effort: request.reasoningEffort }
+          : {}),
+        summary: REASONING_SUMMARY,
+      },
       tool_choice: "auto",
       parallel_tool_calls: true,
     });

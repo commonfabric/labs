@@ -50,27 +50,13 @@ export function collectViewRenderReads(
     }
   }
 
-  /**
-   * Reads `value` and the view nodes under it. A `root` is read the way the
-   * reconciler reads the cell it mounts, as a render read, and a cell is
-   * visited once as a root and once as a child at most: the two reads of one
-   * address can project differently.
-   */
-  function visit(value: unknown, root = false): void {
+  function visit(value: unknown): void {
     if (isCell(value)) {
       const link = value.getAsNormalizedFullLink();
-      const key = [
-        root ? "root" : "child",
-        link.space,
-        link.scope,
-        link.id,
-        ...link.path,
-      ];
+      const key = [link.space, link.scope, link.id, ...link.path];
       if (visited.has(key)) return;
       visited.set(key, true);
-      visit(
-        value.withTx(tx).asSchema(rendererVDOMSchema).get({ renderRead: root }),
-      );
+      visit(value.withTx(tx).asSchema(rendererVDOMSchema).get());
       return;
     }
     if (Array.isArray(value)) {
@@ -122,19 +108,16 @@ export function collectViewRenderReads(
 
   try {
     for (const root of view.query.roots) {
-      visit(
-        runtime.getCellFromLink(
-          {
-            space,
-            id: root.id as NormalizedFullLink["id"],
-            scope: root.scope ?? "space",
-            path: root.selector.path,
-          },
-          rendererVDOMSchema,
-          tx,
-        ),
-        true,
-      );
+      visit(runtime.getCellFromLink(
+        {
+          space,
+          id: root.id as NormalizedFullLink["id"],
+          scope: root.scope ?? "space",
+          path: root.selector.path,
+        },
+        rendererVDOMSchema,
+        tx,
+      ));
     }
     const log = txToReactivityLog(tx);
     return {

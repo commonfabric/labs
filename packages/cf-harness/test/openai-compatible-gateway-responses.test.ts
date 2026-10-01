@@ -90,6 +90,9 @@ Deno.test("gpt-5.6 turns go to the Responses API with reasoning enabled", async 
   assertEquals(body.store, false);
   // Reasoning must not be disabled the way the Chat Completions workaround did.
   assertEquals(body.reasoning_effort, undefined);
+  // A gateway routes models that do not reason too, so without an effort the
+  // request names no reasoning at all, summary included.
+  assertEquals(body.reasoning, undefined);
   assertEquals(body.include, ["reasoning.encrypted_content"]);
   // Tools use the Responses shape: a flat name, not { function: { name } }.
   assertEquals(body.tools, [{
@@ -407,7 +410,7 @@ Deno.test("cache affinity, explicit breakpoint, and reasoning are configurable",
     mode: "explicit",
     ttl: "30m",
   });
-  assertEquals(body.reasoning, { effort: "low" });
+  assertEquals(body.reasoning, { effort: "low", summary: "auto" });
   const input = body.input as Array<Record<string, unknown>>;
   const content = input[0].content as Array<Record<string, unknown>>;
   assertEquals(content[content.length - 1].prompt_cache_breakpoint, {

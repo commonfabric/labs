@@ -439,6 +439,12 @@ export type HarnessChatStructuredEvent =
     subagent?: HarnessChatSubagentRef;
   }
   | {
+    /** The provider's summary of the reasoning behind the message that follows. */
+    kind: "assistant_reasoning";
+    text: string;
+    subagent?: HarnessChatSubagentRef;
+  }
+  | {
     kind: "tool_started";
     tool: HarnessChatToolCallSummary;
     subagent?: HarnessChatSubagentRef;

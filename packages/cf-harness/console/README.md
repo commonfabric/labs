@@ -176,6 +176,7 @@ Every environment variable has a flag, and the flag wins:
 | `--max-model-turns`           | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS`   | the prompt loop's default             |
 | `--skills-root`               | `CF_HARNESS_CONSOLE_SKILLS_ROOT`       | the repository's `skills/` tree       |
 | `--allow-skill-scripts`       | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`     | off; scripts do not run               |
+| `--allow-browser-host`        | `CF_HARNESS_ALLOW_BROWSER_HOST=1`      | off; a task may declare no host       |
 | `--host-mount`                | —                                      | none; repeatable                      |
 
 ### Skill scripts
@@ -281,9 +282,10 @@ durable: restarting the server and reopening the page replays the log.
 
 ## HTTP routes
 
-Every route is behind the loopback `Host` check and nothing else. A caller that
-names this server's host may call any of them, in one request, with no preceding
-one.
+Every route is behind the loopback `Host` check. A caller that names this
+server's host may call any of them, in one request, with no preceding one,
+except the two `/api/browser-host/` routes, which also take the per-turn token
+`POST /api/task` answered with when the task declared a browser host.
 
 | Method | Route                        | Result                                                                                  |
 | ------ | ---------------------------- | --------------------------------------------------------------------------------------- |
@@ -291,6 +293,8 @@ one.
 | `GET`  | `/api/health/detail`         | Cached operator observations with deciding records, times, causes, and remedies         |
 | `POST` | `/api/task`                  | Starts a session or a follow-up turn                                                    |
 | `POST` | `/api/cancel`                | Cancels the active turn, recording the reason the caller gives                          |
+| `POST` | `/api/browser-host/stream`   | A turn's browser operations, over SSE, for the holder of its host token                 |
+| `POST` | `/api/browser-host/result`   | The host's result for one operation                                                     |
 | `GET`  | `/api/sessions`              | Durable session summaries                                                               |
 | `GET`  | `/api/status`                | Session status and artifact roots                                                       |
 | `GET`  | `/api/policy`                | What a new session here would run under                                                 |
@@ -601,6 +605,8 @@ Start. The feed then shows, in the order the harness produces them:
 
 - **`calling <tool>`** as each tool call begins, with its input summary.
 - **`<tool> completed` / `failed`** with the result the model read, truncated.
+- **the model's reasoning**, as the provider summarizes it, before the calls and
+  the text it led to, where the provider gives a summary.
 - **assistant text** between tool calls.
 - **a nested subagent block** under each `delegate_task` entry, headed by the
   child's profile and the goal it was given, holding the child's own tool and
@@ -651,6 +657,60 @@ Cancel stops the running turn. The session survives a cancel and a page reload
 both — the stream resumes from the last event the page rendered rather than
 replaying the feed.
 
+## Browser hosts
+
+A task body may carry `browserHost`, an object declaring that the caller can
+host the turn's browser — show a web page to the owner and execute the `browser`
+tool's operations in it:
+
+```json
+{
+  "text": "find the book on my list",
+  "browserHost": {}
+}
+```
+
+The declaration is an object so it can grow; the console reads nothing in it
+yet, and leaves alone a field it does not know. The answer carries a
+`browserHostToken` beside `sessionId` and `turnId`, given to the task's starter
+and nobody else.
+
+A task may declare a host only on a console its operator launched with
+`--allow-browser-host`; a console launched without it answers the declaration
+403. A turn with a host runs under its session's policy with browser children
+added to drive the host, and the session's other turns run under its policy as
+it is. The token binds the stream and the results to the caller that declared
+the host, and vouches for nothing else about it.
+
+The holder of the token attaches with `POST /api/browser-host/stream`,
+`{"turnId", "token"}`, answered with Server-Sent Events: each operation arrives
+as a `request` event whose data is `{"id", "operation"}`, and a `close` event
+says the turn is over and the stream ends. Operations sent before the host
+attaches wait for it, and the first attach is the only one: a second answers
+409. Each result goes back with `POST /api/browser-host/result`,
+`{"turnId", "token", "id", "result"}`; a result that is not one answers 400, an
+id nobody waits on 404, and a body over 32 MiB 413 without the rest being read.
+A request whose token does not match answers 404, as one for a turn with no host
+does. The token rides in the body so it appears in no URL and no log line
+between the host and the console.
+
+An operation waits for its result however long it takes, since a hand-off waits
+for the owner. The run can end it early by aborting it. One the host has not
+been sent is simply withdrawn; one it holds is withdrawn with a `withdraw` event
+whose data is `{"id"}`, and the host stops it if it can and answers it as it
+ended. That answer is the acknowledgment: no later operation reaches the host
+until it arrives, so nothing the host does for a withdrawn call overlaps the
+next. A result that is not one settles its operation as failed rather than
+leaving it waiting. When the host's stream ends, every outstanding and later
+operation settles as `session-ended`, and so does every operation when the turn
+ends. The operation and result shapes are `src/contracts/browser-host.ts`.
+
+The `/api/` routes answer only the console's own page and clients that are not
+browsers: a request a browser marks as a navigation, or as made by another
+site's page (`Sec-Fetch-Mode: navigate`, or a `Sec-Fetch-Site` other than
+`same-origin` or `none`), answers 403, so a page an agent opened can neither
+load a route nor reach one from elsewhere.
+
 ## The live pane
 
 `GET /live/<sessionId>` is the same work in a column, for a host that can show a
@@ -698,14 +758,34 @@ come from the turn's own run, which the pane re-reads when one of its tool calls
 completes. The run id of a console turn is the turn id, so no route composes
 that address and no lookup stands between the two.
 
+Before the calls a model makes, and before what it says, the pane shows what it
+was thinking, as the provider's summary of its reasoning sums it up, set in
+italics under the parent or the subagent it came from; the console page shows
+the same summary above the step it led to. A model that reasoned little may have
+no summary, and a gateway model has one only when the run names a reasoning
+effort, since the gateway also serves models that do not reason.
+
 Each step is one line — the tool, how it ended, and what it was about: the
 numbered `run_pattern` attempt and the compiler's word on it, the slug
 `assign_slug` registered, the query a search was given, the question legacy
 `query_docs` asked, or the Common Fabric task `research` investigated. Under a
 line whose run recorded a CFC decision sits the same CFC line the console's
 timeline draws, and a result that held anything back from the model carries the
-same omission block, openable in place. A completed turn ends the pane with the
-piece link the turn produced, which is what the pane is watched for.
+same omission block, openable in place. A completed turn ends the pane with its
+answer, the final text rendered as Markdown in place of the block it streamed
+as, and the piece link the turn produced, if it produced one, which is what the
+pane is watched for. A turn `finish_task` answered keeps the block it streamed,
+since the answer came from the tool rather than from that block, and closes with
+the answer. Raw HTML in the answer is not rendered, and a link is kept only when
+it points at a web address, with the host it goes to shown beside it. The turn's
+result carries the final text as written and, as `revealed`, the string each
+`cfh:v:` return referent it names stands for; the pane shows each such string in
+place of its token, in the answer and in a question or a reason for giving up,
+marked as something an agent found, so the owner sees a value the parent held
+only as a name. A string is only ever text there, and never part of a link: a
+link the parent wrote to a token keeps the token as its destination, and is
+dropped as not a web address, and a token in a link's label stays a token, so a
+found address never labels a link that goes somewhere else.
 
 ## Sessions
 

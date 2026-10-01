@@ -1,12 +1,16 @@
 import type { Source } from "@commonfabric/js-compiler";
 import { resolveImportSpecifier } from "@commonfabric/js-compiler/specifier";
+
 import { computeModuleIdentities } from "../sandbox/module-record-compiler.ts";
 import { attachDeclaredDataFiles } from "./declared-data-files.ts";
 import {
   compilerStack,
   ensureCompilerStack,
 } from "./deferred-compiler-stack.ts";
-import { resolveModuleImports } from "./module-identity.ts";
+import {
+  type ModuleImportEdges,
+  resolveModuleImports,
+} from "./module-identity.ts";
 
 // A fixed, arbitrary program id. `computeModuleIdentities` strips this prefix
 // before hashing (see `stripIdentityPrefix`), so its exact value never reaches
@@ -102,9 +106,10 @@ export function computeEntryIdentity(
   // files), so `identities` is guaranteed to contain `entryKey` below. Every
   // source root is an entry of its own, so each root's closure has to be as
   // complete as the main entry's.
-  assertClosureComplete(main, entryKey, prefixedCode);
+  const edges = resolveModuleImports({ main: entryKey, files: prefixedCode });
+  assertClosureComplete(main, entryKey, edges);
   for (const root of rootPaths) {
-    assertClosureComplete(root, prefixName(root), prefixedCode);
+    assertClosureComplete(root, prefixName(root), edges);
   }
 
   const identities = computeModuleIdentities(
@@ -151,17 +156,16 @@ export interface ResolveEntryIdentityOptions extends EntryIdentityOptions {
   readDataFile?: (name: string) => Promise<string>;
 }
 
-// Walk the entry's reachable import closure and fail loudly on any dangling
-// internal import. Scoping the check to the reachable closure (rather than every
-// file) is what makes passing a superset — e.g. every file under the patterns
-// root — safe: an unrelated file's broken relative import does not concern this
-// entry's identity.
+/**
+ * Helper for `computeEntryIdentity()`, which checks a root's reachable closure
+ * against the shared import graph. Throws for dangling internal or fabric
+ * imports; unreachable files do not affect this root's validation.
+ */
 function assertClosureComplete(
   main: string,
   entryKey: string,
-  prefixed: readonly Source[],
+  edges: ReadonlyMap<string, ModuleImportEdges>,
 ): void {
-  const edges = resolveModuleImports({ main: "", files: [...prefixed] });
   const seen = new Set<string>([entryKey]);
   const queue: string[] = [entryKey];
   while (queue.length > 0) {

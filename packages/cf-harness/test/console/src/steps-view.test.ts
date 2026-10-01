@@ -298,6 +298,42 @@ describe("console/src/steps-view", () => {
       }
     }
 
+    it("renders a step's reasoning as plain text in a thinking pane, for prose and for a call", () => {
+      const steps = consoleRunSteps([
+        {
+          role: "assistant",
+          content: "",
+          reasoning: "**Read** [it](https://elsewhere.example/) first.",
+          toolCalls: [{
+            id: "c1",
+            type: "function" as const,
+            function: { name: "read_file", arguments: '{"path":"a"}' },
+          }],
+        },
+        {
+          role: "tool",
+          toolCallId: "c1",
+          toolName: "read_file",
+          content: JSON.stringify({ outputId: "o1", content: "a" }),
+        },
+        { role: "assistant", content: "done", reasoning: "It says *done*." },
+      ]);
+      const view = new TestConsoleSteps();
+      view.steps = steps;
+      const shown = [0, 1].map((selected) => {
+        view.selected = selected;
+        return templateText(view.view());
+      });
+
+      expect(shown[0]).toContain('<div class="pane-head">thinking</div>');
+      expect(shown[0]).toContain(
+        "**Read** [it](https://elsewhere.example/) first.",
+      );
+      expect(shown[0]).not.toContain("<a");
+      expect(shown[1]).toContain("It says *done*.");
+      expect(shown[1]).not.toContain("<em>");
+    });
+
     it("renders the model-facing result beside its retrospective context", () => {
       const outputId = createToolOutputId("run", "run_pattern", 1);
       const token = "cfh:a:abcde";

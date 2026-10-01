@@ -514,42 +514,153 @@ export default pattern<{ a: Node<Wrap<readonly []>> }>(({ a }) => ({ a }));`,
       required: ["v"],
     };
 
-    it("reports `pattern:any-result-schema` for a pattern's inferred result", async () => {
+    /**
+     * The transformed module whose `make()` returns an anonymous class
+     * instance and whose remaining source is `body`, with the diagnostics its
+     * transform reports.
+     */
+    async function transformWithMake(
+      body: string,
+    ): Promise<
+      { root: ts.SourceFile; diagnostics: TransformationDiagnostic[] }
+    > {
       const diagnostics: TransformationDiagnostic[] = [];
-      await transformFiles({
+      const files = await transformFiles({
         "/main.tsx": `/// <cts-enable />
-import { pattern } from "commonfabric";
+import { lift, pattern } from "commonfabric";
 function make() { return new (class { v = 1 })(); }
-export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));`,
+${body}`,
       }, {
         types: COMMONFABRIC_TYPES,
         typeCheck: true,
         pipelineDiagnostics: diagnostics,
       });
+      return { root: parseModule(files["/main.tsx"]!), diagnostics };
+    }
+
+    it("reads a pattern's inferred result as its type", async () => {
+      const { root, diagnostics } = await transformWithMake(
+        "export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));",
+      );
+
+      expect(patternSchemas(root).output).toEqual({
+        type: "object",
+        properties: { a: { $ref: "#/$defs/__class" }, n: { type: "number" } },
+        required: ["a", "n"],
+        $defs: { __class: instance },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports `pattern-result:unknown-type` for each field and array element of a pattern's inferred result typed `unknown`", async () => {
+      const { diagnostics } = await transformWithMake(
+        "export default pattern<{ u: unknown }>(({ u }) => ({ a: make(), u, us: [u] }));",
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern-result:unknown-type" }]);
+      expect(diagnostics[0]!.message).toContain("fields `u`, `us[]` have");
+    });
+
+    for (
+      const [shape, result, fields] of [
+        ["the result itself", "makeHolding()", "field `u` has"],
+        ["a field of the result", "({ a: makeHolding() })", "field `a.u` has"],
+        [
+          "each of two fields of the result",
+          "({ a: makeHolding(), b: makeHolding() })",
+          "fields `a.u`, `b.u` have",
+        ],
+      ] as const
+    ) {
+      it(`reports \`pattern-result:unknown-type\` for the \`unknown\` field of an anonymous class instance that is ${shape}`, async () => {
+        const { diagnostics } = await transformWithMake(
+          `function makeHolding() { return new (class { v = 1; u: unknown = "u"; })(); }
+export default pattern<Record<string, never>>(() => ${result});`,
+        );
+
+        expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+          .toEqual([{
+            severity: "error",
+            type: "pattern-result:unknown-type",
+          }]);
+        expect(diagnostics[0]!.message).toContain(fields);
+      });
+    }
+
+    for (
+      const [holder, result] of [
+        ["an anonymous class instance that is the result", "makeBranded()"],
+        [
+          "an anonymous class instance that is a field of the result",
+          "({ a: makeBranded() })",
+        ],
+        ["the result itself", "({ a: make(), [brand]: u })"],
+      ] as const
+    ) {
+      it(`reports nothing for an \`unknown\` symbol-keyed member of ${holder}, which the schema leaves out`, async () => {
+        const { diagnostics } = await transformWithMake(
+          `const brand = Symbol("brand");
+function makeBranded() { return new (class { v = 1; [brand]: unknown = "b"; })(); }
+export default pattern<{ u: unknown }>(({ u }) => ${result});`,
+        );
+
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads a pattern's inferred result holding a type that refers to itself through `typeof`", async () => {
+      // The type of `tree` has no name, and holds itself through `typeof`.
+      const { root, diagnostics } = await transformWithMake(
+        `const tree: { children: (typeof tree)[] } = { children: [] };
+export default pattern<Record<string, never>>(() => ({ a: make(), tree }));`,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(Object.keys(
+        (patternSchemas(root).output.properties ?? {}) as Schema,
+      )).toEqual(["a", "tree"]);
+    });
+
+    it("reports `pattern:any-result-schema` for a pattern whose result is its callback's type parameter", async () => {
+      // A result typed by a bare type parameter has neither a print nor a
+      // type to read, so it is read as permissive.
+      const { diagnostics } = await transformWithMake(
+        "export default pattern<{ v: string }>(<T,>({ v }: { v: T }) => v);",
+      );
 
       expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
         .toEqual([{ severity: "error", type: "pattern:any-result-schema" }]);
     });
 
-    it('emits a `{ type: "unknown" }` result schema, and no diagnostic, for a lift taking no parameters', async () => {
-      const diagnostics: TransformationDiagnostic[] = [];
-      const files = await transformFiles({
-        "/main.tsx": `/// <cts-enable />
-import { lift } from "commonfabric";
-function make() { return new (class { v = 1 })(); }
-export const f = lift(() => ({ a: make() }));`,
-      }, {
-        types: COMMONFABRIC_TYPES,
-        typeCheck: true,
-        pipelineDiagnostics: diagnostics,
-      });
+    for (
+      const [parameters, callback, schema] of [
+        ["no parameters", "() => ({ a: make() })", {
+          properties: { a: { $ref: "#/$defs/__class" } },
+          required: ["a"],
+        }],
+        ["a parameter", "(n: number) => ({ a: make(), n })", {
+          properties: {
+            a: { $ref: "#/$defs/__class" },
+            n: { type: "number" },
+          },
+          required: ["a", "n"],
+        }],
+      ] as const
+    ) {
+      it(`reads the result of a lift taking ${parameters} as its type`, async () => {
+        const { root, diagnostics } = await transformWithMake(
+          `export const f = lift(${callback});`,
+        );
 
-      expect(callSchemas(parseModule(files["/main.tsx"]!), "lift")).toEqual([
-        false,
-        { type: "unknown" },
-      ]);
-      expect(diagnostics).toEqual([]);
-    });
+        expect(callSchemas(root, "lift").at(-1)).toEqual({
+          type: "object",
+          ...schema,
+          $defs: { __class: instance },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
 
     it("reads a lift's result as its authored return annotation", async () => {
       const { result } = await liftSchemas(

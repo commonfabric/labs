@@ -19,6 +19,7 @@ import {
   mintReferentHandle,
   referentDraft,
   resolveReferentToken,
+  returnReferentValues,
   swapTokensForRefs,
 } from "../src/handle-table.ts";
 import { agentObservedHandlesOfTable } from "../src/result-writer.ts";
@@ -185,6 +186,14 @@ describe("referent handles", () => {
       });
       expect(() => assertValidHarnessHandleTable(research.table)).not
         .toThrow();
+      const returned = await mintReferentHandle(table, {
+        ...ROW,
+        kind: "return",
+        source: "delegate_task:child",
+        labelSource: "child",
+      });
+      expect(() => assertValidHarnessHandleTable(returned.table)).not
+        .toThrow();
       for (
         const broken of [
           { ...table.referents![0], token: "cfh:a:22222" },
@@ -201,6 +210,8 @@ describe("referent handles", () => {
           { ...table.referents![0], labelSource: "guess" },
           { ...table.referents![0], labelSource: "research" },
           { ...table.referents![0], kind: "research" },
+          { ...table.referents![0], labelSource: "child" },
+          { ...table.referents![0], kind: "return" },
           { ...table.referents![0], source: "" },
         ]
       ) {
@@ -312,6 +323,29 @@ describe("referent handles", () => {
         labelSource: "research",
       });
       expect(referentDraft(heldResearch)).not.toHaveProperty("token");
+    });
+  });
+
+  describe("returnReferentValues()", () => {
+    it("maps each return referent the text names to its string, for the owner", async () => {
+      const returned = await mintReferentHandle(
+        createHarnessHandleTable("run-reveal"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "https://shop.example/item/7",
+          label: {},
+          labelSource: "child",
+        },
+      );
+      const document = await mintReferentHandle(returned.table, ROW);
+
+      expect(
+        returnReferentValues(
+          `Bought ${returned.token}; see ${document.token} and cfh:v:zzzzz.`,
+          document.table,
+        ),
+      ).toEqual({ [returned.token]: "https://shop.example/item/7" });
     });
   });
 
