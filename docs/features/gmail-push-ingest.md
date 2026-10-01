@@ -3,12 +3,18 @@
 Gmail push ingest lets a mailbox change wake whatever syncs that mailbox
 promptly, without the syncer being reachable from the internet. It replaces
 frequent polling of Gmail as the way new mail is noticed; a slower poll stays
-as the backstop for a notification that never arrives. Gmail's `users.watch` publishes to a Cloud Pub/Sub topic when a
-watched mailbox changes. A Pub/Sub push subscription delivers each message to
+as the backstop for a notification that never arrives.
+
+Gmail's `users.watch` publishes to a Cloud Pub/Sub topic when a watched
+mailbox changes. A Pub/Sub push subscription delivers each message to
 toolshed, and toolshed appends a record to the journal of every
 [ingest channel](self-serve-ingest-channels.md) bound to that mailbox. The
 syncer reads its channel's journal and, on a new record, resyncs the mailbox
 from its own cursor.
+
+[`gmail-push-architecture.md`](gmail-push-architecture.md) draws the whole
+path, across Google, toolshed, and the user's machine, and says who runs each
+part of it. This document is the reference for the part toolshed implements.
 
 A notification carries the mailbox's address and its latest history id, and
 nothing else: no message, no sender, no subject. So what lands in a user's
