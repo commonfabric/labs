@@ -1086,7 +1086,8 @@ two ways. A signed `session.open` carries its own authorization:
 
 A `session.open` naming a `principal` rests on the connection's
 authentication of that principal, where the server advertises
-`connectionAuth`. A key authenticates once per connection:
+`connectionAuth`. A key authenticates at connection level and renews before
+its lease expires:
 
 ```typescript
 // Shown at module scope.
