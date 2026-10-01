@@ -152,8 +152,10 @@ A pattern that passes a binding to a sub-pattern it composes, as in
 sub-pattern's argument. Setup records the redirect as an argument projection of
 the slot holding it. Preparation accepts the slot while it holds a redirect to
 the cell the projection names, compared by that cell's address rather than by
-the redirect's bytes, and persists the slot as it persists the cells a setup
-projects result fields to (see "Attribution of an initialized value").
+the redirect's bytes. Outside an attributed transaction the slot is persisted
+without a claim about the current principal, as described under "Attribution
+of an initialized value", so a runtime acting for a principal other than the
+bound cell's owner can stage it.
 
 An argument projection covers the slot alone. The cell its redirect names is
 the caller's, and setup writes none of it, so a write to that cell, through the
@@ -205,8 +207,9 @@ carrying such a claim is.
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source
 update installing a new field's default — the seed, the reference that
-exposes it, the new field's default and the cells a setup projects result
-fields to are all persisted without a claim about the current principal.
+exposes it, the new field's default, the cells a setup projects result fields
+to and the argument slots it stages bindings into are all persisted without a
+claim about the current principal.
 Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
 `ownerPrincipal` binding is established by the first write an acting
 principal makes through the field's writer, and that write mints the claim
