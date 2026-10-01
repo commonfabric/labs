@@ -2,10 +2,12 @@ import type { JSONSchemaObj, SchemaPathSelector } from "@commonfabric/api";
 import {
   FabricInstance,
   FabricPrimitive,
+  type FabricSpecialObject,
   type FabricValue,
   hashStringOf,
   isDeepFrozen,
   isFabricSpecialObject,
+  isKeyableObjectNotArray,
   isKeyableObjectOrArray,
   isWalkableObjectNotArray,
   toIndentedDebugString,
@@ -119,6 +121,7 @@ import {
   recordTraverseInvocation,
   wrapTxForTraverseCapture,
 } from "./traverse-recorder.ts";
+import { canCarryFabricInstanceWhole } from "./whole-instance.ts";
 
 const logger = getLogger("traverse", { enabled: true, level: "warn" });
 
@@ -2027,7 +2030,13 @@ export function mergeAnyOfMatches<T>(
     // special object among them sends the whole set to the first-match return
     // below: it has no properties for `Object.assign` to copy, so merging one
     // yields `{}` and the value is lost.
-    if (matches.every((v) => isWalkableObjectNotArray(v))) {
+    //
+    // That includes a `FabricInstance`, which a read hands back as a leaf, as
+    // it does a `FabricPrimitive`, and only when it holds nothing traversal
+    // would follow. The first-match return carries it whole where a merge
+    // would lose it, which is why this asks the question that answers `false`
+    // for one rather than the one that refuses it.
+    if (matches.every((v) => isKeyableObjectNotArray(v))) {
       const unified: Record<string, T> = {};
       for (const match of matches) {
         for (const [key, value] of Object.entries(match as object)) {
@@ -4968,10 +4977,25 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
       return { ok: this.#traversePrimitive(doc, schemaObj) };
     } else if (doc.value instanceof FabricInstance) {
-      // TODO(danfuzz): a `FabricInstance` (which can have model-visible
-      // outgoing references) is not yet handled by schema traversal; correct
-      // traversal descends it by its codec contents. Fail loudly until that
-      // exists.
+      // One holding nothing but fabric data is a leaf here, as a primitive is
+      // above, and is handed back as itself: there is nothing inside it for
+      // traversal to follow, and no view can stand in for one. It answers to
+      // "object", and an object-typed schema's `required` keys are checked
+      // against its accessors.
+      //
+      // TODO(danfuzz): a `FabricInstance` holding a link (which can have
+      // model-visible outgoing references) is not yet handled by schema
+      // traversal; correct traversal descends it by its codec contents. Fail
+      // loudly until that exists.
+      if (canCarryFabricInstanceWhole(doc.value)) {
+        if (this.#isValidType(schemaObj, "object") === TypeValidity.False) {
+          return fail(TRAVERSE_FAILURES.invalidType);
+        }
+        if (opaqueLeafMissesRequired(schemaObj, doc.value)) {
+          return fail(TRAVERSE_FAILURES.invalidObject);
+        }
+        return { ok: this.#traversePrimitive(doc, schemaObj) };
+      }
       throw new Error(
         `Cannot yet handle \`${doc.value.constructor.name}\` (a ` +
           "`FabricInstance`) in schema traversal.",
@@ -5126,12 +5150,20 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
 
     if (isFabricSpecialObject(doc.value)) {
-      // A `FabricPrimitive` is an opaque leaf; see the value-type dispatch's
-      // arm (the plan compiles from the same schema family, so the same
-      // posture applies here).
-      if (doc.value instanceof FabricPrimitive) return { ok: doc.value };
-      // TODO(danfuzz): a `FabricInstance` is not yet handled here either —
-      // see the dispatch's `FabricInstance` arm. Fail loudly until it is.
+      // A `FabricPrimitive` is an opaque leaf, and so is a `FabricInstance`
+      // holding nothing but fabric data; see the value-type dispatch's arms
+      // (the plan compiles from the same schema family, so the same posture
+      // applies here).
+      if (
+        doc.value instanceof FabricPrimitive ||
+        (doc.value instanceof FabricInstance &&
+          canCarryFabricInstanceWhole(doc.value))
+      ) {
+        return { ok: doc.value };
+      }
+      // TODO(danfuzz): an instance holding a link is not yet handled here
+      // either — see the dispatch's `FabricInstance` arm. Fail loudly until it
+      // is.
       throw new Error(
         `Cannot yet handle \`${doc.value.constructor.name}\` (a ` +
           "`FabricInstance`) in plain-schema traversal.",
@@ -6218,10 +6250,10 @@ function schemaTypeIncludesObject(type: JSONSchemaObj["type"]): boolean {
 
 /**
  * Whether an object-typed schema names a required property the opaque leaf
- * (a `FabricPrimitive`) does not have. Required keys are checked with `in`
+ * (a `FabricSpecialObject`) does not have. Required keys are checked with `in`
  * — prototype chain included, the same check the anyOf prefilters apply —
  * so a class accessor such as `FabricBytes.length` satisfies
- * `required: ["length"]` while a key the primitive lacks rejects it. The
+ * `required: ["length"]` while a key the leaf lacks rejects it. The
  * nominal brand key that schemas from pre-vocabulary compilations require,
  * `FABRIC_SPECIAL_OBJECT_BRAND`, has no runtime existence and is satisfied
  * by the instance itself. A `FabricPrimitive`-typed schema is not gated here
@@ -6237,7 +6269,7 @@ function schemaTypeIncludesObject(type: JSONSchemaObj["type"]): boolean {
  */
 export function opaqueLeafMissesRequired(
   schema: JSONSchemaObj,
-  value: FabricPrimitive,
+  value: FabricSpecialObject,
 ): boolean {
   return schemaTypeIncludesObject(schema.type) &&
     Array.isArray(schema.required) &&

@@ -1,0 +1,1 @@
+{"date":"2026-09-28","from":{"k":"unit","s":"runner","n":"llm-dialog-special-objects > reading back through a cell > flattens a cell-resolved `FabricError`, which the refusal misses"},"to":{"k":"unit","s":"runner","n":"llm-dialog-special-objects > reading back through a cell > throws for a cell-resolved `FabricError` rather than flattening one"}}

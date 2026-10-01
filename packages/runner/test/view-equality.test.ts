@@ -62,7 +62,8 @@ describe("view-equality", () => {
     expect(fabricAwareEqualThroughViews({ a: [1] }, { a: [2] })).toBe(false);
   });
 
-  it("decides a view of a stored `FabricError` as the stored instance", () => {
+  it("decides a stored `FabricError` read from a view as the stored instance", () => {
+    // A read hands back the instance itself rather than a view over it.
     const cell = holding(
       "view-of-error",
       FabricError.fromNativeError(new Error("boom")),
@@ -70,7 +71,7 @@ describe("view-equality", () => {
     const view = cell.get().v;
     const stored = (cell.getRaw() as { v: unknown }).v;
 
-    expect(isCellResult(view)).toBe(true);
+    expect(isCellResult(view)).toBe(false);
     expect(fabricAwareEqualThroughViews(view, stored)).toBe(true);
     expect(
       fabricAwareEqualThroughViews(

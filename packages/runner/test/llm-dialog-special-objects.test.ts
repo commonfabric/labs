@@ -10,7 +10,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { FabricInstance } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
@@ -76,9 +75,9 @@ describe("llm-dialog-special-objects", () => {
   describe("reading back through a cell", () => {
     // The tests above hand the walk a value built in place. What this function
     // actually serializes is a value read back out of a cell, and the read path
-    // does not hand back what was written: `getAsQueryResult()` returns a
-    // `FabricPrimitive` raw but wraps everything else in a proxy. So the two
-    // arms arrive differently, and only driving them from a real cell shows it.
+    // does not hand back what was written: it wraps a plain container in a
+    // view, and hands back a special object as itself. Only driving the walk
+    // from a real cell shows what arrives.
 
     let runtime: Runtime;
     let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -125,35 +124,19 @@ describe("llm-dialog-special-objects", () => {
       );
     });
 
-    it("flattens a cell-resolved `FabricError`, which the refusal misses", () => {
-      // A _known blind spot_, pinned so it cannot widen unnoticed, and so that
-      // closing it turns this red rather than passing silently.
+    it("throws for a cell-resolved `FabricError` rather than flattening one", () => {
+      // A read hands back the instance itself, so the refusal above sees it
+      // arriving this way too.
       //
-      // `getAsQueryResult()` hands back a `FabricPrimitive` raw but wraps a
-      // `FabricInstance` in a proxy, and that proxy's prototype is
-      // `Object.prototype` -- there is no `getPrototypeOf` trap. So
-      // `instanceof FabricInstance` is false, the refusal above cannot fire,
-      // and the record branch rebuilds the value as a bare `{}`.
-      //
-      // The refusal is not wrong, it is blind: it covers a value handed over
-      // directly and cannot see one arriving this way. Every
-      // `instanceof FabricInstance` tripwire in the runner shares that blind
-      // spot.
-      //
-      // TODO(danfuzz): this test asserts the WRONG behavior on purpose, and
-      // should be inverted -- to a refusal, matching the sibling test above --
-      // once a proxied `FabricInstance` is perceived as one. The work is at the
-      // matching `TODO` in `query-result-proxy.ts`, where a `FabricPrimitive`
-      // already gets the exemption an instance does not.
-      const value = readBack({
-        failure: FabricError.fromNativeError(new Error("boom")),
-      });
-
-      // `FabricInstance` is abstract, so `toBeInstanceOf` will not take it;
-      // the prototype check below is the same assertion, stated directly.
-      expect(value.failure instanceof FabricInstance).toBe(false);
-      expect(Object.getPrototypeOf(value.failure)).toBe(Object.prototype);
-      expect(Object.keys(value.failure as object)).toEqual([]);
+      // TODO(danfuzz): descend a `FabricInstance` by its codec contents, at
+      // which point this walk shows a model what the error holds and this
+      // becomes a case about that rendering.
+      expect(() =>
+        readBack({ failure: FabricError.fromNativeError(new Error("boom")) })
+      ).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`) when " +
+          "serializing a value for a language model.",
+      );
     });
   });
 

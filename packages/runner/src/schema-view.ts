@@ -42,7 +42,10 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { FabricPrimitive, type FabricValue } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  isFabricSpecialObject,
+} from "@commonfabric/data-model";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -334,12 +337,13 @@ export function materializeSchemaView(
     return mismatch(`schema does not accept ${actualType}`);
   }
 
-  // An opaque leaf still owes the schema's `required` keys. A `FabricPrimitive`
+  // An opaque leaf still owes the schema's `required` keys. A special object
   // supplies them through class accessors — `FabricBytes.length` satisfies
-  // `required: ["length"]` — so the check is prototype-chain membership with
+  // `required: ["length"]`, `FabricError.message` satisfies
+  // `required: ["message"]` — so the check is prototype-chain membership with
   // the brand exemption, which is what an eager read applies before letting one
   // through.
-  if (value instanceof FabricPrimitive && isObjectOrArray(schema)) {
+  if (isFabricSpecialObject(value) && isObjectOrArray(schema)) {
     if (opaqueLeafMissesRequired(schema, value)) {
       return mismatch("opaque leaf is missing a required property");
     }
@@ -356,9 +360,11 @@ export function materializeSchemaView(
     return createOpaqueReference(runtime, link, tx, synced, cfcLabelView);
   }
 
-  // A primitive, and a `FabricPrimitive` with it, is a leaf: the type check
-  // above is the whole of what a schema says about it.
-  if (!isObjectOrArray(value) || value instanceof FabricPrimitive) {
+  // A primitive, and a `FabricSpecialObject` with it, is a leaf: the type check
+  // above is the whole of what a schema says about it. A `FabricInstance` is
+  // handed back as itself, as a schemaless read hands one back, rather than
+  // as a view: no view can stand in for one.
+  if (!isObjectOrArray(value) || isFabricSpecialObject(value)) {
     // The caller read this document without telling the scheduler — the eager
     // traverser registers its own reads as it walks, and so does a view. Same
     // granularity it uses: non-recursive, which a write at this path still
