@@ -2807,7 +2807,7 @@ async function collectNoteCreateProfile(page: Page): Promise<unknown> {
       ["runner.wish-flow", "wish/phase/resolve-paths"],
       ["runner.wish-flow", "wish/phase/dedupe-results"],
       ["runner.wish-flow", "wish/phase/candidates-cell"],
-      ["runner.wish-flow", "wish/phase/result-ui-get"],
+      ["runner.wish-flow", "wish/phase/result-ui-probe"],
       ["runner.wish-flow", "wish/phase/send-fast"],
       ["runner.wish-flow", "wish/phase/send-pending"],
       ["runner.wish-flow", "wish/phase/send-error"],

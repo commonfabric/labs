@@ -33,6 +33,7 @@ import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
 import {
   createSigilLinkFromParsedLink,
+  isPrimitiveCellLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -1554,7 +1555,7 @@ function createSharedHashtagResolver(
           ),
       );
       const resultUI = measureWishPhase(
-        "shared-result-ui-get",
+        "shared-result-ui-probe",
         queryKey,
         () => foundPieceUI(uniqueResultCells[0]),
       );
@@ -1825,24 +1826,27 @@ function cellLinkUI(cell: Cell<unknown>): VNode {
 }
 
 /**
- * The view a wish shows for the piece it found: a reference to the piece's own
- * `[UI]`, or a `cf-cell-link` to the piece when it has none.
+ * Returns the view a wish shows for the piece it found: a reference to the
+ * piece's own `[UI]` slot when that slot holds a view, and a `cf-cell-link` to
+ * the piece when it does not.
  *
  * A wish result is a reference to what it found (CFC spec §8.2), and its view
- * is one too. Whether the piece has a view is all that decides which of the
- * two is written, so that is all this reads: a shape read at the position the
- * piece's `[UI]` resolves to. It consumes the references followed to get
- * there and the presence of a view, and nothing inside the view. The view's
- * contents are read where they are rendered, and their labels are consumed
- * there. Read here, every label in them would join the flow labels the wish
- * state is stamped with, and so reach every value read through the wish
- * result, a cell that a render boundary in the view refuses included.
+ * is a reference too, so the choice is made from the `[UI]` slot of the piece's
+ * own document. A slot holding a link counts as a view, and the link is not
+ * followed: the document behind it can be one a computation derived from sealed
+ * data, and its labels are consumed where the view is rendered. A slot holding
+ * a value counts as a view when the value is a view node. So what this consumes
+ * is the slot's existence and the labels covering it, plus a view node's
+ * `type`, and none of the view's contents.
  */
 function foundPieceUI(resultCell: Cell<unknown>): VNode | Cell<unknown> {
+  // The reference carries no schema: a view is read under the renderer's own.
   const ui = resultCell.asSchema(undefined).key(UI);
-  return ui.getRaw({ lastNode: "value", nonRecursive: true }) === undefined
-    ? cellLinkUI(resultCell)
-    : ui;
+  const slot = ui.getRaw({ lastNode: "top", nonRecursive: true });
+  if (isPrimitiveCellLink(slot)) return ui;
+  const isViewNode = isObjectOrArray(slot) && !Array.isArray(slot) &&
+    ui.key("type").getRaw({ lastNode: "top" }) === "vnode";
+  return isViewNode ? ui : cellLinkUI(resultCell);
 }
 
 function wishResultUI(
@@ -3149,7 +3153,7 @@ export function wish(
             ) {
               // Single result or headless mode - fast path with unified shape
               const resultUI = measureWishPhase(
-                "result-ui-get",
+                "result-ui-probe",
                 queryKey,
                 () => wishResultUI(activeParsed, uniqueResultCells[0]),
               );
@@ -3197,7 +3201,7 @@ export function wish(
               } else {
                 // Surface not open yet — send first result, start opening it
                 const resultUI = measureWishPhase(
-                  "result-ui-get",
+                  "result-ui-probe",
                   queryKey,
                   () => wishResultUI(activeParsed, uniqueResultCells[0]),
                 );
