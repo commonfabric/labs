@@ -2,15 +2,16 @@
  * The labels a wish result carries when the piece it finds has a view that
  * holds a sealed cell. A wish result is a reference to the piece it found, and
  * the view the wish shows is a reference to the `[UI]` slot of that piece (CFC
- * spec §8.2). Choosing that view reads the slot and nothing behind it, so a
- * label inside the view stays off the flow stamps of the wish state, which
- * reads through the wish result consume. A read that goes inside the view
+ * spec §8.2). Choosing that view reads what the slot holds and nothing behind
+ * it, so a label inside the view stays off the wish state, whose labels every
+ * read through the wish result consumes. A read that goes inside the view
  * still consumes what it finds there.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -20,13 +21,15 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
-import type { FabricValue } from "@commonfabric/data-model";
-import type { JSONSchema, PatternFactory } from "../src/builder/types.ts";
-import { UI } from "../src/builder/types.ts";
+import {
+  type JSONSchema,
+  NAME,
+  type Pattern,
+  UI,
+} from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { type CfcConfClause, clauseAlternatives } from "../src/cfc/clause.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
-import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
 import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { collectConsumedLabel } from "../src/cfc/prepare.ts";
@@ -34,18 +37,16 @@ import { createRenderConfidentialityResolver } from "../src/cfc/render-ceiling.t
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import {
   createSigilLinkFromParsedLink,
-  isPrimitiveCellLink,
   type NormalizedFullLink,
-  parseLink,
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { vnodeSchema } from "../src/schemas.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const owner = await Identity.fromPassphrase("wish-result-view-labels owner");
-const patternSpace = await Identity.fromPassphrase(
+const patternSpace = (await Identity.fromPassphrase(
   "wish-result-view-labels pattern space",
-);
+)).did();
 const profileSpace = (await Identity.fromPassphrase(
   "wish-result-view-labels profile space",
 )).did();
@@ -70,8 +71,8 @@ const sealedClause = cfcAtom.modulePolicyRef(
   profileSpace,
 );
 
-// The two spellings the clause is stored in: its subject in the clear in the
-// profile space, and committed to a digest once it is stamped in another.
+// The two spellings the clause takes: its subject in the clear in the profile
+// space, and committed to a digest once a label in another space carries it.
 const sealedSpellings = [
   sealedClause,
   cfcAtom.modulePolicyRef(
@@ -109,6 +110,9 @@ const vnode = (name: string, children: unknown[]) => ({
   children,
 });
 
+/** A stored view node with no children. */
+const emptyView = { type: "vnode", name: "div", props: {}, children: [] };
+
 describe("wish-result-view-labels", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -126,9 +130,9 @@ describe("wish-result-view-labels", () => {
 
     // The sealed cell: a document in the profile space whose stored label
     // carries the policy clause at its root.
-    sealed = await seededPiece("sealed-sheet", { secret: "sealed content" }, [
-      { path: [], label: { confidentiality: [sealedClause] } },
-    ]);
+    sealed = await seeded(profileSpace, "sealed-sheet", {
+      secret: "sealed content",
+    }, [{ path: [], label: { confidentiality: [sealedClause] } }]);
   });
 
   afterEach(async () => {
@@ -136,19 +140,20 @@ describe("wish-result-view-labels", () => {
     await storageManager.close();
   });
 
-  /** A document in the profile space, stored with `entries` as its labels. */
-  const seededPiece = async (
+  /** A document in `space`, stored with `entries` as its labels. */
+  const seeded = async (
+    space: typeof profileSpace,
     cause: string,
     value: FabricValue,
     entries: LabelMapEntry[],
   ): Promise<Cell<unknown>> => {
     const tx = runtime.edit();
-    const piece = runtime.getCell(profileSpace, cause, undefined, tx);
-    writeSeedEnvelopeDoc(tx, profileSpace);
+    const document = runtime.getCell(space, cause, undefined, tx);
+    writeSeedEnvelopeDoc(tx, space);
     seedStoredEnvelope(tx, {
-      space: profileSpace,
+      space,
       scope: "space",
-      id: piece.getAsNormalizedFullLink().id,
+      id: document.getAsNormalizedFullLink().id,
       path: [],
     }, {
       value,
@@ -159,22 +164,23 @@ describe("wish-result-view-labels", () => {
       },
     });
     expect((await tx.commit()).error).toBeUndefined();
-    return piece.withTx(undefined);
+    return document.withTx(undefined);
   };
 
-  /** Runs `piecePattern` on the sealed cell as its `sheet`, and settles it. */
-  const runPiece = async <R>(
-    piecePattern: PatternFactory<{ sheet: { secret: string } }, R>,
+  /** Runs `piecePattern` on `argument` in the pattern space, and settles it. */
+  const runPiece = async (
+    piecePattern: Pattern,
+    argument: unknown,
     cause: string,
-  ): Promise<Cell<R>> => {
+  ): Promise<Cell<Record<string, unknown>>> => {
     const tx = runtime.edit();
-    const resultCell = runtime.getCell<R>(
-      patternSpace.did(),
+    const resultCell = runtime.getCell<Record<string, unknown>>(
+      patternSpace,
       cause,
       undefined,
       tx,
     );
-    const piece = runtime.run(tx, piecePattern, { sheet: sealed }, resultCell);
+    const piece = runtime.run(tx, piecePattern, argument, resultCell);
     expect((await tx.commit()).error).toBeUndefined();
     await piece.pull();
     await runtime.idle();
@@ -204,6 +210,23 @@ describe("wish-result-view-labels", () => {
     expect((await homeTx.commit()).error).toBeUndefined();
   };
 
+  /** Lists `piece` among the mentionables of the pattern space. */
+  const mention = async (piece: Cell<unknown>) => {
+    const tx = runtime.edit();
+    const backlinks = runtime.getCell(patternSpace, "backlinks", undefined, tx);
+    backlinks.set({ mentionable: [piece] });
+    const defaultPattern = runtime.getCell(
+      patternSpace,
+      "default-pattern",
+      undefined,
+      tx,
+    );
+    defaultPattern.set({ backlinksIndex: backlinks });
+    runtime.getCell(patternSpace, patternSpace, undefined, tx)
+      .key("defaultPattern").set(defaultPattern);
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
   /** A piece whose view holds a render boundary over the sealed cell. */
   const pieceShowingSealedCell = async (): Promise<Cell<unknown>> => {
     const tx = runtime.edit();
@@ -216,48 +239,32 @@ describe("wish-result-view-labels", () => {
     return piece.withTx(undefined);
   };
 
-  /** Runs a pattern whose `found` is a typed wish for `tag`, and settles it. */
-  const runWish = async (tag: string, cause: string) => {
-    const { pattern, wish } = builder;
-    const finder = pattern(() => ({
-      found: wish({ query: tag, scope: ["profile"] }, pieceSchema),
+  /** A pattern whose `found` is a typed wish for `tag` in the profile. */
+  const finderFor = (tag: string) =>
+    builder.pattern(() => ({
+      found: builder.wish({ query: tag, scope: ["profile"] }, pieceSchema),
     }));
-    const tx = runtime.edit();
-    const resultCell = runtime.getCell<Record<string, unknown>>(
-      patternSpace.did(),
-      cause,
-      undefined,
-      tx,
-    );
-    const result = runtime.run(tx, finder, {}, resultCell);
-    expect((await tx.commit()).error).toBeUndefined();
-    await result.pull();
-    await runtime.idle();
-    return result.withTx(undefined);
-  };
 
-  /** Where the wish behind `result.found` keeps its state. */
-  const wishStateLink = (result: Cell<Record<string, unknown>>) =>
-    result.key("found").resolveAsCell().getAsNormalizedFullLink();
-
-  /** The stored label-map entries of the document `link` names. */
-  const storedEntries = (link: NormalizedFullLink): LabelMapEntry[] =>
-    readStoredCfcMetadata(runtime.readTx(), link)?.labelMap.entries ?? [];
-
-  /** Every confidentiality clause in the stored label map `link` reaches. */
-  const storedClauses = (link: NormalizedFullLink): CfcConfClause[] =>
-    storedEntries(link).flatMap((entry) => entry.label.confidentiality ?? []);
+  /** Runs a typed wish for `tag` in the profile, and settles it. */
+  const runWish = (tag: string, cause: string) =>
+    runPiece(finderFor(tag), {}, cause);
 
   /**
-   * The confidentiality clauses of the flow stamps in the stored label map
-   * `link` reaches: what the reads of the transactions that wrote it left.
+   * Runs a typed headless wish for `tag` among the pattern space's
+   * mentionables, which resolves through the state the space shares for that
+   * query, and settles it.
    */
-  const flowStampClauses = (link: NormalizedFullLink): CfcConfClause[] =>
-    storedEntries(link)
-      .filter((entry) =>
-        entry.origin === "structure" || entry.origin === "derived"
-      )
-      .flatMap((entry) => entry.label.confidentiality ?? []);
+  const runSharedWish = (tag: string, cause: string) =>
+    runPiece(
+      builder.pattern(() => ({
+        found: builder.wish(
+          { query: tag, scope: ["."], headless: true },
+          pieceSchema,
+        ),
+      })),
+      {},
+      cause,
+    );
 
   /** What `read` returns, and the confidentiality it consumed doing so. */
   const consumedBy = (
@@ -275,8 +282,23 @@ describe("wish-result-view-labels", () => {
     }
   };
 
+  /** Where the wish behind `result.found` keeps its state. */
+  const wishState = (result: Cell<unknown>): NormalizedFullLink =>
+    result.key("found").resolveAsCell().getAsNormalizedFullLink();
+
+  /**
+   * What observing the wish state's shape consumes: the labels a reader of
+   * which fields the state holds is given.
+   */
+  const stateShape = (result: Cell<unknown>) => {
+    const state = wishState(result);
+    return consumedBy((tx) =>
+      tx.readValueOrThrow({ ...state, path: [] }, { nonRecursive: true })
+    ).confidentiality;
+  };
+
   /** The title of the piece the wish found, read through the wish result. */
-  const titleThrough = (result: Cell<Record<string, unknown>>) =>
+  const titleThrough = (result: Cell<unknown>) =>
     consumedBy((tx) =>
       result.withTx(tx).key("found").key("result").key("title").get()
     );
@@ -291,18 +313,16 @@ describe("wish-result-view-labels", () => {
       [cfcAtom.user(owner.did()), cfcAtom.personalSpace(owner.did())],
     );
 
-  /**
-   * What the wish state's `[UI]` holds: the place a link there names, or the
-   * name of the view node held inline.
-   */
-  const shownView = (state: NormalizedFullLink) => {
-    const tx = runtime.readTx();
-    const held = tx.readValueOrThrow({ ...state, path: [UI] });
-    if (isPrimitiveCellLink(held)) {
-      const { id, path } = parseLink(held, state);
-      return { link: { id, path } };
-    }
-    return { node: tx.readValueOrThrow({ ...state, path: [UI, "name"] }) };
+  /** What reading the value `cell` resolves to, whole, consumes. */
+  const consumedReading = (cell: Cell<unknown>) =>
+    consumedBy((tx) => cell.withTx(tx).getRaw({ lastNode: "value" }))
+      .confidentiality;
+
+  /** The view the wish shows: the place it resolves to, and its node's name. */
+  const shownView = (result: Cell<unknown>) => {
+    const view = result.key("found").key(UI);
+    const { id, path } = view.resolveAsCell().getAsNormalizedFullLink();
+    return { id, path, name: view.key("name").get() };
   };
 
   describe("labels", () => {
@@ -311,16 +331,14 @@ describe("wish-result-view-labels", () => {
       await pin(piece, "#sheet");
 
       const result = await runWish("#sheet", "finder");
-      const state = wishStateLink(result);
 
-      expect(shownView(state)).toEqual({
-        link: { id: piece.getAsNormalizedFullLink().id, path: [UI] },
+      expect(shownView(result)).toEqual({
+        id: piece.getAsNormalizedFullLink().id,
+        path: [UI],
+        name: "cf-cfc-render-boundary",
       });
-      // The clause is there to be stamped: the sealed cell's own label holds
-      // it.
-      expect(holdsSealedClause(storedClauses(sealed.getAsNormalizedFullLink())))
-        .toBe(true);
-      expect(holdsSealedClause(storedClauses(state))).toBe(false);
+      expect(holdsSealedClause(consumedReading(sealed))).toBe(true);
+      expect(holdsSealedClause(stateShape(result))).toBe(false);
     });
 
     it("leaves the sealed clause off a title read through the wish result when the found piece renders a sealed argument raw", async () => {
@@ -330,7 +348,7 @@ describe("wish-result-view-labels", () => {
         title: "Sheet view",
         [UI]: vnode("cf-cfc-render-boundary", [vnode("div", [sheet])]),
       }));
-      const piece = await runPiece(sheetView, "sheet-view-piece");
+      const piece = await runPiece(sheetView, { sheet: sealed }, "sheet-view");
       await pin(piece, "#sheetview");
 
       const result = await runWish("#sheetview", "sheet-view-finder");
@@ -343,34 +361,35 @@ describe("wish-result-view-labels", () => {
 
     it("leaves the sealed clause off the wish state when the found piece's view is computed from the sealed cell", async () => {
       // The view lives in a document of its own that a computation wrote
-      // after reading the sealed cell, so that document's own labels carry
-      // the clause, and the piece's `[UI]` slot holds a link to it.
+      // after reading the sealed cell, so that document's labels carry the
+      // clause, and the piece's `[UI]` slot holds a link to it.
       const viewOf = builder.lift((sheet: { secret: string }) =>
         vnode("div", [sheet.secret.length])
       );
       const computedView = builder.pattern<{ sheet: { secret: string } }>((
         { sheet },
       ) => ({ title: "Computed view", [UI]: viewOf(sheet) }));
-      const piece = await runPiece(computedView, "computed-view-piece");
-      const viewDoc = piece.key(UI).resolveAsCell().getAsNormalizedFullLink();
-      expect(holdsSealedClause(storedClauses(viewDoc))).toBe(true);
+      const piece = await runPiece(
+        computedView,
+        { sheet: sealed },
+        "computed-view",
+      );
+      expect(holdsSealedClause(consumedReading(piece.key(UI)))).toBe(true);
       await pin(piece, "#computedview");
 
       const result = await runWish("#computedview", "computed-view-finder");
       const title = titleThrough(result);
 
       expect(title.value).toBe("Computed view");
-      expect(holdsSealedClause(storedClauses(wishStateLink(result)))).toBe(
-        false,
-      );
-      expect(refusedForOwner(title.confidentiality)).toEqual([]);
+      expect(holdsSealedClause(title.confidentiality)).toBe(false);
+      expect(holdsSealedClause(stateShape(result))).toBe(false);
     });
 
-    it("leaves the sealed clause off the wish state's flow stamps when the found piece holds a sealed value inline in its view", async () => {
+    it("leaves the sealed clause off the wish state when the found piece holds a sealed value inline in its view", async () => {
       // The clause sits inside the view, in the piece's own document. The
-      // link the wish writes to the piece carries the piece's labels along,
-      // so what is asserted is the flow stamps the wish's own reads leave.
-      const piece = await seededPiece("inline-piece", {
+      // wish reads what the `[UI]` slot holds and the view node's `type`, and
+      // nothing inside the view.
+      const piece = await seeded(profileSpace, "inline-piece", {
         title: "Inline",
         [UI]: {
           type: "vnode",
@@ -385,27 +404,18 @@ describe("wish-result-view-labels", () => {
       await pin(piece, "#inline");
 
       const result = await runWish("#inline", "inline-finder");
-      const state = wishStateLink(result);
 
-      expect(shownView(state)).toEqual({
-        link: { id: piece.getAsNormalizedFullLink().id, path: [UI] },
-      });
-      // The state's label map is there: the links it holds carry entries.
-      expect(storedClauses(state).length).toBeGreaterThan(0);
-      expect(holdsSealedClause(flowStampClauses(state))).toBe(false);
+      expect(shownView(result).name).toBe("div");
+      expect(holdsSealedClause(consumedReading(piece.key(UI)))).toBe(true);
+      expect(holdsSealedClause(stateShape(result))).toBe(false);
     });
 
-    it("holds a label covering the found piece's `[UI]` slot in the wish state's flow stamps", async () => {
+    it("holds a label covering the found piece's `[UI]` slot on the wish state", async () => {
       // Which view the wish shows depends on what that slot holds, so the
       // label covering the slot is one the wish state carries. The slot holds
       // a link, which the wish does not follow.
-      const viewDoc = await seededPiece("slot-view", {
-        type: "vnode",
-        name: "div",
-        props: {},
-        children: [],
-      }, []);
-      const piece = await seededPiece("slot-piece", {
+      const viewDoc = await seeded(profileSpace, "slot-view", emptyView, []);
+      const piece = await seeded(profileSpace, "slot-piece", {
         title: "Slot",
         [UI]: createSigilLinkFromParsedLink(viewDoc.getAsNormalizedFullLink()),
       }, [{ path: [UI], label: { confidentiality: [sealedClause] } }]);
@@ -413,9 +423,21 @@ describe("wish-result-view-labels", () => {
 
       const result = await runWish("#slot", "slot-finder");
 
-      expect(holdsSealedClause(flowStampClauses(wishStateLink(result)))).toBe(
-        true,
-      );
+      expect(holdsSealedClause(stateShape(result))).toBe(true);
+    });
+
+    it("holds a label on the found piece's view node `type` on the wish state", async () => {
+      // Whether an inline value counts as a view is read from its `type`.
+      const piece = await seeded(profileSpace, "type-piece", {
+        title: "Type",
+        [UI]: emptyView,
+      }, [{ path: [UI, "type"], label: { confidentiality: [sealedClause] } }]);
+      await pin(piece, "#type");
+
+      const result = await runWish("#type", "type-finder");
+
+      expect(shownView(result).name).toBe("div");
+      expect(holdsSealedClause(stateShape(result))).toBe(true);
     });
 
     it("returns a value read through the wish result that the owner's display ceiling admits", async () => {
@@ -470,60 +492,164 @@ describe("wish-result-view-labels", () => {
           return { title: "Stamped", size, [UI]: builder.h("div", {}, size) };
         },
       );
-      const stamped = await runPiece(stampedPattern, "stamped-piece");
-      const sizeLink = stamped.key("size").resolveAsCell()
-        .getAsNormalizedFullLink();
-      expect(holdsSealedClause(storedClauses(sizeLink))).toBe(true);
+      const stamped = await runPiece(
+        stampedPattern,
+        { sheet: sealed },
+        "stamped-piece",
+      );
+      expect(holdsSealedClause(consumedReading(stamped.key("size")))).toBe(
+        true,
+      );
       await pin(stamped, "#pane");
 
       const fresh = await runWish("#pane", "fresh-finder");
       const title = titleThrough(fresh);
 
       expect(title.value).toBe("Stamped");
-      expect(holdsSealedClause(storedClauses(wishStateLink(fresh)))).toBe(
-        false,
-      );
-      expect(refusedForOwner(title.confidentiality)).toEqual([]);
+      expect(holdsSealedClause(title.confidentiality)).toBe(false);
+      expect(holdsSealedClause(stateShape(fresh))).toBe(false);
     });
 
-    it.ignore("leaves the sealed clause off an `ifElse` whose condition is a typed wish result", async () => {
-      // Known gap, outside the wish: `ifElse` and `when` read their condition
-      // with `.get()` under the schema the wish result's link carries, which
-      // describes the piece's `[UI]` as a view node, so the read traverses the
-      // found piece's whole view and the selected branch's output is labeled
-      // with what it found. An untyped wish result leaves the output clean.
+    it("re-derives a clean wish state once a stamped one is deleted", async () => {
+      // A wish state stamped by a reader of the view keeps the stamp while
+      // the document stands. Deleting the document and running the wish again
+      // writes it afresh, labeled by what this run reads.
       const piece = await pieceShowingSealedCell();
       await pin(piece, "#sheet");
-      const { pattern, wish, ifElse } = builder;
-      const chooser = pattern(() => {
-        const found = wish(
-          { query: "#sheet", scope: ["profile"] },
-          pieceSchema,
-        );
-        return { shown: ifElse(found.result, "found", "missing") };
-      });
+      const finder = finderFor("#sheet");
       const tx = runtime.edit();
       const resultCell = runtime.getCell<Record<string, unknown>>(
-        patternSpace.did(),
-        "chooser",
+        patternSpace,
+        "healed-finder",
         undefined,
         tx,
       );
-      const result = runtime.run(tx, chooser, {}, resultCell);
+      const running = runtime.run(tx, finder, {}, resultCell);
       expect((await tx.commit()).error).toBeUndefined();
-      await result.pull();
+      await running.pull();
       await runtime.idle();
-      const shown = consumedBy((tx) => result.withTx(tx).key("shown").get());
+      const result = running.withTx(undefined);
+      const state = wishState(result);
+      const document = {
+        space: state.space,
+        scope: state.scope,
+        id: state.id,
+        path: [],
+      };
 
-      expect(shown.value).toBe("found");
-      expect(holdsSealedClause(shown.confidentiality)).toBe(false);
+      // The stamps a reader of the whole view left on the state: the
+      // container's membership and existence, and the class templates of its
+      // slots, each carrying the clause.
+      const stamp = (
+        path: string[],
+        observes: "enumerate" | "shape" | "value" | "followRef",
+      ): LabelMapEntry => ({
+        path,
+        label: { confidentiality: [sealedSpellings[1]] },
+        origin: "structure",
+        observes,
+      });
+      const stampTx = runtime.edit();
+      writeSeedEnvelopeDoc(stampTx, patternSpace);
+      seedStoredEnvelope(stampTx, document, {
+        value: runtime.readTx().readValueOrThrow(document),
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [
+              stamp([], "enumerate"),
+              stamp([], "shape"),
+              stamp(["*"], "shape"),
+              stamp(["*"], "value"),
+              stamp(["*"], "followRef"),
+            ],
+          },
+        },
+      });
+      expect((await stampTx.commit()).error).toBeUndefined();
+      expect(holdsSealedClause(titleThrough(result).confidentiality)).toBe(
+        true,
+      );
+
+      const deleteTx = runtime.edit();
+      seedStoredEnvelope(deleteTx, document, undefined);
+      expect((await deleteTx.commit()).error).toBeUndefined();
+      runtime.runner.stop(running);
+      const rerunTx = runtime.edit();
+      const rerun = runtime.run(rerunTx, finder, {}, resultCell);
+      expect((await rerunTx.commit()).error).toBeUndefined();
+      await rerun.pull();
+      await runtime.idle();
+      const healed = rerun.withTx(undefined);
+      const title = titleThrough(healed);
+
+      expect(wishState(healed).id).toBe(state.id);
+      expect(title.value).toBe("Sheet");
+      expect(holdsSealedClause(title.confidentiality)).toBe(false);
+      expect(holdsSealedClause(stateShape(healed))).toBe(false);
+    });
+  });
+
+  describe("the shared state of a headless hashtag wish", () => {
+    it("holds a label covering the found piece's `[UI]` slot on the shared state", async () => {
+      // The resolver the space shares for the query writes the state, so its
+      // own transaction is the one that reads the slot.
+      const viewDoc = await seeded(patternSpace, "slot-view", emptyView, []);
+      const piece = await seeded(patternSpace, "shared-slot-piece", {
+        [NAME]: "sharedslot",
+        title: "Shared slot",
+        [UI]: createSigilLinkFromParsedLink(viewDoc.getAsNormalizedFullLink()),
+      }, [{
+        path: [UI],
+        label: {
+          confidentiality: [{
+            anyOf: [sealedClause, cfcAtom.space(patternSpace)],
+          }],
+        },
+      }]);
+      await mention(piece);
+
+      const result = await runSharedWish("#sharedslot", "shared-slot-finder");
+
+      expect(shownView(result).id).toBe(viewDoc.getAsNormalizedFullLink().id);
+      expect(holdsSealedClause(stateShape(result))).toBe(true);
+    });
+
+    it("shows a `cf-cell-link` to the found piece when its `[UI]` holds no view node", async () => {
+      const notViews: Array<[string, FabricValue]> = [
+        ["text", "text"],
+        ["number", 7],
+        ["object", { foo: 1 }],
+        ["array", []],
+      ];
+      for (const [kind, held] of notViews) {
+        const tx = runtime.edit();
+        const piece = runtime.getCell(
+          patternSpace,
+          `shared-${kind}`,
+          undefined,
+          tx,
+        );
+        piece.set({ [NAME]: `shared${kind}`, title: kind, [UI]: held });
+        expect((await tx.commit()).error).toBeUndefined();
+        await mention(piece.withTx(undefined));
+
+        const result = await runSharedWish(`#shared${kind}`, `${kind}-shared`);
+
+        expect({ kind, name: shownView(result).name }).toEqual({
+          kind,
+          name: "cf-cell-link",
+        });
+      }
     });
   });
 
   describe("the view the wish shows", () => {
     it("links to the found piece's `[UI]` slot when the slot links to a view not written yet", async () => {
       const pending = runtime.getCell(profileSpace, "pending-view");
-      const piece = await seededPiece("pending-piece", {
+      const piece = await seeded(profileSpace, "pending-piece", {
         title: "Pending",
         [UI]: createSigilLinkFromParsedLink(pending.getAsNormalizedFullLink()),
       }, []);
@@ -531,9 +657,30 @@ describe("wish-result-view-labels", () => {
 
       const result = await runWish("#pending", "pending-finder");
 
-      expect(shownView(wishStateLink(result))).toEqual({
-        link: { id: piece.getAsNormalizedFullLink().id, path: [UI] },
+      expect(shownView(result)).toEqual({
+        id: pending.getAsNormalizedFullLink().id,
+        path: [],
+        name: undefined,
       });
+    });
+
+    it("shows the found piece's sub-pattern when its `[UI]` is one", async () => {
+      const picker = builder.pattern(() => ({
+        title: "Picker",
+        [UI]: builder.h("div", {}, "picker"),
+      }));
+      const outer = builder.pattern(() => ({
+        title: "Outer",
+        [UI]: picker({}),
+      }));
+      const piece = await runPiece(outer, {}, "outer-piece");
+      await pin(piece, "#outer");
+
+      const result = await runWish("#outer", "outer-finder");
+      const view = result.key("found").key(UI);
+
+      expect(view.key("title").get()).toBe("Picker");
+      expect(view.key(UI).key("name").get()).toBe("div");
     });
 
     it("shows a `cf-cell-link` to the found piece when its `[UI]` holds no view node", async () => {
@@ -546,7 +693,8 @@ describe("wish-result-view-labels", () => {
         ["array", []],
       ];
       for (const [kind, held] of notViews) {
-        const piece = await seededPiece(
+        const piece = await seeded(
+          profileSpace,
           `not-a-view-${kind}`,
           held === undefined ? { title: kind } : { title: kind, [UI]: held },
           [],
@@ -555,9 +703,9 @@ describe("wish-result-view-labels", () => {
 
         const result = await runWish(`#notaview${kind}`, `${kind}-finder`);
 
-        expect({ kind, ...shownView(wishStateLink(result)) }).toEqual({
+        expect({ kind, name: shownView(result).name }).toEqual({
           kind,
-          node: "cf-cell-link",
+          name: "cf-cell-link",
         });
       }
     });
