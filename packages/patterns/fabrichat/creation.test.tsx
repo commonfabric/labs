@@ -1,9 +1,10 @@
 /**
- * A FabriChat manager creating rooms, and finding, forgetting, and accepting
- * them. That each room lives in a space of its own is something a pattern
- * can't read, so `../integration/fabrichat-manager.test.ts` checks it. The manager is given a profile of
- * its own, since `#profile` resolves nothing in this lane and no chat starts
- * without one. `manager.test.tsx` covers its refusals.
+ * A FabriChat manager creating rooms, finding, forgetting, and accepting them,
+ * and refusing the requests it can't act on. That each room lives in a space
+ * of its own is something a pattern can't read, so
+ * `../integration/fabrichat-manager.test.ts` checks it. The manager is given a
+ * profile of its own, since `#profile` resolves nothing in this lane and no
+ * chat starts without one; `manager.test.tsx` covers a manager with none.
  */
 import {
   action,
@@ -12,8 +13,10 @@ import {
   equals,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import { findNodeByProp, propValue } from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
 import type {
   ChatIndexEntry,
@@ -37,6 +40,17 @@ const statusOf = (
   requests: Writable<Record<string, ChatRequestOutcome>>,
   id: string,
 ): string => requests.get()?.[id]?.status ?? "none";
+
+/** Why the request `id` was refused, or its status if it wasn't. */
+const reasonOf = (
+  requests: Writable<Record<string, ChatRequestOutcome>>,
+  id: string,
+): string => {
+  const outcome = requests.get()?.[id];
+  return outcome?.status === "refused"
+    ? outcome.reason
+    : outcome?.status ?? "none";
+};
 
 const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
   (notices.get() ?? []).map((notice) => notice.recipient).join(",");
@@ -208,12 +222,36 @@ export default pattern(() => {
         event: { requestId: "g-1", title: "Team", members: [] },
       },
       { assertion: assert(() => groupRooms.get().length === 1) },
-      // A direct room with this user themself is refused.
-      { action: action_open_direct_with_self },
+      // The start controls are enabled, and a start the manager can't act on
+      // is refused with its reason: a direct room with this user themself,
+      // with someone who isn't a principal, or a group room with no title.
       {
         assertion: assert(() =>
-          statusOf(groupRequests, "d-self") === "refused" &&
-          groupRooms.get().length === 1
+          propValue(
+            findNodeByProp(group[UI], "inputId", "fabrichat-start-direct"),
+            "disabled",
+          ) === false
+        ),
+      },
+      { action: action_open_direct_with_self },
+      {
+        action: group.openDirect,
+        event: { requestId: "d-junk", counterpart: "not a principal" },
+      },
+      {
+        action: group.createGroup,
+        event: { requestId: "g-blank", title: "  ", members: [CAROL] },
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "d-self") ===
+            "The counterpart is this user." &&
+          reasonOf(groupRequests, "d-junk") ===
+            "The counterpart is not a principal." &&
+          reasonOf(groupRequests, "g-blank") ===
+            "A group room needs a title." &&
+          groupRooms.get().length === 1 &&
+          recipientsOf(groupNotices) === CAROL
         ),
       },
 

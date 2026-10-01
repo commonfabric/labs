@@ -6,8 +6,8 @@
  *
  * It creates each room in a space of its own with `inSpace()`, which grants its
  * creator OWNER and each other member named at creation WRITE, and no one
- * else. A pattern can't change a space's grants after that, so a member added
- * later is granted access only by a host.
+ * else. After that, who is in the space is the space's business, changed
+ * through the space's own tools and never through the manager or the room.
  */
 import {
   type Cell,
@@ -189,8 +189,8 @@ function roomLinkOf(room: unknown): unknown {
 
 /**
  * Creates a room in a space of its own, and its notices, and records its
- * entry. Everything happens in one transaction, since a pattern can't grant
- * access, which would otherwise have to commit apart.
+ * entry, all in one transaction: the space's grants are part of creating it,
+ * so nothing has to commit apart.
  */
 const createRoom = (
   state: ManagerActState,
@@ -515,10 +515,16 @@ export const FabriChatManagerCore = pattern<
     );
     const hasSelection = computed(() => selected.get()?.room !== undefined);
     const selectedRoom = computed(() => selected.get()?.room);
+    // The chosen room differs by session, so both parts are always rendered
+    // and one is hidden by a prop: a tree built differently per session is
+    // stored once for every session, and runtimes that built it differently
+    // overwrite each other without end.
+    const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
+    const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
     const noticeList = computed(
       () => [...((outgoingNotices!.get() ?? []) as ChatManagerNotice[])],
     );
-    const cannotStart = computed(() => myProfile === undefined);
+    const cannotStart = computed(() => myProfile?.get() === undefined);
     const streams = {
       openDirect: commitManager({ act: "openDirect", ...records }),
       createGroup: commitManager({ act: "createGroup", ...records }),
@@ -568,9 +574,15 @@ export const FabriChatManagerCore = pattern<
               </cf-hstack>
             ))}
           </cf-vstack>
-          {hasSelection
-            ? <cf-render $cell={selectedRoom} />
-            : <cf-empty-state message="Choose a chat, or start one." />}
+          <div id="fabrichat-selected" style={{ display: selectedDisplay }}>
+            <cf-render $cell={selectedRoom} />
+          </div>
+          <div
+            id="fabrichat-unselected"
+            style={{ display: unselectedDisplay }}
+          >
+            <cf-empty-state message="Choose a chat, or start one." />
+          </div>
           <div
             data-ui-pattern={CHAT_START_SURFACE}
             data-ui-event-integrity={CHAT_START_SURFACE}

@@ -13,7 +13,7 @@ import {
   VIEWS,
   Writable,
 } from "commonfabric";
-import { findElement } from "../test/vnode-helpers.ts";
+import { findNodeById, propValue, readValue } from "../test/vnode-helpers.ts";
 import FabriChatAdapter from "./adapter.tsx";
 import FabriChatPlacement, {
   type PlacedRoom,
@@ -58,6 +58,18 @@ const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
 
 const reactionCount = (messages: Writable<MessagesValue>): number =>
   ((messages.get() as MessageRecord[])[0]?.reactions?.get() ?? []).length;
+
+// How the element `id` under `root` is displayed.
+const displayOf = (root: unknown, id: string): unknown =>
+  readValue(
+    (propValue(findNodeById(root, id), "style") as { display?: unknown })
+      ?.display,
+  );
+
+// Which of an adapter's two parts it shows: the room, or why there is none.
+const shownPart = (root: unknown): string =>
+  `room:${displayOf(root, "fabrichat-adapter-room")} ` +
+  `unavailable:${displayOf(root, "fabrichat-adapter-unavailable")}`;
 
 const talliesText = (all: readonly PlacedTallies[]): string =>
   all.map((each) =>
@@ -139,7 +151,7 @@ export default pattern(() => {
         assertion: assert(() =>
           adapter[VIEWS].chat.state === "member" &&
           adapter[NAME] === "Team" &&
-          findElement(adapter[UI], "cf-render") !== undefined
+          shownPart(adapter[UI]) === "room:block unavailable:none"
         ),
       },
       // A room the viewer can't read offers nothing of itself.
@@ -150,7 +162,7 @@ export default pattern(() => {
           unreadable[VIEWS].chat.recentActivity.length === 0 &&
           unreadable[VIEWS].chat.canSend === false &&
           unreadableAdapter[NAME] === "Chat (unavailable)" &&
-          findElement(unreadableAdapter[UI], "cf-render") === undefined
+          shownPart(unreadableAdapter[UI]) === "room:none unavailable:block"
         ),
       },
     ],

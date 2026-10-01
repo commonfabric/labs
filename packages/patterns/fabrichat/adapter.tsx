@@ -57,6 +57,12 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
   ({ placement }) => {
     const chat = placement[VIEWS].chat;
     const isMember = computed(() => chat.state === "member");
+    // Whether the viewer can read the room differs by viewer, so both parts
+    // are always rendered and one is hidden by a prop: a tree built
+    // differently per viewer is stored once for everyone, and runtimes that
+    // built it differently overwrite each other without end.
+    const roomDisplay = computed(() => (isMember ? "block" : "none"));
+    const unavailableDisplay = computed(() => (isMember ? "none" : "block"));
 
     return {
       [NAME]: computed(() =>
@@ -64,9 +70,15 @@ const FabriChatAdapter = pattern<FabriChatAdapterInput, FabriChatAdapterOutput>(
       ),
       [UI]: (
         <cf-vstack>
-          {isMember
-            ? <cf-render $cell={placement.room} />
-            : <cf-empty-state message="This chat can't be read right now." />}
+          <div id="fabrichat-adapter-room" style={{ display: roomDisplay }}>
+            <cf-render $cell={placement.room} />
+          </div>
+          <div
+            id="fabrichat-adapter-unavailable"
+            style={{ display: unavailableDisplay }}
+          >
+            <cf-empty-state message="This chat can't be read right now." />
+          </div>
         </cf-vstack>
       ),
       placement,

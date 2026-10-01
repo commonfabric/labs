@@ -1,19 +1,27 @@
 /**
- * A FabriChat manager's refusals: the requests it turns down, each with its
- * outcome recorded, and changing nothing else. With no profile, as in this
- * lane, it starts no chat at all.
+ * A FabriChat manager with no profile, as in this lane: it offers no start
+ * controls, and refuses every start, recording why and changing nothing else.
  *
- * `creation.test.tsx` covers the rooms a manager creates, with a profile of
- * its own.
+ * `creation.test.tsx` covers the rooms a manager creates, and its other
+ * refusals, with a profile of its own.
  */
-import { assert, pattern, TESTS } from "commonfabric";
+import { assert, pattern, TESTS, UI } from "commonfabric";
+import { findNodeByProp, propValue } from "../test/vnode-helpers.ts";
 import FabriChatManager from "./manager.tsx";
 import { type ChatRequestOutcome } from "./schemas.tsx";
 
-const statusOf = (
+/** Why the request `id` was refused, or its status if it wasn't. */
+const reasonOf = (
   requests: Record<string, ChatRequestOutcome> | undefined,
   id: string,
-): string => requests?.[id]?.status ?? "none";
+): string => {
+  const outcome = requests?.[id];
+  return outcome?.status === "refused"
+    ? outcome.reason
+    : outcome?.status ?? "none";
+};
+
+const NEEDS_PROFILE = "Starting a chat needs a profile.";
 
 export default pattern(() => {
   const manager = FabriChatManager({});
@@ -21,41 +29,29 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert(() => manager.rooms.length === 0) },
-      {
-        action: manager.openDirect,
-        event: { requestId: "d-0", counterpart: "not a did" },
-      },
-      {
-        action: manager.createGroup,
-        event: { requestId: "g-0", title: "  ", members: [] },
-      },
-      // `#profile` resolves nothing here, and no chat starts without one.
-      {
-        action: manager.openDirect,
-        event: { requestId: "d-1", counterpart: "did:key:z6MkBob" },
-      },
+      // The start controls are disabled.
       {
         assertion: assert(() =>
-          statusOf(manager.requests, "d-0") === "refused" &&
-          statusOf(manager.requests, "g-0") === "refused" &&
-          statusOf(manager.requests, "d-1") === "refused" &&
-          manager.rooms.length === 0 &&
-          manager.outgoingNotices.length === 0
+          propValue(
+            findNodeByProp(manager[UI], "inputId", "fabrichat-start-direct"),
+            "disabled",
+          ) === true
         ),
       },
-      // A request already decided stays decided.
-      {
-        action: manager.createGroup,
-        event: { requestId: "g-0", title: "  ", members: [] },
-      },
-      // `#profile` resolves nothing here, and no chat starts without one.
       {
         action: manager.openDirect,
         event: { requestId: "d-1", counterpart: "did:key:z6MkBob" },
       },
       {
+        action: manager.createGroup,
+        event: { requestId: "g-1", title: "Team", members: [] },
+      },
+      {
         assertion: assert(() =>
-          statusOf(manager.requests, "g-0") === "refused"
+          reasonOf(manager.requests, "d-1") === NEEDS_PROFILE &&
+          reasonOf(manager.requests, "g-1") === NEEDS_PROFILE &&
+          manager.rooms.length === 0 &&
+          manager.outgoingNotices.length === 0
         ),
       },
     ],
