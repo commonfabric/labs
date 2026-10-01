@@ -187,6 +187,7 @@ export {
   MATERIAL_RISK_KINDS,
   STANDARD_PROMPT_CAVEAT_POLICY,
 } from "./standard-profile.ts";
+export { PROMPT_CAVEAT_FAMILY_KINDS } from "./prompt-caveat-kinds.ts";
 export type {
   CfcConceptEdge,
   CfcTrustConfig,
