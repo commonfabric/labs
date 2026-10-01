@@ -1856,9 +1856,10 @@ export class WorkerReconciler {
       return true;
     }
     // Default-ceiling caveat-kind allowance (spec §8.10.6): Caveat-type
-    // atoms of an allow-listed kind render — these are the
-    // display-dischargeable classes (e.g. prompt influence), admitted by
-    // kind rather than by enumerating every (kind, source) instance.
+    // atoms of an allow-listed kind render (the prompt-caveat family,
+    // SC-54), admitted by kind rather than by enumerating every
+    // (kind, source) instance. Admission is not discharge: the caveat
+    // stays on the value.
     const kinds = policy.caveatKindAllow;
     if (
       kinds !== undefined && kinds.length > 0 &&
