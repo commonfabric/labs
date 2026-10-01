@@ -22,6 +22,44 @@ Deno.test("cfcAtom mints confidentiality principals and Expires", () => {
     type: CFC_ATOM_TYPE.Expires,
     timestamp: 1234,
   });
+  assertEquals(cfcAtom.origin("https://example.com/data", 1234), {
+    type: CFC_ATOM_TYPE.Origin,
+    uri: "https://example.com/data",
+    fetchedAt: 1234,
+  });
+});
+
+Deno.test("cfcAtom mints connector and network provenance with exact optionals", () => {
+  const connector = cfcAtom.connectorObserved("gmail", "connection-1");
+  assertEquals(connector, {
+    type: "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
+    connector: "gmail",
+    connection: "connection-1",
+  });
+  assertFalse(Object.hasOwn(connector, "provider"));
+
+  const network = cfcAtom.networkProvenance({
+    host: "mail.example.com",
+    tls: true,
+    tlsCertHash: "sha256:cert",
+    requestDigest: "sha256:request",
+    codeHash: "sha256:code",
+  });
+  assertEquals(network, {
+    type: CFC_ATOM_TYPE.NetworkProvenance,
+    host: "mail.example.com",
+    tls: true,
+    tlsCertHash: "sha256:cert",
+    requestDigest: "sha256:request",
+    codeHash: "sha256:code",
+  });
+
+  const minimalNetwork = cfcAtom.networkProvenance({
+    host: "mail.example.com",
+    tls: false,
+    requestDigest: undefined,
+  });
+  assertFalse(Object.hasOwn(minimalNetwork, "requestDigest"));
 });
 
 Deno.test("cfcAtom mints hash-bound policy references (spec §4.4.2)", () => {

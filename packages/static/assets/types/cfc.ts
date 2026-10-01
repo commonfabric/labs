@@ -34,6 +34,8 @@ export declare const CFC_ATOM_TYPE: {
     "https://commonfabric.org/cfc/atom/CaveatAssessment";
   readonly CaveatScreened: "https://commonfabric.org/cfc/atom/CaveatScreened";
   readonly Concept: "https://commonfabric.org/cfc/atom/Concept";
+  readonly ConnectorObserved:
+    "https://loom.commonfabric.org/cfc/atom/ConnectorObserved";
   readonly Context: "https://commonfabric.org/cfc/atom/Context";
   readonly DisclaimerAttached:
     "https://commonfabric.org/cfc/atom/DisclaimerAttached";
@@ -47,6 +49,8 @@ export declare const CFC_ATOM_TYPE: {
   readonly InjectionSafe: "https://commonfabric.org/cfc/atom/InjectionSafe";
   readonly LinkReference: "https://commonfabric.org/cfc/atom/LinkReference";
   readonly LlmDerived: "https://commonfabric.org/cfc/atom/LlmDerived";
+  readonly NetworkProvenance:
+    "https://commonfabric.org/cfc/atom/NetworkProvenance";
   readonly Origin: "https://commonfabric.org/cfc/atom/Origin";
   readonly Policy: "https://commonfabric.org/cfc/atom/Policy";
   readonly PolicyCertified: "https://commonfabric.org/cfc/atom/PolicyCertified";
@@ -94,6 +98,18 @@ export type CfcBuiltinAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.Builtin;
   readonly name: string;
 };
+type CfcOriginAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.Origin;
+  readonly uri: string;
+  readonly fetchedAt: number;
+  readonly tlsCertHash?: string;
+};
+type CfcConnectorObservedAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.ConnectorObserved;
+  readonly connector: string;
+  readonly connection: string;
+  readonly provider?: string;
+};
 export type CfcInjectionSafeAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.InjectionSafe;
 };
@@ -132,6 +148,14 @@ export type CfcFetchExternalIngestAtom = CfcAtomObject & {
 export type CfcExternalIngestAtom =
   | CfcVouchedChannelExternalIngestAtom
   | CfcFetchExternalIngestAtom;
+type CfcNetworkProvenanceAtom = CfcAtomObject & {
+  readonly type: typeof CFC_ATOM_TYPE.NetworkProvenance;
+  readonly host: string;
+  readonly tls: boolean;
+  readonly tlsCertHash?: string;
+  readonly requestDigest?: string;
+  readonly codeHash?: string;
+};
 export type CfcUserAtom = CfcAtomObject & {
   readonly type: typeof CFC_ATOM_TYPE.User;
   readonly subject: string;
@@ -358,6 +382,11 @@ export declare const cfcAtom: {
     source: CfcAtom,
     by?: CfcAtom,
   ) => CfcCaveatAtom;
+  readonly origin: (
+    uri: string,
+    fetchedAt: number,
+    tlsCertHash?: string,
+  ) => CfcOriginAtom;
   readonly builtin: (name: string) => CfcBuiltinAtom;
   readonly injectionSafe: () => CfcInjectionSafeAtom;
   readonly llmDerived: (model?: string) => CfcLlmDerivedAtom;
@@ -366,6 +395,11 @@ export declare const cfcAtom: {
     surface: string,
     valueDigest: string,
   ) => CfcUserSurfaceInputAtom;
+  readonly connectorObserved: (
+    connector: string,
+    connection: string,
+    provider?: string,
+  ) => CfcConnectorObservedAtom;
   readonly externalIngest: (
     channel: string,
     audience: string,
@@ -377,6 +411,13 @@ export declare const cfcAtom: {
     receivedAt: string,
     valueDigest: string,
   ) => CfcFetchExternalIngestAtom;
+  readonly networkProvenance: (fields: {
+    host: string;
+    tls: boolean;
+    tlsCertHash?: string;
+    requestDigest?: string;
+    codeHash?: string;
+  }) => CfcNetworkProvenanceAtom;
   readonly promptSlotBound: <Source extends CfcAtom, Role extends string>(
     source: Source,
     role: Role,

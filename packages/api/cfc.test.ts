@@ -1,6 +1,15 @@
 import { assertEquals } from "@std/assert";
 import { CFC_ATOM_TYPE, CFC_RUNTIME_SUBJECT, cfcAtom } from "./cfc.ts";
 
+void (() => {
+  cfcAtom.networkProvenance({
+    host: "example.com",
+    tls: true,
+    // @ts-expect-error Transport digests are strings when supplied.
+    requestDigest: 1,
+  });
+});
+
 Deno.test("cfcAtom.resource builds a resource atom (default and explicit subject/scope)", () => {
   assertEquals(cfcAtom.resource("MyClass"), {
     type: CFC_ATOM_TYPE.Resource,
@@ -35,6 +44,23 @@ Deno.test("cfcAtom.caveat builds a caveat atom (with and without `by`)", () => {
   });
 });
 
+Deno.test("cfcAtom.origin builds an origin confidentiality atom", () => {
+  assertEquals(cfcAtom.origin("https://example.com/data", 123), {
+    type: CFC_ATOM_TYPE.Origin,
+    uri: "https://example.com/data",
+    fetchedAt: 123,
+  });
+  assertEquals(
+    cfcAtom.origin("https://example.com/data", 123, "sha256:cert"),
+    {
+      type: CFC_ATOM_TYPE.Origin,
+      uri: "https://example.com/data",
+      fetchedAt: 123,
+      tlsCertHash: "sha256:cert",
+    },
+  );
+});
+
 Deno.test("cfcAtom.builtin builds a builtin atom", () => {
   assertEquals(cfcAtom.builtin("navigateTo"), {
     type: CFC_ATOM_TYPE.Builtin,
@@ -55,6 +81,27 @@ Deno.test("cfcAtom.userSurfaceInput builds a user-surface-input atom", () => {
     surface: "chat",
     valueDigest: "digest123",
   });
+});
+
+Deno.test("cfcAtom.connectorObserved builds Loom connector evidence", () => {
+  assertEquals(
+    CFC_ATOM_TYPE.ConnectorObserved,
+    "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
+  );
+  assertEquals(cfcAtom.connectorObserved("gmail", "connection-1"), {
+    type: "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
+    connector: "gmail",
+    connection: "connection-1",
+  });
+  assertEquals(
+    cfcAtom.connectorObserved("gmail", "connection-1", "google"),
+    {
+      type: "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
+      connector: "gmail",
+      connection: "connection-1",
+      provider: "google",
+    },
+  );
 });
 
 Deno.test("cfcAtom.externalIngest builds an external-ingest atom", () => {
@@ -99,6 +146,34 @@ Deno.test("cfcAtom.externalFetchIngest builds fetch provenance without an audien
   });
   assertEquals(Object.hasOwn(atom, "channel"), false);
   assertEquals(Object.hasOwn(atom, "audience"), false);
+});
+
+Deno.test("cfcAtom.networkProvenance builds exact transport evidence", () => {
+  assertEquals(
+    cfcAtom.networkProvenance({ host: "example.com", tls: false }),
+    {
+      type: CFC_ATOM_TYPE.NetworkProvenance,
+      host: "example.com",
+      tls: false,
+    },
+  );
+  assertEquals(
+    cfcAtom.networkProvenance({
+      host: "example.com",
+      tls: true,
+      tlsCertHash: "sha256:cert",
+      requestDigest: "sha256:request",
+      codeHash: "sha256:code",
+    }),
+    {
+      type: CFC_ATOM_TYPE.NetworkProvenance,
+      host: "example.com",
+      tls: true,
+      tlsCertHash: "sha256:cert",
+      requestDigest: "sha256:request",
+      codeHash: "sha256:code",
+    },
+  );
 });
 
 Deno.test("cfcAtom.promptSlotBound builds a prompt-slot-bound atom", () => {

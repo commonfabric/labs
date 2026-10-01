@@ -1,9 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
-import { StorageManager } from "../src/storage/cache.deno.ts";
-import { Runtime } from "../src/runtime.ts";
+
 import type { JSONSchema } from "../src/builder/types.ts";
+import type { IFCLabel } from "../src/cfc/mod.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-integrity-mint-gate");
 
@@ -198,6 +202,124 @@ describe("CFC integrity mint gate", () => {
         const result = await tx.commit();
         expect(result.error?.message).toContain("requiredIntegrity failed");
       }
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("strips source-entry forgeries and does not exempt Origin-only integrity", async () => {
+    const origin = cfcAtom.origin("https://mail.example.com/message/1", 123);
+    const forged = [
+      cfcAtom.connectorObserved("gmail", "connection-1", "google"),
+      cfcAtom.networkProvenance({
+        host: "mail.example.com",
+        tls: true,
+        requestDigest: "sha256:request",
+      }),
+      cfcAtom.externalIngest(
+        "gmail",
+        signer.did(),
+        "2026-09-25T00:00:00.000Z",
+        "sha256:value",
+      ),
+    ];
+    const schema = {
+      type: "string",
+      ifc: {
+        confidentiality: [origin],
+        integrity: [...forged, "author-claim"],
+      },
+    } as const satisfies JSONSchema;
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const tx = runtime.edit();
+      const cell = runtime.getCell(
+        signer.did(),
+        "source-entry-mint-gate",
+        schema,
+        tx,
+      );
+      const id = cell.getAsNormalizedFullLink().id;
+      cell.set("attacker-controlled");
+      tx.prepareCfc();
+      expect((await tx.commit()).ok).toBeDefined();
+
+      const document =
+        (storageManager.open(signer.did()).replica as unknown as {
+          getDocument(id: string): {
+            cfc?: {
+              labelMap?: {
+                entries: Array<{
+                  origin?: string;
+                  label: IFCLabel;
+                }>;
+              };
+            };
+          } | undefined;
+        }).getDocument(id);
+      const declared = document?.cfc?.labelMap?.entries
+        .filter((entry) => entry.origin === "declared") ?? [];
+      const confidentiality = declared.flatMap(
+        (entry) => entry.label.confidentiality ?? [],
+      );
+      const integrity = declared.flatMap(
+        (entry) => entry.label.integrity ?? [],
+      );
+
+      expect(confidentiality).toContainEqual(origin);
+      expect(integrity).toContainEqual("author-claim");
+      for (const atom of forged) {
+        expect(integrity).not.toContainEqual(atom);
+      }
+
+      const originSeed = runtime.edit();
+      const originIntegritySchema = {
+        type: "string",
+        ifc: { integrity: [origin] },
+      } as const satisfies JSONSchema;
+      runtime.getCell(
+        signer.did(),
+        "origin-integrity-input",
+        originIntegritySchema,
+        originSeed,
+      ).set("attacker-controlled");
+      originSeed.prepareCfc();
+      expect((await originSeed.commit()).ok).toBeDefined();
+
+      const gateTx = runtime.edit();
+      runtime.getCell(
+        signer.did(),
+        "origin-integrity-input",
+        originIntegritySchema,
+        gateTx,
+      ).get();
+      runtime.getCell(
+        signer.did(),
+        "origin-integrity-sink",
+        {
+          type: "object",
+          properties: {
+            out: {
+              type: "string",
+              ifc: {
+                integrity: ["trusted"],
+                requiredIntegrity: ["trusted"],
+              },
+            },
+          },
+          required: ["out"],
+        } as const satisfies JSONSchema,
+        gateTx,
+      ).set({ out: "derived" });
+
+      expect(gateTx.prepareCfc()).toBe("");
+      const gateResult = await gateTx.commit();
+      expect(gateResult.error?.message).toContain("requiredIntegrity failed");
     } finally {
       await runtime.dispose();
       await storageManager.close();
