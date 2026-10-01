@@ -31,9 +31,11 @@ import {
 } from "../builder/types.ts";
 import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
+import { resolveLink } from "../link-resolution.ts";
 import {
   createSigilLinkFromParsedLink,
   isPrimitiveCellLink,
+  type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -1554,10 +1556,11 @@ function createSharedHashtagResolver(
                 index,
           ),
       );
+      // The phase keeps its name so its timings compare with earlier runs.
       const resultUI = measureWishPhase(
-        "shared-result-ui-probe",
+        "shared-result-ui-get",
         queryKey,
-        () => foundPieceUI(uniqueResultCells[0]),
+        () => foundPieceUI(ctx.runtime, tx, uniqueResultCells[0]),
       );
 
       stateCell.set({
@@ -1825,38 +1828,71 @@ function cellLinkUI(cell: Cell<unknown>): VNode {
   return h("cf-cell-link", { $cell: cell });
 }
 
+/** What a view slot holds, as far as choosing a view needs to know. */
+type ViewSlotKind = "link" | "view node" | "other";
+
+/**
+ * Returns what the slot at `slot` holds: `"link"` for a link, `"view node"`
+ * for a value whose `type` is `vnode`, and `"other"` for any other value or
+ * for nothing.
+ *
+ * Reads through `tx`, resolving links on the way to the slot but not a link
+ * the slot holds. It makes two reads: a shape read of the slot, which observes
+ * whether the slot exists and whether it holds a link, and, for a value that
+ * is a record, a read of its `type`. It reads nothing else inside the slot and
+ * hands back no part of it, so a caller that needs more reads it itself.
+ */
+function viewSlotKind(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  slot: NormalizedFullLink,
+): ViewSlotKind {
+  const address = resolveLink(runtime, tx, slot, "top", {
+    markIfcCrossings: true,
+  });
+  const held = tx.readValueOrThrow(address, { nonRecursive: true });
+  if (isPrimitiveCellLink(held)) return "link";
+  if (!isObjectOrArray(held) || Array.isArray(held)) return "other";
+  const type = tx.readValueOrThrow({
+    ...address,
+    path: [...address.path, "type"],
+  });
+  return type === "vnode" ? "view node" : "other";
+}
+
 /**
  * Returns the view a wish shows for the piece it found: a reference to the
- * piece's own `[UI]` slot when that slot holds a view, and a `cf-cell-link` to
- * the piece when it does not.
+ * piece's own `[UI]` slot when that slot holds a link or a view node, and a
+ * `cf-cell-link` to the piece otherwise.
  *
  * A wish result is a reference to what it found (CFC spec §8.2), and its view
  * is a reference too, so the choice is made from the `[UI]` slot of the piece's
- * own document. A slot holding a link counts as a view, and the link is not
- * followed: the document behind it can be one a computation derived from sealed
- * data, and its labels are consumed where the view is rendered. A slot holding
- * a value counts as a view when the value is a view node. So what this consumes
- * is the slot's existence and the labels covering it, plus a view node's
- * `type`, and none of the view's contents.
+ * own document, through `tx`, by {@link viewSlotKind}. A link in the slot is
+ * not followed: the document behind it can be one a computation derived from
+ * sealed data, and its labels are consumed where the view is rendered.
  */
-function foundPieceUI(resultCell: Cell<unknown>): VNode | Cell<unknown> {
+function foundPieceUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  resultCell: Cell<unknown>,
+): VNode | Cell<unknown> {
   // The reference carries no schema: a view is read under the renderer's own.
   const ui = resultCell.asSchema(undefined).key(UI);
-  const slot = ui.getRaw({ lastNode: "top", nonRecursive: true });
-  if (isPrimitiveCellLink(slot)) return ui;
-  const isViewNode = isObjectOrArray(slot) && !Array.isArray(slot) &&
-    ui.key("type").getRaw({ lastNode: "top" }) === "vnode";
-  return isViewNode ? ui : cellLinkUI(resultCell);
+  return viewSlotKind(runtime, tx, ui.getAsNormalizedFullLink()) === "other"
+    ? cellLinkUI(resultCell)
+    : ui;
 }
 
 function wishResultUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
   parsed: ParsedWishTarget,
   resultCell: Cell<unknown>,
 ): VNode | Cell<unknown> {
   if (isProfilePersonaTarget(parsed)) {
     return cellLinkUI(resultCell);
   }
-  return foundPieceUI(resultCell);
+  return foundPieceUI(runtime, tx, resultCell);
 }
 
 function projectWishCellValue(
@@ -3152,10 +3188,13 @@ export function wish(
               profileHasValidDefault
             ) {
               // Single result or headless mode - fast path with unified shape
+              // The phase keeps its name so its timings compare with earlier
+              // runs.
               const resultUI = measureWishPhase(
-                "result-ui-probe",
+                "result-ui-get",
                 queryKey,
-                () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                () =>
+                  wishResultUI(runtime, tx, activeParsed, uniqueResultCells[0]),
               );
               measureWishPhase(
                 "send-fast",
@@ -3200,10 +3239,18 @@ export function wish(
                 );
               } else {
                 // Surface not open yet — send first result, start opening it
+                // The phase keeps its name so its timings compare with earlier
+                // runs.
                 const resultUI = measureWishPhase(
-                  "result-ui-probe",
+                  "result-ui-get",
                   queryKey,
-                  () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                  () =>
+                    wishResultUI(
+                      runtime,
+                      tx,
+                      activeParsed,
+                      uniqueResultCells[0],
+                    ),
                 );
                 measureWishPhase(
                   "send-fast-before-suggestion",
