@@ -197,6 +197,7 @@ import {
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
+  CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -1450,11 +1451,18 @@ const setupProjectionSourceMatchesValue = (
   },
   path: readonly string[],
 ): boolean => {
+  // A result field and an argument slot alike: either marker names the
+  // redirect a setup put at the path.
   const projection = structuralProvenanceForPath(
     tx,
     target,
     path,
     CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+  ) ?? structuralProvenanceForPath(
+    tx,
+    target,
+    path,
+    CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
   );
   if (projection === undefined) {
     return false;
@@ -1494,7 +1502,11 @@ const setupProjectionSourceMatchesValue = (
 // own trusted creation step, authored by the runtime's result projection, not by
 // the per-field edit handler. Recognize a target as that trusted-creation site
 // when it is the redirect *source* of a setup-projection marker recorded in this
-// transaction, covering the field path.
+// transaction, covering the field path. A redirect a setup stages into an
+// argument records a marker of its own
+// (`CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION`), which does not count here:
+// the cell it names belongs to whoever passed the binding, and the setup
+// initializes none of it.
 //
 // This is safe because the marker counts only with the runtime's authorization
 // (`isRuntimeWritePolicyInput`), which the runtime's result projection records
@@ -1759,12 +1771,17 @@ const pathHoldsUnattributedInitialization = (
     !tx.getCfcState().attributedInitialization &&
     inputs.some((input) => {
       if (input.kind === "structural-provenance") {
+        if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
         // internal cell holding the field's value; both are the pattern's own
-        // initialization (`writeIsPatternSetupInitialization`).
-        return tx.isRuntimeWritePolicyInput(input) &&
-          input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
-          [input.target, ...input.sources].some(covers);
+        // initialization (`writeIsPatternSetupInitialization`). An argument
+        // projection names the slot this setup stages and the cell the caller
+        // passed, and only the slot is the setup's.
+        if (input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) {
+          return [input.target, ...input.sources].some(covers);
+        }
+        return input.claim === CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION &&
+          covers(input.target);
       }
       return input.kind === "initialization" &&
         (input.mode === "seed" || input.mode === "projection" ||

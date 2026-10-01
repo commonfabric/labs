@@ -28,6 +28,14 @@ export type {
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
+// A write redirect a setup stages into a piece's argument: `target` is the
+// argument slot holding it, `sources` the cell it names. That cell belongs to
+// whoever passed the binding, and the setup initializes none of it, so the
+// prepare gate takes the marker for the slot alone, where a result
+// projection's marker covers its sources as well.
+export const CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION =
+  "runtime.setup.argument-projection";
+
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
 // argument, result and internal documents, minted by the runner from the

@@ -221,6 +221,7 @@ import {
   validateSchemaValue,
 } from "./cfc/schema-sanitization.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type ImplementationIdentity,
@@ -866,6 +867,9 @@ const recordSetupProjectionPolicyInputs = (
   resultCell: Cell<any>,
   resultSchema: JSONSchema | undefined,
   projection: unknown,
+  claim:
+    | typeof CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION
+    | typeof CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
   schemaPath: readonly string[] = [],
 ): void => {
   if (resultSchema === undefined) {
@@ -899,7 +903,7 @@ const recordSetupProjectionPolicyInputs = (
         scope: target.scope,
         path: [...target.path, ...schemaPath],
       },
-      claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+      claim,
       sources: [{
         space: source.space,
         id: source.id,
@@ -918,6 +922,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        claim,
         [...schemaPath, String(index)],
       )
     );
@@ -947,6 +952,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        claim,
         [...schemaPath, key],
       );
     }
@@ -2859,17 +2865,20 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a setup-projection marker, and
-    // a marker exempts writes at-or-below its target from `writeAuthorizedBy`
-    // for the rest of the transaction (`writeIsPatternSetupInitialization` in
+    // slots in. Each redirect it finds records an argument-projection marker,
+    // which exempts the slot holding it from `writeAuthorizedBy` while the slot
+    // holds the cell the marker names (`setupProjectionSourceMatchesValue` in
     // cfc/prepare.ts), so the redirects it walks are the ones this setup
-    // establishes rather than the ones the document already held.
+    // establishes rather than the ones the document already held. The cell a
+    // redirect names receives no exemption: it is the caller's, and this setup
+    // writes none of it.
     recordSetupProjectionPolicyInputs(
       tx,
       this.#runtime,
       argumentCell,
       argumentSchema,
       projection,
+      CFC_STRUCTURAL_PROVENANCE_ARGUMENT_PROJECTION,
     );
     diffAndUpdate(
       this.#runtime,
@@ -3054,6 +3063,7 @@ export class Runner {
         resultCell,
         pattern.resultSchema,
         result,
+        CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
       );
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)

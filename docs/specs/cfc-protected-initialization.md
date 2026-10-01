@@ -145,6 +145,22 @@ branch-local expansion rules. Ordinary chains need no shared-result cache.
 The persisted view still contains every distinct labeled path; sharing work
 does not reduce the size of a flat label map for a branching graph.
 
+## Bindings passed to a composed sub-pattern
+
+A pattern that passes a binding to a sub-pattern it composes, as in
+`Child({ items })`, has setup stage a write redirect to the bound cell into the
+sub-pattern's argument. Setup records the redirect as an argument projection of
+the slot holding it. Preparation accepts the slot while it holds a redirect to
+the cell the projection names, compared by that cell's address rather than by
+the redirect's bytes, and persists the slot as it persists the cells a setup
+projects result fields to (see "Attribution of an initialized value").
+
+An argument projection covers the slot alone. The cell its redirect names is
+the caller's, and setup writes none of it, so a write to that cell, through the
+slot or directly, needs the cell's own writer and owner binding in the staging
+transaction as in any other. A result projection differs: the cell it names is
+the pattern's internal cell, which setup initializes.
+
 ## Setup replay over a stored argument
 
 A runtime that starts a piece it did not create replays the setup of the
