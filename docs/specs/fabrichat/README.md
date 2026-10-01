@@ -285,10 +285,12 @@ prerequisite, the patterns depart from this design, as below.
   principal, and the manager refuses a direct room with the user themself and
   leaves them out of a group's other members. A reaction's address still
   derives from its reactor's profile, as the design says. The manager takes
-  principals as typed; nothing in the patterns reads a profile's principal
-  (`principalOf()`) yet. `accept` takes a direct room's counterpart as sent,
-  since the room's `about` carries no `authored-by` label to check it
-  against (see [writers and labels](#writers-and-labels)).
+  principals as typed. A room offers a direct chat with each participant
+  whose profile attests a principal (`principalOf()`), except the viewer, by
+  sending that principal to the `openDirect` of the viewer's manager, found
+  with `#chatManager`. `accept` takes a direct room's counterpart as sent,
+  since the room's `about` carries no `authored-by` label to check it against
+  (see [writers and labels](#writers-and-labels)).
 - **Creation takes one transaction.** The space comes with its grants, so
   writing the room, the manager's notices, and its index entry happens in one
   commit, rather than in the design's resumable steps, and a request's outcome

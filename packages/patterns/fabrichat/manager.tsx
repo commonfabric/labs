@@ -33,6 +33,7 @@ import {
 } from "commonfabric";
 import FabriChatRoom from "./room.tsx";
 import {
+  CHAT_START_ACTION,
   CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
@@ -44,9 +45,6 @@ import {
   nsecOf,
   type ProfileCell,
 } from "./schemas.tsx";
-
-/** The reviewed action a start is, on `CHAT_START_SURFACE`. */
-export const CHAT_START_ACTION = "ChatStart";
 
 /** The manager's rooms, in the order it recorded them. */
 export type RoomsCell = Writable<ChatIndexEntry[] | Default<[]>>;

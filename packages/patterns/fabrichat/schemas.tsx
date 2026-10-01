@@ -60,6 +60,9 @@ export const CHAT_UNREACT_ACTION = "ChatUnreact";
 /** The reviewed surface a conversation is started from. */
 export const CHAT_START_SURFACE = "ChatStartSurface";
 
+/** The reviewed action starting a conversation is, on `CHAT_START_SURFACE`. */
+export const CHAT_START_ACTION = "ChatStart";
+
 //
 // Times
 //

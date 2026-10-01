@@ -19,9 +19,11 @@ import {
   type Default,
   equals,
   type FabricEpochNsec,
+  handler,
   NAME,
   pattern,
   type PerSession,
+  principalOf,
   Stream,
   UI,
   VIEWS,
@@ -66,6 +68,8 @@ import { bodyText, FabriChatMessageRow } from "./message-row.tsx";
 import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
   type ChatProfile,
   type ChatRoomAbout,
   type ChatRoomActivity,
@@ -93,6 +97,98 @@ export const participantsOf = (
     },
     [...listed],
   );
+
+/** What starting a direct chat asks of a manager: who to chat with. */
+export interface StartDirectEvent {
+  /** The other person's principal. */
+  counterpart: string;
+}
+
+/**
+ * Asks the viewer's manager for a direct chat with the person `participant`
+ * stands for, by the principal its `represents-principal` label attests. A
+ * profile whose label names no single principal starts nothing.
+ */
+const startDirectWith = handler<unknown, {
+  participant: ProfileCell;
+  startDirect?: Stream<StartDirectEvent>;
+}>((_event, { participant, startDirect }) => {
+  const counterpart = principalOf(participant, "represents-principal");
+  if (counterpart === undefined) return;
+  startDirect?.send({ counterpart });
+});
+
+/** What a participant's chip needs. */
+export interface ParticipantChipInput {
+  /** The participant's profile. */
+  participant: ProfileCell;
+
+  /** The viewer's profile, which holds no value while it is unknown. */
+  myProfile: ProfileCell | undefined;
+
+  /**
+   * Whether the viewer has a manager to start a direct chat with; absent for
+   * none.
+   */
+  startsDirect?: boolean;
+
+  /** The viewer's manager's `openDirect`, when `startsDirect` holds. */
+  startDirect?: Stream<StartDirectEvent>;
+}
+
+/** What a participant's chip provides. */
+export interface ParticipantChipOutput {
+  /** The participant's badge, and the control that starts a chat with them. */
+  [UI]: VNode;
+
+  /** Starts a direct chat with the participant. */
+  chat: Stream<unknown>;
+}
+
+/**
+ * One participant, shown by their profile, with a control that starts a direct
+ * chat with them. The control shows only where it can start one: for someone
+ * other than the viewer, whose profile attests a principal, to a viewer who
+ * has a manager.
+ */
+export const ParticipantChip = pattern<
+  ParticipantChipInput,
+  ParticipantChipOutput
+>(({ participant, myProfile, startsDirect, startDirect }) => {
+  const chat = startDirectWith({ participant, startDirect });
+  // Who may start a chat differs by viewer, so the control is hidden by a
+  // prop rather than built as a different tree (see `FabriChatMessageRow`).
+  const chatDisplay = computed(() =>
+    startsDirect === true && myProfile?.get() !== undefined &&
+      !equals(participant, myProfile) &&
+      principalOf(participant, "represents-principal") !== undefined
+      ? "inline-flex"
+      : "none"
+  );
+
+  return {
+    [UI]: (
+      <span style={{ display: "inline-flex", gap: "0.25rem" }}>
+        <cf-profile-badge variant="chip" $profile={participant} />
+        <span
+          data-ui-pattern={CHAT_START_SURFACE}
+          data-ui-event-integrity={CHAT_START_SURFACE}
+          style={{ display: chatDisplay }}
+        >
+          <cf-button
+            data-ui-action={CHAT_START_ACTION}
+            size="sm"
+            variant="ghost"
+            onClick={chat}
+          >
+            Chat
+          </cf-button>
+        </span>
+      </span>
+    ),
+    chat,
+  };
+});
 
 /** A room's messages: facts, the newest, and this session's windows. */
 export interface ChatMessageList {
@@ -203,6 +299,15 @@ export interface FabriChatRoomCoreInput {
 
   /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
+
+  /**
+   * Whether the viewer has a manager to start a direct chat with; absent for
+   * none.
+   */
+  startsDirect?: boolean;
+
+  /** The viewer's manager's `openDirect`, when `startsDirect` holds. */
+  startDirect?: Stream<StartDirectEvent>;
 }
 
 /**
@@ -235,6 +340,8 @@ export const FabriChatRoomCore = pattern<
     usedTimes,
     activity,
     counters,
+    startsDirect,
+    startDirect,
   } = input;
   const composer = new Writable.perSession<ComposerState>({});
   const kind = computed((): ChatRoomKind => about?.kind ?? "group");
@@ -385,7 +492,12 @@ export const FabriChatRoomCore = pattern<
           }}
         >
           {participants.map((participant) => (
-            <cf-profile-badge variant="chip" $profile={participant} />
+            <ParticipantChip
+              participant={participant}
+              myProfile={myProfile}
+              startsDirect={startsDirect}
+              startDirect={startDirect}
+            />
           ))}
         </div>
 
@@ -528,6 +640,11 @@ export interface FabriChatRoomInput {
 const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
   (input) => {
     const profileWish = wish<ChatProfile>({ query: "#profile" });
+    // The viewer's manager, which starts a direct chat with a participant.
+    const managerWish = wish<{ openDirect: Stream<StartDirectEvent> }>({
+      query: "#chatManager",
+    });
+    const startsDirect = computed(() => managerWish.result !== undefined);
     // Hidden by a prop rather than a branch, as `FabriChatMessageRow` says.
     const setupDisplay = computed(() =>
       profileWish.result === undefined ? "block" : "none"
@@ -542,6 +659,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         usedTimes: input.usedTimes,
         activity: input.activity,
         counters: input.counters,
+        startsDirect,
+        startDirect: managerWish.result?.openDirect,
       },
     );
 
