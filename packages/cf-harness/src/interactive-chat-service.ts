@@ -40,6 +40,8 @@ import {
   type HarnessChatListTurnsResult,
   type HarnessChatPolicy,
   type HarnessChatRequestEnvelope,
+  type HarnessChatResolveClientActionParams,
+  type HarnessChatResolveClientActionResult,
   type HarnessChatResponse,
   type HarnessChatSessionStatus,
   type HarnessChatStartSessionParams,
@@ -76,6 +78,14 @@ import type {
   HarnessChatSessionStore,
 } from "./session-store.ts";
 import { HarnessControlError } from "./control-errors.ts";
+import {
+  HARNESS_CLIENT_ACTION_IDLE_TIMEOUT_MS,
+  HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
+  type HarnessClientAction,
+  type HarnessClientActionOutcome,
+  type HarnessClientActionOutcomeKind,
+  isHarnessClientActionOutcomeKind,
+} from "./contracts/client-action.ts";
 
 export type HarnessInteractivePromptLoop = Pick<
   CfHarnessPromptLoop,
@@ -137,6 +147,22 @@ export interface CreateHarnessInteractiveChatServiceOptions {
   onEventDeliveryError?: HarnessInteractiveChatEventDeliveryErrorHandler;
   sessionStore?: HarnessChatSessionStore;
   maxInMemoryEvents?: number;
+
+  /**
+   * How long a `weaver_action` call waits with none of its actions settled
+   * before the rest fail as "timeout". Defaults to five minutes; tests shorten
+   * it.
+   */
+  clientActionIdleTimeoutMs?: number;
+}
+
+/** One requested action the person's client has not yet settled. */
+interface PendingClientAction {
+  turnId: string;
+  settle(
+    outcome: HarnessClientActionOutcomeKind,
+    result: string | undefined,
+  ): Promise<void>;
 }
 
 interface HarnessInteractiveChatSessionRecord {
@@ -171,6 +197,26 @@ interface HarnessInteractiveChatSessionRecord {
   fabricRuntimes: Set<Runtime>;
   canceledTurnIds: Set<string>;
   turns: Map<string, HarnessChatTurnRecord>;
+
+  /**
+   * Whether the client that started this session opted in to `weaver_action`.
+   * Held in memory only, so a session restored from the store starts without
+   * it until a client starts a session again.
+   */
+  clientActions?: boolean;
+
+  /**
+   * Actions awaiting the person, by actionId. In memory only: a restart
+   * forgets them, and a late answer is `unknown_action`.
+   */
+  pendingClientActions?: Map<string, PendingClientAction>;
+
+  /**
+   * Every actionId this process has settled, so a repeat answer is told apart
+   * from an id never minted. Grows by one id per settlement for the session's
+   * life; harden with a bounded window if sessions ever run for days.
+   */
+  settledClientActionIds?: Set<string>;
 }
 
 interface HarnessInteractiveChatEmitOptions {
@@ -741,6 +787,7 @@ export class HarnessInteractiveChatService {
     HarnessInteractiveChatEventDeliveryErrorHandler;
   readonly #sessionStore?: HarnessChatSessionStore;
   readonly #maxInMemoryEvents?: number;
+  readonly #clientActionIdleTimeoutMs: number;
   readonly #systemPrompt?: string;
   readonly #sessions = new Map<string, HarnessInteractiveChatSessionRecord>();
   readonly #events: HarnessChatEventEnvelope[] = [];
@@ -748,6 +795,8 @@ export class HarnessInteractiveChatService {
   #sequence = 0;
 
   constructor(options: CreateHarnessInteractiveChatServiceOptions = {}) {
+    this.#clientActionIdleTimeoutMs = options.clientActionIdleTimeoutMs ??
+      HARNESS_CLIENT_ACTION_IDLE_TIMEOUT_MS;
     this.#basePromptLoopOptions = options.basePromptLoopOptions ?? {};
     if (
       this.#basePromptLoopOptions.fabricSession !== undefined ||
@@ -1178,6 +1227,11 @@ export class HarnessInteractiveChatService {
           request.params.sessionId,
           request.params.reason,
         );
+      case "resolve_client_action":
+        return await this.resolveClientAction(
+          request.requestId,
+          request.params,
+        );
       case "status":
         return createHarnessChatOkResponse(
           request.requestId,
@@ -1257,6 +1311,7 @@ export class HarnessInteractiveChatService {
       canceledTurnIds: new Set(),
       fabricRuntimes: new Set(),
       turns: new Map(),
+      ...(params.clientActions === true ? { clientActions: true } : {}),
     });
     try {
       await this.#emit(session.sessionId, undefined, {
@@ -1294,6 +1349,9 @@ export class HarnessInteractiveChatService {
     if (record === undefined) {
       return sessionNotFoundError(requestId, params.sessionId);
     }
+    // A turn can opt its session in, so a client that talks to a session it
+    // did not start (the console's follow-up turns) can still ask.
+    if (params.clientActions === true) record.clientActions = true;
     if (this.#loomLocalHostBinding !== undefined) {
       if (
         !loomLocalHostBindingsEqual(
@@ -1603,6 +1661,163 @@ export class HarnessInteractiveChatService {
       requestId,
       this.#sessions.get(sessionId)!.status,
     );
+  }
+
+  /**
+   * Takes the person's answer for one pending action. The same method backs
+   * the stdio request and the console route.
+   */
+  async resolveClientAction(
+    requestId: string,
+    params: HarnessChatResolveClientActionParams,
+  ): Promise<HarnessChatResponse<HarnessChatResolveClientActionResult>> {
+    if (
+      typeof params.sessionId !== "string" ||
+      typeof params.actionId !== "string" ||
+      !isHarnessClientActionOutcomeKind(params.outcome) ||
+      (params.result !== undefined &&
+        (typeof params.result !== "string" ||
+          params.result.length > HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH))
+    ) {
+      return createHarnessChatErrorResponse(requestId, {
+        code: "invalid_request",
+        message:
+          `resolve_client_action requires sessionId, actionId, an outcome of done, declined, or failed, and a result of at most ${HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH} characters`,
+      });
+    }
+    const record = this.#sessions.get(params.sessionId);
+    if (record === undefined) {
+      return sessionNotFoundError(requestId, params.sessionId);
+    }
+    const pending = record.pendingClientActions?.get(params.actionId);
+    if (pending === undefined) {
+      return record.settledClientActionIds?.has(params.actionId)
+        ? createHarnessChatErrorResponse(requestId, {
+          code: "action_resolved",
+          message: `client action already settled: ${params.actionId}`,
+        })
+        : createHarnessChatErrorResponse(requestId, {
+          code: "unknown_action",
+          message: `no pending client action: ${params.actionId}`,
+        });
+    }
+    await pending.settle(params.outcome, params.result);
+    return createHarnessChatOkResponse(requestId, { ok: true });
+  }
+
+  /**
+   * Emits one request per action, then waits until the person has settled
+   * every one. Everything waits for the person: the only other ways out are
+   * the idle timeout (reset by each settlement, so a person working through a
+   * queue is never cut off mid-way) and the turn's abort signal, which covers
+   * both a turn cancel and a session close. Each settlement, whatever its
+   * cause, emits one `client_action_resolved`.
+   */
+  async #requestClientActions(
+    record: HarnessInteractiveChatSessionRecord,
+    turnId: string,
+    actions: readonly HarnessClientAction[],
+    signal: AbortSignal | undefined,
+  ): Promise<HarnessClientActionOutcome[]> {
+    const sessionId = record.status.sessionId;
+    if (signal?.aborted) {
+      return actions.map((action) => ({
+        action,
+        outcome: "declined" as const,
+        result: "canceled",
+      }));
+    }
+    const pendingMap = record.pendingClientActions ??= new Map<
+      string,
+      PendingClientAction
+    >();
+    const settledIds = record.settledClientActionIds ??= new Set<string>();
+    const entries = actions.map((action) => ({
+      action,
+      actionId: this.#randomUUID(),
+    }));
+    const outcomes = new Map<string, HarnessClientActionOutcome>();
+    const emits: Promise<void>[] = [];
+    let remaining = entries.length;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => finish = resolve);
+
+    const armTimer = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => {
+        for (const { actionId } of entries) {
+          void pendingMap.get(actionId)?.settle("failed", "timeout");
+        }
+      }, this.#clientActionIdleTimeoutMs);
+    };
+    const settleOne = (
+      entry: (typeof entries)[number],
+      outcome: HarnessClientActionOutcomeKind,
+      result: string | undefined,
+    ): Promise<void> => {
+      // Synchronous, so a second answer for the same id is `action_resolved`
+      // even while this one's event is still being written.
+      pendingMap.delete(entry.actionId);
+      settledIds.add(entry.actionId);
+      outcomes.set(entry.actionId, {
+        action: entry.action,
+        outcome,
+        ...(result !== undefined ? { result } : {}),
+      });
+      remaining -= 1;
+      if (remaining > 0) armTimer();
+      else if (timer !== undefined) clearTimeout(timer);
+      const emitted = this.#emit(sessionId, turnId, {
+        kind: "client_action_resolved",
+        turnId,
+        actionId: entry.actionId,
+        outcome,
+        ...(result !== undefined ? { result } : {}),
+      });
+      emits.push(emitted.catch(() => undefined));
+      if (remaining === 0) finish();
+      return emitted;
+    };
+    const onAbort = () => {
+      for (const entry of entries) {
+        void pendingMap.get(entry.actionId)?.settle("declined", "canceled");
+      }
+    };
+
+    for (const entry of entries) {
+      pendingMap.set(entry.actionId, {
+        turnId,
+        settle: (outcome, result) => settleOne(entry, outcome, result),
+      });
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      for (const { actionId, action } of entries) {
+        await this.#emit(sessionId, turnId, {
+          kind: "client_action_requested",
+          turnId,
+          actionId,
+          action,
+        });
+      }
+    } catch (error) {
+      // A request the person never saw must not stay answerable.
+      for (const { actionId } of entries) pendingMap.delete(actionId);
+      signal?.removeEventListener("abort", onAbort);
+      throw error;
+    }
+    // The signal may have fired while the requests were being written.
+    if (signal?.aborted) onAbort();
+    else if (remaining > 0) armTimer();
+    try {
+      await finished;
+      await Promise.all(emits);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+    return entries.map((entry) => outcomes.get(entry.actionId)!);
   }
 
   async #disposeFabricRuntimes(
@@ -1951,6 +2166,8 @@ export class HarnessInteractiveChatService {
       session.sessionId,
       loomId,
     );
+    const clientActionsOptedIn =
+      this.#sessions.get(session.sessionId)?.clientActions === true;
     return {
       ...this.#basePromptLoopOptions,
       ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
@@ -1981,8 +2198,25 @@ export class HarnessInteractiveChatService {
         ? { artifactRoot: session.artifactRoot }
         : {}),
       cacheAffinityKey: `interactive:${session.sessionId}`,
-      allowedToolIds: policy.allowedToolIds,
+      allowedToolIds: clientActionsOptedIn &&
+          !policy.allowedToolIds.includes("weaver_action")
+        ? [...policy.allowedToolIds, "weaver_action"]
+        : policy.allowedToolIds,
       allowedSubagentProfiles: policy.allowedSubagentProfiles,
+      ...(clientActionsOptedIn
+        ? {
+          requestClientActions: (
+            actions: readonly HarnessClientAction[],
+            signal?: AbortSignal,
+          ) =>
+            this.#requestClientActions(
+              this.#sessions.get(session.sessionId)!,
+              turnId,
+              actions,
+              signal,
+            ),
+        }
+        : {}),
       ...(browserAccess !== undefined ? { browserAccess } : {}),
       ...(browserHost !== undefined ? { browserHost } : {}),
       ...(policy.cfcEnforcementMode !== undefined

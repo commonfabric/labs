@@ -958,6 +958,69 @@ Deno.test("interactive NDJSON transport validates method-specific params", async
   );
 });
 
+Deno.test("interactive NDJSON transport validates resolve_client_action and clientActions params", async () => {
+  const output: string[] = [];
+  const line = (requestId: string, method: string, params: unknown) =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      // Well formed, but no such session: reaches the service.
+      line("ok", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "done",
+        result: "opened",
+      }),
+      line("bad-outcome", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "maybe",
+      }),
+      line("missing-id", "resolve_client_action", {
+        sessionId: "s",
+        outcome: "done",
+      }),
+      line("long-result", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "failed",
+        result: "x".repeat(501),
+      }),
+      line("bad-opt-in", "start_session", {
+        workspace: { hostPath: "/w" },
+        clientActions: "yes",
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+  });
+
+  const codes = Object.fromEntries(
+    decodeLines(output).flatMap((response) =>
+      "requestId" in response
+        ? [[
+          response.requestId,
+          response.ok ? "ok" : response.error.code,
+        ]]
+        : []
+    ),
+  );
+  assertEquals(codes, {
+    "ok": "session_not_found",
+    "bad-outcome": "invalid_request",
+    "missing-id": "invalid_request",
+    "long-result": "invalid_request",
+    "bad-opt-in": "invalid_request",
+  });
+});
+
 Deno.test("interactive NDJSON transport rejects malformed policy params", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({

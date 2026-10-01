@@ -152,6 +152,10 @@ What works today:
   - `finish_task` (parent-only answer with optional client actions, question, or
     reason the task cannot proceed; ends the turn through ordinary policy and
     artifacts)
+  - `weaver_action` (parent-only, present only when the host opts the session
+    in: asks the person's client to run up to eight client actions mid-turn and
+    waits for the person to settle each; never a default tool, never offered to
+    a subagent)
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the
     host-owned result file)

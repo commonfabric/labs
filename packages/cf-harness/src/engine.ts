@@ -254,6 +254,11 @@ import {
   type EditFileToolOutput,
 } from "./tools/edit-file.ts";
 import type { FinishTaskInput, FinishTaskOutput } from "./tools/finish-task.ts";
+import type {
+  WeaverActionInput,
+  WeaverActionOutput,
+} from "./tools/weaver-action.ts";
+import type { HarnessClientActionRequester } from "./contracts/client-action.ts";
 import {
   type ReadFileToolInput,
   type ReadFileToolOutput,
@@ -328,6 +333,7 @@ export interface BuiltinToolInputMap {
   resolve_piece: ResolvePieceToolInput;
   describe_handle: DescribeHandleToolInput;
   finish_task: FinishTaskInput;
+  weaver_action: WeaverActionInput;
   search_patterns: SearchPatternsToolInput;
   record_feedback: RecordFeedbackToolInput;
   search_skills: SearchSkillsToolInput;
@@ -365,6 +371,7 @@ export interface BuiltinToolOutputMap {
   resolve_piece: ResolvePieceToolOutput;
   describe_handle: DescribeHandleToolOutput;
   finish_task: FinishTaskOutput;
+  weaver_action: WeaverActionOutput;
   search_patterns: SearchPatternsToolOutput;
   record_feedback: RecordFeedbackToolOutput;
   search_skills: SearchSkillsToolOutput;
@@ -506,6 +513,13 @@ export interface CreateHarnessEngineOptions
    * own fetch seam below because it is a separate effect.
    */
   skillsShSearchClientFactory?: HarnessSkillsShSearchClientFactory;
+
+  /**
+   * The host's door for asking the person's client to act mid-turn. Supplying
+   * it is the host's opt-in: without it `weaver_action` stays out of the tool
+   * surface. Never inherited by a subagent's engine.
+   */
+  requestClientActions?: HarnessClientActionRequester;
 
   /**
    * Injection seam for pinned external-skill acquisition. Production builds
@@ -696,6 +710,7 @@ export class CfHarnessEngine {
   readonly #patternIndexClientFactory?: HarnessPatternIndexClientFactory;
   readonly #browserHost?: HarnessBrowserHost;
   readonly #skillsShSearchClientFactory?: HarnessSkillsShSearchClientFactory;
+  readonly #requestClientActions?: HarnessClientActionRequester;
   readonly #skillsShAcquisitionClientFactory?:
     HarnessSkillsShAcquisitionClientFactory;
   #docsCorpus?: Promise<HarnessDocsCorpus>;
@@ -899,6 +914,7 @@ export class CfHarnessEngine {
     this.#patternIndexClientFactory = patternIndexClientFactory === undefined
       ? undefined
       : cacheHarnessPatternIndexClientFactory(patternIndexClientFactory);
+    this.#requestClientActions = options.requestClientActions;
     const skillsShSearchClientFactory = options.skillsShSearchClientFactory ??
       (this.config.skillsSh !== undefined
         ? createHarnessSkillsShSearchClientFactory(
@@ -1380,6 +1396,11 @@ export class CfHarnessEngine {
     | HarnessPatternIndexClientFactory
     | undefined {
     return this.#patternIndexClientFactory;
+  }
+
+  /** Whether the host opted this run in to asking the client to act. */
+  get clientActionsAvailable(): boolean {
+    return this.#requestClientActions !== undefined;
   }
 
   /** Whether this run can search the configured skills.sh registry. */
@@ -2929,6 +2950,9 @@ export class CfHarnessEngine {
       currentDir: this.#runState.currentDir,
       workspaceHostPath: this.workspaceHostPath,
       ...(signal !== undefined ? { signal } : {}),
+      ...(this.#requestClientActions !== undefined
+        ? { requestClientActions: this.#requestClientActions }
+        : {}),
       skillRegistry: this.#runState.skillRegistry,
       skillActivations: this.#runState.skillActivations,
       allowSkillScripts: this.config.allowSkillScripts,

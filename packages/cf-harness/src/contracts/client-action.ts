@@ -121,3 +121,44 @@ export const readHarnessClientActions = (
   }
   return actions;
 };
+
+/** How the person's client settled one requested action. */
+export type HarnessClientActionOutcomeKind = "done" | "declined" | "failed";
+
+/** The outcomes a client may report, for readers of untrusted input. */
+export const HARNESS_CLIENT_ACTION_OUTCOMES:
+  readonly HarnessClientActionOutcomeKind[] = ["done", "declined", "failed"];
+
+/** Longest receipt or failure text a settlement may carry. */
+export const HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH = 500;
+
+/**
+ * How long a call waits with nobody settling any of its actions before the
+ * rest fail as `timeout`. Every settlement restarts the clock.
+ */
+export const HARNESS_CLIENT_ACTION_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** One action's settlement, as the model reads it. */
+export interface HarnessClientActionOutcome {
+  action: HarnessClientAction;
+  outcome: HarnessClientActionOutcomeKind;
+  result?: string;
+}
+
+/**
+ * The host's door for asking the person's client to act mid-turn. It emits
+ * one request per action in order, resolves when every one is settled, and
+ * settles any still open as declined "canceled" when `signal` aborts.
+ * Outcomes come back in input order. Only a host that opted in supplies one.
+ */
+export type HarnessClientActionRequester = (
+  actions: readonly HarnessClientAction[],
+  signal?: AbortSignal,
+) => Promise<HarnessClientActionOutcome[]>;
+
+/** Whether a value is an outcome a client may report. */
+export const isHarnessClientActionOutcomeKind = (
+  value: unknown,
+): value is HarnessClientActionOutcomeKind =>
+  typeof value === "string" &&
+  (HARNESS_CLIENT_ACTION_OUTCOMES as readonly string[]).includes(value);

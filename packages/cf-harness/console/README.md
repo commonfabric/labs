@@ -295,6 +295,7 @@ except the two `/api/browser-host/` routes, which also take the per-turn token
 | `POST` | `/api/cancel`                | Cancels the active turn, recording the reason the caller gives                          |
 | `POST` | `/api/browser-host/stream`   | A turn's browser operations, over SSE, for the holder of its host token                 |
 | `POST` | `/api/browser-host/result`   | The host's result for one operation                                                     |
+| `POST` | `/api/client-actions`        | Settles one action the model asked the person's client to perform                       |
 | `GET`  | `/api/sessions`              | Durable session summaries                                                               |
 | `GET`  | `/api/status`                | Session status and artifact roots                                                       |
 | `GET`  | `/api/policy`                | What a new session here would run under                                                 |
@@ -820,6 +821,35 @@ top-level root as the console-wide fallback.
 Status is read directly, with no preceding request. The top-level fields are
 present even before the console has any sessions, so an unattended client can
 check the route contract before starting a model turn.
+
+### Client actions
+
+A task started with `"clientActions": true` on `POST /api/task` offers the model
+`weaver_action` for that session's turns. The tool takes `actions` (one to eight
+of `open_loom`, `command`, `open_url`, the vocabulary `finish_task` uses) and
+waits for the person. Each action rides the ordinary `GET /api/events` stream as
+a `client_action_requested` event (`turnId`, `actionId`, `action`), and every
+settlement, whether the person's answer, a timeout, or a cancel, as a
+`client_action_resolved` event (`turnId`, `actionId`, `outcome`, `result?`). A
+reader replaying the log treats a request as open until a resolved event names
+its `actionId`.
+
+`POST /api/client-actions` with
+`{ "sessionId", "actionId", "outcome", "result" }` settles one. `outcome` is
+`done`, `declined`, or `failed`; `result` is a string of at most 500 characters,
+the receipt line or the failure text. It answers 200 `{ "ok": true }`, 404
+`{ "error": { "code": "unknown_action" } }` for an id with nothing pending
+(pending actions live in memory, so this includes a request replayed after a
+restart), 409 `{ "error": { "code": "action_resolved" } }` for one already
+settled, and 400 for a bad body. The tool returns the outcomes to the model in
+input order.
+
+The wait has an idle clock of five minutes, reset whenever any action of the
+call settles; on expiry every unsettled action fails with `result: "timeout"`.
+Canceling the turn or closing the session declines every unsettled action with
+`result: "canceled"`. The stdio request `resolve_client_action` (same params,
+same error codes) calls the same service method, and `start_session` and
+`start_turn` take `clientActions: true` to opt in, off by default.
 
 ### Cancel route
 

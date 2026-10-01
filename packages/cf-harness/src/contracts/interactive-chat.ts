@@ -1,5 +1,9 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessBrowserAccessLease } from "./browser-access.ts";
+import type {
+  HarnessClientAction,
+  HarnessClientActionOutcomeKind,
+} from "./client-action.ts";
 import type { HarnessImageAttachment } from "./image.ts";
 import type { HarnessInputCellSpec } from "./input-cells.ts";
 import type { HarnessPatternRefSpec } from "./pattern-refs.ts";
@@ -33,6 +37,7 @@ export type HarnessChatRequestMethod =
   | "start_turn"
   | "cancel_turn"
   | "close_session"
+  | "resolve_client_action"
   | "status"
   | "list_events"
   | "list_turns";
@@ -204,6 +209,15 @@ export interface HarnessChatStartSessionParams {
   policy?: HarnessChatPolicy;
   capabilities?: Partial<HarnessChatCapabilities>;
   browserAccess?: HarnessChatBrowserAccessLease;
+
+  /**
+   * Opts this session's turns in to `weaver_action`: the model may ask the
+   * person's client to act mid-turn, and the host answers through
+   * `resolve_client_action`. Off unless true, and held in memory only, so a
+   * session restored from the store starts again without it.
+   */
+  clientActions?: boolean;
+
   metadata?: Record<string, unknown>;
 }
 
@@ -214,6 +228,9 @@ export interface HarnessChatStartTurnParams {
   input: HarnessChatTurnInput;
   policy?: HarnessChatPolicy;
   browserAccess?: HarnessChatBrowserAccessLease;
+
+  /** Opts the session in to `weaver_action` from this turn on; see the same field on `start_session`. */
+  clientActions?: boolean;
 
   /**
    * Cells the caller attaches to this turn by reference, each under a name the
@@ -247,6 +264,20 @@ export interface HarnessChatCloseSessionParams {
   reason?: string;
 }
 
+export interface HarnessChatResolveClientActionParams {
+  sessionId: string;
+  actionId: string;
+  outcome: HarnessClientActionOutcomeKind;
+
+  /** The pill's receipt line or the failure text; at most 500 characters. */
+  result?: string;
+}
+
+/** The answer to `resolve_client_action`: the settlement was taken. */
+export interface HarnessChatResolveClientActionResult {
+  ok: true;
+}
+
 export interface HarnessChatStatusParams {
   sessionId?: string;
 }
@@ -267,6 +298,7 @@ export type HarnessChatRequestParamsByMethod = {
   start_turn: HarnessChatStartTurnParams;
   cancel_turn: HarnessChatCancelTurnParams;
   close_session: HarnessChatCloseSessionParams;
+  resolve_client_action: HarnessChatResolveClientActionParams;
   status: HarnessChatStatusParams;
   list_events: HarnessChatListEventsParams;
   list_turns: HarnessChatListTurnsParams;
@@ -294,6 +326,8 @@ export interface HarnessChatError {
     | "turn_already_running"
     | "turn_canceled"
     | "session_closed"
+    | "unknown_action"
+    | "action_resolved"
     | "incomplete_transcript"
     | "browser_access_required"
     | "policy_denied"
@@ -488,6 +522,24 @@ export type HarnessChatStructuredEvent =
     turnId: string;
     usage?: HarnessChatGatewayUsage;
     elapsedMs?: number;
+  }
+  | {
+    /** The model asked the person's client to perform one action. */
+    kind: "client_action_requested";
+    turnId: string;
+    actionId: string;
+    action: HarnessClientAction;
+  }
+  | {
+    /**
+     * One requested action settled: the person's answer, a timeout, or a
+     * cancel. A request is open only until a resolved event names its id.
+     */
+    kind: "client_action_resolved";
+    turnId: string;
+    actionId: string;
+    outcome: HarnessClientActionOutcomeKind;
+    result?: string;
   }
   | {
     kind: "turn_canceled";

@@ -89,6 +89,7 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
+import type { HarnessClientActionOutcomeKind } from "../src/contracts/client-action.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -1749,6 +1750,9 @@ export class ConsoleServer {
     if (request.method === "POST" && url.pathname === "/api/cancel") {
       return await this.#cancel(request);
     }
+    if (request.method === "POST" && url.pathname === "/api/client-actions") {
+      return await this.#resolveClientAction(request);
+    }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return Response.json(await this.#sessions());
     }
@@ -2031,7 +2035,17 @@ export class ConsoleServer {
       patternRefs?: unknown;
       loomId?: unknown;
       browserHost?: unknown;
+      clientActions?: unknown;
     } = isObjectOrArray(parsed) ? parsed : {};
+    if (
+      body.clientActions !== undefined &&
+      typeof body.clientActions !== "boolean"
+    ) {
+      return Response.json({ error: "clientActions must be a boolean" }, {
+        status: 400,
+      });
+    }
+    const clientActions = body.clientActions === true;
     if (
       body.loomId !== undefined &&
       (typeof body.loomId !== "string" ||
@@ -2090,6 +2104,7 @@ export class ConsoleServer {
         model: this.#config.model,
         artifactRoot: this.#config.artifactRoot,
         policy: this.#sessionPolicy(),
+        ...(clientActions ? { clientActions } : {}),
       });
       if (!session.ok) {
         return chatErrorResponse(session);
@@ -2107,6 +2122,7 @@ export class ConsoleServer {
       {
         turnId,
         sessionId,
+        ...(clientActions ? { clientActions } : {}),
         input: {
           text,
           ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
@@ -2276,6 +2292,47 @@ export class ConsoleServer {
     return response.ok
       ? Response.json(response.result)
       : chatErrorResponse(response);
+  }
+
+  /**
+   * Takes the person's answer to one action the model asked their client to
+   * perform. The route is the stdio `resolve_client_action` request under
+   * HTTP: the same service method decides, so the two cannot disagree. Its
+   * errors carry the code in an `error` object, as the Weaver reads them.
+   */
+  async #resolveClientAction(request: Request): Promise<Response> {
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ error: "request body is not JSON" }, {
+        status: 400,
+      });
+    }
+    const body: Record<string, unknown> = isObjectOrArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+    if (
+      typeof body.sessionId !== "string" || typeof body.actionId !== "string"
+    ) {
+      return Response.json({ error: "sessionId and actionId are required" }, {
+        status: 400,
+      });
+    }
+    const response = await this.#service.resolveClientAction(
+      crypto.randomUUID(),
+      {
+        sessionId: body.sessionId,
+        actionId: body.actionId,
+        outcome: body.outcome as HarnessClientActionOutcomeKind,
+        ...(body.result !== undefined ? { result: body.result as string } : {}),
+      },
+    );
+    if (response.ok) return Response.json({ ok: true });
+    const { code, message } = response.error;
+    return Response.json({ error: { code, message } }, {
+      status: CHAT_ERROR_STATUS[code],
+    });
   }
 
   /**
@@ -2547,6 +2604,8 @@ export class ConsoleServer {
 
 const CHAT_ERROR_STATUS: Readonly<Record<HarnessChatError["code"], number>> = {
   invalid_request: 400,
+  unknown_action: 404,
+  action_resolved: 409,
   session_exists: 409,
   session_not_found: 404,
   turn_exists: 409,

@@ -3183,7 +3183,8 @@ export class CfHarnessPromptLoop {
       requestedToolIds.filter((toolId) =>
         !withheld.has(toolId) &&
         (isSubagent || !isSubagentOnlyToolId(toolId)) &&
-        (!isSubagent || toolId !== "finish_task")
+        (!isSubagent ||
+          (toolId !== "finish_task" && toolId !== "weaver_action"))
       ),
     );
     this.#nativeModelToolIds = options.nativeModelToolIds ?? [];
@@ -3239,6 +3240,7 @@ export class CfHarnessPromptLoop {
       loomAuthoringAvailable: this.engine.config.loomAuthoring !== undefined,
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
       structuredResultAvailable: this.engine.structuredResultAvailable,
+      clientActionsAvailable: this.engine.clientActionsAvailable,
     };
   }
 
@@ -4322,6 +4324,7 @@ export class CfHarnessPromptLoop {
     if (
       toolId === "delegate_task" || toolId === "describe_handle" ||
       toolId === "research" || toolId === "finish_task" ||
+      toolId === "weaver_action" ||
       toolId === "loom_compose" || toolId === "submit_result"
     ) {
       return input;
