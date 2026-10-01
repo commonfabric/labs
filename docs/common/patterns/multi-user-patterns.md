@@ -701,6 +701,45 @@ Both calls throw on a serving runtime for now.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
 details.
 
+### Telling someone about a space
+
+`noticeSpaceAccess(principal, entry)` tells `principal` about the space
+`entry` lives in, by a message to their DID inbox, so that someone a handler
+has admitted can find the space without sharing another one with the sender.
+`entry` is what they should open: a piece, or any cell at the root of its own
+document, in the space's own scope. The message names the space and that
+document and nothing else, and arrives from the person who sent the event.
+
+```tsx
+// Shown at module scope.
+const invite = handler<
+  { member: DID },
+  { board: Writable<{ title: string }>; members: Writable<DID[]> }
+>(({ member }, { board, members }) => {
+  grantSpaceAccess(board, member, "WRITE");
+  noticeSpaceAccess(member, board);
+  members.addUnique(member);
+});
+```
+
+The call works only in a handler, and throws anywhere else, on a serving
+runtime, for a `principal` that is not a `did:key` DID, and for an `entry` that
+is not the root of a document. The person who sent the event must hold `OWNER`
+in the space, and `principal` must have an entry of their own in its access
+list, counting any `grantSpaceAccess()` the same handler made to that same
+space; an entry for `"*"` does not count. Those two are checked only when the
+message is about to go out, after the handler's writes commit: a notice that
+fails them is dropped, the handler's writes stand, and only the log shows it.
+
+The message goes out only after the handler's writes commit. An event sends a
+principal at most one notice, however many times its handler runs. Nothing
+retries a message that fails to send, and one reaches only a recipient who has
+enabled their inbox, so a notice may not arrive: keep another way for the person
+to find the space. The recipient cannot trust what a notice says beyond who sent
+it, and opening the space is what checks the rest.
+[`space-access-notices.md`](../../features/space-access-notices.md) has the
+details.
+
 ## Mapping Shared Lists
 
 `map` is the normal way to render shared lists. Pass object references or cell
@@ -770,8 +809,15 @@ Three escalating options:
    headlessly. It serves the authored patterns tree beside its in-process
    storage server, so a `#profile` wish opens the real create surface and a
    pattern whose identity is a profile cell can be driven without a test seam
-   standing in for one. See `cfc-group-chat-demo-multi-runtime.test.ts` and
-   `profile-create-surface-multi-runtime.test.ts`.
+   standing in for one. Its storage server checks no access list unless given
+   `aclMode`; `enforce`, the mode a deployed toolshed runs, is what a test of
+   who may read which space needs. A session's `read()`, `readRaw()`,
+   `link()`, `send()`, `set()` and `push()` address the piece the harness
+   opened, or, given `piece`, another piece, such as one living in a space of
+   its own, at the address `link()` returns for a link to it. See
+   `cfc-group-chat-demo-multi-runtime.test.ts`,
+   `profile-create-surface-multi-runtime.test.ts`, and
+   `space-access-multi-runtime.test.ts`.
 3. **Two simultaneous browsers**
    (`cfc-group-chat-demo-two-browsers.test.ts`,
    `lunch-poll-vote.test.ts`): guards the real DOM input binding /

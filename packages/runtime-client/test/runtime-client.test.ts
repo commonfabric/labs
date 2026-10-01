@@ -914,6 +914,30 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("retrySpaceAccess", () => {
+    it("asks the worker to retry the space", async () => {
+      const space = "did:key:z6Mk-runtime-client-retried-space";
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve(undefined);
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+
+      await client.retrySpaceAccess(space);
+
+      expect(requests).toEqual([{
+        type: RequestType.RetrySpaceAccess,
+        space,
+      }]);
+    });
+  });
+
   describe("hasPendingWrites", () => {
     // The constructor registers connection listeners; capture them so the
     // pending-writes notification can be driven directly, no worker needed.

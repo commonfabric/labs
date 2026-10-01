@@ -261,7 +261,7 @@ the entry. It never creates a second room.
 ## Delivering notices
 
 A notice has to reach a principal who may share no space with this user. Until a
-pattern can deliver one itself (see [first
+pattern can deliver one end to end (see [first
 contact](FabriChatManager.md#first-contact)), the manager lists notices in
 `outgoingNotices` and a client delivers them. A notice says which room, and who
 sent it: this user. A client MUST deliver only that, and MUST NOT deliver any of

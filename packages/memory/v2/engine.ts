@@ -52,6 +52,7 @@ import {
   containsSyncSchemaRefString,
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
+import { aclDocId } from "../acl.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -3765,6 +3766,37 @@ export class WavePreconditionError extends Error {
   }
 }
 
+/**
+ * A derived commit carries an operation on its space's ACL document.
+ * No derived producer may write that document, in any memory ACL mode: the
+ * derived admission checks the lease and nothing of INV-12's shape or of any
+ * user's level (`docs/specs/memory-v2/09-invariants.md`). `operationIndex`
+ * names the first such operation, so that the wave commit step can attribute
+ * the refusal to the contribution that wrote it.
+ */
+export class DerivedAclDocumentWriteError extends ProtocolError {
+  readonly #operationIndex: number;
+
+  /**
+   * Constructs an instance naming operation `operationIndex` of a commit to
+   * `space`.
+   */
+  constructor(space: string, operationIndex: number) {
+    super(
+      `derived-class commit rejected: operation ${operationIndex} writes ` +
+        `${aclDocId(space)}, the space ACL document, which no derived ` +
+        "commit may write (INV-12)",
+    );
+    this.name = "DerivedAclDocumentWriteError";
+    this.#operationIndex = operationIndex;
+  }
+
+  /** Index into the commit's operations of the first write to the document. */
+  get operationIndex(): number {
+    return this.#operationIndex;
+  }
+}
+
 /** Current head seq of one doc instance (0 when never written). */
 export const selectDocHead = (
   engine: Engine,
@@ -5059,6 +5091,16 @@ const applyCommitTransaction = (
           "admission only (protocol.md §2's delegated row); a derived " +
           "commit's identity rides its per-write annotations",
       );
+    }
+    // No derived commit writes the space's ACL document, in any memory ACL
+    // mode (INV-12). The lease check above has refused a commit naming no
+    // space.
+    const aclSpace = space!;
+    const aclOperationIndex = commit.operations.findIndex((operation) =>
+      operation.op !== "sqlite" && operation.id === aclDocId(aclSpace)
+    );
+    if (aclOperationIndex !== -1) {
+      throw new DerivedAclDocumentWriteError(aclSpace, aclOperationIndex);
     }
   } else if (
     annotations !== undefined || consequenceOf !== undefined ||
