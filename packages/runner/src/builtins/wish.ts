@@ -646,7 +646,13 @@ function searchFavoritesForHashtag(
   return measureWishPhase(
     "favorites-result-map",
     queryKey,
-    () => matches.map((match) => ({ cell: match.cell, pathPrefix })),
+    () =>
+      matches.flatMap((match) => {
+        const cell = resolvePath(match.cell, [], ctx);
+        return ctx.readiness.requireDocument(cell, ctx.tx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 

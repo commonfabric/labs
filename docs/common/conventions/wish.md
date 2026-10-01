@@ -45,7 +45,9 @@ return { [UI]: <div>{wishResult.result}</div> };
 Wish waits for the backing documents of its discovery collections and
 mentionable candidates before selecting a result. This loading behavior applies
 to every hashtag Wish. Pending document loads leave any existing state untouched;
-a cold Wish with no existing state publishes none until loading settles. UI
+a cold Wish with no existing state publishes none until loading settles. A
+favorite whose piece document is confirmed absent is excluded from matches;
+its bookmark remains in the home collection. UI
 loading affordances must not depend on an empty `candidates` array. A confirmed
 empty collection produces a no-match error; a failed document load produces a
 load error.
