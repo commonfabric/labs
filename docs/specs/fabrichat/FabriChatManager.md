@@ -54,13 +54,14 @@ is what labels it `authored-by` this user.
 - **Creating a private space from a pattern**: the same as the room's (see
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
 - **A principal from a profile.** A client that starts a direct room from a
-  person's profile needs that profile's principal. A profile's value carries a
-  `represents-principal` label, but no pattern-facing call returns the
-  principal. `openDirect` and `createGroup` take principals. A shared space's
-  member set pairs each principal with a profile (see [shared
+  person's profile needs that profile's principal, since `openDirect` and
+  `createGroup` take principals. A profile's value carries a
+  `represents-principal` label, which
+  `principalOf(profile, "represents-principal")` reads
+  ([reading the principal a label attests](../../features/principal-of.md)).
+  A shared space's member set pairs each principal with a profile (see [shared
   spaces](README.md#shared-spaces)), so starting a conversation with someone
-  found in one needs nothing more. Starting one from a profile found anywhere
-  else still needs this call.
+  found in one needs nothing more.
 
 ### First contact
 

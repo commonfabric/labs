@@ -278,11 +278,15 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
   through the space's own tools. The room's participants come from the space's
   default pattern, which a host creates the first time someone opens the
   space, so until then they are only the room's authors.
-- **Principals from handlers only.** A handler learns the principal it acts
-  for (`currentPrincipal()`), so a room keys its request memory by the
-  sender's principal, and the manager refuses a direct room with the user
-  themself and leaves them out of a group's other members. A reaction's
-  address still derives from its reactor's profile, as the design says.
+- **Principals.** A handler learns the principal it acts for
+  (`currentPrincipal()`), so a room keys its request memory by the sender's
+  principal, and the manager refuses a direct room with the user themself and
+  leaves them out of a group's other members. A reaction's address still
+  derives from its reactor's profile, as the design says. The manager takes
+  principals as typed; nothing in the patterns reads a profile's principal
+  (`principalOf()`) yet. `accept` takes a direct room's counterpart as sent,
+  since the room's `about` carries no `authored-by` label to check it
+  against (see [writers and labels](#writers-and-labels)).
 - **Creation takes one transaction.** The space comes with its grants, so
   writing the room, the manager's notices, and its index entry happens in one
   commit, rather than in the design's resumable steps, and a request's outcome
