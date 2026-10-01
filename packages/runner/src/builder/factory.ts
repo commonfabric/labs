@@ -87,6 +87,7 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
+import { principalOf } from "./principal-of.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import { noticeSpaceAccess } from "./space-access-notice.ts";
 import { spaceAccess } from "./space-access.ts";
@@ -278,6 +279,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
     currentPrincipal,
+    principalOf,
     viewerPrincipal,
     spaceMembers,
     eventKey,

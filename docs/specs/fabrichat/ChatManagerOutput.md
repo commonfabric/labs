@@ -200,15 +200,15 @@ Records a room this user has been admitted to.
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index. Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
-- **Effect:** records an entry in `rooms`. The manager, being a pattern, can't
-  read `about`'s label itself, so it records the client's checked `counterpart`;
-  once the room's space has a member set, it also checks that `counterpart` is a
-  member. For a direct room, it also records the entry in `direct`, unless
+- **Effect:** records an entry in `rooms`. For a direct room, the manager checks
+  that `counterpart` is a member and equals the creator returned by
+  `principalOf(room.about, "authored-by")`. It also records the entry in
+  `direct`, unless
   `direct` already has an entry for `counterpart`, in which case that entry
   stays, as under [crossing creations](#crossing-creations).
 - **Outcome:** `done` with the entry, or `refused` if this user can't read the
-  room, or if the room is direct and `counterpart` is missing, or, once there
-  are member sets, isn't a member.
+  room, or if the room is direct and `counterpart` is missing, is not a member,
+  or does not match its attested creator.
 
 A client also sends `accept` when the user first opens the chat of an existing
 shared space, which is created with its space and not by a manager.

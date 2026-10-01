@@ -208,13 +208,11 @@ access list admits, plus any admitted principal with no entry, would combine
 the two. It is a property of the space, the same for every pattern in it. Until
 a space offers one, a reader shows the participants as claims.
 
-With a member set:
-
-- Starting a conversation from a shared space's members yields principals
-  directly (see [`FabriChatManager.md`](FabriChatManager.md#prerequisites)).
-- A client can tell whether a container admits anyone besides a direct room's
-  two members, which it must know before placing that room there (see
-  [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
+A client or pattern can resolve a participant profile's principal with
+`principalOf(profile, "represents-principal")` and check that principal against
+`spaceMembers()`. Container admission checks compare the authoritative access
+lists directly, including wildcard grants, before placing a direct room there
+(see [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
 ## Known quirks, accepted for now
 

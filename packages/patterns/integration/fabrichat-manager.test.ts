@@ -37,7 +37,7 @@ function testPrincipalSessionOpenAuthFactory(
 }
 
 class PrivateStorageManager extends StorageManager {
-  constructor(server: MemoryServer.Server) {
+  constructor(server: MemoryServer.Server, identity: Identity = creator) {
     const factory: SessionFactory = {
       supportsAclBootstrap: true,
       async create(
@@ -56,7 +56,7 @@ class PrivateStorageManager extends StorageManager {
         return { client, session };
       },
     };
-    super({ as: creator, memoryHost: new URL("memory://") }, factory);
+    super({ as: identity, memoryHost: new URL("memory://") }, factory);
   }
 }
 
@@ -126,8 +126,10 @@ describe("FabriChat manager", () => {
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit()).error).toBeUndefined();
       await result.pull();
-      const member = (await Identity.fromPassphrase("chat-manager-member"))
-        .did();
+      const memberIdentity = await Identity.fromPassphrase(
+        "chat-manager-member",
+      );
+      const member = memberIdentity.did();
       const send = async (
         status: string,
         requestId = "create-1",
@@ -283,6 +285,59 @@ describe("FabriChat manager", () => {
           result.key("requests").key(id).key("entry").key("room")
             .resolveAsCell().getAsNormalizedFullLink(),
         ).toEqual(directLink);
+      }
+      await result.key("accept").send({
+        requestId: "accept-false-creator",
+        room: direct,
+        counterpart: member,
+      });
+      await waitForCellValue(
+        runtime,
+        result.key("requests").key("accept-false-creator").key("status"),
+        (value) => value === "refused",
+      );
+      const recipientStorage = new PrivateStorageManager(
+        server,
+        memberIdentity,
+      );
+      const recipientRuntime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager: recipientStorage,
+      });
+      try {
+        const recipientPattern = await recipientRuntime.patternManager
+          .compilePattern(program, { space: member });
+        const recipientManager = recipientRuntime.getCell<
+          Record<string, unknown>
+        >(
+          member,
+          "recipient-chat-manager",
+          recipientPattern.resultSchema,
+        );
+        await recipientRuntime.runSynced(
+          recipientManager,
+          recipientPattern,
+          {},
+        );
+        const recipientRoom = recipientRuntime.getCellFromLink(directLink);
+        await recipientManager.key("accept").send({
+          requestId: "accept-attested-creator",
+          room: recipientRoom,
+          counterpart: creator.did(),
+        });
+        await waitForCellValue(
+          recipientRuntime,
+          recipientManager.key("requests").key("accept-attested-creator")
+            .key("status"),
+          (value) => value === "done",
+        );
+        expect(
+          recipientManager.key("direct").key(creator.did()).key("room")
+            .resolveAsCell().equals(recipientRoom),
+        ).toBe(true);
+      } finally {
+        await recipientRuntime.dispose();
+        await recipientStorage.close();
       }
       const placementProgram = await resolveLocalProgram(
         (resolver) => runtime.harness.resolve(resolver),

@@ -1127,6 +1127,10 @@ interface CauseContainer {
   // Entity reference - shared across all siblings
   id: URI | undefined;
   space: MemorySpace | undefined;
+
+  /** Whether the pattern builder explicitly selected this output space. */
+  spacePinned?: boolean;
+
   // Cause for creating the entity ID
   cause: unknown | undefined;
 }
@@ -1159,7 +1163,10 @@ let runtimeOf: (cell: CellImpl<FabricValue>) => Runtime;
 let txOf: (
   cell: CellImpl<FabricValue>,
 ) => IExtendedStorageTransaction | undefined;
-let exportOf: (cell: CellImpl<FabricValue>) => CellExport;
+let exportOf: (
+  cell: CellImpl<FabricValue>,
+  linkPinnedHandlerCell?: boolean,
+) => CellExport;
 let setOf: (
   cell: CellImpl<FabricValue>,
   value: unknown,
@@ -1391,6 +1398,7 @@ export class CellImpl<T extends FabricValue>
       );
     }
     this.#causeContainer.space = space;
+    this.#causeContainer.spacePinned = true;
     this.#_link = frozenLink({ ...this.#_link, space });
     for (const node of cellNodes.get(this.#causeContainer.cell) ?? []) {
       (node.module as Module).targetSpace = space;
@@ -3792,7 +3800,14 @@ export class CellImpl<T extends FabricValue>
   }
 
   /** Returns what `exportCell()` does for this cell. */
-  #export(): CellExport {
+  #export(linkPinnedHandlerCell: boolean = false): CellExport {
+    // Partial causes bind in the handler's space. At graph serialization,
+    // concrete links preserve each explicitly selected output space. Naming
+    // remains available throughout the handler, including after node binding.
+    if (
+      linkPinnedHandlerCell && this.#causeContainer.spacePinned &&
+      this.#frame?.inHandler
+    ) this.#ensureLink();
     // Exporting a cell is a step in building a pattern, and the builder checks
     // the exported frame against the one it is building under.
     if (!this.#frame) {
@@ -4413,7 +4428,8 @@ export class CellImpl<T extends FabricValue>
     isCellImpl = (value): value is CellImpl<FabricValue> => #_link in value;
     runtimeOf = (cell) => cell.#runtime;
     txOf = (cell) => cell.#tx;
-    exportOf = (cell) => cell.#export();
+    exportOf = (cell, linkPinnedHandlerCell) =>
+      cell.#export(linkPinnedHandlerCell);
     setOf = (cell, value, onCommit, sendOptions) => {
       cell.#set(value as FabricValue, onCommit, sendOptions);
     };
@@ -4520,10 +4536,15 @@ export function cellTx(
 /**
  * Returns `cell`'s metadata, for building a pattern, and throws for anything
  * but a cell or a `Reactive` proxy over one. Host code only: it carries the
- * frame the cell was built under.
+ * frame the cell was built under. At graph serialization,
+ * `linkPinnedHandlerCell` assigns addresses to handler-created outputs with
+ * an explicit space, preserving that space in their serialized references.
  */
-export function exportCell(cell: unknown): CellExport {
-  return exportOf(requireCellImpl(cell));
+export function exportCell(
+  cell: unknown,
+  linkPinnedHandlerCell: boolean = false,
+): CellExport {
+  return exportOf(requireCellImpl(cell), linkPinnedHandlerCell);
 }
 
 /**

@@ -33,8 +33,8 @@ a room to anyone its space doesn't admit.
   client MUST read the principal the room's `about` is labeled `authored-by`
   (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), as
   `cf-cfc-authorship` reads a message's label, and pass that principal as
-  `counterpart`, never the notice's claim. The manager can't make this check
-  itself, since a pattern can't read a label's principal. A client shows who
+  `counterpart`, never the notice's claim. The manager verifies that principal
+  again with `principalOf(room.about, "authored-by")`. A client shows who
   created the room from the same label. Whether to add the room to their list is
   the person's decision, so a client SHOULD accept only after showing them who
   created the room, and what it is.

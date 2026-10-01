@@ -13,6 +13,7 @@ import {
   NAME,
   type OpaqueCell,
   pattern,
+  principalOf,
   spaceMembers,
   type Stream,
   toSchema,
@@ -329,7 +330,7 @@ const createGroupFromUi = handler<{ target?: { value?: string } }, StartState>((
   }, state)
 );
 
-/** Accepts a readable admitted room; the client supplies its checked creator for a direct room. */
+/** Accepts an admitted room and verifies a direct room's attested creator. */
 export const accept = handler<
   { requestId: string; room: Cell<ChatRoomOutput>; counterpart?: string },
   ManagerState
@@ -342,7 +343,9 @@ export const accept = handler<
     !actor || !(acl?.[actor] ?? acl?.["*"]) || !about ||
     (about.kind === "direct" &&
       (!event.counterpart || !acl[event.counterpart] ||
-        event.counterpart === actor))
+        event.counterpart === actor ||
+        principalOf(event.room.key("about"), "authored-by") !==
+          event.counterpart))
   ) {
     refuse(
       event.requestId,

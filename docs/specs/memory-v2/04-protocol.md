@@ -1039,7 +1039,10 @@ last-owner removal are rejected. These shape and genesis rules are hard
 storage invariants in both `observe` and `enforce`; `observe` relaxes only
 READ and WRITE shortfalls on an already valid ACL, and refuses a principal
 lacking OWNER, so no principal can write a space's ACL while a deployment
-stages its access control.
+stages its access control. The one ACL mutation a principal without OWNER may
+make, in both modes, is removing its own entry: a replacement whose document is
+the stored one less that principal's entry, and nothing else, from a list with
+no `"*"` entry.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority) in

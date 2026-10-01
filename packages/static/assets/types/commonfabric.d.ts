@@ -4214,6 +4214,45 @@ export declare function isWellFormedDID(value: unknown): value is DID;
 export declare function currentPrincipal(): DID | undefined;
 
 /**
+ * A kind of principal claim a label can carry: `represents-principal` names
+ * whom a value stands for, as a profile's label does, and `authored-by` names
+ * who wrote it, as `AuthoredByCurrentUser` records.
+ */
+export type PrincipalClaimKind = "authored-by" | "represents-principal";
+
+/**
+ * Returns the one principal that the label on `target`'s value attests with a
+ * claim of `kind`: the DID a profile represents, or the author of a record.
+ * The claim is read at the value's root and on its top-level fields, and only
+ * in the form the runtime writes when it resolves `RepresentsCurrentUser`,
+ * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
+ * for anyone but the principal it runs for.
+ *
+ * `undefined` means the label names no verified single principal of that kind:
+ * none, more than one, or a claim in some other form. It also means that
+ * `target` is `undefined`, which is what a value that cannot be read yet reads
+ * as. It is never a guess, and a caller refuses whatever needs a principal. A
+ * label that cannot be read throws instead.
+ *
+ * It reads the label, and no contents of the value beyond the link pointers
+ * needed to reach it. In a reactive computation
+ * (`computed()`, `lift()`) the result updates when the label changes. It can
+ * also be called in a handler, on a cell an event names. Calling it in a
+ * pattern body throws: wrap it in `computed()` instead.
+ *
+ * What a principal claim names is public to anyone who holds the value, so the
+ * result carries no label of its own. Compare it with `currentPrincipal()`, or
+ * check it with `isWellFormedDID()`; writing it into a label as a claim's
+ * subject is refused, like any other literal DID a pattern writes there,
+ * unless the schema declares it as the `ownerPrincipal` and it is the
+ * principal the write acts for.
+ */
+export declare function principalOf(
+  target: AnyCell<unknown> | undefined,
+  kind: PrincipalClaimKind,
+): DID | undefined;
+
+/**
  * Returns the event key of the event the running handler handles: a string
  * naming that one event, as its actor sent it to its stream. Every run of the
  * same event returns the same key, including a retry and the serving runtime's

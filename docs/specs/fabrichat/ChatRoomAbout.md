@@ -53,10 +53,11 @@ claim of who sent it is not (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). For a direct
 room, the label names the counterpart of the member who didn't create it.
 
-Reading a label's principal is something host code can do, through the runtime
-client, as `cf-cfc-authorship` does for messages; pattern code can't. So it is a
-client that checks a direct room's creator before it sends `accept` (see
-[`clients.md`](clients.md#finding-conversations)), and not the manager.
+A client checks a direct room's creator through the runtime's label view before
+it sends `accept` (see [`clients.md`](clients.md#finding-conversations)). The
+manager verifies the same claim with `principalOf(room.about, "authored-by")`;
+[principal label reading](../../features/principal-of.md) describes that call.
+A missing or ambiguous creator claim cannot establish a direct counterpart.
 
 ## Future directions
 
