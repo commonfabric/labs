@@ -222,8 +222,10 @@ function composeBundleSourceMapTextual(
       }
 
       if (emitted) {
-        sources.push(...effectiveSources);
-        names.push(...mapNames);
+        for (const effectiveSource of effectiveSources) {
+          sources.push(effectiveSource);
+        }
+        for (const name of mapNames) names.push(name);
         if (source !== undefined) {
           // Overridden single source: its content is the first non-null entry
           // (per-module compiler maps carry exactly one source).

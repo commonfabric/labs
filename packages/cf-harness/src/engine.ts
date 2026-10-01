@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { maxOf } from "@commonfabric/utils/math";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
@@ -2813,8 +2814,10 @@ export class CfHarnessEngine {
     // the length would hand out a number already in use.
     const sequence = Math.max(
       0,
-      ...(this.#runState.cfcInvocationContexts ?? []).map((context) =>
-        context.sequence
+      maxOf(
+        (this.#runState.cfcInvocationContexts ?? []).map((context) =>
+          context.sequence
+        ),
       ),
       this.#lastCfcInvocationSequence,
     ) + 1;

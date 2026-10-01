@@ -135,7 +135,9 @@ async function reconciliationReachedNow(page: Page): Promise<boolean> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -158,7 +160,9 @@ async function editorContent(page: Page): Promise<string> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -180,7 +184,9 @@ async function dispatchEdit(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -199,7 +205,9 @@ async function appendEdit(page: Page, insert: string): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -222,7 +230,9 @@ async function enablePresence(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -245,7 +255,9 @@ async function selectEditorText(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -265,7 +277,9 @@ async function unmountEditor(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -287,7 +301,9 @@ async function dispatchExternalBacklinkRename(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -309,7 +325,9 @@ async function installNextApplyGate(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -421,7 +439,9 @@ async function listenForReconciliation(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -522,7 +542,9 @@ async function releaseCollaboration(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -542,7 +564,9 @@ async function confirmPendingCollaborationEdits(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -562,7 +586,9 @@ async function disableCollaboration(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };

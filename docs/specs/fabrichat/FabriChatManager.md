@@ -1,7 +1,5 @@
 # FabriChatManager
 
-Status: proposed design (see [`README.md`](README.md)).
-
 `FabriChatManager` is an implementation of
 [`ChatManagerOutput`](ChatManagerOutput.md), which states everything a chat
 manager does: where it lives, what its indexes mean, and what each request does.
@@ -33,10 +31,11 @@ counterpart after crossing creations.
 ## Creating a room
 
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
-create a room of its own in four steps:
+create a space for the conversation, with the room as its chat, in four steps:
 
-1. Create the room's space, with only this user granted (OWNER), and instantiate
-   `FabriChatRoom` there with its `about`.
+1. Create the conversation's space, with only this user granted (OWNER), and
+   instantiate `FabriChatRoom` there with its `about`. The space's root, its
+   default pattern, comes from its host the first time someone opens it.
 2. Grant each other member WRITE on the room's space, by principal.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver.
@@ -52,8 +51,7 @@ is what labels it `authored-by` this user.
 
 ## Prerequisites
 
-- **Creating a private space from a pattern**, and **pattern-facing access
-  control**: the same as the room's (see
+- **Creating a private space from a pattern**: the same as the room's (see
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
 - **A principal from a profile.** A client that starts a direct room from a
   person's profile needs that profile's principal. A profile's value carries a

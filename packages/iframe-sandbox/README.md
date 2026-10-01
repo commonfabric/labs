@@ -50,12 +50,14 @@ frame.src = "<main id='root'></main>";
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell
 shape: `get()`, `pull()`, optional `initialize()`, `set()`, and `push()`,
-`sink()`, `key()`, and `resolve()`. `initialize(defaultValue)` atomically stores
-the default only while the cell has no backing value and returns the value that
-won. A readable schema fallback does not count as stored, so calling
-`initialize()` after `pull()` safely materializes it before a child write. The
-resource kinds are `cell`, `stream`, `sqlite`, and `service`. Named methods let
-an application expose a narrow service without expanding the cell protocol.
+`sink()`, `key()`, and `resolve()`. The capability's `push(values)` takes the
+members to append as one list, like the runtime's `Cell.pushAll()`, so a list of
+any length reaches it intact. `initialize(defaultValue)` atomically stores the
+default only while the cell has no backing value and returns the value that won.
+A readable schema fallback does not count as stored, so calling `initialize()`
+after `pull()` safely materializes it before a child write. The resource kinds
+are `cell`, `stream`, `sqlite`, and `service`. Named methods let an application
+expose a narrow service without expanding the cell protocol.
 
 The higher-level `cf-iframe` component accepts the same `bridge` property. Its
 `context` convenience property turns top-level Fabric cells into cell resources,
@@ -154,6 +156,9 @@ and replacing the array:
 ```ts
 await tasks.push({ title: "Review bridge", done: false });
 ```
+
+`pushAll()` appends every member of one list the same way, for a list too long
+to spread into `push()`'s arguments.
 
 ## React
 

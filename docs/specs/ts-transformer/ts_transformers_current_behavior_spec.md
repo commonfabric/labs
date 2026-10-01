@@ -1051,20 +1051,30 @@ report these through the same collector (deduplicated via §2.2's
   to the local schema use, since the unread node is a print with no source
   position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
   the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
+- **Error** `cfc-schema:recursion-limit` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a CFC alias chain reaches its recursion limit
+  and compilation refuses the schema: the unread remainder could
+  discard confidentiality or write policies. This includes recursive arguments
+  whose types settle but whose writer-query syntax keeps growing. See
+  `test/recursive-writer-schema.test.ts`.
 - **Error** `cfc-write-authorized-by:unread` (`schema-generator.ts`,
   `writer-binding-diagnostics.ts`) — a `WriteAuthorizedBy` or
   `TrustedActionWrite*` policy written through another alias whose writer
   binding the schema generator cannot read: one passed through a parameter a
   conditional alias checks, say, or a conditional alias with more than one
-  branch other than `never`. Its schema would carry no write restriction, so
+  branch other than `never`, or an alias for `typeof writer` passed as the
+  binding. Its schema would carry no write restriction, so
   compilation fails. It fails over stored source (`storedSource`) too: unlike
   the authoring-shape gates, which that mode demotes to warnings, it guards a
   write restriction, and a reload that cannot read one does not run without
-  it. A policy written directly is not reported:
-  the direct path (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
-  type argument) mints its claim here, and the validator above refuses a
-  binding that is not a direct `typeof`. A schema read from a type alone has
-  no reference and is not reported either. See §11 of the schema-generator mapping spec,
+  it. A binding node that is not a direct `typeof` of an identifier is reported
+  even when the policy is written directly. A direct path
+  (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
+  type argument) that mints its own claim gives the generator no binding node
+  and is not reported here; the validator above checks its spelling. A schema
+  read from a type alone has no reference and is not reported either, including
+  a declaration parameter bound to an argument with no syntax. See §11 of the
+  schema-generator mapping spec,
   rule 8 of `cfc_authoring_contract.md`, and
   `test/protected-cell-policy.test.ts`.
 - **Warning** `cfc-label:unread` (`common-fabric-formatter.ts`,

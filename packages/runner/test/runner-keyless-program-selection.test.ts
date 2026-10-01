@@ -91,7 +91,7 @@ describe("runner-keyless-program-selection", () => {
     runtime.installSealDestination({
       seal: (tx) => wave.seal(tx),
       deferSealedEffects: (_tx, deferred) => {
-        effects.push(...deferred);
+        for (const effect of deferred) effects.push(effect);
         return true;
       },
     });

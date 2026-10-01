@@ -147,10 +147,16 @@ export class Writable<T = unknown> {
   push(
     ...values: T extends Array<infer U> ? U[] : unknown[]
   ): void {
+    this.pushAll(values);
+  }
+
+  pushAll(
+    values: T extends Array<infer U> ? readonly U[] : readonly unknown[],
+  ): void {
     if (!Array.isArray(this.#value)) {
-      throw new Error("push requires an array value");
+      throw new Error("push and pushAll require an array value");
     }
-    (this.#value as unknown[]).push(...values);
+    for (const value of values.slice()) (this.#value as unknown[]).push(value);
   }
 
   addUnique(

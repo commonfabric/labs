@@ -94,7 +94,9 @@ export class ObservedServer extends MemoryV2Server.Server {
     ...args: Parameters<MemoryV2Server.Server["evaluateGraphQuery"]>
   ) {
     const result = await super.evaluateGraphQuery(...args);
-    this.returnedEntityIds.push(...result.entities.map((entity) => entity.id));
+    for (const entity of result.entities) {
+      this.returnedEntityIds.push(entity.id);
+    }
     return result;
   }
 }

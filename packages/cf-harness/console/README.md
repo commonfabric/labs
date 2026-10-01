@@ -327,7 +327,7 @@ unknown rather than claiming a failure.
 Configuration rows name the active console address, port, space, store, model,
 sandbox runtime, and skill-script switch. The launcher passes its decision
 report directly into the server: connector rows retain every accepted or refused
-grant, its CFC class or refusal reason, and the injection receipt and piece
+grant, its CFC classes or refusal reason, and the injection receipt and piece
 declaration that decided it. Changing those files requires a console restart to
 establish new grants. A server flag takes precedence over the inherited launch
 value and its source. A directly configured server reports its explicit grants
@@ -515,13 +515,17 @@ The completed-turn result is:
 
 `outcome` is `completed`, `question`, or `gave-up`. All three are normally ended
 turns and return **200**. A question includes `question: { "text": "…" }`; a
-give-up includes `reason: "…"`. Each field is present only for its matching
-outcome. `finalText` carries the human-readable answer, question, or reason in
-every case. An older result without `outcome` means `completed`. When reading
-stored artifacts, an unfamiliar nonempty outcome word also means `completed`, so
-a pin change or rollback does not hide a finished turn's result. Its `finalText`
-remains available. Malformed objects remain invalid; new tool calls and writes
-use the closed three-outcome contract.
+give-up includes `reason: "…"`. A completion the model ended with `finish_task`
+includes `answer: "…"` and, when it named any, `actions`: the client actions the
+host performs in order, each an `open_loom` with a `loomId`, a `command` with a
+slash-command `line`, or an `open_url` with an http or https `url` (the
+[harness README](../README.md) gives their shapes). Each field is present only
+for its matching outcome. `finalText` carries the human-readable answer,
+question, or reason in every case. An older result without `outcome` means
+`completed`. When reading stored artifacts, an unfamiliar nonempty outcome word
+also means `completed`, so a pin change or rollback does not hide a finished
+turn's result. Its `finalText` remains available. Malformed objects remain
+invalid; new tool calls and writes use the closed three-outcome contract.
 
 Optional `usage` contains the run report's cumulative `inputTokens`,
 `outputTokens`, and other reported token/cache/cost fields, including research
@@ -603,17 +607,20 @@ Start. The feed then shows, in the order the harness produces them:
   assistant lines as they happen and closing with the child's status.
 - **the final text** of the turn, in a boxed entry, when it completes.
 
-The `turn_completed` event carries the same `outcome` and its matching question
-or reason at the event level, and the structured object under `result`. Its turn
-attribution is unchanged. Live streams and replayed durable events have the same
-shape, so a caller can open `result.pieces[0].url` without parsing assistant
-prose. Pollers read the same object from `GET /api/turns/<turnId>/result`.
+The `turn_completed` event carries the same `outcome` and its matching answer,
+actions, question, or reason at the event level, and the structured object under
+`result`. Its turn attribution is unchanged. Live streams and replayed durable
+events have the same shape, so a caller can open `result.pieces[0].url` or
+perform `result.actions` without parsing assistant prose. Pollers read the same
+object from `GET /api/turns/<turnId>/result`.
 
-A completed Fabric task produces a named UI piece. A text answer is rendered by
-a small pattern and named through `assign_slug`; a data-only computation is not
-the user-facing result. Revising an existing piece can confirm its existing
-slug. A plain-text completion without a successful naming receipt is returned to
-the model for correction within its current turn budget.
+A completed Fabric task either produces a named UI piece or ends with a
+`finish_task` answer. Something built or shown is named through `assign_slug`; a
+data-only computation is not the user-facing result. Revising an existing piece
+can confirm its existing slug. An answer in words is the `finish_task` message,
+with no pattern built to hold it. A plain-text completion without a successful
+naming receipt is returned to the model for correction within its current turn
+budget.
 
 During the turn, `turn_usage` events carry `{ turnId, usage?, elapsedMs? }`
 after each completed parent, private research, or child model call. `usage` is
@@ -626,11 +633,12 @@ generated in a provider request. The next turn starts its own total, and updates
 stop when a turn is canceled. An older console without `turn_usage` still
 exposes its existing terminal usage when available.
 
-The parent calls `finish_task` alone to ask a question or explain why it cannot
-proceed. This uses the ordinary tool policy and artifact path, then ends the
-turn without another model request. The live pane shows the sentence as "waiting
-for your answer" or "stopped", without a failure badge. Child agents report
-blockers to their parent; they cannot end the user's task themselves.
+The parent calls `finish_task` alone to give its answer, ask a question, or
+explain why it cannot proceed. This uses the ordinary tool policy and artifact
+path, then ends the turn without another model request. The live pane shows the
+sentence as "done", "waiting for your answer", or "stopped", without a failure
+badge. Child agents report blockers to their parent; they cannot end the user's
+task themselves.
 
 When the run names a piece, the `assign_slug` result carries a `slug` and a
 `url`, and the page raises an **Open your piece** link above the feed. That link
@@ -1227,10 +1235,11 @@ what each one's reference is, and records no class. `pieces.json` declares each
 connector piece's `sqlite_sources`, whose table contract carries the per-column
 `ifc` the daemon seeded, and that is where the class is written down. They join
 on the piece, connection, and optional companion key Loom names in both.
-Repeated receipts for the same connection/store, reference, and class set yield
-one grant. Conflicting references or classes for that store are reported and
-withheld. Grants carry the class list as `cfcClasses`; persisted grants with a
-singular `cfcClass` or a class as their name remain readable.
+Repeated receipts for the same connection/store and reference yield one grant,
+described with every class any declaring piece's contract names. Conflicting
+references for that store are reported and withheld. Grants carry the class list
+as `cfcClasses`; persisted grants with a singular `cfcClass` or a class as their
+name remain readable.
 
 The session description carries the receipt's account identity, physical row
 count, and newest record observation time. Counts come from linked `sources`
@@ -1271,10 +1280,17 @@ trusted-side, `describe_handle` answers shape from the cell, and reading
 anything behind the token means running a pattern over it, where CFC rules as it
 does for every other flow.
 
-Three cases the launch printout states rather than resolving silently:
+Four cases the launch printout states rather than resolving silently:
 
-- A handle whose declared contract carries no CFC class is printed as
-  `grant <connection>  (none: <reason>)` and is not granted.
+- A handle whose declared contract declares no confidentiality (no per-column
+  `ifc.confidentiality` and no `rowLabel` confidentiality; integrity alone does
+  not count) is printed as `grant <connection>  (none: <reason>)` and is not
+  granted. A contract that declares confidentiality but names no `Resource`
+  class is granted under its connection, described with no class.
+- A handle whose declared contract carries an invalid `rowLabel` (one the
+  runner's `validateRowLabelSpec` rejects) is printed the same way, with the
+  validator's reason, and is not granted, even when another table declares
+  confidentiality: the runner refuses every read of such a database.
 - An ambiguous store identity or invalid connection name, companion key, or
   class is reported with the deciding record and a remedy.
 - A receipt that does not parse refuses the launch. A console that came up

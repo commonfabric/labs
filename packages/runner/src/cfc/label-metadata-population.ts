@@ -307,7 +307,7 @@ export const resolveLabelMetadataTemplateConfidentiality = (
     if (best === undefined || best.pathLength < entryPath.length) {
       best = { pathLength: entryPath.length, atoms: [...confidentiality] };
     } else if (best.pathLength === entryPath.length) {
-      best.atoms.push(...confidentiality);
+      for (const atom of confidentiality) best.atoms.push(atom);
     }
   }
   return best === undefined ? undefined : uniqueCfcAtoms(best.atoms);

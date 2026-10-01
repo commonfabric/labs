@@ -678,6 +678,31 @@ Deno.test("Capability analysis classifies push-only usage as writeonly", () => {
   assertEquals(input.readPaths.length, 0);
 });
 
+Deno.test("Capability analysis reads the whole list passed to pushAll", () => {
+  // `xs === input.prev` makes `other` identity-compared, so an element pushed
+  // by `push(xs)` stays an identity use; `pushAll(xs)` stores every element of
+  // the list, so the list is read in full.
+  const analyze = (write: string) =>
+    getPaths(
+      analyzeFunctionCapabilities(parseFirstCallback(
+        `const fn = (input) => {
+          const xs = input.other;
+          if (xs === input.prev) return;
+          input.key("items").${write};
+        };`,
+      )),
+      "input",
+    );
+
+  const pushAll = analyze("pushAll(xs)");
+  assert(pushAll.writePaths.includes("items"));
+  assert(pushAll.fullShapePaths.includes("other"));
+
+  const push = analyze("push(xs)");
+  assert(push.writePaths.includes("items"));
+  assert(!push.fullShapePaths.includes("other"));
+});
+
 Deno.test("Capability analysis classifies removeAll-only usage as writeonly", () => {
   const fn = parseFirstCallback(
     `const fn = (input, item) => {
@@ -3401,6 +3426,31 @@ Deno.test(
     );
 
     assertEquals(findings.length, 0);
+  },
+);
+
+Deno.test(
+  "Mergeable-push misuse: flags a read-then-pushAll to the same collection",
+  () => {
+    const flagged = collectMergeablePushMisuses(
+      `const fn = (input) => {
+        const existing = input.key("users").get();
+        if (existing.length > 0) return;
+        input.key("users").pushAll([{ name: "a" }, { name: "b" }]);
+      };`,
+    );
+
+    assertEquals(flagged.length, 1);
+    assertEquals(flagged[0]!.path.join("."), "users");
+    assertEquals(flagged[0]!.kind, "read-dependent-push");
+
+    const unread = collectMergeablePushMisuses(
+      `const fn = (input) => {
+        input.key("users").pushAll([{ name: "a" }, { name: "b" }]);
+      };`,
+    );
+
+    assertEquals(unread.length, 0);
   },
 );
 

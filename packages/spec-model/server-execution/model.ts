@@ -777,7 +777,7 @@ function commitWave(w: World, space: SpaceId): void {
       w.skippedIdempotent += 1; // no consequences, no consequenceOf
       continue;
     }
-    writes.push(...c.writes);
+    for (const write of c.writes) writes.push(write);
     consequenceOf.push(c.eventId);
   }
   if (committed.length === 0 && writes.length === 0) return;
@@ -861,7 +861,7 @@ function commitWave(w: World, space: SpaceId): void {
     }
     // FP1 (RULED): append entries are DURABLE rows written inside
     // this very wave transaction — deleted only on delivery-ack
-    sp.outboundAppends.push(...c.cascadesCross.map((x) => clone(x)));
+    for (const x of c.cascadesCross) sp.outboundAppends.push(clone(x));
   }
   // W advances only at TRUE quiescence — an exhausted wave's commit
   // carries no watermark movement, and a requeued event holds W back
@@ -1030,7 +1030,7 @@ export function apply(w0: World, step: Step): World {
       srv.alive = false;
       // FP1 (RULED): durable append rows SURVIVE — only the
       // process-local effect half and the in-memory wave die
-      srv.lostAppends.push(...srv.outbox);
+      for (const append of srv.outbox) srv.lostAppends.push(append);
       srv.outbox = [];
       srv.pendingWave = null; // in-memory wave dies with the process
       break;
