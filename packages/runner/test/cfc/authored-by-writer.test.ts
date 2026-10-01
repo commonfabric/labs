@@ -235,6 +235,23 @@ describe("authored-by-writer", () => {
       expect(authoredBy(serving, cell)).toEqual([alice.did()]);
     });
 
+    it("labels a value a handler run initializes `authored-by` the acting principal, with no writer", async () => {
+      const tx = client.edit();
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+      const space = client.userIdentityDID;
+      const seed = client.getCell(
+        space,
+        "initialized-note",
+        noteSchema(undefined, { default: "a default" }),
+        tx,
+      );
+      client.getCell(space, "initialized-note-holder", undefined, tx)
+        .set({ seed });
+      client.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(authoredBy(client, seed)).toEqual([bob.did()]);
+    });
+
     it("refuses a write from a writer the position does not name", async () => {
       const { error } = await write(client, "rogue-note", noteSchema(), {
         as: "rogue",
