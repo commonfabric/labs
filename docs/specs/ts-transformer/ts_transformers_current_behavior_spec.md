@@ -137,6 +137,15 @@ present; no stage handles a missing one.
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
+   - `definesDocument` — a presence flag on a `toSchema` call SchemaInjection
+     created to describe a document it creates: an authored pattern's argument
+     (not one lowered from an array method's callback, whose argument is
+     captures and an element), its result where the author wrote the result
+     type (`pattern<In, Out>`), or a cell `new Writable(…)`, `Writable.of(…)`,
+     `cell(…)` and the other cell factories create. SchemaGeneration passes it
+     to the schema generator as its `definesDocument` option, under which a
+     writer it cannot read is an error. Like `patternResultAnchor`, a plain
+     identity lookup with **no** `getOriginalNode` fallback.
    - `printedFrom` — for a type node printed from a type, that type. Both
      printers record it: `typeToTypeNodeWithRegistry()`, including the
      `unknown` it puts in place of a type the checker will not print, and the
@@ -1150,13 +1159,25 @@ report these through the same collector (deduplicated via §2.2's
   it. A binding node that is not a direct `typeof` of an identifier is reported
   even when the policy is written directly. A direct path
   (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
-  type argument) that mints its own claim gives the generator no binding node
-  and is not reported here; the validator above checks its spelling. A schema
-  read from a type alone has no reference and is not reported either, including
-  a declaration parameter bound to an argument with no syntax. See §11 of the
+  type argument) that mints its own claim gives the generator the payload's
+  node, and the generator's report of the root writer at that node is
+  answered by the claim rather than reported, nullable payloads included,
+  whose policy the checker reduces to a type with no alias name; the
+  validator above checks its spelling. A schema that defines a document
+  (§2.2's `definesDocument`: an authored pattern's input, its authored result
+  type, a created cell's schema) also reports every writer it reaches where no
+  syntax names it: through a parameter bound to an argument with no syntax, an
+  index signature, a tuple, a carrier's metadata read from a type alone, or a
+  cell value whose type is inferred. Any other schema read from a type alone,
+  such as a computed's capture, a handler's state, a pattern result inferred
+  from its callback, or the argument of a pattern lowered from an array
+  method's callback, is not reported; it reads the policy whole or not at all,
+  leaving out with an unread writer the `ownerPrincipal` and current-principal
+  integrity that the runtime enforces only beside one. See §11 of the
   schema-generator mapping spec,
-  rule 8 of `cfc_authoring_contract.md`, and
-  `test/protected-cell-policy.test.ts`.
+  rules 8 and 9 of `cfc_authoring_contract.md`,
+  `test/protected-cell-policy.test.ts`, and
+  `test/document-writer-policy.test.ts`.
 - **Warning** `cfc-label:unread` (`common-fabric-formatter.ts`,
   `unread-label-diagnostics.ts`) — a CFC label list (`confidentiality`,
   `integrity`, `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, or a

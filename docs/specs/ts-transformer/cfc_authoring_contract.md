@@ -240,7 +240,26 @@ Normative behavior:
    carrier without readable binding syntax must report that unsupported form
    rather than silently discard its restriction. A schema
    generated from a type alone, such as a computed's capture, has no reference
-   to read a binding from: it carries no write claim, and nothing reports that.
+   to read a binding from: it carries no write claim, and outside a schema that
+   defines a document (rule 9) nothing reports that.
+9. A schema that defines a document — the one a pattern's argument document,
+   its result document where the author wrote the result type, or a created
+   cell stores its policy envelope from — must carry every writer policy its
+   type declares, or compilation must fail with
+   `cfc-write-authorized-by:unread`. Without the claim the document stores no
+   write restriction, and any writer writes the field. So a writer the schema
+   reaches where no syntax names it fails there: through a type parameter
+   bound to an argument with no syntax, an index signature, a tuple element, a
+   carrier read from a type alone, or a cell value whose type is inferred.
+   Stored source fails the same way. Every other schema views a document
+   whose stored envelope already binds its writers, so a writer such a view
+   reads from a type alone is left out of it and not reported. A result
+   inferred from the pattern's callback is such a view: its fields link to the
+   documents they come from, which store their own envelopes. A view reads a
+   writer policy whole or not at all: where its writer cannot be read, the
+   principal claims that need a writer, an `ownerPrincipal` and integrity
+   naming the current principal, are left out with it, since either alone
+   refuses every write against it, its own writer's included.
 
 One valid marker shape is:
 
