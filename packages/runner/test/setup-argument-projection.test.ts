@@ -14,6 +14,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
+import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -207,6 +208,22 @@ describe("setup-argument-projection", () => {
 
         expect(await commit(tx)).toBeUndefined();
       }
+    });
+
+    it("refuses a relative write redirect over it in the transaction staging it, which names the child's own argument document rather than the list", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      const argument = await setUpChild(tx, binding(tx));
+      const slot = argument.getAsNormalizedFullLink();
+      // The same path as the list's, in the document holding the slot: the
+      // link's address omits the document, which is the slot's own.
+      const relative = createSigilLinkFromParsedLink(
+        { ...slot, path: ["items"] },
+        { base: slot, overwrite: "redirect" },
+      );
+      tx.writeValueOrThrow({ ...slot, path: [...slot.path, "list"] }, relative);
+
+      expect(await commit(tx)).toContain(`${refusal} at /list`);
     });
 
     it("refuses a value staged in its place", async () => {

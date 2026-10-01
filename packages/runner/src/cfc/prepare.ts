@@ -1476,14 +1476,16 @@ const setupProjectionSourceMatchesValue = (
   if (!isWriteRedirectLink(targetValue)) {
     return false;
   }
-  const projected = parseLink(targetValue);
+  // A link whose address omits its document names the document holding it,
+  // so it is resolved against the target before it is compared.
+  const projected = parseLink(targetValue, { ...target, path: [] });
   if (projected === undefined) {
     return false;
   }
   const projectedPath = projected.path.map((entry) => String(entry));
   return projection.sources.some((source) =>
-    (projected.space === undefined || projected.space === source.space) &&
-    (projected.id === undefined || projected.id === source.id) &&
+    projected.space === source.space && projected.id === source.id &&
+    normalizeCellScope(projected.scope) === normalizeCellScope(source.scope) &&
     arraysEqual(projectedPath, source.path)
   );
 };
