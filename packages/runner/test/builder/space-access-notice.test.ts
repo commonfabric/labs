@@ -510,7 +510,7 @@ describe("space-access-notice", () => {
      */
     async function noticeAndCommit(
       runtime: Runtime,
-      room: Cell<unknown>,
+      room: unknown,
       eventKey: string,
     ): Promise<void> {
       const tx = runtime.edit();
@@ -548,6 +548,19 @@ describe("space-access-notice", () => {
 
       expect(inbox.sends).toBe(2);
       expect(inbox.refusals).toEqual(["operation-conflict"]);
+      expect(inbox.messagesFor(bob.did()).map((message) => message.payload))
+        .toEqual([noticeOf(room)]);
+    });
+
+    it("sends a notice naming the room for an entry passed as its cell's reactive proxy", async () => {
+      const { runtime, room } = await owned();
+
+      await noticeAndCommit(
+        runtime,
+        room.getAsReactiveProxy(),
+        "evk:space-access-notice:proxy",
+      );
+
       expect(inbox.messagesFor(bob.did()).map((message) => message.payload))
         .toEqual([noticeOf(room)]);
     });

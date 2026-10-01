@@ -776,6 +776,17 @@ describe("space-access-change", () => {
       expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
     });
 
+    it("stages a grant in the space of a target passed as its cell's reactive proxy", async () => {
+      const { runtime, space } = await owned();
+      const target = runtime.getCell(space, "target").getAsReactiveProxy();
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
+    });
+
     for (
       const [description, call] of [
         ["`*` as the principal", "wildcard"],
@@ -872,6 +883,21 @@ describe("space-access-change", () => {
           () => revokeSpaceAccess(target, alice.did()),
         )
       ).toThrow("with no concrete `OWNER`");
+    });
+
+    it("stages a revoke in the space of a target passed as its cell's reactive proxy", async () => {
+      const { runtime } = clientRuntime(alice);
+      const space = await createSpace(runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "READ",
+      });
+      const target = runtime.getCell(space, "target").getAsReactiveProxy();
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => revokeSpaceAccess(target, bob.did()),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
     });
   });
 

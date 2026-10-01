@@ -228,7 +228,7 @@ describe("spaceAccess()", () => {
     options: {
       kind?: "lift" | "handler";
       frameSpace?: MemorySpace;
-      target?: Cell<unknown>;
+      target?: unknown;
     } = {},
   ): ReturnType<typeof spaceAccess> {
     const frame = pushFrame({
@@ -367,6 +367,32 @@ describe("spaceAccess()", () => {
         callIn(runtime, runtime.edit(), { frameSpace: home, target: link }),
       )
         .toBe("READ");
+    });
+
+    it("returns the level in the space a linked cell's value lives in, for the cell passed as its reactive proxy", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [carol.did()]: "READ" });
+      const home = carol.did() as MemorySpace;
+      await (await aclWriter(carol))({ [home]: "OWNER" });
+
+      const runtime = clientRuntime(carol);
+      await syncAcl(runtime);
+      const tx = runtime.edit();
+      const link = runtime.getCell<unknown>(
+        home,
+        "space-access link",
+        undefined,
+        tx,
+      );
+      link.set(runtime.getCell<unknown>(space, "space-access target"));
+      expect((await tx.commit()).error).toBeUndefined();
+
+      expect(
+        callIn(runtime, runtime.edit(), {
+          frameSpace: home,
+          target: link.getAsReactiveProxy(),
+        }),
+      ).toBe("READ");
     });
 
     it("returns `undefined` for a target passed as `undefined`, not the calling code's level", async () => {
