@@ -244,12 +244,11 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** A handler on a client runtime can send a member of
-  a space a notice to their DID inbox with `noticeSpaceAccess()`
-  ([telling a member of a space about it](../../features/space-access-notices.md)),
-  but nothing in this repository reads a recipient's inbox yet, so nothing
-  delivers a notice to a principal who shares no space with the sender end to
-  end (see [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
+- **Delivering a notice.** A room is to be offered to its recipient through
+  their profile share inbox, but no offer names a room yet and the manager
+  reads none, so nothing delivers a notice to a principal who shares no space
+  with the sender end to end (see
+  [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
   document written by two sets of writers (see
@@ -338,13 +337,10 @@ from this design, as below.
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
 - **Notices.** A manager's notice id is `[recipient, requestId]` as JSON.
-  The manager also sends each other member of a room it creates a notice
-  through their DID inbox, with `noticeSpaceAccess()`, where the runtime can,
-  and queues the notice in `outgoingNotices` either way. A serving runtime
-  refuses the send, so under server execution the queue is the only notice,
-  and nothing reads an inbox yet. So a person can join without one, the
-  manager's rendering shows each queued notice with a link to its room, for
-  the room's creator to send on. And a room shows a viewer whose manager
+  Nothing delivers a notice yet (see
+  [first contact](FabriChatManager.md#first-contact)), so the manager's
+  rendering shows each queued notice with a link to its room, for the room's
+  creator to send on. And a room shows a viewer whose manager
   doesn't list it a control that asks the manager to `accept` it, so
   whoever opens the room's link can add it to their chats.
 - **Request ids.** A rendered control sends no `requestId`, and the room and

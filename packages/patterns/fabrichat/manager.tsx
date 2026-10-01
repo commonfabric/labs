@@ -22,7 +22,6 @@ import {
   type InSpaceGrants,
   isWellFormedDID,
   NAME,
-  noticeSpaceAccess,
   pattern,
   principalOf,
   spaceAccess,
@@ -221,23 +220,6 @@ function roomLinkOf(room: unknown): unknown {
 }
 
 /**
- * Tells `recipient` about `room` through their DID inbox, once the handler's
- * commit is accepted, where the runtime can (see `noticeSpaceAccess()`). Where
- * it can't, the notice queued in `outgoingNotices` is the only one, so a
- * refusal here costs the start nothing.
- */
-const tellAbout = (recipient: DID, room: Cell<ChatRoomLink>): void => {
-  try {
-    noticeSpaceAccess(recipient, room);
-  } catch {
-    // A serving runtime refuses the call, holding no key to sign the message
-    // as the event's actor, and so does any runtime for a recipient whose DID
-    // is not a `did:key`, which no inbox addresses. A refusal that escaped
-    // would drop the whole start.
-  }
-};
-
-/**
  * The record a room's creator wrote, which the room's `about` links, as a
  * cell: what `principalOf()` reads the creator from, and what reads without
  * the room running. It holds nothing for a space's own chat.
@@ -250,9 +232,8 @@ function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
 /**
  * Creates a room in a space of its own, and its notices, and records its
  * entry, all in one transaction: the space's grants are part of creating it,
- * so nothing has to commit apart. Each other member is told about the room
- * through their inbox where the runtime can, and a notice for each is queued
- * for a client to deliver as well.
+ * so nothing has to commit apart. A notice for each other member is queued for
+ * a client to deliver.
  */
 const createRoom = (
   state: ManagerActState,
@@ -277,7 +258,6 @@ const createRoom = (
     }),
   );
   members.forEach((recipient) => {
-    tellAbout(recipient, room);
     state.outgoingNotices.push({
       id: JSON.stringify([recipient, requestId]),
       room,

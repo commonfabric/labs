@@ -12,7 +12,6 @@ import {
   currentPrincipal,
   equals,
   pattern,
-  type SentSpaceAccessNotice,
   TESTS,
   UI,
   Writable,
@@ -91,9 +90,7 @@ const reasonOf = (
 const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
   (notices.get() ?? []).map((notice) => notice.recipient).join(",");
 
-export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
-  { spaceAccessNotices },
-) => {
+export default pattern(() => {
   const profile = Writable.of<ChatProfile>({ name: "Tester" });
 
   // A direct room: one per counterpart, found again after it is forgotten.
@@ -283,21 +280,6 @@ export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
           groupRooms.key(0).key("room").key("about").get()?.kind === "group" &&
           groupRooms.key(0).key("room").key("about").get()?.title === "Team" &&
           !equals(groupRooms.key(0).key("room"), directHeld.key("room"))
-        ),
-      },
-      // Each room's other member is told through their inbox, once: Bob of
-      // the direct room, though it was found again twice, and Carol of the
-      // group room, both by this user, each about a room in a space of its own
-      // rather than this user's home space.
-      { settle: true },
-      {
-        assertion: assert(() =>
-          spaceAccessNotices.map((notice) => notice.recipient).join() ===
-            `${BOB},${CAROL}` &&
-          spaceAccessNotices.every((notice) =>
-            notice.sender === spaceAccessNotices[0]?.sender &&
-            notice.space !== notice.sender
-          )
         ),
       },
       // A request already decided changes nothing when it arrives again.

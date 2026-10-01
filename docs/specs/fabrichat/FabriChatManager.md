@@ -65,24 +65,16 @@ is what labels it `authored-by` this user.
 
 ### First contact
 
-A notice has to reach a principal who may share no space with the sender.
-Nothing in this repository delivers one end to end today:
-
-- DID inboxes ([`did-inboxes.md`](../../features/did-inboxes.md)) deliver to a
-  principal. A handler on a client runtime sends to one with
-  `noticeSpaceAccess()`, which tells a member of a space about it
-  ([telling a member of a space about it](../../features/space-access-notices.md)),
-  but no client in this repository reads a recipient's inbox, a serving runtime
-  refuses the call, and a notice it sends may not arrive.
-- A profile's `inbox` field (`inbox.piece`,
-  `packages/patterns/system/profile-home.tsx`) points at a receiving piece in a
-  space of its own, which a host outside this repository provides. It is the
-  likeliest path for notices: a pattern could send a notice to that piece, if
-  the piece takes one and its space admits the sender. Whether it does is for
-  that host to say.
-- A space's access list can admit any writer, but that is the `"*"` grant a room
-  must not have.
+A notice has to reach a principal who may share no space with the sender. Its
+route is the recipient's profile share inbox: a profile's `inbox` field
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
+in a space of its own that any writer may post to and only its owner reads. The
+sender offers the room there, and the recipient's manager reads its offers, is
+readmitted to the room's space, and accepts the room. Nothing delivers one end
+to end today: no offer names a room yet, the manager reads none, and an inbox
+exists only where a host outside this repository creates one. A space's access
+list can admit any writer, but that is the `"*"` grant a room must not have.
 
 That is why step 3 hands notices to a client through `outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once one of
-these delivers end to end, the manager can deliver notices itself.
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
+deliver end to end, the manager can deliver notices itself.
