@@ -352,13 +352,13 @@ export function collectDestructureBindings(
 }
 
 export function createKeyCall(
-  rootIdentifier: ts.Identifier,
+  receiver: ts.Expression,
   path: readonly PathSegment[],
   factory: ts.NodeFactory,
 ): ts.Expression {
   const keyCall = factory.createCallExpression(
     factory.createPropertyAccessExpression(
-      rootIdentifier,
+      receiver,
       factory.createIdentifier("key"),
     ),
     undefined,

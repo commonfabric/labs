@@ -1751,6 +1751,67 @@ function buildCapabilityParamSummary(
   };
 }
 
+/** Path segment that a `SELF` key denotes in a recorded path. */
+const SELF_PATH_SEGMENT = "$SELF";
+
+/**
+ * Whether `fn` is the callback of a `pattern()` call. Its first parameter is
+ * the pattern's input, on which `SELF` names the pattern's own result rather
+ * than any of the input's data. Undecidable without a checker, in which case
+ * no function is taken to be one.
+ */
+function isPatternBuilderCallback(
+  fn: CapabilityAnalyzableFunction,
+  checker: ts.TypeChecker | undefined,
+): boolean {
+  if (!checker) return false;
+  const original = ts.getOriginalNode(fn);
+  let call = original.parent;
+  while (call && ts.isParenthesizedExpression(call)) {
+    call = call.parent;
+  }
+  if (!call || !ts.isCallExpression(call)) return false;
+  if (
+    !call.arguments.some((argument) => unwrapExpression(argument) === original)
+  ) {
+    return false;
+  }
+  const callKind = detectCallKind(call, checker);
+  return callKind?.kind === "builder" && callKind.builderName === "pattern";
+}
+
+/**
+ * Returns a copy of `state` without its paths under `SELF`, for a pattern's
+ * input, where `SELF` names the pattern's own result: a read through it reads
+ * that result rather than the input, and asks nothing of the input's schema.
+ */
+function withoutSelfPaths(
+  state: MutableCapabilityState,
+): MutableCapabilityState {
+  const keep = (paths: ReadonlySet<string>): Set<string> =>
+    new Set(
+      Array.from(paths).filter((path) =>
+        decodePath(path)[0] !== SELF_PATH_SEGMENT
+      ),
+    );
+  const wildcardPaths = keep(state.wildcardPaths);
+  return {
+    ...state,
+    reads: keep(state.reads),
+    fullShapeReads: keep(state.fullShapeReads),
+    writes: keep(state.writes),
+    rawIdentityPaths: keep(state.rawIdentityPaths),
+    rawIdentityCellPaths: keep(state.rawIdentityCellPaths),
+    rawComparablePaths: keep(state.rawComparablePaths),
+    rawComparableCellPaths: keep(state.rawComparableCellPaths),
+    rawOpaquePaths: keep(state.rawOpaquePaths),
+    wildcardPaths,
+    // Every wildcard mark records its path, so one whose paths were all under
+    // `SELF` leaves nothing behind.
+    wildcard: state.wildcard && wildcardPaths.size > 0,
+  };
+}
+
 export function analyzeFunctionCapabilities(
   fn: CapabilityAnalyzableFunction,
   options?: CapabilityAnalysisOptions,
@@ -4013,6 +4074,7 @@ export function analyzeFunctionCapabilities(
     }
 
     const params: CapabilityParamSummary[] = [];
+    const isPatternCallback = isPatternBuilderCallback(fn, checker);
     for (let index = 0; index < fn.parameters.length; index++) {
       const parameter = fn.parameters[index];
       if (!parameter) continue;
@@ -4021,7 +4083,12 @@ export function analyzeFunctionCapabilities(
         : `${PARAMETER_SUMMARY_PREFIX}${index}`;
       const state = states.get(summaryName);
       if (!state) continue;
-      params.push(buildCapabilityParamSummary(summaryName, state));
+      params.push(
+        buildCapabilityParamSummary(
+          summaryName,
+          isPatternCallback && index === 0 ? withoutSelfPaths(state) : state,
+        ),
+      );
     }
 
     const result: FunctionCapabilitySummary = unreadableCellArguments.length

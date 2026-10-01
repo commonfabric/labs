@@ -668,6 +668,24 @@ Diagnostics emitted in all modes:
     `wish(...)`, or reactive collection aliases and their property accesses
   - message instructs the author to move the use into a nested
     `computed(() => ...)` or module-scope `lift()`
+- **Error** `pattern-context:self-access`
+  - an element access keyed by `SELF` (`x[SELF]`) inside a compute callback —
+    `computed(...)`, `action(...)`, `lift(...)`, a `handler(...)` body, an
+    inline JSX event handler — or inside a reactive collection callback such as
+    `items.map((item) => ...)`
+  - `SELF` names the pattern's own result only on the reactive proxy a
+    `pattern(...)` body receives as its input. A compute callback sees plain
+    values, and a reactive collection callback sees a captured reference to the
+    input, so `[SELF]` there is `undefined` at runtime, and the link it would
+    make names a cell that never holds a value
+  - the same access read directly in the pattern body, in its JSX, or bound
+    into a handler's state (`poke({ room: input[SELF] })`) is supported and
+    reports nothing (§9.7); so is one in a plain array callback, which runs
+    once during pattern construction
+  - message names the access and instructs the author to destructure
+    `[SELF]` in the pattern's parameter (`({ [SELF]: self }) => ...`) and
+    capture `self`, or hand it to the handler as state
+  - `test/pattern-input-self.test.ts`
 - **Error** `pattern-context:optional-chaining`
   - optional property / element access that appears outside a supported
     lowerable expression site — including inside a lowered array-method
@@ -1640,6 +1658,15 @@ Primary behaviors:
   nested blocks) also receive `.key(...)` lowering
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
+- reads `input[SELF]` on a pattern's input in place, as the destructured
+  `[SELF]: self` binding is read: the data-flow analyzer counts a `SELF`
+  element key as static (`isSelfElementAccess` in `src/ast/dataflow.ts`), so
+  the access is not lifted, and the lowering emits `input[__cfHelpers.SELF]`
+  and keys any further path off it, so `input[SELF].title` becomes
+  `input[__cfHelpers.SELF].key("title")`. A computation over the read, such as
+  `input[SELF].title + "!"`, lifts with that keyed read as its capture
+  (golden `closures/pattern-input-self-index`). Other well-known keys (`UI`,
+  `NAME`, `FS`) keep their dynamic-access analysis
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for
@@ -1865,6 +1892,13 @@ adjustments:
   are retained the original TypeReference is kept for schema fidelity.
 - pattern boundaries apply defaults-only mode to preserve broad shape continuity
   while still applying extracted static defaults
+- on the input parameter of a `pattern(...)` callback, capability analysis
+  leaves out every path under `SELF` (`withoutSelfPaths` in
+  `policy/capability-analysis.ts`). `input[SELF]` there names the pattern's
+  own result, not any of the input's data, so it asks nothing of the input
+  schema and draws no `schema:path-not-in-type` error. On any other function's
+  parameter, `x[SELF]` is recorded as the path `$SELF`
+  (`test/policy/capability-analysis.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather

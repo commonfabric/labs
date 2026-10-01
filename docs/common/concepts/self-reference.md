@@ -36,6 +36,45 @@ const TreeNode = pattern<TreeNodeInput, TreeNodeOutput>(
 );
 ```
 
+## Reading SELF off the input
+
+A pattern that keeps its parameter whole can read the same reference off it as
+`input[SELF]`, anywhere in the pattern body: at the top level, in JSX, bound to
+a local, through a property (`input[SELF].title`), or handed to a child pattern
+or a handler. Destructuring `[SELF]: self` and reading `input[SELF]` name the
+same result, so use whichever reads better.
+
+```tsx
+import { NAME, pattern, SELF, UI, type VNode } from "commonfabric";
+
+interface CardInput {
+  title: string;
+}
+
+interface CardOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  title: string;
+  me: CardOutput;
+}
+
+const Card = pattern<CardInput, CardOutput>((input) => ({
+  [NAME]: input.title,
+  [UI]: <h2>{input[SELF].title}</h2>,
+  title: input.title,
+  me: input[SELF],
+}));
+```
+
+`input[SELF]` works only where `input` is the reactive value the pattern body
+receives. Inside `computed()`, `action()`, `lift()` or a handler, the callback
+sees a plain value, and inside a callback over a reactive collection, such as
+`items.map(...)`, it sees a captured reference to the input; `SELF` means
+nothing on either. The compiler reports `input[SELF]` in those places as an
+error. Destructure `[SELF]: self` in the pattern's parameter and capture `self`
+there instead, as in the next section, or bind `input[SELF]` into the
+handler's state from the pattern body.
+
 ## SELF in Actions
 
 `self` works inside `action()` closures, not just inline arrows:

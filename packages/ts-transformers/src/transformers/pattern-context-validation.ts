@@ -37,6 +37,9 @@
  * - lift()/handler() inside pattern: ERROR (move to module scope)
  * - Local computed()/lift() aliases used as plain values in the same
  *   callback: ERROR (use a nested computed()/lift())
+ * - `x[SELF]` inside computed(), action(), lift(), a handler or a collection
+ *   callback, where `x` cannot be the pattern's input: ERROR (destructure
+ *   `[SELF]` in the pattern parameter)
  */
 
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
@@ -69,11 +72,13 @@ import {
   classifyUnsupportedExpressionSiteCallRoot,
   findInlineCallbackCarrierSite,
   findLowerableExpressionSite,
+  isArrayMethodOwnedExpressionSite,
 } from "./expression-site-policy.ts";
 import {
   isDeclaredWithinFunction,
   isModuleScopedDeclaration,
 } from "../ast/scope-analysis.ts";
+import { getCommonFabricKeyName } from "../utils/reactive-keys.ts";
 import type {
   CallbackBoundarySemantics,
   SupportedCallbackBoundaryKind,
@@ -262,6 +267,10 @@ export class PatternContextValidationTransformer
         }
       }
 
+      if (ts.isElementAccessExpression(node)) {
+        this.#validateSelfAccess(node, context);
+      }
+
       // Check for .get() calls and lift/handler placement in reactive context
       if (ts.isCallExpression(node)) {
         // Check for lift/handler inside pattern
@@ -353,6 +362,47 @@ export class PatternContextValidationTransformer
       message:
         `Property access ${accessText} used in computation is not allowed in reactive context. ` +
         `Wrap the computation in computed(() => ...) instead.`,
+      node,
+    });
+  }
+
+  /**
+   * Validates that `x[SELF]` is read only where `x` can be the pattern's
+   * input. Only the reactive proxy a pattern body receives as its input knows
+   * the pattern's own result. Inside `computed()`, `action()`, `lift()` or a
+   * handler, the callback sees a plain value instead, and inside a collection
+   * callback it sees a captured reference to the input; `[SELF]` is
+   * `undefined` on either.
+   */
+  #validateSelfAccess(
+    node: ts.ElementAccessExpression,
+    context: TransformationContext,
+  ): void {
+    if (
+      getCommonFabricKeyName(node.argumentExpression, context.checker) !==
+        "SELF"
+    ) {
+      return;
+    }
+    if (
+      context.getReactiveContext(node).kind !== "compute" &&
+      !isArrayMethodOwnedExpressionSite(node, context)
+    ) {
+      return;
+    }
+
+    context.reportDiagnostic({
+      severity: "error",
+      type: "pattern-context:self-access",
+      message: `\`${getNodeText(node)}\` reads \`SELF\` where it is ` +
+        `\`undefined\`. \`SELF\` names the pattern's own result only on ` +
+        `the pattern's input as the pattern body itself sees it. Inside ` +
+        `\`computed()\`, \`action()\`, \`lift()\` or a handler that ` +
+        `input is a plain value, and inside a collection callback such as ` +
+        `\`.map()\` it is a captured reference. Destructure \`[SELF]\` in ` +
+        `the pattern's parameter, as in \`({ [SELF]: self }) => ...\`, and ` +
+        `capture \`self\` here, or pass it to the handler as part of its ` +
+        `state.`,
       node,
     });
   }

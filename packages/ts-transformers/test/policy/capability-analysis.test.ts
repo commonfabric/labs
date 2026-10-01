@@ -3116,6 +3116,62 @@ Deno.test(
   },
 );
 
+function analyzeBuilderCallback(builderName: "lift" | "pattern") {
+  const { program, sourceFile } = createProgramWithFiles({
+    "/test.ts": `
+      import { lift, pattern, SELF } from "commonfabric";
+
+      type Input = { title: string; [SELF]?: { title: string } };
+
+      ${builderName}((input: Input) => [
+        input.title,
+        input[SELF],
+        input[SELF]?.title,
+      ]);
+    `,
+    "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+  });
+  let callback: ts.ArrowFunction | undefined;
+  const visit = (node: ts.Node): void => {
+    if (callback) return;
+    if (ts.isArrowFunction(node)) {
+      callback = node;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (!callback) {
+    throw new Error("Expected a builder callback in test source.");
+  }
+  return getPaths(
+    analyzeFunctionCapabilities(callback, {
+      checker: program.getTypeChecker(),
+    }),
+    "input",
+  );
+}
+
+Deno.test(
+  "Capability analysis leaves SELF paths out of a pattern callback's input",
+  () => {
+    const input = analyzeBuilderCallback("pattern");
+
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["title"]);
+  },
+);
+
+Deno.test(
+  "Capability analysis keeps SELF paths on the input of a lift callback",
+  () => {
+    const input = analyzeBuilderCallback("lift");
+
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths.toSorted(), ["$SELF", "$SELF.title", "title"]);
+  },
+);
+
 Deno.test(
   "Capability analysis does not treat arbitrary .equals() methods as identity-only",
   () => {

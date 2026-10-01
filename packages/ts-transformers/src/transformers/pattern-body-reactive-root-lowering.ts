@@ -133,9 +133,36 @@ function calleeMethodName(call: ts.CallExpression): string | undefined {
 function isSelfPathSegment(
   segment: PathSegment,
   context: TransformationContext,
-): boolean {
+): segment is ts.Expression {
   return typeof segment !== "string" &&
     isCommonFabricKeyExpression(segment, context, "SELF");
+}
+
+/**
+ * Builds the in-place read of `path` under the opaque root named `root`. A
+ * leading `SELF` segment names the pattern's own result rather than a key of
+ * the input, so it stays an element access, the way a destructured `[SELF]`
+ * binding lowers, and the rest of the path is keyed off that.
+ */
+function createOpaquePathAccess(
+  root: string,
+  path: readonly PathSegment[],
+  context: TransformationContext,
+): ts.Expression {
+  const factory = context.factory;
+  const rootIdentifier = factory.createIdentifier(root);
+  const [head, ...rest] = path;
+  if (head === undefined || !isSelfPathSegment(head, context)) {
+    return createKeyCall(rootIdentifier, path, factory);
+  }
+
+  const selfAccess = factory.createElementAccessExpression(
+    rootIdentifier,
+    cloneKeyExpression(head, factory),
+  );
+  return rest.length === 0
+    ? selfAccess
+    : createKeyCall(selfAccess, rest, factory);
 }
 
 /** Carries the source-map range and inferred type to a semantic replacement. */
@@ -871,10 +898,10 @@ function rewriteTrackedOpaquePatternBody(
           }
 
           const receiverPath = info.path.slice(0, -1);
-          const rewrittenReceiver = createKeyCall(
-            context.factory.createIdentifier(info.root),
+          const rewrittenReceiver = createOpaquePathAccess(
+            info.root,
             receiverPath,
-            context.factory,
+            context,
           );
           const rewrittenMethod = context.factory
             .createPropertyAccessExpression(
@@ -902,20 +929,11 @@ function rewriteTrackedOpaquePatternBody(
         }
       }
 
-      const firstPathSegment = info.path[0];
-      if (
-        info.path.length === 1 &&
-        firstPathSegment &&
-        isSelfPathSegment(firstPathSegment, context)
-      ) {
-        return visited;
-      }
-
       if (info.path.length > 0) {
-        const rewritten = createKeyCall(
-          context.factory.createIdentifier(info.root),
+        const rewritten = createOpaquePathAccess(
+          info.root,
           info.path,
-          context.factory,
+          context,
         );
         registerReplacement(rewritten, visited, context);
         return rewritten;
