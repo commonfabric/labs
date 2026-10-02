@@ -6,6 +6,7 @@ import type {
 } from "./client-action.ts";
 import type {
   HarnessClientProtocolDeclaration,
+  HarnessCommandResolveBody,
   HarnessCommandSettlementRecord,
   HarnessTypedClientAction,
 } from "./client-command.ts";
@@ -318,7 +319,10 @@ export type HarnessChatRequestParamsByMethod = {
   start_turn: HarnessChatStartTurnParams;
   cancel_turn: HarnessChatCancelTurnParams;
   close_session: HarnessChatCloseSessionParams;
-  resolve_client_action: HarnessChatResolveClientActionParams;
+  /** A final-action answer, or a typed request's settlement. */
+  resolve_client_action:
+    | HarnessChatResolveClientActionParams
+    | HarnessCommandResolveBody;
   status: HarnessChatStatusParams;
   list_events: HarnessChatListEventsParams;
   list_turns: HarnessChatListTurnsParams;

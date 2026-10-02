@@ -90,6 +90,7 @@ import {
 import {
   checkHarnessClientProtocol,
   type HarnessClientProtocolDeclaration,
+  type HarnessCommandResolveBody,
 } from "./contracts/client-command.ts";
 
 export type HarnessInteractivePromptLoop = Pick<
@@ -1784,9 +1785,12 @@ export class HarnessInteractiveChatService {
    */
   async resolveClientAction(
     requestId: string,
-    params: HarnessChatResolveClientActionParams,
+    params: HarnessChatResolveClientActionParams | HarnessCommandResolveBody,
   ): Promise<HarnessChatResponse<HarnessChatResolveClientActionResult>> {
+    // This console serves `client_actions` only, so a typed settlement is
+    // refused like any other body without a final-action outcome.
     if (
+      !("outcome" in params) ||
       typeof params.sessionId !== "string" ||
       typeof params.actionId !== "string" ||
       !isHarnessClientActionOutcomeKind(params.outcome) ||
