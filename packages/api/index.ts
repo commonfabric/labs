@@ -1740,6 +1740,16 @@ export type InSpaceGrants = Readonly<
 export interface InSpaceOptions {
   /** Access the created space grants beyond its owner. */
   grants?: InSpaceGrants;
+
+  /**
+   * Access the created space grants as well when the runtime creating it does
+   * not have server execution on, where a principal's handler writes into
+   * another principal's space from the principal's own runtime rather than
+   * through the space's server. A principal named here and in `grants` takes
+   * the access named here. The choice is made when the space is created, and
+   * nothing changes the access-control document when the setting does.
+   */
+  grantsWithoutServerExecution?: InSpaceGrants;
 }
 
 export type PatternFactory<T, R> =
