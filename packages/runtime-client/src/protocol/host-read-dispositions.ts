@@ -139,8 +139,9 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.RetrySpaceAccess]: lifecycle,
   [RequestType.FlushCompileCacheWrites]: lifecycle,
   [RequestType.GetGraphSnapshot]: {
-    kind: "no-cell-value",
-    why: "the scheduler's graph of actions and the cells they touch",
+    kind: "ungated",
+    why: "the scheduler's graph: the addresses actions read and write, " +
+      "field paths included, and no values",
   },
   [RequestType.GetLoggerCounts]: setting,
   [RequestType.GetStorageDiagnostics]: {
@@ -158,13 +159,18 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.GetSettleStats]: setting,
   [RequestType.GetSettleStatsHistory]: setting,
   [RequestType.SetSettleStatsEnabled]: setting,
-  [RequestType.GetActionRunTrace]: setting,
+  [RequestType.GetActionRunTrace]: {
+    kind: "ungated",
+    why: "the addresses each action declared and wrote, field paths " +
+      "included, and no values",
+  },
   [RequestType.SetActionRunTraceEnabled]: setting,
   [RequestType.GetTriggerTrace]: DECIDED,
   [RequestType.SetTriggerTraceEnabled]: setting,
   [RequestType.GetWriteStackTrace]: {
-    kind: "no-cell-value",
-    why: "where writes came from, by address and stack",
+    kind: "ungated",
+    why: "where writes came from: addresses, field paths included, value " +
+      "kinds and stacks, and no values",
   },
   [RequestType.SetWriteStackTraceMatchers]: setting,
   [RequestType.DetectNonIdempotent]: DECIDED,
