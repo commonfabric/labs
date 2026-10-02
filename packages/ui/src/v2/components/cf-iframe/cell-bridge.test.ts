@@ -3,8 +3,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { BRIDGE_READ_REFUSED } from "@commonfabric/iframe-sandbox";
 import {
   $conn,
+  $onCellRefused,
   $onCellUpdate,
   CellHandle,
   type CellRef,
@@ -172,7 +174,7 @@ describe("cf-iframe cell bridge", () => {
     const items = createCellContextBridge(context).resources.items.cell!;
 
     const positionalTitle = items.key!(0).key!("title");
-    const cancel = positionalTitle.sink!(() => {});
+    const cancel = positionalTitle.sink!(() => {}, () => {});
     expect(subscriptions.at(-1)?.path).toEqual(["items", "0", "title"]);
     cancel();
 
@@ -667,11 +669,104 @@ describe("cf-iframe cell bridge", () => {
     const count = createCellContextBridge(context).resources.count;
     const changes: unknown[] = [];
 
-    const unsubscribe = count.cell!.sink!((value) => changes.push(value));
+    const unsubscribe = count.cell!.sink!(
+      (value) => changes.push(value),
+      () => {},
+    );
     subscribed?.[$onCellUpdate](2);
 
     expect(changes).toEqual([1, 2]);
     unsubscribe();
+  });
+
+  describe("a read the worker refuses", () => {
+    // A guest is told of a refused read with an error of its own code, never
+    // handed an empty value: one that read the refusal as empty would show
+    // nothing for a cell that holds something, or initialize over it.
+    const refusal = { refusedBy: "display-ceiling" } as const;
+
+    /** A runtime that answers every read with a refusal, keeping requests. */
+    const refusing = () => {
+      let subscribed: CellHandle<unknown> | undefined;
+      const requests: { type: RequestType }[] = [];
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType }) => {
+            requests.push(request);
+            return Promise.resolve({ refused: refusal });
+          },
+          subscribe: (cell: CellHandle<unknown>) => {
+            subscribed = cell;
+            return Promise.resolve();
+          },
+          unsubscribe: () => Promise.resolve(),
+          signal: { aborted: false },
+        }),
+      });
+      return { runtime, requests, subscribed: () => subscribed };
+    };
+
+    it("tells a sink of a refusal as a failure, and hands it no value", () => {
+      const { runtime, subscribed } = refusing();
+      const context = new CellHandle(runtime, ref, { count: 1 });
+      const count = createCellContextBridge(context).resources.count;
+      const values: unknown[] = [];
+      const failures: { code: string }[] = [];
+
+      const cancel = count.cell!.sink!(
+        (value) => values.push(value),
+        (error) => failures.push(error),
+      );
+      const before = values.length;
+      subscribed()?.[$onCellRefused](refusal);
+
+      expect(values.length).toBe(before);
+      expect(failures).toEqual([
+        expect.objectContaining({ code: BRIDGE_READ_REFUSED }),
+      ]);
+      cancel();
+    });
+
+    for (const operation of ["pull", "initialize", "set", "push"] as const) {
+      it(`rejects a guest's \`${operation}()\` with the refusal's own code`, async () => {
+        const { runtime, requests } = refusing();
+        const context = new CellHandle(runtime, ref, { count: 1 });
+        const count = createCellContextBridge(context).resources.count.cell!;
+        if (operation === "set" || operation === "push") {
+          // A read refused first, as a guest learns it before it writes.
+          await expect(count.pull()).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          requests.length = 0;
+        }
+
+        const attempt = operation === "pull"
+          ? count.pull()
+          : operation === "initialize"
+          ? count.initialize!(0)
+          : operation === "set"
+          ? count.set!(2)
+          : count.push!([2]);
+
+        await expect(attempt).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        if (operation === "set" || operation === "push") {
+          expect(requests).toEqual([]);
+        }
+      });
+    }
+
+    it("names the resources a refused context's schema declares", () => {
+      const { runtime } = refusing();
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      const bridge = createCellContextBridge(context);
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(
+        ["count", "database", "events", "locked"],
+      );
+    });
   });
 
   it("reports a stream event the runtime refuses", async () => {

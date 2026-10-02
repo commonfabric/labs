@@ -5,6 +5,7 @@
 
 import {
   type BridgeCell,
+  BridgeReadRefusedError,
   type BridgeResource,
   createFabricBridge,
   type FabricBridge,
@@ -12,11 +13,14 @@ import {
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   CellHandle,
+  CellReadRefusedError,
   type ClientCellValue,
   isCellHandle,
 } from "@commonfabric/runtime-client";
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+
+import { shownValue } from "../../core/shown-value.ts";
 
 /** Capability kind assigned to a named context child. */
 export type CellContextResourceKind =
@@ -106,7 +110,9 @@ async function demandSqliteSource<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const demand = source.asSchema({ asCell: ["sqlite"] });
-  const cancel = demand.subscribe(() => {});
+  // Held only to keep the producer demanded; its refusal is the operation's
+  // to answer, and the operation is decided on its own.
+  const cancel = demand.subscribe(() => {}, { onRefused: () => {} });
   try {
     await source.pull();
     const latest = await source.resolveAsCell();
@@ -119,6 +125,37 @@ async function demandSqliteSource<T>(
   } finally {
     cancel();
   }
+}
+
+/**
+ * Runs `operation`, telling the guest of a refused read as one
+ * (`BridgeReadRefusedError`), never as an empty value: a guest that read a
+ * refusal as empty would show nothing for a cell that holds something, or
+ * initialize it over what it holds.
+ */
+function refusedAsBridgeError<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    throw asBridgeRefusal(error);
+  }
+}
+
+/** As {@link refusedAsBridgeError}, for an operation that settles later. */
+async function refusedAsBridgeErrorAsync<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw asBridgeRefusal(error);
+  }
+}
+
+function asBridgeRefusal(error: unknown): unknown {
+  return error instanceof CellReadRefusedError
+    ? new BridgeReadRefusedError(error.message)
+    : error;
 }
 
 function bridgeCell(
@@ -134,16 +171,32 @@ function bridgeCell(
       ...(ref.scope !== undefined && { scope: ref.scope }),
       path: [...ref.path],
     },
-    get: () => bridgeValue(cell.get()),
-    pull: async () => bridgeValue(await cell.pull()),
+    get: () => refusedAsBridgeError(() => bridgeValue(cell.get())),
+    pull: () =>
+      refusedAsBridgeErrorAsync(async () => bridgeValue(await cell.pull())),
     ...(writable && {
-      initialize: async (value: FabricValue) =>
-        bridgeValue(await cell.initialize(value)),
-      set: async (value: FabricValue) => await cell.setStrict(value),
-      push: async (values: readonly FabricValue[]) =>
-        await (cell as CellHandle<FabricValue[]>).pushAllStrict(values),
+      // A refused stored value rejects rather than reading as none, so a
+      // guest that initializes what it reads as empty writes nothing.
+      initialize: (value: FabricValue) =>
+        refusedAsBridgeErrorAsync(async () =>
+          bridgeValue(await cell.initialize(value))
+        ),
+      set: (value: FabricValue) =>
+        refusedAsBridgeErrorAsync(() => cell.setStrict(value)),
+      push: (values: readonly FabricValue[]) =>
+        refusedAsBridgeErrorAsync(() =>
+          (cell as CellHandle<FabricValue[]>).pushAllStrict(values)
+        ),
     }),
-    sink: (listener) => cell.subscribe((value) => listener(bridgeValue(value))),
+    sink: (listener, failed) =>
+      cell.subscribe((value) => listener(bridgeValue(value)), {
+        onRefused: (refusal) =>
+          failed(
+            new BridgeReadRefusedError(
+              new CellReadRefusedError(refusal).message,
+            ),
+          ),
+      }),
     key: (key) => bridgeCell(cell.key(key as never), writable),
     resolve: async () => bridgeCell(await cell.resolveAsCell(), writable),
   };
@@ -175,13 +228,16 @@ function cellResource(
       ...metadata,
       sink: (listener) => {
         let initial = true;
-        return revisionCell.subscribe(() => {
+        const changed = () => {
           if (initial) {
             initial = false;
             return;
           }
           listener(undefined);
-        });
+        };
+        // A refusal tells the guest the database changed as far as it can
+        // tell, so it asks again, and each query is answered on its own.
+        return revisionCell.subscribe(changed, { onRefused: changed });
       },
       methods: {
         query: async (value) => {
@@ -297,8 +353,10 @@ function schemaProperties(
 function cellContextResources(
   root: CellHandle<Record<string, unknown>>,
 ): Record<string, BridgeResource> {
+  // A context whose read is refused names the resources its schema declares,
+  // each of which answers for its own reads.
   const names = (): Set<string> => {
-    const current = root.get();
+    const current = shownValue(root);
     return new Set([
       ...Object.keys(schemaProperties(root.ref().schema)),
       ...(current && typeof current === "object" ? Object.keys(current) : []),
@@ -306,7 +364,7 @@ function cellContextResources(
   };
   const resource = (name: string): BridgeResource | undefined => {
     const properties = schemaProperties(root.ref().schema);
-    const current = root.get();
+    const current = shownValue(root);
     if (
       !Object.hasOwn(properties, name) &&
       !(current && Object.hasOwn(current, name))
@@ -338,6 +396,21 @@ function cellContextResources(
   });
 }
 
+/**
+ * `cell`'s value once pulled, or `undefined` when the worker refuses the
+ * read, in which case nothing of the value is known.
+ */
+async function pulledOrRefused<T>(
+  cell: CellHandle<T>,
+): Promise<Readonly<T> | undefined> {
+  try {
+    return await cell.pull();
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
+  }
+}
+
 /** Builds the convenience bridge used by `cf-iframe`'s `context` property. */
 export function createCellContextBridge(context: object): FabricBridge {
   if (isCellHandle(context)) {
@@ -361,11 +434,11 @@ export async function resolveCellContextBridge(
   context: CellHandle<Record<string, unknown>>,
   resourceKinds: Readonly<Record<string, CellContextResourceKind>> = {},
 ): Promise<FabricBridge> {
-  await context.pull();
-  const sourceCurrent = context.get();
+  // A context whose read is refused names the resources its schema declares,
+  // each of which answers for its own reads.
+  const sourceCurrent = await pulledOrRefused(context);
   const root = await context.resolveAsCell();
-  await root.pull();
-  const resolvedCurrent = root.get();
+  const resolvedCurrent = await pulledOrRefused(root);
   const properties = schemaProperties(root.ref().schema);
   const names = new Set([
     ...Object.keys(properties),
