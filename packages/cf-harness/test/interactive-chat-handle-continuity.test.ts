@@ -486,6 +486,62 @@ describe("interactive chat handle continuity", () => {
     });
   });
 
+  for (
+    const { finalizeOnTurnLimit, kept } of [
+      { finalizeOnTurnLimit: true, kept: true },
+      { finalizeOnTurnLimit: false, kept: false },
+    ]
+  ) {
+    it(
+      `${
+        kept ? "keeps" : "drops"
+      } a failed turn's checkpointed handles when the host ${
+        finalizeOnTurnLimit ? "opts in" : "does not opt in"
+      } to retaining its checkpoint`,
+      async () => {
+        const engines: CfHarnessEngine[] = [];
+        const tokens: Record<string, string> = {};
+        const described: Record<string, boolean> = {};
+        const mintJson = async (engine: CfHarnessEngine, tag: string) => {
+          tokens[tag] = await engine.mintReferentHandle({
+            source: "loom_search",
+            value: { title: tag },
+            label: {},
+            labelSource: "query",
+          });
+        };
+        const service = new HarnessInteractiveChatService({
+          basePromptLoopOptions: { finalizeOnTurnLimit },
+          createPromptLoop: engineLoop([
+            async (engine, request) => {
+              await mintJson(engine, "checkpointed");
+              await request.onCheckpoint?.({
+                transcript: [
+                  ...request.transcript,
+                  ...completedBatch("call-1"),
+                ],
+                runState: engine.getRunState(),
+              });
+              await mintJson(engine, "after");
+              throw new Error("provider unavailable");
+            },
+            async (engine) => {
+              for (const [tag, token] of Object.entries(tokens)) {
+                described[tag] = (await describeIn(engine, token)).known;
+              }
+            },
+          ], engines),
+        });
+        await startSession(service);
+
+        await runTurn(service, "turn-failed");
+        await runTurn(service, "turn-after");
+
+        expect(described).toEqual({ checkpointed: kept, after: false });
+      },
+    );
+  }
+
   it("keeps a turn's handles out of the session when its completion fails to persist", async () => {
     const engines: CfHarnessEngine[] = [];
     let minted: string | undefined;
