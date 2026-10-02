@@ -11,11 +11,12 @@
  * says everything about a value that the format carries and nothing about how
  * the format carries it.
  *
- * Where the formal spec and this package disagree, the case says so: the
- * fixture records the spec's outcome, and this package's beside it as a
- * divergence. Generating the fixture fails when a case's declared divergence
- * does not hold, so that a fix here retires the mark rather than leaving it
- * to mislead.
+ * Where the formal spec says outright that this package falls short of it, the
+ * case says so: the fixture records the spec's outcome, and this package's
+ * beside it as a divergence. Where the spec does not settle a case, the case
+ * records this package's outcome as unspecified. Generating the fixture fails
+ * when a case's declared divergence does not hold, so that a fix here retires
+ * the mark rather than leaving it to mislead.
  *
  * This is reached through `for-testing-only.ts` and has no place in any
  * barrel.
@@ -24,7 +25,11 @@
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { FabricValue } from "@/interface.ts";
-import { ProblematicValue, UnknownValue } from "@/codec-common";
+import {
+  ProblematicStateError,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common";
 import { JsonCodecEngine } from "@/codec-json";
 import {
   FabricError,
@@ -89,11 +94,13 @@ export type Fvj1DecodeOutcome =
  * text that decodes makes an encode case of the value it decodes to, so most
  * cases check both directions.
  *
- * `section` names the part of the formal spec the case exercises. `divergence`
- * marks a case where this package does not do what the spec says, and gives
- * the spec's outcome: the text a value encodes to, or the value a text decodes
- * to, or that the text is refused. `unspecified` marks a case the spec does not
- * decide, recording what this package does without claiming it is required.
+ * `section` names the part of the formal spec the case exercises.
+ * `divergence` is a note on what the spec requires, for a value case where
+ * this package does not do it. The spec's text for such a value is not typed
+ * here but computed, by {@link plainJsonTextOf}, so a divergence can only be
+ * declared for a value that function writes. `unspecified` is a note on what
+ * the spec leaves open, for a case whose outcome is recorded without being
+ * claimed as required.
  */
 export type Fvj1ConformanceCase =
   & {
@@ -102,19 +109,8 @@ export type Fvj1ConformanceCase =
     readonly unspecified?: string;
   }
   & (
-    | {
-      readonly make: () => FabricValue;
-      readonly divergence?: {
-        readonly note: string;
-        readonly specText: string;
-      };
-    }
-    | {
-      readonly text: string;
-      readonly divergence?:
-        | { readonly note: string; readonly specValue: () => FabricValue }
-        | { readonly note: string; readonly specRefused: true };
-    }
+    | { readonly make: () => FabricValue; readonly divergence?: string }
+    | { readonly text: string }
   );
 
 /** Makers of examples of each class in one of the class tables. */
@@ -123,15 +119,12 @@ type ExampleMakers<ClassesByName> = {
 };
 
 /**
- * What a class's examples need beyond their makers: the spec section, and the
- * spec's text for each example where this package does not write it.
+ * What a class's examples need beyond their makers: the spec section, and a
+ * note where the spec does not settle how the class is written.
  */
 interface ClassCaseNotes {
   readonly section: string;
-  readonly divergence?: {
-    readonly note: string;
-    readonly specTexts: readonly string[];
-  };
+  readonly unspecified?: string;
 }
 
 //
@@ -171,13 +164,23 @@ const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
 
 /**
- * Note shared by the cases where this package's base64url decoding accepts
- * text no encoder writes.
+ * The clause the notes on loosely read states rest on, a requirement the spec
+ * states without saying which loose states it reaches.
  */
-const LOOSE_BASE64_NOTE = "Section 3 allows padding and nothing else outside " +
-  "the base64url alphabet, and its decoding-validation note requires a codec " +
-  "to reject a state it did not write. This implementation's base64url " +
-  "decoding accepts this state.";
+const REJECT_UNWRITTEN_STATE = "the decoding-validation note in section 3 " +
+  "requires a codec to reject a state it did not write";
+
+/** Note shared by the examples of the classes whose codecs are stubs. */
+const STUB_CODEC_NOTE = "1-fabric-values.md sections 1.4.3 and 1.4.4 give " +
+  "this class's codec as a stub whose encoding is being reworked. This " +
+  "implementation refuses to encode it.";
+
+/** Note shared by the cases with a key this implementation reserves. */
+const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
+  "note says this implementation does not yet meet that: it refuses " +
+  "`__proto__` and `constructor` on both sides of the wire. An " +
+  "implementation on a host that does not route assignment through a " +
+  "prototype reserves no names.";
 
 /** The cases that do not range over the class tables. */
 const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
@@ -316,13 +319,10 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "record keys that read as integers",
     section: SECTION_KEY_ORDER,
     make: () => ({ "2": "two", "10": "ten", a: "a" }),
-    divergence: {
-      note: "Section 10 orders keys by UTF-8 bytes, under which `10` comes " +
-        "before `2`. This implementation writes keys that read as array " +
-        "indices first and in numeric order, building its output through " +
-        "a JavaScript object, whose enumeration puts them there.",
-      specText: 'fvj1:{"10":"ten","2":"two","a":"a"}',
-    },
+    divergence: "Section 10 requires keys in UTF-8 byte order, under which " +
+      "`10` comes before `2`. This implementation writes keys that read as " +
+      "array indices first and in numeric order, building its output " +
+      "through a JavaScript object, whose enumeration puts them there.",
   },
   {
     name: "record naming a key twice",
@@ -335,25 +335,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "record with key __proto__",
     section: SECTION_RESERVED_KEYS,
     make: () => JSON.parse('{"__proto__":1}'),
-    divergence: {
-      note: "Section 4 lets a record carry any key. This implementation " +
-        "refuses `__proto__` and `constructor` on both sides of the wire, " +
-        "as the note there says; an implementation on a host that does not " +
-        "route assignment through a prototype reserves no names.",
-      specText: 'fvj1:{"__proto__":1}',
-    },
+    divergence: RESERVED_KEY_NOTE,
   },
   {
     name: "record with key constructor",
     section: SECTION_RESERVED_KEYS,
     make: () => ({ constructor: 1 }),
-    divergence: {
-      note: "Section 4 lets a record carry any key. This implementation " +
-        "refuses `__proto__` and `constructor` on both sides of the wire, " +
-        "as the note there says; an implementation on a host that does not " +
-        "route assignment through a prototype reserves no names.",
-      specText: 'fvj1:{"constructor":1}',
-    },
+    divergence: RESERVED_KEY_NOTE,
   },
 
   // Arrays, holes, and `undefined`.
@@ -393,12 +381,9 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "undefined with an empty-record state",
     section: SECTION_UNDEFINED,
     text: 'fvj1:{"/Undefined@1":{}}',
-    divergence: {
-      note: "Section 5 accepts both `null` and `{}` as the state of a " +
-        "stateless type. This implementation's `Undefined@1` codec accepts " +
-        "`null` alone.",
-      specValue: () => undefined,
-    },
+    unspecified: "Section 5 accepts `{}` as the state of a stateless " +
+      "type, while section 3 gives `Undefined@1` the state `null` and " +
+      `${REJECT_UNWRITTEN_STATE}. This implementation refuses \`{}\`.`,
   },
 
   // Records with `/`-prefixed keys.
@@ -459,6 +444,16 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_SYMBOL,
     make: () => Symbol("local"),
   },
+  {
+    name: "unregistered symbol with no description",
+    section: SECTION_SYMBOL,
+    make: () => Symbol(),
+  },
+  {
+    name: "unregistered symbol with the empty description",
+    section: SECTION_SYMBOL,
+    make: () => Symbol(""),
+  },
   { name: "bigint zero", section: SECTION_BIGINT, make: () => 0n },
   { name: "bigint one", section: SECTION_BIGINT, make: () => 1n },
   { name: "bigint minus one", section: SECTION_BIGINT, make: () => -1n },
@@ -475,13 +470,10 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bigint state not minimal",
     section: SECTION_BIGINT,
     text: 'fvj1:{"/BigInt@1":"AAA"}',
-    divergence: {
-      note: "Section 3 defines the state as the minimal two's-complement " +
-        "bytes, and its decoding-validation note requires a codec to reject " +
-        "a state it did not write. This implementation reads a state with " +
-        "a redundant leading byte as the value it stands for.",
-      specRefused: true,
-    },
+    unspecified: "Section 3 defines the state as the minimal " +
+      "two's-complement bytes without saying whether a decoder refuses " +
+      `others, though ${REJECT_UNWRITTEN_STATE}. This implementation reads ` +
+      "a redundant leading byte as the value it stands for.",
   },
   {
     name: "bigint state of no bytes",
@@ -507,13 +499,18 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bytes state holding whitespace",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AQ I"}',
-    divergence: { note: LOOSE_BASE64_NOTE, specRefused: true },
+    unspecified: "Section 3 refuses the standard-base64 characters without " +
+      `saying whether a decoder refuses whitespace, though ` +
+      `${REJECT_UNWRITTEN_STATE}. This implementation skips it.`,
   },
   {
     name: "bytes state with nonzero trailing bits",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AR"}',
-    divergence: { note: LOOSE_BASE64_NOTE, specRefused: true },
+    unspecified: "Section 3 does not say whether a decoder refuses nonzero " +
+      `bits after the last whole byte, though ${REJECT_UNWRITTEN_STATE}. ` +
+      "This implementation ignores them, reading `AR` as the byte `AQ` " +
+      "writes.",
   },
 
   // Nesting, and values beyond the class examples.
@@ -693,12 +690,6 @@ function sparseArrayOf(
   return result;
 }
 
-/** The spec text of the `FabricMap` examples, in maker order. */
-const MAP_SPEC_TEXTS = ['fvj1:{"/Map@1":[["a",1]]}', 'fvj1:{"/Map@1":[]}'];
-
-/** The spec text of the `FabricSet` examples, in maker order. */
-const SET_SPEC_TEXTS = ['fvj1:{"/Set@1":[1,2]}', 'fvj1:{"/Set@1":[]}'];
-
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
   readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
@@ -732,20 +723,11 @@ const INSTANCE_CLASS_NOTES: {
   FabricLink: { section: "3-json-encoding.md section 3, `Link@1`" },
   FabricMap: {
     section: "3-json-encoding.md section 3, `Map@1`",
-    divergence: {
-      note: "Section 3 specifies `Map@1` state as entry pairs in insertion " +
-        "order. This implementation's codec for it refuses to encode or " +
-        "decode.",
-      specTexts: MAP_SPEC_TEXTS,
-    },
+    unspecified: STUB_CODEC_NOTE,
   },
   FabricSet: {
     section: "3-json-encoding.md section 3, `Set@1`",
-    divergence: {
-      note: "Section 3 specifies `Set@1` state as values in insertion order. " +
-        "This implementation's codec for it refuses to encode or decode.",
-      specTexts: SET_SPEC_TEXTS,
-    },
+    unspecified: STUB_CODEC_NOTE,
   },
   ProblematicValue: {
     section: "3-json-encoding.md section 3, `Problematic@1`",
@@ -756,8 +738,6 @@ const INSTANCE_CLASS_NOTES: {
 /**
  * Returns one case for each maker in `makers`, named for its class and its
  * place among that class's makers.
- *
- * @throws If a class's divergence does not give one spec text per maker.
  */
 function classCasesOf<Name extends string>(
   makers: { readonly [N in Name]: readonly (() => FabricValue)[] },
@@ -765,26 +745,13 @@ function classCasesOf<Name extends string>(
 ): Fvj1ConformanceCase[] {
   const cases: Fvj1ConformanceCase[] = [];
   for (const name in notes) {
-    const { section, divergence } = notes[name];
-    const classMakers = makers[name];
-    if (
-      divergence !== undefined &&
-      divergence.specTexts.length !== classMakers.length
-    ) {
-      throw new Error(
-        `\`${name}\` has ${classMakers.length} makers and ` +
-          `${divergence.specTexts.length} spec texts.`,
-      );
-    }
-    classMakers.forEach((make, index) => {
-      const specText = divergence?.specTexts[index];
+    const { section, unspecified } = notes[name];
+    makers[name].forEach((make, index) => {
       cases.push({
         name: `${name}, example ${index + 1}`,
         section,
         make,
-        ...(divergence === undefined || specText === undefined
-          ? {}
-          : { divergence: { note: divergence.note, specText } }),
+        ...(unspecified === undefined ? {} : { unspecified }),
       });
     });
   }
@@ -806,9 +773,10 @@ const FIXTURE_ABOUT = "Generated by `deno task regenerate-fvj1-conformance` " +
  * past ASCII is escaped, so that the file is unchanged by any tool that
  * normalizes text.
  *
- * @throws If two cases share a name; if a value case's text does not decode
- *   back to its value and no divergence says so; or if a divergence a case
- *   declares does not hold.
+ * @throws If two cases share a name; if the codec fails other than by
+ *   refusing; if a value case's text does not decode back to its value, or
+ *   differs from what {@link plainJsonTextOf} writes for it, and no divergence
+ *   says so; or if a divergence a case declares does not hold.
  */
 export function fvj1ConformanceFixtureText(
   cases: readonly Fvj1ConformanceCase[],
@@ -828,26 +796,43 @@ export function fvj1ConformanceFixtureText(
 
 /**
  * Returns what encoding `value` with this package's default JSON codec does.
+ * A refusal is a throw of a plain `Error` or a `ProblematicStateError`, which
+ * are what the codec refuses with.
+ *
+ * @throws What the codec throws, when it is anything else: a `TypeError`,
+ *   say, is a fault in the codec rather than an answer from it.
  */
 export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1EncodeOutcome {
   try {
     return { text: jsonFromFabricValue(value) };
-  } catch {
-    return { refused: "unencodable" };
+  } catch (e) {
+    if (
+      (e instanceof Error && e.constructor === Error) ||
+      e instanceof ProblematicStateError
+    ) {
+      return { refused: "unencodable" };
+    }
+    throw e;
   }
 }
 
 /**
  * Returns what decoding `text` with this package's default JSON codec does,
  * the codec being strict, so that a malformation is refused rather than
- * returned as a `ProblematicValue`.
+ * returned as a `ProblematicValue`. A refusal is a throw of a
+ * `ProblematicStateError`, which is what a strict codec refuses with.
+ *
+ * @throws What the codec throws, when it is anything else.
  */
 export function fvj1DecodeOutcomeOf(text: string): Fvj1DecodeOutcome {
   let decoded: FabricValue;
   try {
     decoded = fabricFromJsonValue(text);
-  } catch {
-    return { refused: decodeRefusalOf(text) };
+  } catch (e) {
+    if (e instanceof ProblematicStateError) {
+      return { refused: decodeRefusalOf(text) };
+    }
+    throw e;
   }
   return { value: fvj1DescriptorOf(decoded) };
 }
@@ -856,7 +841,10 @@ export function fvj1DecodeOutcomeOf(text: string): Fvj1DecodeOutcome {
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
 ): Record<string, Fvj1Descriptor> {
-  const { name, section, divergence, unspecified } = conformanceCase;
+  const { name, section, unspecified } = conformanceCase;
+  const divergence = ("make" in conformanceCase)
+    ? conformanceCase.divergence
+    : undefined;
   const entry: Record<string, Fvj1Descriptor> = { name, section };
   const implementation: Record<string, Fvj1Descriptor> = {};
 
@@ -864,12 +852,24 @@ function fixtureEntryOf(
     const value = conformanceCase.make();
     const described = fvj1DescriptorOf(value);
     const encoded = fvj1EncodeOutcomeOf(value);
-    const caseDivergence = conformanceCase.divergence;
-    const specEncoded = (caseDivergence === undefined)
+    const plainText = plainJsonTextOf(value);
+    if (divergence !== undefined && plainText === undefined) {
+      throw new Error(
+        `${name}: declares a divergence for a value whose spec text this ` +
+          "module does not compute.",
+      );
+    }
+    const specEncoded = (plainText === undefined)
       ? encoded
-      : { text: caseDivergence.specText };
+      : { text: plainText };
     entry.encode = { value: described, ...specEncoded };
     if (!isSameOutcome(encoded, specEncoded)) {
+      if (divergence === undefined) {
+        throw new Error(
+          `${name}: encodes to ${JSON.stringify(encoded)}, not to ` +
+            `\`${plainText}\`.`,
+        );
+      }
       implementation.encode = encoded;
     }
 
@@ -889,23 +889,14 @@ function fixtureEntryOf(
   } else {
     const { text } = conformanceCase;
     const decoded = fvj1DecodeOutcomeOf(text);
-    const caseDivergence = conformanceCase.divergence;
-    const specDecoded: Fvj1DecodeOutcome = caseDivergence === undefined
-      ? decoded
-      : "specRefused" in caseDivergence
-      ? { refused: decodeRefusalOf(text) }
-      : { value: fvj1DescriptorOf(caseDivergence.specValue()) };
-    entry.decode = { text, ...specDecoded };
-    if (!isSameOutcome(decoded, specDecoded)) {
-      implementation.decode = decoded;
-    }
+    entry.decode = { text, ...decoded };
 
-    if ("value" in specDecoded) {
+    if ("value" in decoded) {
       // Built from the descriptor, so that the value encoded is the one the
       // fixture states rather than the one this decode happened to return.
       entry.encode = {
-        value: specDecoded.value,
-        ...fvj1EncodeOutcomeOf(fabricValueOfFvj1Descriptor(specDecoded.value)),
+        value: decoded.value,
+        ...fvj1EncodeOutcomeOf(fabricValueOfFvj1Descriptor(decoded.value)),
       };
     }
   }
@@ -917,13 +908,99 @@ function fixtureEntryOf(
           "the spec says.",
       );
     }
-    entry.divergence = { note: divergence.note, ...implementation };
+    entry.divergence = { note: divergence, ...implementation };
   }
   if (unspecified !== undefined) {
     entry.unspecified = unspecified;
   }
 
   return entry;
+}
+
+/**
+ * Returns the `fvj1:` text the spec gives `value`, when `value` is plain JSON
+ * that needs no encoding: `null`, a boolean, a finite number other than
+ * negative zero, a string, or an array or record of these, holding no hole and
+ * no key starting with `/`. Returns `undefined` for anything else.
+ *
+ * This writes the text without the codec, sorting each record's keys by their
+ * WTF-8 bytes as section 10 requires, so that the codec's key order is held
+ * to a computation of its own rather than to text typed by hand.
+ */
+function plainJsonTextOf(value: FabricValue): string | undefined {
+  const body = plainJsonBodyOf(value);
+  return (body === undefined)
+    ? undefined
+    : JsonCodecEngine.wrapEncodedValueForTesting(body, true);
+}
+
+/** Helper for {@link plainJsonTextOf}, which writes the JSON alone. */
+function plainJsonBodyOf(value: FabricValue): string | undefined {
+  if (
+    value === null || typeof value === "boolean" || typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value) &&
+      !Object.is(value, -0))
+  ) {
+    return JSON.stringify(value);
+  }
+
+  const parts: string[] = [];
+  if (isFabricArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      const part = (index in value) ? plainJsonBodyOf(value[index]) : undefined;
+      if (part === undefined) return undefined;
+      parts.push(part);
+    }
+    return `[${parts.join(",")}]`;
+  } else if (isFabricPlainObject(value)) {
+    const keys = Object.keys(value).map((key) => ({ key, bytes: wtf8Of(key) }))
+      .sort((a, b) => compareBytes(a.bytes, b.bytes));
+    for (const { key } of keys) {
+      const part = plainJsonBodyOf(value[key]);
+      if (part === undefined || key.startsWith("/")) return undefined;
+      parts.push(`${JSON.stringify(key)}:${part}`);
+    }
+    return `{${parts.join(",")}}`;
+  }
+  return undefined;
+}
+
+/**
+ * Returns the WTF-8 bytes of `text`: UTF-8, with a lone surrogate written as
+ * the three bytes its code unit's value would take.
+ */
+function wtf8Of(text: string): number[] {
+  const bytes: number[] = [];
+  for (const char of text) {
+    const point = char.codePointAt(0)!;
+    if (point < 0x80) {
+      bytes.push(point);
+    } else if (point < 0x800) {
+      bytes.push(0xc0 | (point >> 6), 0x80 | (point & 0x3f));
+    } else if (point < 0x10000) {
+      bytes.push(
+        0xe0 | (point >> 12),
+        0x80 | ((point >> 6) & 0x3f),
+        0x80 | (point & 0x3f),
+      );
+    } else {
+      bytes.push(
+        0xf0 | (point >> 18),
+        0x80 | ((point >> 12) & 0x3f),
+        0x80 | ((point >> 6) & 0x3f),
+        0x80 | (point & 0x3f),
+      );
+    }
+  }
+  return bytes;
+}
+
+/** Compares two byte sequences as unsigned bytes, a prefix first. */
+function compareBytes(a: readonly number[], b: readonly number[]): number {
+  for (let index = 0; index < a.length && index < b.length; index++) {
+    if (a[index] !== b[index]) return a[index]! - b[index]!;
+  }
+  return a.length - b.length;
 }
 
 /**
@@ -986,7 +1063,11 @@ export function fvj1DescriptorOf(value: FabricValue): Fvj1Descriptor {
     case "symbol": {
       const key = Symbol.keyFor(value);
       return (key === undefined)
-        ? { unregisteredSymbol: stringDescriptorOf(value.description ?? "") }
+        ? {
+          unregisteredSymbol: (value.description === undefined)
+            ? null
+            : stringDescriptorOf(value.description),
+        }
         : { symbol: stringDescriptorOf(key) };
     }
     case "number": {
@@ -1055,7 +1136,7 @@ export function fabricValueOfFvj1Descriptor(
       return Symbol.for(stringOf(payload));
     }
     case "unregisteredSymbol": {
-      return Symbol(stringOf(payload));
+      return (payload === null) ? Symbol() : Symbol(stringOf(payload));
     }
     case "array": {
       return arrayOf(payload);
