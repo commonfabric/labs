@@ -3,6 +3,7 @@
 import WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { toFileUrl } from "@std/path";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
@@ -481,6 +482,79 @@ Deno.test("rejected view mutations leave no persistent quota reservation", async
       })).ok !== undefined,
     );
     assertEquals(f.server.viewInterestsForSpace(f.space.did()).length, 64);
+  } finally {
+    await f.close();
+    resetServerExecutionConfig();
+  }
+});
+
+Deno.test("revocation before a failed resume response cannot restore phantom quotas", async () => {
+  setServerExecutionConfig(true);
+  const f = await fixture("revoked-resume");
+  try {
+    const session = await f.open();
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: [],
+        views: Array.from(
+          { length: 64 },
+          (_, i) => ({
+            id: `v${i}`,
+            revision: 0,
+            query: {
+              roots: [{
+                id: "of:visible",
+                selector: { path: [], schema: false },
+              }],
+            },
+            mode: "speculate",
+            componentContractVersion: "1",
+          }),
+        ),
+      })).ok !== undefined,
+    );
+    // Force the backend's lifecycle push before its refused resume verdict.
+    {
+      using _open = stub(f.server, "openSession", (request, connection) => {
+        connection.revokeSession(
+          f.space.did(),
+          session.sessionId,
+          "unauthorized",
+        );
+        return Promise.resolve({
+          type: "response",
+          requestId: request.requestId,
+          error: {
+            name: "SessionRevokedError",
+            message: "Revoked while opening",
+          },
+        });
+      });
+      assert(
+        (await f.request({
+          type: "session.open",
+          space: f.space.did(),
+          principal: f.principal.did(),
+          session,
+        })).error !== undefined,
+      );
+    }
+    const fresh = await f.open();
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: fresh.sessionId,
+        watches: Array.from(
+          { length: 1024 },
+          (_, i) => ({ id: `fresh${i}`, kind: "graph", query: { roots: [] } }),
+        ),
+      })).ok !== undefined,
+    );
+    assertEquals(f.socket.readyState, 1);
   } finally {
     await f.close();
     resetServerExecutionConfig();

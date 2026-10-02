@@ -728,7 +728,9 @@ export class RoutedMemoryHost {
         opens.delete(message.requestId);
         if (open !== undefined) {
           if (
-            message.error !== undefined && open.priorReservation !== undefined
+            message.error !== undefined &&
+            open.priorReservation !== undefined &&
+            sessions.has(open.reservation)
           ) {
             ticket!.context.watches.set(
               open.reservation,
