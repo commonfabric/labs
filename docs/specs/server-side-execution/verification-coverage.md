@@ -7271,7 +7271,16 @@ supply; OW29/OW32/OW34 closed):
     not retried in place. Non-stale refusals and promise rejections remain
     terminal in every posture, and client/OFF retains terminal behavior for
     stale reads: a graph whose setup writes never landed is a zombie unless
-    the serving side's materialization supplies the repair path. Explicit wave
+    the serving side's materialization supplies the repair path. A refusal
+    that names only policy manifests is the exception in every posture: the
+    instantiation installed a manifest another participant installed first,
+    and a manifest never changes once present, so a catch-up that loads it
+    repairs the commit with no serving side, and a catch-up that cannot load
+    it fails the start with the load's reason. A refusal that also names the
+    piece's own documents is the stale read it would be without the
+    manifest. The start loads the manifests its pattern names before it
+    instantiates, so this retry answers only a manifest installed after
+    those loads. Explicit wave
     abandon is classified separately and warned without incrementing the
     serving runtime's structure-load-failure observer. A recoverable failure
     is warned on the same terms while its one retry is outstanding, and is
@@ -7284,7 +7293,11 @@ supply; OW29/OW32/OW34 closed):
     terminal-behavior companion, and a second-refusal companion for the
     commit-time arm. The readiness assertions name a real conflicted
     document, so the catch-up's named-document pull is exercised rather
-    than skipped. And OW46's
+    than skipped. The manifest exception is pinned flag-OFF in
+    `cfc-policy-manifest-shared-install.test.ts`, by a second participant
+    starting a piece whose per-user part carries the policy, together with a
+    refusal over the piece's own documents beside the manifest staying
+    terminal. And OW46's
     `structure-load-stuck` counter is BLIND here: it fires 6× per run
     in BOTH arms and in the reds names only the HOST's space, because
     it counts deferred structure loads of DEMANDED roots and this

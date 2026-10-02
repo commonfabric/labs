@@ -90,6 +90,8 @@ import {
 import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
 import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
+  CFC_POLICY_MANIFEST_ID_PREFIX,
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
   validateCfcPolicyArtifactManifest,
@@ -1026,11 +1028,6 @@ export const spaceCellSchema = internSchema(
   },
 );
 
-const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
-  type: "object",
-  additionalProperties: true,
-} as const satisfies JSONSchema;
-
 /** The allocation record a space holds for one `PatternFactory.inSpace`
  *  name: the DID of the space the name reaches. */
 const inSpaceAllocationSchema = {
@@ -1168,6 +1165,14 @@ const externalObservationRefusal = (
 
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
+
+/** A document a commit retry's catch-up could not load, and the reason. */
+export type CommitRetryPullFailure = {
+  space: MemorySpace;
+  id: URI;
+  scope?: CellScope;
+  error: unknown;
+};
 
 /**
  * Main Runtime class that orchestrates all services in the runner package.
@@ -3354,14 +3359,21 @@ export class Runtime {
    * without scope use the space instance. If no array entry names a usable
    * address, the singular conflict supplies the recovery target.
    *
-   * Recovery is best-effort: failed waits and pulls leave the fresh retry's
-   * commit to decide whether its basis is valid. Aborting `teardownSignal`
-   * ends the wait; callers must check their lifetime before requeueing work.
+   * A policy manifest is pulled with the documents its rules live in, since
+   * a retry verifies the whole artifact.
+   *
+   * Recovery is best-effort: a failed wait or pull leaves the fresh retry's
+   * commit to decide whether its basis is valid. The pulls that failed are
+   * returned, each with its reason, so that a caller whose retry cannot
+   * succeed without a document can tell a document that could not be loaded
+   * from one that is absent. Aborting `teardownSignal` ends the wait and
+   * returns no failures; callers must check their lifetime before requeueing
+   * work.
    */
   async awaitCommitRetryReadiness(
     error: unknown,
     teardownSignal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<CommitRetryPullFailure[]> {
     const waitUnlessTeardown = async (
       operation: PromiseLike<unknown>,
     ): Promise<boolean> => {
@@ -3386,12 +3398,14 @@ export class Runtime {
       ?.readyToRetry;
     if (typeof readyToRetry === "function") {
       try {
-        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) return;
+        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) {
+          return [];
+        }
       } catch {
         // Readiness aborted — the retry's commit decides.
       }
     }
-    if (teardownSignal?.aborted) return;
+    if (teardownSignal?.aborted) return [];
     type ConflictAddress = { space: MemorySpace; of: URI; scope?: CellScope };
     const isPullableConflict = (value: unknown): value is ConflictAddress => {
       const conflict = value as Partial<ConflictAddress> | null | undefined;
@@ -3408,6 +3422,7 @@ export class Runtime {
       : isPullableConflict(rejection?.conflict)
       ? [rejection.conflict]
       : [];
+    const failures: CommitRetryPullFailure[] = [];
     const pulls: Promise<unknown>[] = [];
     const seen = new Set<string>();
     for (const conflict of conflicts) {
@@ -3418,23 +3433,39 @@ export class Runtime {
       });
       if (seen.has(key)) continue;
       seen.add(key);
+      const failed = (reason: unknown) => {
+        failures.push({
+          space: conflict.space,
+          id: conflict.of,
+          scope: conflict.scope,
+          error: reason,
+        });
+      };
       try {
         pulls.push(
           Promise.resolve(
             this.storageManager.open(conflict.space).sync(
               conflict.of,
-              { path: [], schema: false },
+              {
+                path: [],
+                schema: conflict.of.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX)
+                  ? CFC_POLICY_MANIFEST_DOC_SCHEMA
+                  : false,
+              },
               conflict.scope,
             ),
-          ).catch(() => undefined),
+          ).then((result) => {
+            if (result?.error !== undefined) failed(result.error);
+          }, failed),
         );
-      } catch {
-        // A synchronous pull failure leaves the retry's commit to decide.
+      } catch (reason) {
+        failed(reason);
       }
     }
-    if (pulls.length > 0) {
-      await waitUnlessTeardown(Promise.all(pulls));
+    if (pulls.length > 0 && !await waitUnlessTeardown(Promise.all(pulls))) {
+      return [];
     }
+    return failures;
   }
 
   /**

@@ -187,4 +187,28 @@ describe("served-event delivery failure policy", () => {
       permanentEvidence: true,
     });
   });
+
+  it("returns permanent protocol evidence for a foreign scoped read refusal by its type, never by its message", () => {
+    expect(
+      toReplicaLoadFailureError({
+        name: "ForeignScopedReadRefusedError",
+        message: "foreign scoped read refused on the serving path",
+      }, "load:3").failure,
+    ).toEqual({
+      failureClass: "protocol",
+      recoveryEpoch: "load:3",
+      permanentEvidence: true,
+    });
+
+    expect(
+      toReplicaLoadFailureError({
+        name: "ConnectionError",
+        message: "foreign scoped read refused on the serving path",
+      }, "load:4").failure,
+    ).toEqual({
+      failureClass: "connection",
+      recoveryEpoch: "load:4",
+      permanentEvidence: false,
+    });
+  });
 });

@@ -4,8 +4,10 @@ Status: the direct setup of section 3 is implemented behind the
 `sharedMemoryConnection` experimental flag, which is off by default
 ([EXPERIMENTAL_OPTIONS.md](../../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)).
 The wire behavior it shipped is specified in [04-protocol.md](./04-protocol.md);
-where the two differ, that chapter describes the system. The router (section
-5) and attestation (section 6) are proposed and not implemented.
+where the two differ, that chapter describes the system. The opt-in Mode A router contract is implemented in
+[routed-mode-a.md](./routed-mode-a.md) and the companion infra Rust service.
+Public deployment requires the security acceptance and main-artifact gates.
+Mode B and attestation (section 6) remain proposed.
 
 ## 1. Two ways to reach a host
 
@@ -27,9 +29,9 @@ chosen by the `sharedMemoryConnection` flag:
   requires.
 - **One connection per host**, under the flag. The factory dials one
   connection per storage address, with no space in it, and mounts the session
-  of every space on that host on it. Each key the manager acts as
-  authenticates once per connection with `connection.auth`, and its sessions
-  open naming that principal. Ending a session sends `session.close` and
+  of every space on that host on it. Each key the manager acts as authenticates
+  with `connection.auth`, renews before its lease expires, and opens sessions
+  naming that principal. Ending a session sends `session.close` and
   leaves the connection to its other sessions; the connection closes when the
   storage manager does. The ACL bootstrap of a fresh named space — a session
   as the active user to inspect the ACL, one as the space identity to write
@@ -47,19 +49,19 @@ Goals:
 
 1. One memory connection per client per toolshed in the direct setup (a client
    talking to one toolshed, as in local development).
-2. A client authenticates once per connection and key. It can authenticate
-   more than one key on a connection and open sessions as any of them.
+2. A client authenticates each key when it is first needed and renews it before
+   its lease expires. It can authenticate more than one key on a connection and
+   open sessions as any of them.
 3. Startup and reconnect latency for N spaces stays close to what N parallel
    sockets give: session opens on one connection run concurrently, and a
    reconnect restores every session at once.
 4. A router can sit between clients and toolsheds. The toolshed that owns a
    space verifies the client's signature itself and trusts the router for the
    freshness of it.
-5. Everything about establishing trust happens in one exchange at the start of
-   a connection, and nothing later in the connection carries authentication
-   material. That exchange is where remote attestation will be added
-   (section 6), so the steps it has today are placed where those steps will
-   go.
+5. Authentication material stays in connection-level exchanges: the initial
+   exchange and later lease renewals. Session opens and operations carry no
+   authentication material. Remote attestation can extend the initial exchange
+   (section 6), with its renewal policy specified separately.
 
 Non-goals:
 
@@ -81,12 +83,15 @@ established in two steps: the `hello` exchange, and then one `connection.auth`
 for each key the client will act as, signed over a challenge the server
 issued on the connection. `hello.ok` carries the first challenge, every
 `session.open` response carries another, and `connection.challenge` asks for
-one outright. A `session.open` then names an authenticated principal and
-carries no signature, so opens on one connection run concurrently and a
+one outright. With `connectionAuth`, the client keeps the audience from
+`hello.ok` and does not replace it from a `session.open` response. A
+`session.open` then names an authenticated principal and carries no signature,
+so opens on one connection run concurrently and a
 reconnect costs one signature per key rather than one per space. The server
 advertises the capability as `connectionAuth`; toolshed does so under the
-flag. `connection.release` ends a key's authentication, which a client uses
-after acting as a space identity for its genesis ACL.
+flag. `connection.release` ends a key's authentication for new session opens,
+which a client uses after acting as a space identity for its genesis ACL.
+Existing sessions remain under their original lease.
 
 The challenge is created by the peer the client is connected to, never by the
 client. A value the client chooses proves nothing about freshness by itself,
@@ -99,8 +104,8 @@ relay is what a router does (section 5).
 
 What a signature authorizes is wider than before: a signed `session.open` is
 good for one space, a signed `connection.auth` for everything its key can
-reach through the peer that issued the challenge, for as long as the
-connection stays open. The challenge binds it to one connection.
+reach through the peer that issued the challenge, while its authentication
+lease remains valid. The challenge binds it to one connection.
 
 **Per-space turns** (section 4.11.2 there). A connection handles the frames
 for one space in the order they were handed over, and the frames for different
@@ -121,11 +126,15 @@ one connection each hold a membership of their own in a room.
 
 `Client.mount()` takes the key a session acts as: a `SessionPrincipal`, which
 signs a `connection.auth` and, for a server without `connectionAuth`, a
-`session.open`. The client authenticates a key once per connection, however
-many sessions are mounted as it, and asks for a challenge of its own when the
-one it holds has expired or the key has signed it. Against a server without
-`connectionAuth` it signs each `session.open` and issues them one at a time,
-since each uses the connection's current challenge and receives the next.
+`session.open`. The client authenticates a key when first needed, however many
+sessions are mounted as it, and renews it before its lease expires. It asks for
+a challenge of its own when the one it holds has expired or the key has signed
+it. Against a server without `connectionAuth`, it signs each `session.open`
+and issues them one at a time, since each uses the connection's current
+challenge and receives the next.
+With `connectionAuth`, it keeps the audience and first challenge from
+`hello.ok`; subsequent `session.open` authentication metadata does not change
+that audience. It asks for a new challenge when the same key must sign again.
 
 A reconnect runs `hello` once and then restores every session at once. A
 session's requests wait for its own restore only, so a space whose reopen is
@@ -182,42 +191,86 @@ toolshed that owns its space. Two shapes are possible:
 ### 5.1 Requirements common to both modes
 
 **The router link.** A router and a toolshed establish trust once per pair,
-on a long-lived connection called the router link. The router authenticates on
-it with `connection.auth` as its own identity, and the toolshed's configuration
-lists the router identities it accepts. Being a router grants one thing: the
-toolshed accepts client authentication statements the router forwards. It
-grants no capability on any space. Everything expensive about trust between a
-router and a toolshed is paid on the link, once, and not per client or per
-session; today that is one signature, and later it is attestation (section 6).
+on a mutually authenticated, encrypted, long-lived connection called the router
+link. The router authenticates as its own identity, and the toolshed's
+configuration lists the router identities it accepts. The link agent holds that
+identity's key and a link epoch; replacing or revoking the link invalidates its
+epoch, tickets, client contexts, and sessions at the toolshed. Being a router
+grants one thing: the toolshed accepts verifiable client authentication
+statements it forwards. It grants no capability on any space. Router-to-toolshed
+authentication, and later attestation (section 6), is paid once per link rather
+than per client or session.
 
-**Client authentication through a router.** The client runs the same exchange
-it runs against a toolshed. The router issues the challenge in its `hello.ok`
-and advertises its own identity as the audience, exactly as a toolshed
-advertises its own, so the statement the client signs names the peer that
-issued its challenge. The router verifies each `connection.auth` itself. When
-the client first names a space on some toolshed, the router forwards the
-client's signed statement to that toolshed, marked as forwarded. The toolshed
-verifies the signature and `exp`, requires the statement's audience to be the
-identity of the router link it arrived on, and accepts that router's word for
-the challenge, which it did not issue. The toolshed therefore checks for
-itself that the key signed and which router it signed for, and trusts only
-that router for the statement having been made on a connection that is open
-now. A statement that leaks from one router is refused on every other
-router's link.
+**Client authentication through a router.** The link agent issues the
+challenge in the router's `hello.ok`. Its `sessionOpen` metadata carries the
+router identity as `audience`, the challenge, and a configured `deployment`
+identifier. A routed `connection.auth` signs the principal in `iss`, `cmd`, the
+router identity in `aud`, the memory protocol in `args.protocol`, the same
+identifier in `args.deployment`, the challenge, `iat`, and `exp`. The routed
+invocation is distinct from the direct invocation in
+[04-protocol.md](./04-protocol.md); clients and toolsheds negotiate its support
+before using a router. The client signs a challenge once per principal on its
+connection. A new router or router-link epoch requires a new challenge and
+signature.
 
-A statement's `exp` bounds two things, and the toolshed caps both. It is the
-window in which the statement may be forwarded, and it is the lease on the
-authentication it produces: a principal a toolshed admitted from a forwarded
-statement is authenticated until that `exp`, however long the upstream
-connection or the router link lives, and the toolshed caps the lease the
-client may ask for. When the lease runs out, requests naming the principal
-are refused, sessions opened as it are sent nothing more until it is renewed,
-and renewal takes a new signature from the client's key: re-forwarding the old
-statement extends nothing. A compromised router therefore holds a client's
-authority for at most one lease past the client's last signature, whatever it
-reports about the client's connection. The direct setup applies the same
-lease, so a client renews its authentication before it runs out, over a
-challenge it asks for.
+The link agent assigns a client-context ID unique within its link epoch from
+the worker IPC channel, never from client-supplied data. Its signed challenge
+record binds the deployment, router identity, link epoch, context ID,
+challenge value, issue time, and expiry. Its separately signed receipt binds
+that challenge record, a claimed principal, and a digest of the exact
+`connection.auth` statement bytes to a receipt time measured by the link
+agent. The worker supplies the claimed
+principal as bounded IPC metadata but supplies neither the time nor the
+context ID. The link agent receives and hashes the opaque statement without
+parsing Memory payloads and records one receipt per context, challenge, and
+claimed principal. The toolshed checks that the signed `iss` equals the
+receipt's principal; a different claim cannot permit a second accepted
+statement for the same signer and challenge. The router worker verifies the
+client's signature before it asks the link agent to retain the statement.
+
+**Forwarded-proof control.** The link agent sends the exact statement bytes,
+both signed records, the client-context ID, and the assigned upstream ticket
+identifier to a toolshed over its authenticated router link. The toolshed
+accepts this control message only from the link agent on that link, associates
+it with the one ticketed upstream for the context, hashes the statement bytes
+before parsing them, and verifies the records against the allowlisted router
+identity. It compares the digest, challenge, deployment, context, epoch, and
+times with the parsed and signed invocation. The records must show
+`issuedAt <= receivedAt < expiresAt`, with at most 60 seconds from issue to
+expiry. A public client cannot set a
+`forwarded` marker or send this control message. Session traffic on the
+ticketed upstream waits behind proof admission. The control-record encoding
+must have one interpretation and bounded lengths; its canonical bytes and test
+vectors are part of the phase 4 wire change.
+
+The toolshed verifies the client signature and signed fields itself. The
+invocation uses integral Unix seconds for `iat` and `exp`. At most 120 seconds
+of positive client clock skew is allowed against the attested receipt time;
+`exp` is no later than one hour after either `iat` or receipt, and a statement
+presented at or after `exp` is refused. A challenge received at or after its
+expiry, or a proof for a different deployment, router, context, or link epoch,
+is refused. Clock skew cannot extend the challenge or lease past its recorded
+expiry. The toolshed records each accepted challenge and statement digest by
+router, epoch, context, and principal. It rejects a different statement for
+the same challenge and principal. The same statement can reach another
+assigned toolshed before `exp`; on one toolshed it can establish at most one
+live backend context for that client context. Re-presentation for recovery
+atomically replaces that context rather than creating another. A statement
+from one router is refused on every other router's link.
+
+A statement's signed `exp` bounds both the window in which it may first reach a
+toolshed and the backend lease it creates. Forwarding it later never starts a
+new one-hour lease. The client renews before `exp` with a new challenge and
+signature for the same context. A permanent refusal of renewal revokes the
+routed context and its sessions; a transient failure leaves authority only
+until the existing `exp`, when the toolshed closes or revokes its sessions.
+Client close and router-link loss revoke the context and sessions immediately
+when the toolshed receives that event. A compromised router can withhold a
+client-close event, but cannot extend the signed lease. In routed mode,
+`connection.release` prevents new sessions as that principal while existing
+sessions retain their original lease; it is not a revocation signal. Context
+close is a separate authenticated router-link operation. The direct setup
+keeps its renewable-session behavior specified in [04-protocol.md](./04-protocol.md).
 
 When the router needs a statement it does not hold, or holds only expired —
 the client reaches a new toolshed after the connection has been open for a
@@ -236,7 +289,8 @@ interface ConnectionChallengePush {
 ```
 
 The client answers with a `connection.auth` for that principal over the new
-challenge. A toolshed never sends this push to a client connected to it
+challenge, using the router audience and deployment identifier from its
+`hello.ok`. A toolshed never sends this push to a client connected to it
 directly.
 
 **What the router is trusted with.** Requests after authentication carry no
@@ -305,7 +359,14 @@ client names a space that toolshed owns.
   toolshed admits sessions by what that `hello` declares, so what it admits
   is the client, not the router: a client without `stableExpressionResultIds`
   is refused upstream exactly as it would be directly. A router that cannot
-  forward a client's flags exactly refuses the client.
+  forward a client's flags exactly refuses the client. The router stage
+  requires the client's `connectionAuth` and routed-auth support; older clients
+  using signed `session.open` are not routed under this contract.
+- Authentication metadata: the client pins the router audience and deployment
+  identifier from the router's `hello.ok`. With `connectionAuth`, it ignores
+  the toolshed's `sessionOpen` metadata in a forwarded `session.open` response
+  and gets later challenges from the router. A toolshed's audience cannot
+  replace the router's on the client connection.
 - An upstream connection does not authenticate the router again. The toolshed
   issues tickets over the router link, and the router presents one in the
   `hello` of each upstream connection, which makes that connection part of
@@ -322,48 +383,49 @@ client names a space that toolshed owns.
 - Compression is negotiated separately on each hop.
 - Ordering and back pressure are what they are today: each upstream connection
   serves one client.
-- Before `session/detached` exists, the router may close the client connection
+- Before `session/detached` exists, the router closes the client connection
   when any of its upstream connections drops. That resets all of the client's
   spaces, which is today's behavior for a single host.
 
 ### 5.3 Mode B: one upstream per router per toolshed
 
-Everything in section 5.2 applies, and the shared upstream connection adds the
-following.
+Mode B shares the client-authentication and router-link requirements of
+section 5.1, but needs a separate security review before implementation. It
+replaces Mode A's ticketed upstream connections with one shared data channel.
+The minimum constraints for that review are:
 
 - **Receive order per session.** The per-space turns of section 3.1 would
   still make clients in one space wait for each other; the chains become per
   session.
-- **The router link carries the traffic.** The shared upstream connection is
-  the router link itself, so no tickets are needed.
+- **The router link carries the traffic.** The link agent authenticates the
+  toolshed, then hands only its data channel to a payload-opaque multiplexer.
+  No tickets are needed on that channel, and the multiplexer holds no router
+  identity key.
 - **Principals per client.** Authenticated principals belong to a client, not
-  to the connection. The router assigns each client an id, stamps it on every
-  frame it forwards, and the toolshed keeps principals and sessions under it.
+  to the connection. A client ID is assigned from the worker IPC channel, not
+  from a client field, and the toolshed keeps principals and sessions under it.
 - **Request id namespaces.** The client's request ids (`req:1`, `req:2`, …)
-  collide across clients. The router rewrites each id on the way up and
-  restores it on the way down.
+  collide across clients. The toolshed scopes each request ID by client ID;
+  the multiplexer does not rewrite payloads.
 - **Per-connection flags move to the session.** `stableExpressionResultIds`
   admission and the `syncSchemaTableV2` encoding are negotiated per connection.
-  Clients of different builds share one upstream connection, so either these
-  move into `session.open`, or the router normalizes every frame to what its
-  client negotiated.
+  Clients of different builds share one upstream connection, so their
+  negotiated flags move into each client's `session.open` admission state.
 - **Detach on client loss.** A client that disconnects from the router no
-  longer closes a connection the toolshed can see. The router sends
-  `session.close` upstream for each of that client's sessions.
-- **Large frames.** A WebSocket message is not interleaved with others, so a
-  large sync frame for one client holds the upstream connection while it
-  transfers. This needs either fragmenting large messages into chunks that
-  interleave by session, or bounding sync payloads by paging them.
+  longer closes a connection the toolshed can see. The multiplexer sends one
+  client-loss signal; the toolshed closes that client's sessions.
+- **Large frames.** The data channel carries bounded chunks interleaved fairly
+  across clients, with per-client and total reassembly limits at the toolshed.
 - **Back pressure.** The server sends without waiting for the peer. The router
-  holds a bounded buffer per client and drops a client that fills it, rather
-  than stalling the upstream connection for everyone; resume with declared
-  holdings makes that drop cheap for the client.
-- **Rate limiting** keys on the session principal rather than the TCP peer.
+  holds a bounded queue per client and drops a client that fills it, rather
+  than stalling every client on the shared channel.
+- **Rate limiting** keys on client context and principal, not the shared TCP
+  peer.
 - **Upstream loss affects every client at once.** Every session on the
-  connection detaches together, and the router must forward every client's
-  statement again, asking for a new signature where one has expired. The
-  router spreads the `session/detached` pushes over time to avoid every client
-  reopening in the same instant.
+  connection detaches together. The router obtains a new challenge and client
+  signature for each context in the new link epoch before restoring it. It
+  spreads client reconnects or `session/detached` pushes over time to avoid
+  every client reopening in the same instant.
 
 ### 5.4 Choosing a mode
 
@@ -398,14 +460,13 @@ What is known:
 
 Where it goes:
 
-- **Connection establishment is the one place trust is established.** Under
-  connection authentication (section 3.1), `hello` and `connection.auth` are
-  the only messages that carry authentication material, and establishment is
-  already a sequence of requests
-  and responses rather than one message. Attestation adds steps to that
-  sequence, under capability flags, and changes nothing after it:
-  `session.open` and every request that follows carry no material that
-  attestation would have to extend.
+- **Connection-level exchanges carry authentication.** Under connection
+  authentication (section 3.1), `hello` and `connection.auth` establish trust
+  initially, and a later challenge and `connection.auth` renew the lease. No
+  `session.open` or session operation carries authentication material.
+  Attestation adds steps to the initial exchange under capability flags.
+  Whether renewing a lease also renews attestation is part of the separate
+  attestation design.
 - **The router link is where router-to-toolshed attestation is paid.** It is
   long-lived and established once per pair, and Mode A's upstream connections
   inherit its trust through tickets. Attesting the link once covers every
@@ -414,10 +475,10 @@ Where it goes:
   the peer contributes and the client signs. Attestation evidence from the
   peer needs a value the client contributes, which `hello` can carry.
 
-Two things follow for work done now. Authentication is not added to any
-message outside connection establishment. And the state authentication
-produces, the set of authenticated principals, is kept by the connection, or
-by the client id on a router link, and never by a session.
+Two things follow for work done now. Authentication and renewal stay in
+connection-level messages. The state authentication produces, the set of
+authenticated principals, is kept by the connection or by the client context
+on a router link, never by a session.
 
 ## 7. Phases
 
@@ -426,8 +487,9 @@ by the client id on a router link, and never by a session.
 | 1 | Server: `connection.auth`, `connection.challenge`, `connection.release`, unsigned `session.open` naming a principal, per-space turns, `session.close`, presence membership per session | done |
 | 2 | Client: authentication per key, concurrent mounts, parallel restore, `session.close` on release | done |
 | 3 | Runner: one pooled client per host, session release in place of client close, behind `sharedMemoryConnection` | done |
-| 4 | The router link, forwarded statements, `connection/challenge`, the space field in the binary envelope, `session/detached` | proposed |
+| 4 | Routed-auth negotiation and client signing context, the router link, forwarded statements and evidence, `connection/challenge`, the space field in the binary envelope | proposed |
 | 5 | Mode A router, link tickets, and space directory | proposed |
+| 6 | `session/detached` for restoring one session without closing the client connection | proposed |
 
 The flag stays off in a deployment that routes a connection by the space its
 address names, until phase 5 gives it a router.

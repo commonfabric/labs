@@ -248,11 +248,11 @@ export interface GenerationContext {
 }
 
 /**
- * Type parameters bound to their arguments, for a payload read from the
- * declaration of the alias that holds it, as written, rather than from an
- * instantiation. Wherever a bound parameter appears, its argument is read. A
- * type that still depends on one where the binding cannot reach, such as
- * `T["name"]` or a conditional type, is reported through
+ * Type parameters bound to their arguments, for a CFC payload or a plain
+ * generic carrying authored binding identities, read from its declaration
+ * rather than from an instantiation. Wherever a bound parameter appears, its
+ * argument is read. A type that still depends on one where the binding cannot
+ * reach, such as `T["name"]` or a conditional type, is reported through
  * `uninterpretedTypeNodes` as not fully read.
  */
 export interface BoundTypeParameters {

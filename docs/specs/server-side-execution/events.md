@@ -617,6 +617,15 @@ loop's duty).
   Authorization or protocol-shaped failures without positive evidence,
   and ambiguous storage-time or transport outcomes, are not authorized
   for explicit replay.
+- A serving runtime's refusal of a foreign scoped read (protocol.md §2's
+  fail-closed interim) is a `protocol` verdict in `dispatch-load` and
+  terminalizes immediately. The read's scope and the runtime's serving
+  posture decide it, so the same read from the same runtime is refused
+  every time. A handler whose declared inputs reach a user- or
+  session-scoped document in another space therefore seals its
+  `needs-attention` notice at once, and the arrival barrier releases the
+  space's later events without waiting out the budget. Explicit retry
+  is the recovery once a runtime no longer refuses the read.
 - An event held only behind an earlier failed head preserves arrival
   order but records no checkpoint and spends no budget. A load-park
   observation neither increments nor clears the independent cold-view

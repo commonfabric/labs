@@ -1,4 +1,8 @@
-export { decomposeSchema, recomposeSchema } from "./schema-decompose.ts";
+export {
+  decomposeSchema,
+  recomposeSchema,
+  SchemaNotDecomposableError,
+} from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
 export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
@@ -275,10 +279,6 @@ export {
   pushFrame,
   pushFrameFromCause,
 } from "./builder/pattern.ts";
-export {
-  SPACE_ACCESS_NOTICE_TYPE,
-  type SpaceAccessNotice,
-} from "./builder/space-access-notice.ts";
 export {
   AuthSchema,
   type Cell as BuilderCell,

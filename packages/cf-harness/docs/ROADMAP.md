@@ -75,8 +75,8 @@ permanently growing implementation plan.
   stopped-but-never-deleted piece whose source-history revision is a
   storage-retention root the piece list does not reveal — a piece `register`
   named is as retained as one it did not, so registration changes findability
-  and not retention — and handle-table entries accumulate per run with no
-  expiry.
+  and not retention — and handle-table entries accumulate per run, and across
+  every turn of an interactive session, with no expiry.
 - Add an outbound CFC flow check on compiled pattern source. The current
   space-equality gate covers inbound input links only; nothing checks what a
   compiled pattern's own code sends out of the session space.

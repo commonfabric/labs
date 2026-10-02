@@ -12,7 +12,7 @@
  * queries materialize labeled results which the runtime measures on cell reads.
  */
 
-import { readCeilingShapeError } from "@commonfabric/memory/v2";
+import { readCeilingShapeError, toDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
@@ -170,14 +170,16 @@ export function assertCfcReadCeiling(
     isSchedulerDependencyRead(options?.meta)
   ) return;
   const metadata = readStoredCfcMetadata(tx, address);
+  // A read addresses the stored document, so its path is rooted there.
+  const documentPath = toDocumentPath(address.path);
   let entries = cfcLabelViewFromMetadata(
     metadata,
-    canonicalizeDocumentPath(address.path),
+    canonicalizeDocumentPath(documentPath),
   )?.entries ?? [];
   if (linkProbe) {
     entries = entries.filter((entry) => readConsumesEntry("followRef", entry));
-  } else if (address.path.at(-1) === "length") {
-    const parentPath = address.path.slice(0, -1);
+  } else if (documentPath.at(-1) === "length") {
+    const parentPath = toDocumentPath(documentPath.slice(0, -1));
     // Only an array's native length observes its parent's membership. The
     // verifier probe distinguishes it from an ordinary object field without
     // exposing or consuming the parent's payload.

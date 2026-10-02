@@ -85,6 +85,16 @@ happens to know. Handles cross that boundary — a child resolves tokens its
 parent minted — but the brief around them does not. Closing that is live work,
 not a settled part of the design.
 
+What crosses back is handles too. A string a child's structured return would
+otherwise seal as an `opaque:` link reaches the parent as a `cfh:v:` return
+referent: the parent can name it in another child's goal, and that child can
+spend it as the `browser` tool's `urlHandle` or `valueHandle`, while neither
+parent nor `describe_handle` ever reads it. A field that takes an address, such
+as `skillHandle`, refuses one. That is how one browser child's finding — a URL,
+a value on a page — becomes the input of the next without passing through the
+model that planned them. The owner, whose run it is, sees the string in place of
+the token where the final answer names one.
+
 ## Why This Exists
 
 Common Fabric needs an agent harness that can become CFC-aware without
@@ -126,8 +136,9 @@ What works today:
   [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
 - built-in tools:
   - `bash`
-  - `browser` (structured host browser control for the browser subagent profile
-    only)
+  - `browser` (structured browser control for the browser subagent profile only,
+    executed by a browser host attached to the run or else through the Browser
+    Access lease; see [A browser host](#a-browser-host))
   - `read_file`
   - `view_image`
   - `web_fetch` (explicit parent allowlist or `web_fetch` subagent profile only)
@@ -141,6 +152,10 @@ What works today:
   - `finish_task` (parent-only answer with optional client actions, question, or
     reason the task cannot proceed; ends the turn through ordinary policy and
     artifacts)
+  - `weaver_action` (parent-only, present only when the host opts the session
+    in: asks the person's client to run up to eight client actions mid-turn and
+    waits for the person to settle each; never a default tool, never offered to
+    a subagent)
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the
     host-owned result file)
@@ -231,11 +246,11 @@ What works today:
 - provider-reported per-turn token usage in run reports, with aggregate input,
   cached-input, cache-write, output, reasoning, and total tokens surfaced in
   operator and batch results
-- GPT-5.6 gateway cost estimates when the provider returns complete cache usage
-  detail; estimates use the public OpenAI token schedule and are kept distinct
-  from provider-reported cost
+- GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
+  cache usage detail; estimates use the public OpenAI token schedule and are
+  kept distinct from provider-reported cost
 - stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6 gateway implicit/explicit cache-mode controls
+  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
@@ -420,6 +435,15 @@ section pass `--model-provider` for one run; `CF_HARNESS_MODEL_PROVIDER` selects
 one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
 
+New runs default to `gpt-6.1-sol`. `--model` or `CF_HARNESS_MODEL` selects a
+different model for a new run. Gateway resumes keep their recorded model unless
+`--model` explicitly changes it; Codex resumes require the recorded model and
+reject model changes. The console uses the same new-run default. GPT-6.1 Sol
+supports reasoning efforts `low`, `medium` (provider default), `high`, `xhigh`,
+and `max`; it does not support `none` or `minimal`. Both the gateway and Codex
+adapters reject unsupported known-model efforts before dispatch; Codex validates
+them before resolving credentials.
+
 A flag the CLI does not declare is refused, never ignored, because an ignored
 restriction is a run without it: `--allowed-tools read_file` stops before any
 model call with
@@ -469,14 +493,14 @@ deno task run -- \
   --print-transcript
 ```
 
-GPT-5.6 cache experiment:
+GPT-6.1 Sol cache experiment:
 
 ```bash
 cd packages/cf-harness
 CF_HARNESS_API_KEY=... deno task run -- \
   --workspace ../.. \
   --model-provider openai-compatible-gateway \
-  --model gpt-5.6-terra \
+  --model gpt-6.1-sol \
   --reasoning-effort low \
   --prompt-cache-mode explicit \
   --prompt "Inspect the cf-harness package and summarize its model adapters."
@@ -488,8 +512,15 @@ including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
 that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the public OpenAI GPT-5.6 price
-schedule and is not an invoice or a subscription quota conversion.
+`estimatedCostUsd` is an estimate based on the
+[public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
+for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
+subscription quota conversion.
+
+GPT-6.1 Sol estimates use $2 input, $0.10 cached input, $2.50 cache writes, and
+$10 output per million tokens. Above 272,000 input tokens, the full request uses
+2x input/cache rates and 1.5x output rates. These are standard API rates, not
+fast-mode, batch, regional-processing, or subscription prices.
 
 Interactive streams emit `turn_usage` after each completed model call with the
 root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
@@ -1084,11 +1115,15 @@ being retyped. Loom retrieval uses the parallel `cfh:v:` grammar for admitted
 non-cell document referents, which can be delegated and consumed by the agent
 result writer. It does not expose a general value-handle dereference or release
 API. Token derivation is deterministic: the suffix is computed from the table's
-salt (the run id) and the normalized address, so the same referent yields the
-same token within a run and two spellings of one address (an LLM-friendly link
-and the bare entity URI, say) share one token. A suffix collision re-derives a
-fresh five-character suffix with a counter mixed into the hash, so no token is
-ever a prefix of another.
+salt (the id of the run that created the table) and the normalized address, so
+the same referent yields the same token within a table and two spellings of one
+address (an LLM-friendly link and the bare entity URI, say) share one token. An
+interactive session carries its table from turn to turn: each turn is a fresh
+run with its own run id that starts from the session's table, keeping its salt,
+so a token from an earlier turn resolves in a later one and an address held
+already keeps its token. A suffix collision re-derives a fresh five-character
+suffix with a counter mixed into the hash, so no token is ever a prefix of
+another.
 
 The table supports swapping in both directions:
 
@@ -1104,9 +1139,13 @@ The table supports swapping in both directions:
   reference string; a well-formed token the table does not hold is left
   untouched.
 
-The table is per-run state: it is persisted in `run-state.json` alongside the
+The table is run state: it is persisted in `run-state.json` alongside the
 transcript and policy evidence, and a resumed run (`--resume-run`) carries its
-table, so tokens stay stable across resume.
+table, so tokens stay stable across resume. An interactive session also commits
+the table with each checkpoint, and the next turn's run starts from it, less its
+skill-context entries: an acquired skill's scripts are recorded on the run that
+acquired them, so a later turn holds no such handle and acquires the skill
+again.
 
 The prompt/tool loop applies the swaps at three seams. Successful tool output
 bound for model context carries tokens, while the persisted tool-output artifact
@@ -1679,7 +1718,7 @@ limits; the question determines how much research is useful:
 
 The tool is available to the parent and `pattern-author` whenever the run can
 supply a documentation corpus or pattern index. The gateway transport uses
-`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-5.6-luna`.
+`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-6-luna`.
 Research is a private tool loop, not web search or a delegable child profile.
 Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
 `cf:pattern:<id>`; index lookups and retained evidence use the bare id.
@@ -1895,12 +1934,13 @@ chronological order. Saved unscoped kits are interpreted in one read boundary:
 orientation. Stored transcripts are not rewritten. Saved unscoped kits retain
 their implementation admission contract; new calls use the two purposes above.
 
-Interactive sessions commit the original user goal, selected research, and the
-full model-context CFC record atomically with resumable history. A later root
-task retains that goal alongside its current request and inherits those findings
-as historical context, including after SQLite restart. It receives current
-grants independently; earlier bindings are not automatically transferred to a
-child. By default, a failed turn retains the previous checkpoint. The Loom
+Interactive sessions commit the original user goal, selected research, the full
+model-context CFC record, and the handle table atomically with resumable
+history; the handle table follows whichever checkpoint is committed. A later
+root task retains that goal alongside its current request and inherits those
+findings as historical context, including after SQLite restart. It receives
+current grants independently; earlier bindings are not automatically transferred
+to a child. By default, a failed turn retains the previous checkpoint. The Loom
 interactive host opts into `finalizeOnTurnLimit`: a failed provider call can
 retain the last resumable checkpoint: a validated complete tool batch or
 opening-research handoff with matching research, CFC state, and omission
@@ -2700,6 +2740,95 @@ deno task run -- \
   --allow-subagent-profile browser \
   --prompt "Delegate browser inspection of the local app and summarize the result."
 ```
+
+### A browser host
+
+A run may instead have a browser host attached: a trusted component, such as the
+Weaver, that owns a web engine, shows its page to the owner, and executes the
+`browser` tool's operations in the one session it holds for the run. The
+protocol is `src/contracts/browser-host.ts` (`HarnessBrowserHost`), and the
+tool's host backend is `src/tools/browser-host-backend.ts`. The interactive chat
+service takes a host per turn (`startTurn`'s `attached.browserHost`), which is
+how the console's [browser host routes](console/README.md#browser-hosts) reach
+it.
+
+With a host, the tool offers more than a lease does, and the model is offered
+the host's descriptor rather than the lease's: `back`, `forward`, `reload`,
+`scroll`, `screenshot` (whose pixels reach the model's next turn as an image,
+one pixel per CSS pixel, with whatever the page shows in them), a `click` at a
+point of that screenshot, and `handoff`, which gives the page to the owner for a
+fixed reason — `sign-in`, `one-time-code`, `challenge`, or `choice` — and
+returns whether they finished or declined; the host shows the owner fixed words
+for the reason, never words an agent wrote. `press` takes only keys that move,
+submit, or dismiss, none of which puts a character into the page. A host waits
+for a ref, a load state, or a URL, never for a time, and takes no `timeoutMs` —
+an operation waits as long as the page or the owner takes. It ends when the host
+answers, when the host's stream or the turn ends (settling it as
+`session-ended`), or when the run's abort signal fires. A browser child in such
+a run holds the `browser` tool alone, with no skill scripts and no host
+execution. Every result carries the page: the address the host committed for it,
+and the title the page wrote.
+
+No operation names this device, its network, or an address written as an IP
+literal: `open`, a `urlHandle`'s value, and a `urlPattern` naming a host are
+refused here, and the host refuses such a load whatever starts it. Once the
+owner finishes a hand-off, the page may hold their sign-in, so from then on the
+session can only be read and opened on the origin they finished on: `click`,
+`check`, `press`, `fill`, `type`, and `select` change the page, `back` and
+`forward` leave it for an address nobody checked, and `reload` may send it
+again, so all of them are refused.
+
+A value reaches a page in one of two ways, and the host is told which:
+
+- text the agent wrote is entered as given;
+- a string a browser child found on the web, which its parent holds as a
+  `cfh:v:` return referent and passes on without reading, goes as a
+  `handle-value`, and the host enters it and leaves it out of later snapshots,
+  since no model that saw it chose it. An address one resolves to is opened the
+  same way, and the host reports that document by its origin alone. A referent
+  labeled above the run's read ceiling is refused.
+
+The host path takes no value from the owner's space: nothing yet holds such a
+value to the page it was meant for, so an address handle (`cfh:a:`) is refused
+there. Only a browser child of a run with a host returns referents, and only
+before the owner finishes a hand-off; after one, a page may hold their account,
+which no label describes, so its strings stay sealed.
+
+Nothing asks the owner whether a value may go to a page, or whether a click may
+commit them to something: a question at every step teaches a person to agree
+without reading. Until release rules over a value's CFC label decide it, the
+owner's task and the guidance below are the only limit on what an agent enters
+or clicks.
+
+What a host shows is labeled by where the session stands. Before any hand-off it
+is a fresh browser with no sign-in, so what it shows is the public web: text and
+pixels a page wrote, which may carry instructions. Each result enters the
+model's context under the unscreened prompt-injection caveat
+(`prompt-injection-risk-unscreened`), sourced to the page's origin, under any
+enforcement mode, and a run whose read ceiling does not admit it is told the
+action ran and given none of the page. A child's return brings the child's label
+into its parent's model context, as every child's does, so the caveat reaches
+the parent with whatever crosses — a scalar, a summary, a referent. Once the
+owner finishes a hand-off, a page may show their account, which no label
+describes, so a run under `enforce-explicit` or `enforce-strict` learns only how
+the hand-off ended and on which origin, refuses every action but another
+`handoff`, and observes nothing more of the page.
+
+A page can show what it was given back — in its text, its title, its address, or
+a screenshot. Wherever a host's later answer carries a value it was sent, the
+harness puts the value's handle in its place before a model reads the answer,
+and the host paints over every field a value went into before it takes a
+screenshot. What the page shows after changing a value is the page's.
+
+The host decides which fields only the owner may fill. Its refusals come back
+under their own codes — `stale_ref`, `owner_only_field`, `session_ended` —
+beside the lease's.
+
+A turn with a host is guided on both sides (`src/browser-host-guidance.ts`): the
+parent is told how to split web work between browser children and pass their
+findings on as handles, and a browser child what the owner sees and what it may
+do without asking anyone. A turn whose browser child finished may end with a
+Markdown answer rather than a named piece.
 
 The `web_fetch` profile is the preferred first-pass path for web page
 inspection. It gives the child only the `web_fetch` tool: no shell, no browser,
