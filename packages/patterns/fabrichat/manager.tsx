@@ -659,6 +659,19 @@ export type FabriChatManagerOutput = ChatManagerOutput & {
   [NAME]: string;
 };
 
+/** Selects a room by reference without reading its session-local state. */
+const selectRoom = handler<unknown, {
+  selected: Writable<{ room?: Cell<ChatRoomLink> }>;
+  room: Cell<ChatRoomLink>;
+}>(
+  toSchema<unknown>(),
+  toSchema<{
+    selected: Writable<unknown>;
+    room: OpaqueCell<unknown>;
+  }>(),
+  (_event, { selected, room }) => selected.set({ room }),
+);
+
 /** Owns the user's protected index, with their profile supplied by its host. */
 export const FabriChatManagerCore = pattern<
   { myProfile: Cell<ChatProfile | undefined> },
@@ -697,7 +710,7 @@ export const FabriChatManagerCore = pattern<
   const joinableByLink = new Writable.perSession(false);
   const members = new Writable.perSession("");
   const myAddress = computed(() => viewerPrincipal() ?? "");
-  const selected = new Writable.perSession<{ room?: Cell<ChatRoomOutput> }>({});
+  const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>({});
   const entries = computed(() => state.rooms.get());
   const latestOutcome = computed(() =>
     state.requests.key(latestStart.get().requestId).get()
@@ -765,7 +778,7 @@ export const FabriChatManagerCore = pattern<
               <cf-hstack gap="2">
                 <cf-button
                   variant="ghost"
-                  onClick={action(() => selected.set({ room: entry.room }))}
+                  onClick={selectRoom({ selected, room: entry.room })}
                 >
                   {entry.room.get()?.about?.title || (entry.kind === "direct"
                     ? `With ${entry.counterpart ?? "someone"}`

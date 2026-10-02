@@ -9939,27 +9939,22 @@ export class Runner {
     // For event preflight, writable-input links are narrower than traversing
     // captured argument objects and avoid treating broad closures as demand.
     for (const read of reads) {
-      let target = read;
-      if (read.overwrite === "redirect") {
-        try {
-          const { overwrite: _overwrite, ...resolved } = resolveLink(
-            this.#runtime,
-            depTx,
-            read,
-            "writeRedirect",
-          );
-          target = {
-            ...resolved,
-            schema: resolved.schema ?? read.schema,
-          };
-        } catch (error) {
-          logger.debug("scheduler-read-redirect", () => [
-            "Unable to resolve scheduler read redirect",
-            { read, error },
-          ]);
-        }
-      }
-      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get();
+      // A property traversal follows readable handles while leaving opaque
+      // references intact. Its reader schema governs every redirect crossing.
+      const readerSchema = read.schema ?? true;
+      const inputSchema = cfcSchemaWithInheritedDefs(
+        { type: "object", properties: { input: readerSchema } },
+        isObjectNotArray(readerSchema)
+          ? resolveExternalRootRefForStructure(readerSchema).$defs
+          : undefined,
+      );
+      const input = this.#runtime.getImmutableCell(
+        read.space,
+        { input: this.#runtime.getCellFromLink(read).getAsLink() },
+        inputSchema,
+        depTx,
+      );
+      input.get({ traverseCells: true });
     }
   }
 
