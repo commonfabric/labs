@@ -64,26 +64,44 @@ describe("scoped-internal-cell-seed", () => {
     await server.close();
   });
 
-  /**
-   * Loads the draft-holding piece in a runtime with a memory session of its
-   * own, as a page load does, and returns the piece's draft cell.
-   */
-  async function load(scope: "user" | "session", as: Identity) {
+  /** Opens a runtime with a memory session of its own, as a page load does. */
+  function openRuntime(as: Identity) {
     const manager = EmulatedStorageManager.connectTo(server, { as });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
     });
     opened.push({ runtime, manager });
+    return runtime;
+  }
+
+  /** The pattern that holds a draft cell of the given scope. */
+  function draftHolder(runtime: Runtime, scope: "space" | "user" | "session") {
     const { pattern, Cell } = createTrustedBuilder(runtime).commonfabric;
-    const scoped = scope === "user" ? Cell.perUser : Cell.perSession;
-    const DraftHolder = pattern(
+    const scoped = scope === "space"
+      ? Cell.perSpace
+      : scope === "user"
+      ? Cell.perUser
+      : Cell.perSession;
+    return pattern(
       () => ({ draft: scoped.of<Draft>(EMPTY_DRAFT) }),
-      false,
+      { type: "object", properties: {} },
       resultSchema,
     );
+  }
+
+  /**
+   * Loads the draft-holding piece in a runtime of its own, and returns the
+   * piece's draft cell.
+   */
+  async function load(scope: "user" | "session", as: Identity) {
+    const runtime = openRuntime(as);
     const resultCell = runtime.getCell(space, "draft holder", resultSchema);
-    const result = await runtime.runSynced(resultCell, DraftHolder, {});
+    const result = await runtime.runSynced(
+      resultCell,
+      draftHolder(runtime, scope),
+      {},
+    );
     await runtime.idle();
     return { runtime, draft: result.key("draft") };
   }
@@ -122,4 +140,30 @@ describe("scoped-internal-cell-seed", () => {
 
     expect(reloaded.draft.get()).toEqual({ title: "kept", members: "" });
   });
+
+  for (const [from, to] of [["user", "space"], ["session", "user"]] as const) {
+    it(`reads a field written after the cell's scope changes from ${from} to ${to} beside its defaults`, async () => {
+      // The same partial cause names the cell in both versions, so the
+      // manifest entry the first version left is for the cell's other scope.
+
+      const runtime = openRuntime(owner);
+      const resultCell = runtime.getCell(
+        space,
+        "rescoped holder",
+        resultSchema,
+      );
+      await runtime.runSynced(resultCell, draftHolder(runtime, from), {});
+      const result = await runtime.runSynced(
+        resultCell,
+        draftHolder(runtime, to),
+        {},
+      );
+      await runtime.idle();
+      const draft = result.key("draft");
+      await writeTitle({ runtime, draft }, "rescoped");
+
+      expect(draft.resolveAsCell().getAsNormalizedFullLink().scope).toBe(to);
+      expect(draft.get()).toEqual({ title: "rescoped", members: "" });
+    });
+  }
 });

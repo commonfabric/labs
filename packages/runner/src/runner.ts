@@ -3161,9 +3161,14 @@ export class Runner {
         descriptor,
         tx,
       );
+      const derivedScope = derivedCell.getAsNormalizedFullLink().scope;
+      // An entry matches only at the scope it records: a pattern version that
+      // changes the cell's scope keeps its partial cause, and the entry the
+      // earlier version left vouches for an instance at the other scope.
       const manifestMatch = existingManifest.findIndex((existingDescriptor) =>
         deepEqual(existingDescriptor.partialCause, descriptor.partialCause) &&
-        existingDescriptor.kind === descriptor.kind
+        existingDescriptor.kind === descriptor.kind &&
+        parseLink(existingDescriptor.link, resultCell)?.scope === derivedScope
       );
       // Re-emit the manifest link and backlink from the current descriptor on
       // every setup. A compatible setsrc may narrow an internal schema while
@@ -3192,7 +3197,7 @@ export class Runner {
       // instance is probed on every setup; a synced start pulls that instance
       // first (`#syncCellsForRunningPattern()`).
       const vouched = manifestMatch !== -1 &&
-        scopeRank(derivedCell.getAsNormalizedFullLink().scope) <=
+        scopeRank(derivedScope) <=
           scopeRank(resultCell.getAsNormalizedFullLink().scope);
       if (!vouched) {
         const schemaDefault = isObjectOrArray(descriptor.schema)
