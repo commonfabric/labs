@@ -37,10 +37,14 @@ declare interface SqliteDb<T = SqliteDatabase>
   extends BrandedCell<T, "sqlite"> {}
 
 declare const SCOPE_BRAND: unique symbol;
-declare type PerSpace<T> = T & { readonly [SCOPE_BRAND]?: "space" };
-declare type PerUser<T> = T & { readonly [SCOPE_BRAND]?: "user" };
-declare type PerSession<T> = T & { readonly [SCOPE_BRAND]?: "session" };
-declare type PerAny<T> = T & { readonly [SCOPE_BRAND]?: "any" };
+declare type ScopeTag<T, Scope extends string> = T extends unknown
+  ? { readonly [SCOPE_BRAND]?: Scope } | Extract<T, null | undefined>
+  : never;
+declare type Scoped<T, Scope extends string> = T & ScopeTag<T, Scope>;
+declare type PerSpace<T> = Scoped<T, "space">;
+declare type PerUser<T> = Scoped<T, "user">;
+declare type PerSession<T> = Scoped<T, "session">;
+declare type PerAny<T> = Scoped<T, "any">;
 `;
 
 /**

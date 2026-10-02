@@ -58,12 +58,23 @@ import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
+  CFC_CARRIER_PROPERTY,
+  cfcCarrierProperty,
+} from "../typescript/cfc-carrier.ts";
+import {
   getScopeBrand,
+  hasNestedScopeBrands,
+  isScopeBrandMember,
   SCOPE_WRAPPER_FOR_SCOPE,
+  type ScopeBrand,
   scopeForWrapperName,
+  scopePayloadType,
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
-import { scopeInsideUnionError } from "../scope-placement.ts";
+import {
+  scopeAroundCellUnionError,
+  scopeInsideUnionError,
+} from "../scope-placement.ts";
 import { withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
@@ -248,10 +259,32 @@ const applyScopeToAsCellEntry = (
     return { kind: entry, scope };
   }
   if (isObjectOrArray(entry)) {
+    // A cell another scope's wrapper caps is a wrapper nested in another with
+    // no cell between them, whose scope would replace the cap.
+    if (entry.scope !== undefined && entry.scope !== scope) {
+      throw nestedScopeError();
+    }
     return { ...entry, scope };
   }
   return entry;
 };
+
+/** Whether `schema` declares a cell: an object with an `asCell` entry. */
+const isHandleSchema = (schema: unknown): boolean =>
+  isObjectOrArray(schema) && !Array.isArray(schema) &&
+  Array.isArray((schema as MutableJSONSchemaObj).asCell) &&
+  ((schema as MutableJSONSchemaObj).asCell as unknown[]).length > 0;
+
+/** Whether `schema` is `{ type: "null" }` or `{ type: "undefined" }` alone. */
+const isNullishSchema = (schema: unknown): boolean =>
+  isObjectOrArray(schema) && !Array.isArray(schema) &&
+  Object.keys(schema).length === 1 &&
+  ((schema as { type?: unknown }).type === "null" ||
+    (schema as { type?: unknown }).type === "undefined");
+
+/** The error for a scope wrapper nested in another with no cell between. */
+const nestedScopeError = (): Error =>
+  new Error("Nested scope wrappers require a cell boundary between scopes.");
 
 /**
  * `typeNode` with each reference to a parameter in `paramMap` replaced by its
@@ -408,12 +441,6 @@ const soleConditionalBranch = (
 };
 
 /**
- * The member a CFC metadata carrier holds (`Cfc` in `packages/api/cfc.ts`).
- * It is a phantom: no value holds it.
- */
-export const CFC_CARRIER_PROPERTY = "__ct_cfc__";
-
-/**
  * The default-library aliases that map an object's members, which fold a
  * labelled operand's carrier into the object they build as one more member.
  */
@@ -434,18 +461,6 @@ const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
   "Partial",
   "Required",
 ]);
-
-/**
- * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
- * metadata carrier, which a CFC alias intersects its payload with.
- */
-const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
-  const properties = member.getProperties();
-  return properties.length === 1 &&
-      properties[0]!.name === CFC_CARRIER_PROPERTY
-    ? properties[0]
-    : undefined;
-};
 
 /**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
@@ -838,7 +853,8 @@ const placeCarriedLabels = (
  * members; which of them a policy was written around, the intersection
  * itself does not say, and each carrier records it (`CarrierStamp.of`). A
  * payload the checker drops from an intersection, as it drops `unknown` and
- * `{}`, is none.
+ * `{}`, is none. A scope wrapper's brand, which a labeled value in a scope
+ * carries too, is no part of the value, and is passed over.
  */
 const cfcCarriedParts = (
   type: ts.Type,
@@ -856,7 +872,7 @@ const cfcCarriedParts = (
           checker,
         )
       ) metadata.push(stamp);
-    } else rest.push(member);
+    } else if (!isScopeBrandMember(member, checker)) rest.push(member);
   }
   return metadata.length > 0 ? { payload: rest, metadata } : undefined;
 };
@@ -1130,16 +1146,30 @@ export function scopeOfAliasChain(
 }
 
 /**
- * Whether `type` is a scope wrapper, reached through its alias chain
- * (`scopeOfAliasChain()`), around a cell. It caps the cell's handle and is
- * itself a wrapper, so a cycle through it is found at the cell's value, not
- * at the wrapper, and the capped handle is written inline at each reference.
+ * The scope of the scope wrapper `type` is: the one its alias chain reaches
+ * (`scopeOfAliasChain()`), and otherwise the one its brand declares
+ * (`getScopeBrand()`), as for a type the checker narrowed or built with no
+ * alias, or a union written beside a wrapper, as `PerUser<A> | null`.
+ */
+export function scopeOfScopeWrapper(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): SchemaScope | undefined {
+  return scopeOfAliasChain(type, checker) ??
+    getScopeBrand(type, checker)?.scope;
+}
+
+/**
+ * Whether `type` is a scope wrapper (`scopeOfScopeWrapper()`) around a cell.
+ * It caps the cell's handle and is itself a wrapper, so a cycle through it is
+ * found at the cell's value, not at the wrapper, and the capped handle is
+ * written inline at each reference.
  */
 export function scopesCellHandle(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): boolean {
-  return scopeOfAliasChain(type, checker) !== undefined &&
+  return scopeOfScopeWrapper(type, checker) !== undefined &&
     (getScopeBrand(type, checker)?.payload.some((members) =>
       members.some((member) =>
         getCellWrapperInfo(member, checker) !== undefined
@@ -1178,6 +1208,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (scopeOfAliasChain(type, context.typeChecker) !== undefined) {
+      return true;
+    }
+
+    if (
+      this.#scopeBrand(type, context) !== undefined ||
+      hasNestedScopeBrands(type, context.typeChecker)
+    ) {
       return true;
     }
 
@@ -1331,6 +1368,23 @@ export class CommonFabricFormatter implements TypeFormatter {
       // The structure may carry the same labels, from the carrier folded into
       // it; labelling it again with them changes nothing.
       return this.#withPlacedLabels(shape, type, view.metadata, context);
+    }
+
+    // Two scopes' brands on one value are a wrapper nested in another with no
+    // cell between them, as the node-driven reading refuses when a node
+    // names both.
+    if (hasNestedScopeBrands(type, context.typeChecker)) {
+      throw nestedScopeError();
+    }
+
+    // A scope wrapper that no alias names, as a type the checker narrowed or
+    // `PerUser<A> | null`, is named by its brand.
+    const brand = this.#scopeBrand(type, context);
+    if (brand) {
+      return this.#applyScopeWrapperSemantics(
+        this.#formatScopePayload(type, brand, context),
+        brand.scope,
+      );
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1714,6 +1768,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       scopeForWrapperName(typeWithAlias?.aliasSymbol?.name) !== undefined
         ? typeWithAlias?.aliasTypeArguments?.[0]
         : undefined;
+    const brand = type && !resolvedInner
+      ? this.#scopeBrand(type, context)
+      : undefined;
     const usableResolvedInner = resolvedInner &&
         !this.#isUnusableInnerType(resolvedInner)
       ? resolvedInner
@@ -1748,6 +1805,8 @@ export class CommonFabricFormatter implements TypeFormatter {
           context,
           undefined,
         );
+      } else if (type && brand) {
+        innerSchema = this.#formatScopePayload(type, brand, context);
       } else {
         for (const node of uninterpreted) {
           context.uninterpretedTypeNodes?.push(node);
@@ -1756,6 +1815,57 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return this.#applyScopeWrapperSemantics(innerSchema, scope);
+  }
+
+  /**
+   * The scope brand `type` carries (`getScopeBrand()`), or `undefined` where a
+   * scope wrapper reading it has taken the brand off
+   * (`GenerationContext.scopeBrandRead`).
+   */
+  #scopeBrand(
+    type: ts.Type,
+    context: GenerationContext,
+  ): ScopeBrand | undefined {
+    return context.scopeBrandRead?.has(type)
+      ? undefined
+      : getScopeBrand(type, context.typeChecker);
+  }
+
+  /**
+   * The schema of the payload the scope wrapper `type` holds, with its `brand`
+   * taken off. A payload the checker cannot intersect again without the brand,
+   * as `A & B` in `PerUser<A & B>`, is `type` itself, whose own `#formatType()`
+   * is in progress. It is read in place rather than as a type met again inside
+   * itself: by this formatter where it claims `type` for anything besides the
+   * brand, such as the labels of a CFC alias, and otherwise by the formatters
+   * after it (`SchemaGenerator.formatStructure()`). Either reads it without the
+   * wrapper's node, which would name the wrapper once more.
+   */
+  #formatScopePayload(
+    type: ts.Type,
+    brand: ScopeBrand,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const payload = scopePayloadType(type, brand, context.typeChecker);
+    const { typeNode: _, ...rest } = context;
+    const payloadContext: GenerationContext = {
+      ...rest,
+      scopeBrandRead: new Set([
+        type,
+        payload,
+        ...(type.isUnion() ? type.types : []),
+      ]),
+    };
+    if (payload !== type) {
+      return this.#schemaGenerator.formatChildType(
+        payload,
+        payloadContext,
+        undefined,
+      );
+    }
+    return this.supportsType(type, payloadContext)
+      ? this.formatType(type, payloadContext)
+      : this.#schemaGenerator.formatStructure(type, payloadContext);
   }
 
   #applyScopeWrapperSemantics(
@@ -1774,11 +1884,32 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
-    if (schema.scope !== undefined) {
-      throw new Error(
-        "Nested scope wrappers require a cell boundary between scopes.",
-      );
+    // Beside `null` or `undefined`, a cell is an `anyOf` branch, and the scope
+    // is declared twice: at the top, the slot's own scope, which the write
+    // path reads, and in the cell's `asCell` entry, the cap on following its
+    // handle, which a read applies however it reaches the handle. One cell
+    // beside those is all a scope wrapper around a cell may hold.
+    const branches = schema.anyOf;
+    if (Array.isArray(branches) && branches.some(isHandleSchema)) {
+      if (
+        branches.filter(isHandleSchema).length !== 1 ||
+        !branches.every((b) => isHandleSchema(b) || isNullishSchema(b))
+      ) {
+        throw scopeAroundCellUnionError(scope);
+      }
+      if (schema.scope !== undefined) throw nestedScopeError();
+      return {
+        ...schema,
+        anyOf: branches.map((branch) =>
+          isHandleSchema(branch)
+            ? this.#applyScopeWrapperSemantics(branch, scope)
+            : branch
+        ),
+        scope,
+      };
     }
+
+    if (schema.scope !== undefined) throw nestedScopeError();
 
     return { ...schema, scope };
   }
