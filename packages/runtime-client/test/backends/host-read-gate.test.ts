@@ -141,12 +141,20 @@ async function shelf() {
     [[], [ownerOnly]],
     [["auth", "token"], [cfcAtom.resource("CredentialSecret")]],
   ]);
+  // A piece with no label of its own whose `note` field is labeled with the
+  // owner's space, and whose schema declares the same of `note`.
+  const spaceNote = await write(
+    "space-note",
+    { note: HOME_NAME },
+    [[["note"], [cfcAtom.space(space)]]],
+  );
   await runtime.idle();
 
   return {
     runtime,
     write,
     credentialPiece,
+    spaceNote,
     sealedEntry,
     piece,
     nestedPiece,
@@ -315,6 +323,32 @@ describe("HostReadGate", () => {
 
       expect(holds(answer, SEALED_ENTRY)).toBe(false);
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+    });
+
+    it("returns a member a field labeled with their space, under a schema that declares the same, beside a node with no label of its own", async () => {
+      await using docs = await shelf();
+      const schema = {
+        type: "object",
+        properties: {
+          note: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.space(space)] },
+          },
+        },
+      } as const;
+      const gate = gateFor(docs.runtime, owner);
+      const { updates, cancel } = subscribe(
+        gate,
+        docs.spaceNote.asSchema(schema),
+      );
+      cancel();
+
+      expect(gate.read(docs.spaceNote.asSchema(schema))).toEqual({
+        value: { note: HOME_NAME },
+      });
+      expect(updates).toEqual([
+        expect.objectContaining({ value: { note: HOME_NAME } }),
+      ]);
     });
 
     it("returns a visitor the whole of a piece anyone may see", async () => {
