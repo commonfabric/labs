@@ -16,7 +16,9 @@
  * At the container it is built over: the value's type against the schema's, and
  * the schema's `required` keys — that the value carries each of them, and that
  * the schema selects each one it requires. Both come off the container
- * read a view takes anyway, so neither descends.
+ * read a view takes anyway, so neither descends into a child's value; the
+ * `required` check does observe each required child's existence, which is a
+ * read at that child's path and nothing below it.
  *
  * Everything below that is checked where the reader touches it. A subtree the
  * reader never reads is never validated — the deliberate cost of not
@@ -64,6 +66,7 @@ import {
   validateAndTransform,
 } from "./schema.ts";
 import { type IExtendedStorageTransaction } from "./storage/interface.ts";
+import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
   arrayItemFallbackType,
   arrayItemUsesValueIdentity,
@@ -188,6 +191,34 @@ const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
   isObjectOrArray(schema) && Array.isArray(schema.required)
     ? schema.required as string[]
     : [];
+
+/**
+ * Registers that the reader observed whether `key` exists in the object at
+ * `link`, and nothing about its value.
+ *
+ * A view decides some things off the container alone: whether a `required`
+ * key is there, and which keys an enumeration lists. Each of those is an
+ * observation of the child's existence, and the child's own path can carry an
+ * existence label the container's does not. A key-presence check consumes
+ * `shape` at the child, and an enumeration the `shape` of each child it
+ * returns (CFC spec §4.6.3), so this registers a non-recursive read at the
+ * child's path: the flow join classifies it as a `shape` observation, which
+ * consumes the child's existence label and nothing below it.
+ *
+ * The read is kept out of scheduling. The container's own non-recursive read
+ * already runs the reader again when a key comes or goes, and a write to the
+ * child's value changes nothing this observation saw.
+ */
+const observeChildExistence = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  key: string,
+): void => {
+  tx.readValueOrThrow(
+    { ...link, path: [...link.path, key] },
+    { nonRecursive: true, meta: ignoreReadForScheduling },
+  );
+};
 
 /**
  * The schema of `key` under `schema`, narrowed for the `container` the view
@@ -393,6 +424,9 @@ export function materializeSchemaView(
   }
 
   for (const key of requiredKeys(schema)) {
+    // Whether the data carries the key decides whether there is a view at
+    // all, whichever way the check goes.
+    observeChildExistence(tx, link, key);
     const narrowed = childSchema(schema, key, "object");
     if (!Object.hasOwn(value, key)) {
       // A declared default stands in for an absent required key, exactly as it
@@ -650,6 +684,20 @@ function createObjectView(
     return result === ABSENT ? undefined : result;
   };
 
+  // Listing the keys tells the reader which children there are, so each
+  // listed child's existence is observed, at the instant the view describes.
+  const listKeys = (): string[] => {
+    const keys = visibleKeys(schema, value);
+    const hasWrites = tx.hasWrites();
+    const previous = hasWrites ? tx.enterReadEpoch(epoch) : undefined;
+    try {
+      for (const key of keys) observeChildExistence(tx, link, key);
+    } finally {
+      if (hasWrites) tx.exitReadEpoch(previous);
+    }
+    return keys;
+  };
+
   return new Proxy({} as Record<string, unknown>, {
     get: (_target, prop) => {
       // See the same guard in `query-result-proxy.ts`: promise adoption probes
@@ -665,12 +713,13 @@ function createObjectView(
       }
       return child(prop);
     },
-    // `ownKeys` stays cheap — listing the keys must not read every value. The
-    // proxy target is an extensible object with no own properties, so a key
-    // listed here whose descriptor comes back `undefined` is simply not there
-    // as far as `Object.keys`, a spread, `for...in` and `JSON.stringify` are
-    // concerned; each of them asks for the descriptor before believing the key.
-    ownKeys: () => visibleKeys(schema, value),
+    // `ownKeys` stays cheap — listing the keys observes each listed child's
+    // existence and reads no value. The proxy target is an extensible object
+    // with no own properties, so a key listed here whose descriptor comes back
+    // `undefined` is simply not there as far as `Object.keys`, a spread,
+    // `for...in` and `JSON.stringify` are concerned; each of them asks for the
+    // descriptor before believing the key.
+    ownKeys: listKeys,
     getOwnPropertyDescriptor: (_target, prop) => {
       if (typeof prop === "symbol") return undefined;
       if (!visibleKeys(schema, value).includes(prop)) return undefined;
