@@ -1241,6 +1241,8 @@ export type MemoryProtocolFlags = {
    * false, and a client then signs each `session.open`.
    */
   connectionAuth?: boolean;
+  /** The peer supports router-scoped binary connection authentication. */
+  routedAuthV1?: boolean;
 };
 
 /**
@@ -1271,6 +1273,7 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
+  routedAuthV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1294,6 +1297,8 @@ export type SessionOpenChallenge = {
 export type SessionOpenAuthMetadata = {
   challenge: SessionOpenChallenge;
   audience: string;
+  /** Deployment identifier signed when this peer is a Mode A router. */
+  deployment?: string;
 };
 
 export type SessionDescriptor = {
@@ -1906,6 +1911,8 @@ export type ConnectionAuthRequest = {
   requestId: string;
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
+  /** Canonical base64url statement when routedAuthV1 is negotiated. */
+  statement?: string;
 };
 
 /** The `ok` of the response to a `connection.auth`. */
@@ -2362,6 +2369,7 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
+  routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2382,6 +2390,11 @@ export const parseMemoryProtocolFlags = (
   value: unknown,
 ): MemoryProtocolFlags | null => {
   if (!isPlainObject(value)) {
+    return null;
+  }
+  if (
+    value.routedAuthV1 !== undefined && typeof value.routedAuthV1 !== "boolean"
+  ) {
     return null;
   }
 
@@ -2581,6 +2594,7 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
+    routedAuthV1: value.routedAuthV1 === true,
   };
 };
 
@@ -2613,6 +2627,7 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
+  routedAuthV1: flags.routedAuthV1,
 });
 
 /**

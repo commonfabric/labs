@@ -4,8 +4,10 @@
 
 Proposed requirements for the router phases of the
 [Memory connection multiplexing design](../specs/memory-v2/connection-multiplexing.md).
-The router phases are proposed. They depend on the direct connection-auth
-protocol described in that design. The first public stage serves existing spaces
+The opt-in Mode A implementation is specified in
+[the routed protocol](../specs/memory-v2/routed-mode-a.md); public deployment
+remains subject to the acceptance gates below. Other router phases are proposed.
+They depend on the direct connection-auth protocol described in that design. The first public stage serves existing spaces
 through one client WebSocket that can reach several toolsheds. It uses the
 design's Mode A: one upstream connection per client per toolshed. Mode B needs a
 separate security review before deployment. That review must establish a
