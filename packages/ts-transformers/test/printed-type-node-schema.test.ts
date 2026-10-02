@@ -472,10 +472,9 @@ export default pattern<{ n: number }>(() => {
         ["a tuple", "interface Twice<U> { items: [U, U] }", "Twice"],
       ] as const
     ) {
-      it(`reports a scope recursion reached through ${position} with no written reference, naming its type`, async () => {
-        // Each `Node<Readonly<…>>` is a new type, and a chain reached by type
-        // has no written reference to name, so the warning names a print of
-        // the type the chain stops at.
+      it(`reports an unsettled scope recursion reached through ${position} at its generic slot or concrete argument`, async () => {
+        // The declared generic slot reads under bindings. A recursion that
+        // cannot settle reports that slot at its nesting bound.
         const diagnostics: TransformationDiagnostic[] = [];
         await transformFiles({
           "/main.tsx": `/// <cts-enable />
@@ -495,7 +494,9 @@ export default pattern<{ a: Node<Wrap<readonly []>> }>(({ a }) => ({ a }));`,
 
         expect(unread.length).toBeGreaterThan(0);
         for (const diagnostic of unread) {
-          expect(diagnostic.message).toContain("Wrap<readonly []>");
+          expect(diagnostic.message).toMatch(
+            new RegExp(`${holder}<Node<Readonly<T>>>|Wrap<readonly \\[\\]>`),
+          );
         }
       });
     }
@@ -1720,10 +1721,9 @@ export default pattern<{ a: Holder<string> }>(({ a }) => ({ a }));`,
         expect((output.properties as Schema).a).toEqual(expected);
       });
 
-      it("reads a nullable payload of a generic declaration's member as the checker instantiates it", async () => {
-        // `Inner<U>` is written in `Holder`'s parameter, so the member is read
-        // as the type `Holder<string>` instantiates, where intersecting
-        // `null` with the label's carrier has left nothing of it.
+      it("reads a generic member's nullable payload as written", async () => {
+        // A declared read retains the null arm just as the payload written
+        // with the concrete argument in place does.
         const files = await transformFiles({
           "/main.tsx": `/// <cts-enable />
 import { Confidential, pattern } from "commonfabric";
@@ -1738,9 +1738,14 @@ export default pattern<{ a: Holder<string> }>(({ a }) => ({ a }));`,
           type: "object",
           properties: {
             inner: {
-              ...box({ type: "string" }),
-              properties: { v: { type: "string" } },
-              required: ["v"],
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { v: { type: "string" } },
+                  required: ["v"],
+                },
+                { type: "null" },
+              ],
               ifc: { confidentiality: ["secret"] },
             },
           },
@@ -2538,7 +2543,7 @@ export default pattern<{ items: Item[] }>(({ items }) => {
             properties: {
               pending: { type: "boolean" },
               result: {
-                anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Sentiment" }],
+                anyOf: [{ $ref: "#/$defs/Sentiment" }, { type: "undefined" }],
               },
             },
           },

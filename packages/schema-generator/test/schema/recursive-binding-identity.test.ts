@@ -47,7 +47,14 @@ function* recursiveValues(
 
   for (;;) {
     yield resolve(node.properties!.value!);
-    const next = asObjectSchema(node.properties!.next!);
+    const optionalNext = asObjectSchema(node.properties!.next!);
+    const next = optionalNext.anyOf
+      ? asObjectSchema(
+        optionalNext.anyOf.find((arm) =>
+          typeof arm === "object" && typeof arm.$ref === "string"
+        )!,
+      )
+      : optionalNext;
     if (typeof next.$ref === "string") {
       if (visited.has(next.$ref)) break;
       visited.add(next.$ref);

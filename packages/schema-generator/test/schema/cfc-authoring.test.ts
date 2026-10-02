@@ -542,13 +542,10 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
-  it("reads a policy's carriers in full, or not at all, when no reference names it", async () => {
-    // Read from a type alone, a policy whose alias name is gone has only its
-    // carriers, which hold its metadata as types. A writer binding is a
-    // `typeof` no type spells, and an `ownerPrincipal` without its
-    // `writeAuthorizedBy` would claim what the author never wrote alone, so
-    // such carriers are not read at all. `NonNullable<…>` intersects with
-    // `{}`, which drops the name as a reduction does.
+  it("reads a policy through an available alias reference and otherwise requires its whole carrier", async () => {
+    // The NonNullable reference can follow Owned to its authored writer. A
+    // type-only read has just its carriers: an owner without its unread
+    // writer would claim a policy the author never wrote alone.
     const { type, checker } = await getTypeFromCode(
       `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -577,7 +574,23 @@ describe("Schema: CFC authoring aliases", () => {
         ownerPrincipal: { __ctCurrentPrincipal: true },
       },
     });
-    expect(schema.properties?.owned).toEqual(payload);
+    expect(schema.properties?.owned).toEqual({ $ref: "#/$defs/Owned" });
+    expect(schema.$defs?.Owned).toEqual({
+      ...payload,
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
+        },
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+      },
+    });
+    const owned = checker.getPropertyOfType(type, "owned")!;
+    expect(
+      new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbol(owned),
+        checker,
+      ),
+    ).toEqual(payload);
   });
 
   it("formats a projection reached through a user alias over the root its reference carries", async () => {
@@ -2369,8 +2382,7 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
-    it("reports a library alias over a parameter whose rules do not apply", async () => {
-      // `Pick` reads its keys from a literal, and `K` is a parameter.
+    it("reads a library alias's keys from their bound argument", async () => {
       const { value, diagnostics } = await generate(`
         type Sec<T, K extends keyof T> =
           Confidential<{ picked: Pick<T, K> }, readonly ["a"]>;
@@ -2378,16 +2390,20 @@ describe("Schema: CFC authoring aliases", () => {
       `);
       expect(value).toEqual({
         type: "object",
-        properties: { picked: true },
+        properties: {
+          picked: {
+            type: "object",
+            properties: { a: { type: "string" } },
+            required: ["a"],
+          },
+        },
         required: ["picked"],
         ifc: { confidentiality: ["a"] },
       });
-      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "schema-type:unread",
-      ]);
+      expect(diagnostics).toEqual([]);
     });
 
-    it("reports a mapped type over a parameter that a generic declaration in the payload holds", async () => {
+    it("reads a library mapped type through the generic declaration's bindings", async () => {
       const { value, diagnostics } = await generate(`
         interface W<U> { m: Partial<U> }
         type Sec<T> = Confidential<W<T>, readonly ["a"]>;
@@ -2395,18 +2411,18 @@ describe("Schema: CFC authoring aliases", () => {
       `);
       expect(value).toEqual({
         type: "object",
-        properties: { m: {} },
+        properties: {
+          m: { type: "object", properties: { a: { type: "string" } } },
+        },
         required: ["m"],
         ifc: { confidentiality: ["a"] },
       });
-      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "schema-type:unread",
-      ]);
+      expect(diagnostics).toEqual([]);
     });
 
-    it("reports a mapped type a generic declaration in the payload writes over its own parameter", async () => {
-      // `W<T>`'s `m` is `W`'s mapped type instantiated over `T`, which has no
-      // alias arguments to show it and no member the checker can list.
+    it("reads a declared mapped member from its checker instantiation", async () => {
+      // The checker instantiates the operator; bindings retain the enclosing
+      // declaration and its other members.
       const { value, diagnostics } = await generate(`
         interface W<U> { m: { [K in keyof U]: U[K] } }
         type Sec<T> = Confidential<W<T>, readonly ["a"]>;
@@ -2414,13 +2430,17 @@ describe("Schema: CFC authoring aliases", () => {
       `);
       expect(value).toEqual({
         type: "object",
-        properties: { m: {} },
+        properties: {
+          m: {
+            type: "object",
+            properties: { a: { type: "string" } },
+            required: ["a"],
+          },
+        },
         required: ["m"],
         ifc: { confidentiality: ["a"] },
       });
-      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "schema-type:unread",
-      ]);
+      expect(diagnostics).toEqual([]);
     });
 
     it("reads a mapped type a generic declaration in the payload writes over a concrete argument", async () => {
@@ -2956,9 +2976,9 @@ describe("Schema: CFC authoring aliases", () => {
       ]);
     });
 
-    it("reports a generic declaration's member naming a generic alias whose payload its instantiated type does not hold apart", async () => {
-      // `Wrapper<string>` holds the argument, but its payload, a union, is
-      // not one member beside the carrier, and `U` binds nothing here.
+    it("reads a generic member's union payload under its own argument bindings", async () => {
+      // The declaration binds U to string and forwards it into the labelled
+      // union, whose arms keep their authored order.
       const { value, diagnostics } = await generate(`
         type Inner<X> = Confidential<{ v: X } | number, readonly ["i"]>;
         interface Wrapper<U> { inner: Inner<U> }
@@ -2969,17 +2989,19 @@ describe("Schema: CFC authoring aliases", () => {
         properties: {
           inner: {
             anyOf: [
+              {
+                type: "object",
+                properties: { v: { type: "string" } },
+                required: ["v"],
+              },
               { type: "number" },
-              { type: "object", properties: { v: {} }, required: ["v"] },
             ],
             ifc: { confidentiality: ["i"] },
           },
         },
         required: ["inner"],
       });
-      expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "schema-type:unread",
-      ]);
+      expect(diagnostics).toEqual([]);
     });
 
     it("reads a generic declaration's member naming a generic alias from its instantiated type", async () => {

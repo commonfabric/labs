@@ -40,6 +40,103 @@ function valueSchema(
 
 describe("generic writer policy", () => {
   for (const position of ["input", "output"] as const) {
+    it(`keeps a named writer policy under Readonly in the ${position} schema`, async () => {
+      const output = await transformSource(
+        `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+type Protected = WriteAuthorizedBy<{ value: string }, typeof f>;
+type Payload = Readonly<Protected>;
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      expect(valueSchema(schema, schema)).toMatchObject({
+        type: "object",
+        properties: { value: { type: "string" } },
+        ifc: { writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["f"] } } },
+      });
+    });
+
+    it(`matches Partial of a value query and its declared shape in the ${position} schema`, async () => {
+      const output = await transformSource(
+        `import { pattern } from "commonfabric";
+interface Shape { text: string; value: number; child: { n: number }; values: number[] }
+declare const x: Shape;
+type Payload = { queried: Partial<typeof x>; declared: Partial<Shape> };
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      const root = valueSchema(schema, schema);
+      expect(valueSchema(root.properties?.queried, schema)).toEqual(
+        valueSchema(root.properties?.declared, schema),
+      );
+    });
+
+    it(`keeps nongeneric aliases of different instantiations distinct in the ${position} schema`, async () => {
+      const output = await transformSource(
+        `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+const g = handler<void, {}>(() => {});
+interface Box<T> { value: T }
+type F = Box<WriteAuthorizedBy<string, typeof f>>;
+type G = Box<WriteAuthorizedBy<string, typeof g>>;
+interface Payload { a: F; b: G }
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      const root = valueSchema(schema, schema);
+      for (const [field, writer] of [["a", "f"], ["b", "g"]]) {
+        const box = valueSchema(root.properties?.[field!], schema);
+        expect(
+          valueSchema(box.properties?.value, schema).ifc?.writeAuthorizedBy,
+        ).toEqual({
+          __ctWriterIdentityOf: { file: "/test.tsx", path: [writer] },
+        });
+      }
+    });
+
+    it(`names a recursive generic root at its first reading in the ${position} schema`, async () => {
+      const output = await transformSource(
+        `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+interface Node<T> { value: T; next?: Node<T> }
+type Payload = Node<WriteAuthorizedBy<string, typeof f>>;
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      expect(schema.$ref).toBeDefined();
+      const root = valueSchema(schema, schema);
+      const next = root.properties?.next as JSONSchemaObj;
+      expect(next.anyOf).toContainEqual({ $ref: schema.$ref });
+    });
+
     for (
       const [name, declaration] of [
         [
@@ -262,6 +359,56 @@ export default ${
       const [name, declarations, spelling, field] of [
         ["a direct member", "", "{ value: POLICY }", "value"],
         ["an array", "", "Array<POLICY>", "items"],
+        ["a declared tuple", "", "[POLICY]", "items"],
+        [
+          "a declared index signature",
+          "",
+          "{ [key: string]: POLICY }",
+          "additionalProperties",
+        ],
+        [
+          "an array alias body",
+          "type Box<T> = Array<T>;",
+          "Box<POLICY>",
+          "items",
+        ],
+        [
+          "a readonly array alias body",
+          "type Box<T> = ReadonlyArray<T>;",
+          "Box<POLICY>",
+          "items",
+        ],
+        [
+          "a record alias body",
+          "type Box<T> = Record<string, T>;",
+          "Box<POLICY>",
+          "additionalProperties",
+        ],
+        ["a tuple alias body", "type Box<T> = [T];", "Box<POLICY>", "items"],
+        [
+          "a nullable alias body",
+          "type Box<T> = T | null;",
+          "{ value: Box<POLICY> }",
+          "value",
+        ],
+        [
+          "a class",
+          "class Box<T> { declare value: T }",
+          "Box<POLICY>",
+          "value",
+        ],
+        [
+          "an inherited class member",
+          "class Base<T> { declare value: T } class Box<T> extends Base<T> {}",
+          "Box<POLICY>",
+          "value",
+        ],
+        [
+          "a named readonly policy",
+          "type Protected<W> = { value: WriteAuthorizedBy<string, W> };",
+          "Readonly<Protected<WRITER>>",
+          "value",
+        ],
         [
           "an interface",
           "interface Box<W> { value: W }",

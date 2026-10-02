@@ -23,20 +23,26 @@
   },
   "properties": {
     "aliasedCell": {
-      "$ref": "#/$defs/AnonymousType_1",
       "asCell": [
         "cell"
-      ]
+      ],
+      "items": {
+        "$ref": "#/$defs/RecursiveItem"
+      },
+      "type": "array"
     },
     "aliasedDefault": {
       "$ref": "#/$defs/AnonymousType_1",
       "default": []
     },
     "aliasedStream": {
-      "$ref": "#/$defs/AnonymousType_1",
       "asCell": [
         "stream"
-      ]
+      ],
+      "items": {
+        "$ref": "#/$defs/RecursiveItem"
+      },
+      "type": "array"
     },
     "directCell": {
       "$ref": "#/$defs/AnonymousType_1",

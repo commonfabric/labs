@@ -128,22 +128,19 @@ wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
 then the general path, which resolves the name the same way — bound through
 the node, else lexically from the module's scope, an import followed to what
 it imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. On the general path, a generic
-declared outside the default library is left unread: its declared type leaves
-the parameters unbound, and no reading of an unbound parameter stands in for
-the argument a reference supplies — the constraint drops the members an
-argument adds, the default is free to contradict one, and an operator over the
-parameter (`keyof T`, `T["name"]`) has no schema at all. The exceptions are the
-references `CommonFabricFormatter` lowers from their own arguments: a scope
-wrapper, whose payload it reads from the reference's argument without
-resolving the wrapper's name (the transformer prints a wrapper it builds as
-`__cfHelpers.PerUser<…>`, a name no scope declares), and an alias that is not
-itself a CFC alias or a scope wrapper and whose whole body references one,
-directly or through further such aliases, named with an argument for every
-parameter that has no default, which it substitutes down the chain (a chain
-reaching a scope wrapper must hand it an argument) — plus a `Date`-by-name
-special case), keyword types, and a final
-resolve-else-`true` fallback.
+exported or not, or imports is read. A plain generic declaration is read under
+bindings for every required parameter, taken from the reference's written
+arguments or preceding-parameter defaults (§4.1). A member the bindings cannot
+read, such as an indexed access with no checker-created instantiation, remains
+unread at that member; it does not discard the enclosing object's readable
+shape. Missing required arguments and deferred conditional declarations remain
+unread on this fallback path. `CommonFabricFormatter` lowers scope wrappers
+from their own payload argument without resolving the wrapper's name (the
+transformer prints a wrapper it builds as `__cfHelpers.PerUser<…>`, a name no
+scope declares), and follows CFC alias chains under their bindings (§11). A
+scope wrapper without a payload argument remains unread, including through an
+alias. `Date` also has a by-name special case. Keyword types and a final
+resolve-else-`true` fallback complete the node path.
 
 A `true` from that fallback is a guess rather than a reading, and is recorded
 as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
@@ -265,7 +262,8 @@ true, in this fixed order (`src/schema-generator.ts`):
 Order matters: CommonFabric before Union (wrapper unions), Native before
 Object (built-ins are object types), Array before Primitive. If no formatter
 matches, generation throws (`src/schema-generator.ts`). Before
-dispatch, `formatType` short-circuits unresolved type parameters
+dispatch, a type parameter bound at the reading is formatted as its argument
+(§4.1). `formatType` short-circuits other type parameters
 (constraint → default → `{}`) and conditional types (`{}`).
 
 ## 4. Core Type Mappings
@@ -289,7 +287,8 @@ by any repo test.
 | `any` | `true`; `any[]` → `items: true` | `primitive-formatter.ts`; `array-formatter.ts` | tests |
 | `unknown` | `{ type: "unknown" }` — non-standard (`api/index.ts`); `unknown[]` → `items: { type: "unknown" }` | `primitive-formatter.ts`; `array-formatter.ts` | array-special-types |
 | TS `object` keyword | `{ type: "object", additionalProperties: true }` | `object-formatter.ts` | probe only |
-| Uninstantiated type parameter | constraint if any, else default, else `{}` | `schema-generator.ts` | untested at generator level; the pipeline substitutes `unknown` nodes before generation (ts-transformers spec §10.5), so `{}` is the *local* behavior |
+| Type parameter bound at the reading (§4.1) | its argument, retaining authored argument syntax and its declaration scope | `schema-generator.ts`; `type-parameter-bindings.ts` | `test/typescript/type-arguments.test.ts`; generic writer tests |
+| Unbound type parameter | constraint if any, else default, else `{}` | `schema-generator.ts` | untested at generator level; the pipeline substitutes `unknown` nodes before generation (ts-transformers spec §10.5), so `{}` is the *local* behavior |
 | Conditional type | `{}` | `schema-generator.ts` | untested |
 | `T[]` / `Array<T>` / `ReadonlyArray<T>` / aliases | `{ type: "array", items: <T> }`; node-first element detection, then Reference/typeArguments, then numeric index | `type-utils.ts`; `array-formatter.ts` | fixtures |
 | Tuple (`[string, number]`) | `{ type: "array", items: <merged element union> }` — e.g. `items: { type: ["number","string"] }`. **No `prefixItems`, no length bounds**; positional structure is lost (numeric-index fallback, `type-utils.ts`; grep confirms `prefixItems` appears only in a comment) | `type-utils.ts` | `test/tuple-emission.test.ts` |
@@ -312,9 +311,80 @@ Fallback sentinel: a primitive-flagged type matching none of the branches emits
 `{ type: "string", enum: ["unknown"] }` (`primitive-formatter.ts`) — a
 silent, mis-typed sentinel; untested and believed unreachable in practice.
 
+### 4.1 Generic declarations and their bindings
+
+A generic member annotation names its declaration's own parameters, even when
+the checker knows the enclosing instantiation. The generator therefore reads
+plain interfaces, classes and type-alias bodies under
+`GenerationContext.boundTypeParameters`. Each parameter declaration maps to a
+`BoundTypeArgument`: its checker type, its authored node where one exists, and
+the bindings of the scope where that node is written. A forwarded parameter
+retains that argument and scope. A parameter default reads under the preceding
+parameters. Inherited members use their base declaration's parameters, bound
+through the heritage arguments. A nested instantiation binds its parameters
+afresh.
+
+A bound parameter reads as its argument. Structural member syntax retains those
+bindings through object properties, literal index signatures, arrays, tuples,
+unions and intersections, and through alias bodies such as `Array<T>`,
+`ReadonlyArray<T>`, `Record<string, T>`, `[T]` and `T | null`. Optional properties
+remain outside `required`. When the checker adds `undefined` for an optional
+property, the declared bound value retains that alternative, including an
+optional cell reference. Explicit `T | undefined` and optional tuple elements
+also retain `undefined`.
+
+Library key arguments also read their bindings: `Pick<T, K>` and `Omit<T, K>`
+accept a `K` bound to a literal key union, and `Record<K, T>` accepts a bound
+string or number index type. This keeps intersection aliases such as
+`Omit<T, K> & Partial<Pick<T, K>>` readable without losing their enclosing
+shape. Concrete template-literal types remain readable beside generic members;
+an unrelated binding does not make such a type deferred.
+
+`UnionFormatter` reads the types used for `Default` coverage and object-default
+checks through the same bindings. A reference such as `Box<T>` is matched to
+its own instantiation among the enclosing union's semantic members, so an
+argument for a different `Box` reading cannot validate its default. Default
+coverage uses the authored target rather than a capture's narrowed observation;
+fields omitted from an observation do not invalidate a full object default.
+Literal default nodes also read bound parameters. With `T` bound to `number`,
+`T | string | Default<string, "">` emits
+`{ type: ["number", "string"], default: "" }`; `PerUser<T>` with `T` bound to
+`string` emits `{ type: "string", scope: "user" }`. A default the instantiated
+value does not cover throws under the ordinary rules of §7. These behaviors
+are pinned by `test/typescript/type-arguments.test.ts` and the full pattern
+pipeline's `test/generic-pattern-input.test.ts` in ts-transformers.
+
+When an operator cannot be read structurally, an available checker
+instantiation supplies its value. Without one, an indexed access, conditional,
+`keyof` or mapped member over a parameter remains unread and is reported; the
+surrounding shape stays readable. An operator that retains a writer carrier
+but loses its binding syntax must report the unread authored writer (§11).
+Checker-created instantiations with no authored argument nodes bind their
+parameter types, including base declarations, so printed captures can retain
+member defaults and scopes. Such an argument does not recover a writer's
+`typeof` identity from its type.
+
+The default library's mapped aliases bind declarations reached through their
+arguments: `Readonly<Input<number>>` reads an `Input<T>` member with `T` as
+`number`. A synthetic reference such as `Box<number>` resolves the name in the
+module's scope and binds the declaration to its supplied argument. An authored
+or imported alias shadowing a library name reads its own declaration. Synthetic
+operators still need either structural rules or an available checker
+instantiation; resolving a name alone cannot evaluate them.
+
 ## 5. Named-Type Hoisting, `$defs`, And Cycles
 
 ### 5.1 All-named policy
+
+A generic reading's cycle identity is its declaration together with its
+bindings, semantic instantiation and authored query origins. Its first reading
+and recursive occurrence use the same identity. A nongeneric alias naming a
+generic instantiation supplies that reading's name, so two aliases of different
+arguments cannot share the underlying declaration's definition. Readings under
+different arguments remain distinct; stable recursive readings share a `$ref`.
+Default-library containers retain their concrete checker identity, so an
+enclosing `Array<T>` binding cannot alias arrays of different nested element
+types.
 
 Every type with a usable name is hoisted into `$defs` and referenced by
 `{ "$ref": "#/$defs/<Name>" }` at non-root occurrences
@@ -1107,26 +1177,24 @@ Mechanics:
   (`type Id<X> = X`) denotes the argument it writes for that parameter, so the
   chain, and the labels and defaults read from its syntax, start at that
   argument (`readThroughIdentityAliases`, `src/typescript/type-node.ts`).
-- A plain generic interface or object alias whose arguments carry authored
-  `typeof` identities binds its parameters to those written arguments before
-  reading members. Forwarded alias references and inherited interface members
-  use the bindings of their own declarations, and defaults read under preceding
-  parameters. A readable property or index-signature value is read from its
-  declaration under those bindings, with its instantiated type retained beside
-  it. This preserves both a whole policy passed as a parameter
-  (`Box<WriteAuthorizedBy<string, typeof save>>`) and a writer passed into a
-  member's policy (`Pair<typeof save, typeof other>`). `Record` reads its value
-  argument by syntax when it carries an authored query, including through a
-  named policy alias. Recursive definitions retain those same bindings and query
-  origins: same-typed writers remain distinct below `$ref` boundaries. Plain
-  generics without authored query arguments retain their type-based analysis.
-  An indexed access or conditional member over bound parameters can leave a
-  writer policy's instantiated carrier without readable binding syntax. That
-  authored read reports `cfc-write-authorized-by:unread` and explains the
-  unsupported operator; compilation cannot silently discard its restriction.
-  See `packages/ts-transformers/test/generic-writer-policy.test.ts` for both
-  pattern schemas and `packages/runner/test/generic-writer-policy.test.ts` for
-  authorized and refused writes, including stored reloads.
+- Plain generic declarations use the bindings of §4.1 whether their arguments
+  carry writer queries or ordinary values. Readable properties and index values
+  retain their declaration syntax alongside their instantiated types. This
+  preserves both a whole policy argument (`Box<WriteAuthorizedBy<string,
+  typeof save>>`) and a writer parameter used by a member's policy
+  (`Pair<typeof save, typeof other>`). The library-alias syntax branch follows
+  declarations and fires when a writer query is reachable, including through
+  a named policy alias such as `Readonly<Protected>`. An ordinary value query
+  such as `Partial<typeof value>` retains the checker's utility-type semantics.
+  Non-generic tuples and literal index signatures also retain authored writer
+  queries. Recursive definitions keep each writer's query origin even when
+  handlers have identical types. An indexed access or conditional member that
+  leaves a writer carrier without binding syntax reports
+  `cfc-write-authorized-by:unread`; compilation cannot silently discard the
+  restriction. Pattern input and explicit output schemas are pinned by
+  ts-transformers `test/generic-writer-policy.test.ts`; runner
+  `test/generic-writer-policy.test.ts` pins authorized and refused writes,
+  including stored reloads.
 - The payload is read from the declaration of the last alias along the chain,
   as written, with each parameter bound to its argument
   (`GenerationContext.boundTypeParameters`), never from a substituted node,
