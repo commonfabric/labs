@@ -11,6 +11,8 @@ import {
 import { Identity } from "@commonfabric/identity";
 import { KeepAsCell, Runtime } from "@commonfabric/runner";
 import {
+  addCfcDenialListener,
+  type CfcDenial,
   createRenderConfidentialityResolver,
   PROMPT_CAVEAT_FAMILY_KINDS,
 } from "@commonfabric/runner/cfc";
@@ -891,6 +893,127 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
             (op.op === "remove-prop" && op.key === "style")
           ),
           true,
+        );
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "a clean src read from a cell in a clean view loads",
+    async () => {
+      const value = await seed("https://images.example/clean.png", [owner]);
+      const id = await seed({
+        type: "vnode",
+        name: "img",
+        props: { src: linkTo(value) },
+        children: [],
+      }, [owner]);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), [
+          "https://images.example/clean.png",
+        ]);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "an object style's number and empty entries apply under the caveat",
+    async () => {
+      const id = await seed({
+        type: "vnode",
+        name: "p",
+        props: { style: { zIndex: 2, outline: null, color: "red" } },
+        children: ["Numbered"],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        const styles = setProps(collector.all(), "style").map(String);
+        assertEquals(styles.some((style) => style.includes("red")), true);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "a refused load is reported with its prop and why",
+    async () => {
+      const denials: CfcDenial[] = [];
+      const stop = addCfcDenialListener((denial) => denials.push(denial));
+      const value = await seed(ATTACKER_URL, [owner, unscreened]);
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          {
+            type: "vnode",
+            name: "img",
+            props: { src: linkTo(value) },
+            children: [],
+          },
+        ],
+      }, [owner]);
+      const { cancel } = await render(id);
+      const blocked = await mountBlocked(pixelView());
+      try {
+        const remote = denials.filter((denial) =>
+          denial.code === "render-remote-load"
+        );
+        assertEquals(
+          remote.some((denial) =>
+            denial.inputs.prop === "src" && denial.inputs.blockedByView !== true
+          ),
+          true,
+        );
+        assertEquals(
+          remote.some((denial) =>
+            denial.inputs.prop === "src" && denial.inputs.blockedByView === true
+          ),
+          true,
+        );
+      } finally {
+        cancel();
+        blocked.cancel();
+        stop();
+      }
+    },
+  );
+
+  await t.step(
+    "a cell child updated in place under the same decision keeps loading",
+    async () => {
+      const inner = await seed(pixelView(), [owner]);
+      const outer = "remote-loads-in-place";
+      const section = (title: string) => ({
+        type: "vnode",
+        name: "section",
+        props: { title },
+        children: [linkTo(inner)],
+      });
+      await seed(section("first"), [owner], outer);
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [linkTo(outer)],
+      }, [owner]);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
+        collector.clear();
+        await seed(section("second"), [owner], outer);
+        await t.settle();
+        const ops = collector.all();
+        assertEquals(setProps(ops, "title").includes("second"), true);
+        assertEquals(
+          ops.some((op) => op.op === "remove-prop" && op.key === "src"),
+          false,
         );
       } finally {
         cancel();

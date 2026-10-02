@@ -207,18 +207,13 @@ const STYLE_MAY_LOAD_REMOTE =
  * rendering would escape, is not mistaken for an escape; a key that defines a
  * custom property counts as one that could.
  */
-function valueMayLoadRemote(
-  value: unknown,
-  seen = new Set<unknown>(),
-): boolean {
+function valueMayLoadRemote(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === "string") return STYLE_MAY_LOAD_REMOTE.test(value);
   if (typeof value !== "object") return false;
-  if (seen.has(value)) return true;
-  seen.add(value);
   for (const [key, entry] of Object.entries(value)) {
     if (key.startsWith("--") || STYLE_MAY_LOAD_REMOTE.test(key)) return true;
-    if (valueMayLoadRemote(entry, seen)) return true;
+    if (valueMayLoadRemote(entry)) return true;
   }
   return false;
 }
@@ -1222,7 +1217,9 @@ export class WorkerReconciler {
   /**
    * Whether two policies decide remote loads alike. Content laid out under
    * one is never reused under the other: a literal prop the old decision set
-   * would be skipped as unchanged.
+   * would be skipped as unchanged. Keyed children need no check of their own:
+   * a change makes their parent's child policy differ, and a parent whose
+   * child policy changed replaces its children rather than reusing them.
    */
   #sameRemoteLoadDecision(left: RenderPolicy, right: RenderPolicy): boolean {
     return (left.remoteLoadsBlocked ?? false) ===
@@ -4540,14 +4537,6 @@ export class WorkerReconciler {
 
     const sanitized = this.#sanitizeNode(newVNode);
     if (!sanitized || sanitized.name !== childState.elementState.tagName) {
-      return false;
-    }
-    if (
-      !this.#sameRemoteLoadDecision(
-        childState.elementState.renderPolicy,
-        policy,
-      )
-    ) {
       return false;
     }
 
