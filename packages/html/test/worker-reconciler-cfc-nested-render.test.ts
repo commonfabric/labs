@@ -42,7 +42,10 @@ import {
 } from "../../runtime-client/src/backends/utils.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
-import type { WorkerReconcilerOptions } from "../src/worker/types.ts";
+import type {
+  SpaceAccessProvider,
+  WorkerReconcilerOptions,
+} from "../src/worker/types.ts";
 
 // `cf-render` shows a piece through renders of its own, each mounted from a
 // reference the way the shell mounts a piece opened by its address. Each step
@@ -103,20 +106,21 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
   };
 
   /**
-   * Writes `value` to the document named `id`, with stored labels giving each
-   * path in `labels` its confidentiality.
+   * Writes `value` to the document named `id` in `inSpace`, with stored labels
+   * giving each path in `labels` its confidentiality.
    */
   const write = async (
     id: string,
     value: unknown,
     labels: readonly [path: string[], confidentiality: readonly CfcAtom[]][] =
       [],
+    inSpace = space,
   ): Promise<Cell<unknown>> => {
     const tx = runtime.edit();
-    const cell = runtime.getCell(space, id, undefined, tx);
-    writeSeedEnvelopeDoc(tx, space);
+    const cell = runtime.getCell(inSpace, id, undefined, tx);
+    writeSeedEnvelopeDoc(tx, inSpace);
     seedStoredEnvelope(tx, {
-      space,
+      space: inSpace,
       id: cell.getAsNormalizedFullLink().id!,
       type: "application/json",
       path: [],
@@ -137,7 +141,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
       }),
     });
     expect((await tx.commit()).ok).toBeDefined();
-    return runtime.getCell(space, id);
+    return runtime.getCell(inSpace, id);
   };
 
   const link = (cell: Cell<unknown>) =>
@@ -224,15 +228,21 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
 
   /**
    * Mounts what `reference` names as the worker mounts it, settles, and
-   * returns what was emitted and the unmount.
+   * returns what was emitted and the unmount. `spaceAccess`, when given,
+   * stands in for the worker's own view of which spaces are in reach.
    */
-  const mount = async (reference: CellRef, viewer: Identity) => {
+  const mount = async (
+    reference: CellRef,
+    viewer: Identity,
+    spaceAccess?: SpaceAccessProvider,
+  ) => {
     const ops: VDomOp[] = [];
     const cancel = new WorkerReconciler({
       onOps: (batch) => {
         for (const op of batch) ops.push(op);
       },
       ...viewedBy(viewer),
+      ...(spaceAccess === undefined ? {} : { spaceAccess }),
     }).mount(getCell(runtime, reference).asSchema(rendererVDOMSchema));
     await t.settle();
     return {
@@ -313,18 +323,28 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
    * `typed`, a field read under `pieceListSchema`, which a binding link to it
    * stores, as the JSX factory stores it for a list of pieces; and `linked`, a
    * field holding a link that stores `pieceListSchema` to an array in a
-   * document of its own, read under `any`. Each is in documents of its own.
+   * document of its own, read under `any`. Each is in documents of its own,
+   * in `inSpace`.
    */
-  const pickerLists = async (id: string, items: readonly unknown[]) => {
-    const array = await write(`${id}-linked-array`, [...items]);
+  const pickerLists = async (
+    id: string,
+    items: readonly unknown[],
+    inSpace = space,
+  ) => {
+    const array = await write(`${id}-linked-array`, [...items], [], inSpace);
     return {
-      any: (await write(`${id}-any`, { items: [...items] })).key("items")
-        .asSchema(true),
-      typed: (await write(`${id}-typed`, { items: [...items] })).key("items")
-        .asSchema(pieceListSchema),
-      linked: (await write(`${id}-linked`, {
-        items: link(array.asSchema(pieceListSchema)),
-      })).key("items").asSchema(true),
+      any: (await write(`${id}-any`, { items: [...items] }, [], inSpace))
+        .key("items").asSchema(true),
+      typed: (await write(`${id}-typed`, { items: [...items] }, [], inSpace))
+        .key("items").asSchema(pieceListSchema),
+      linked: (await write(
+        `${id}-linked`,
+        {
+          items: link(array.asSchema(pieceListSchema)),
+        },
+        [],
+        inSpace,
+      )).key("items").asSchema(true),
     };
   };
 
@@ -1273,6 +1293,105 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           linked: followed,
           repointed: followed,
           unsealed: [0, 1],
+        });
+      },
+    );
+
+    await t.step(
+      "withholds `cf-picker`'s binding while its list cannot be read, and decides it again once it can",
+      async () => {
+        // Each list sits in a space the view loses access to and regains.
+        // While the list cannot be read what it holds is unknown, not empty,
+        // so a list of public pieces loses its binding until the list can be
+        // read again, and a list holding a sealed piece is never bound.
+
+        const listSpace =
+          (await Identity.fromPassphrase("nested render list space")).did();
+        let revoked = false;
+        const observers = new Set<() => void>();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            revoked && named === listSpace
+              ? new Error("Access revoked")
+              : undefined,
+          subscribe: (_named, onChange) => {
+            observers.add(onChange);
+            return () => {
+              observers.delete(onChange);
+            };
+          },
+        };
+        const setRevoked = async (value: boolean) => {
+          revoked = value;
+          for (const observer of [...observers]) observer();
+          await t.settle();
+        };
+        const pieces = [
+          [
+            "public",
+            await write("unread-public-piece", {
+              [NAME]: "Shelf",
+              [UI]: vnode("div", ["Shelf heading"]),
+            }),
+          ],
+          [
+            "sealed",
+            await labeled("unread-sealed-piece", {
+              [NAME]: "Sealed shelf",
+              [UI]: vnode("div", [SEALED]),
+            }, sealedAtom),
+          ],
+        ] as const;
+        const outcomes: Record<string, unknown> = {};
+        for (const [held, piece] of pieces) {
+          const lists = await pickerLists(
+            `unread-${held}`,
+            [link(piece)],
+            listSpace,
+          );
+          for (const [way, list] of Object.entries(lists)) {
+            const mounted = await mount(
+              createCellRef(
+                await pickerView(`unread-${held}-${way}-view`, list),
+              ),
+              visitor,
+              access,
+            );
+            try {
+              const seen: { bound: number; removed: number }[] = [];
+              const look = () =>
+                seen.push({
+                  bound: mounted.bindings("items").length,
+                  removed: mounted.removed("items"),
+                });
+              look();
+              await setRevoked(true);
+              look();
+              await setRevoked(false);
+              look();
+              outcomes[`${held}, ${way}`] = seen;
+            } finally {
+              mounted.cancel();
+            }
+          }
+        }
+        const publicSeen = [
+          { bound: 1, removed: 0 },
+          { bound: 1, removed: 1 },
+          { bound: 2, removed: 1 },
+        ];
+        const sealedSeen = [
+          { bound: 0, removed: 0 },
+          { bound: 0, removed: 0 },
+          { bound: 0, removed: 0 },
+        ];
+        expect(outcomes).toEqual({
+          "public, any": publicSeen,
+          "public, typed": publicSeen,
+          "public, linked": publicSeen,
+          "sealed, any": sealedSeen,
+          "sealed, typed": sealedSeen,
+          "sealed, linked": sealedSeen,
         });
       },
     );

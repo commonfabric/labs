@@ -1149,9 +1149,12 @@ export class WorkerReconciler {
     const hostRead = nested === undefined
       ? read
       : read.asSchema(covered ? nested.schema : true);
-    addCancel(this.#sinkCell(hostRead, (value, labels) => {
+    addCancel(this.#sinkCell(hostRead, (value, labels, reachable) => {
       consumed = labels;
-      elements?.update(read, Array.isArray(value) ? value.length : 0);
+      elements?.update(
+        read,
+        !reachable ? undefined : Array.isArray(value) ? value.length : 0,
+      );
       watch.reeval();
     }, true));
     return cancel;
@@ -1160,28 +1163,31 @@ export class WorkerReconciler {
   /**
    * The reads a component makes of each element of a list it mounts a render
    * from each element of, each read with `schema`. `update()` keeps one read
-   * per element of the list `list` names, of the given length, and `settling`
-   * holds while it runs, so that the reads it starts, each reporting its first
-   * result to `changed` as it starts, are decided together once it returns.
-   * `reads()` returns each element as `list.key(index)` names it, whose labels
-   * a decision reads through the list's links as they stand then, with what
-   * the element's read consumed.
+   * per element of the list `list` names, of the given length, which is
+   * undefined when the list could not be read, and `settling` holds while it
+   * runs, so that the reads it starts, each reporting its first result to
+   * `changed` as it starts, are decided together once it returns. `reads()`
+   * returns each element as `list.key(index)` names it, whose labels a
+   * decision reads through the list's links as they stand then, with what the
+   * element's read consumed.
    *
    * A read addressed through the list's links crosses them under their stored
    * schemas, and one that declares the list's elements references ends the
    * read at an element's own link. So each element is read at the slot
    * holding it in the document `list` resolves to, where it is read as
    * `cf-render` reads its cell, following the element's links to the document
-   * they land on; the links up to that slot are the list read's to decide. A
-   * list that does not resolve has no element reads, and the list read
-   * refuses it.
+   * they land on; the links up to that slot are the list read's to decide.
+   * While the list cannot be read, because its space is out of reach or it
+   * does not resolve, the element reads stand as they were, and `reads()`
+   * adds one that failed, which no policy admits: what the list holds is
+   * unknown then, not empty.
    */
   #nestedRenderElements(
     schema: JSONSchema,
     changed: () => void,
   ): {
     readonly settling: boolean;
-    update(list: Cell<unknown>, length: number): void;
+    update(list: Cell<unknown>, length: number | undefined): void;
     reads(): DecidingRead[];
     cancel(): void;
   } {
@@ -1192,6 +1198,7 @@ export class WorkerReconciler {
     };
     const elements: Element[] = [];
     let resolved: Cell<unknown> | undefined;
+    let unread: Cell<unknown> | undefined;
     let settling = false;
     const resize = (list: Cell<unknown>, at: Cell<unknown>, length: number) => {
       for (const element of elements.splice(length)) element.cancel();
@@ -1222,27 +1229,33 @@ export class WorkerReconciler {
         try {
           let at: Cell<unknown> | undefined;
           try {
-            at = list.resolveAsCell();
+            at = length === undefined ? undefined : list.resolveAsCell();
           } catch {
             at = undefined;
           }
-          if (
-            at === undefined || resolved === undefined ||
-            !this.#sameCellForReuse(resolved, at)
-          ) {
+          if (length === undefined || at === undefined) {
+            unread = list;
+            return;
+          }
+          unread = undefined;
+          if (resolved === undefined || !this.#sameCellForReuse(resolved, at)) {
             for (const element of elements.splice(0)) element.cancel();
           }
           resolved = at;
-          if (at !== undefined) resize(list, at, length);
+          resize(list, at, length);
         } finally {
           settling = false;
         }
       },
-      reads: () =>
-        elements.map(({ source, consumed }) => ({
+      reads: () => [
+        ...(unread === undefined
+          ? []
+          : [{ source: unread, reads: [undefined] }]),
+        ...elements.map(({ source, consumed }) => ({
           source,
           reads: [consumed],
         })),
+      ],
       cancel: () => {
         for (const element of elements.splice(0)) element.cancel();
       },
@@ -1562,10 +1575,19 @@ export class WorkerReconciler {
     return undefined;
   }
 
-  /** Keeps a rendered subscription responsive to session access loss and recovery. */
+  /**
+   * Keeps a rendered subscription responsive to session access loss and
+   * recovery. `deliver` receives the value, the labels the read consumed, and
+   * whether the cell's space is in reach; while it is not, the value is
+   * undefined.
+   */
   #sinkCell<T>(
     cell: Cell<T>,
-    deliver: (value: T | undefined, consumed?: SinkConsumedLabel) => void,
+    deliver: (
+      value: T | undefined,
+      consumed: SinkConsumedLabel | undefined,
+      reachable: boolean,
+    ) => void,
     includeConsumedLabel = false,
   ): Cancel {
     const [cancel, addCancel] = useCancelGroup();
@@ -1575,7 +1597,8 @@ export class WorkerReconciler {
     let consumed: SinkConsumedLabel | undefined;
     const emit = () => {
       if (active) {
-        deliver(this.#cellAccessError(cell) ? undefined : current, consumed);
+        const reachable = this.#cellAccessError(cell) === undefined;
+        deliver(reachable ? current : undefined, consumed, reachable);
       }
     };
     addCancel(cell.sink((value, _cfcLabel, read) => {
