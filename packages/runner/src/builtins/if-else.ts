@@ -27,7 +27,7 @@ import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
  * `condition` stays a plain (value-read) input, so a condition change keeps
  * re-running ifElse. The action decides on its truthiness alone, which it reads
  * from the condition's root (`readsTruthyAtRoot()`), so nothing below the root
- * of a condition that is a record is read, consumed or re-run on.
+ * of a condition that is a record or an array is read.
  */
 export const IF_ELSE_ARGUMENT_SCHEMA = internSchema({
   type: "object",

@@ -15,7 +15,7 @@ import { ContextualFlowControl } from "../cfc.ts";
  * Returns value if condition is truthy, otherwise returns condition (falsy value)
  *
  * Truthiness is read from the condition's root (`readsTruthyAtRoot()`), so
- * nothing below the root of a condition that is a record is read.
+ * nothing below the root of a condition that is a record or an array is read.
  */
 export function when(
   inputsCell: Cell<{ condition: any; value: any }>,

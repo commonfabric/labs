@@ -1149,6 +1149,29 @@ function readsWithoutSchema(schema: JSONSchema | undefined): boolean {
     filtered !== false && !isNontrivialSchema(filtered);
 }
 
+/**
+ * Helper for `validateAndTransform()` and `readsTruthyAtRoot()`, which marks
+ * `tx` cfc-relevant for a read of `linkId` entering with `entrySchema` across
+ * the write redirects that resolved to `redirected`: where either schema
+ * carries `ifc`, or, when `probeStoredMetadata` is set, where `redirected`'s
+ * document carries stored CFC metadata that applies to its path.
+ */
+function markReadEntryCfcRelevant(
+  tx: IExtendedStorageTransaction,
+  linkId: string,
+  entrySchema: JSONSchema | undefined,
+  redirected: NormalizedFullLink,
+  probeStoredMetadata: boolean,
+): void {
+  if (
+    schemaHasIfc(entrySchema) ||
+    schemaHasIfc(resolveSchema(redirected.schema)) ||
+    (probeStoredMetadata && storedCfcMetadataAppliesToPath(tx, redirected))
+  ) {
+    tx.markCfcRelevant(`schema-ifc-read:${linkId}`);
+  }
+}
+
 export interface ValidateAndTransformOptions {
   /** When true, also read into each Cell created for asCell fields to capture dependencies */
   traverseCells?: boolean;
@@ -1248,14 +1271,13 @@ export function validateAndTransform(
   // precedence (`combineSchemaForLink`) keeps a shaped reader's combined
   // schema free of the link's `ifc` — the marking must not depend on which
   // side won the combination.
-  if (
-    schemaHasIfc(effectiveSchema) ||
-    schemaHasIfc(resolvedLinkSchema) ||
-    (options?.viewChild !== true &&
-      storedCfcMetadataAppliesToPath(tx, resolvedLink))
-  ) {
-    tx.markCfcRelevant(`schema-ifc-read:${link.id}`);
-  }
+  markReadEntryCfcRelevant(
+    tx,
+    link.id,
+    effectiveSchema,
+    resolvedLink,
+    options?.viewChild !== true,
+  );
 
   // Unlike the original, we have kept the asCell markers in the schema
   link = {
@@ -1670,27 +1692,16 @@ export function validateAndTransform(
 
 /**
  * Returns whether what `validateAndTransform()` returns for `link`, read
- * through `tx`, is truthy, decided from the value's root without reading below
- * it. A caller that decides on a value's truthiness and nothing else reads it
- * this way, so that what it consumes and what it runs again on are the root's,
- * not those of the whole value a schema describes.
+ * through `tx`, is truthy, deciding it from the value's root without reading
+ * below it.
  *
- * It resolves `link` the way that read does, following the write redirects at
- * its entry and then every link to the value, so it consumes each hop. It then
- * reads the value's root non-recursively, which observes whether the value
- * exists and what kind of value it is, and consumes the labels covering the
- * root.
- *
- * A root that is not a record or an array is the whole of its value, so the
- * read of it reaches nothing below the root, and that read decides: a schema
- * default standing in for an absent value, a type check on a scalar, and a
- * value that has not arrived all come out as they do there. A record or an
- * array is truthy whatever it holds, so what decides is whether the read's
- * checks at the root admit it. A handle, or a read without a schema, admits
- * any value; otherwise the schema the read validates against has to accept the
- * container's type. What lies below the root is not read, and is taken to be
- * valid: a container that fails its schema only below its root returns `true`
- * here, where the read returns `undefined`.
+ * It resolves `link` as that read does, consuming each hop, and reads the root
+ * non-recursively. A root that is not a record or an array is the whole of its
+ * value, so the read itself decides, defaults and values not yet arrived
+ * included. A record or an array is truthy unless the schema the read
+ * validates against refuses its type at the root. One that fails only below
+ * its root, a `oneOf` more than one of whose branches admits it among them,
+ * returns `true` here, where the read returns `undefined`.
  */
 export function readsTruthyAtRoot(
   runtime: Runtime,
@@ -1705,6 +1716,10 @@ export function readsTruthyAtRoot(
     readerSchema,
     resolveSchema(redirected.schema),
   );
+  markReadEntryCfcRelevant(tx, link.id, entrySchema, redirected, true);
+  // A handle is truthy whatever it points at, and the read hands one back
+  // without reading the value.
+  if (SchemaObjectTraverser.hasAsCell(entrySchema)) return true;
   const target = resolveLink(
     runtime,
     tx,
@@ -1719,11 +1734,11 @@ export function readsTruthyAtRoot(
   if (!isKeyableObjectOrArray(root)) {
     return Boolean(validateAndTransform(runtime, tx, link));
   }
-  if (
-    entrySchema === undefined || readsWithoutSchema(entrySchema) ||
-    SchemaObjectTraverser.hasAsCell(entrySchema)
-  ) {
+  if (entrySchema === undefined || readsWithoutSchema(entrySchema)) {
     return true;
+  }
+  if (schemaHasIfc(target.schema)) {
+    tx.markCfcRelevant(`schema-ifc-read:${link.id}`);
   }
   return schemaAcceptsType(
     entrySelectorSchema(readerSchema, entrySchema, target.schema),
