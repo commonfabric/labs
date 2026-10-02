@@ -10977,8 +10977,13 @@ export function* prepareBoundaryCommitSteps(
           continue;
         }
       }
+      // A declared entry minted at a slot labels the position, not the
+      // pointer the slot holds, so a link-origin entry there stays until its
+      // own pointer is replaced (`linkEntrySuperseded` below).
       if (
-        persistedLabelEntryKeys.has(key) || remintedDeclaredPaths.has(key) ||
+        (entry.origin !== "link" &&
+          (persistedLabelEntryKeys.has(key) ||
+            remintedDeclaredPaths.has(key))) ||
         currentLinkWritePaths.has(key)
       ) {
         if (

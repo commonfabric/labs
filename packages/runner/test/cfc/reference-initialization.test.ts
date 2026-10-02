@@ -86,6 +86,20 @@ describe("reference-initialization", () => {
     await runtime.dispose();
   });
 
+  /** Every confidentiality atom `cell`'s stored label map holds at `path`. */
+  function confidentialityAt(
+    cell: { getAsNormalizedFullLink(): NormalizedFullLink },
+    path: readonly string[],
+  ): unknown[] {
+    return (readStoredCfcMetadata(
+      runtime.edit(),
+      cell.getAsNormalizedFullLink(),
+    )
+      ?.labelMap.entries ?? [])
+      .filter((entry) => entry.path.join("/") === path.join("/"))
+      .flatMap((entry) => entry.label.confidentiality ?? []);
+  }
+
   /** Writes an entry under no schema, as a list's existing entry is held. */
   function entryCell(
     tx: ReturnType<Runtime["edit"]>,
@@ -759,6 +773,46 @@ describe("reference-initialization", () => {
           { schema },
         ),
       ).toContain("writeAuthorizedBy");
+    });
+
+    it("keeps the confidentiality its link carries on the slot when it is staged again", async () => {
+      // The slot declares a writer and no confidentiality; the list it names
+      // is secret, and only the link's own label says so at the slot.
+      const secretList: JSONSchemaObj = {
+        type: "array",
+        items: { type: "string" },
+        ifc: { confidentiality: ["secret"] },
+      };
+      const seed = runtime.edit();
+      runtime.getCell(space, "secret-board", {
+        type: "object",
+        properties: { items: secretList },
+      }, seed).set({ items: ["a"] });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+      const schema = capturing({
+        items: {
+          type: "array",
+          items: { type: "string" },
+          asCell: ["readonly"],
+          ifc: { writeAuthorizedBy: writer },
+        },
+      });
+
+      for (const _ of ["staged", "staged again"]) {
+        expect(
+          await commitStaging(
+            (tx) => ({ items: captured(tx, "secret-board") }),
+            { schema },
+          ),
+        ).toBeUndefined();
+        expect(
+          confidentialityAt(runtime.getCell(space, "argument"), [
+            "params",
+            "items",
+          ]),
+        ).toContain("secret");
+      }
     });
   });
 

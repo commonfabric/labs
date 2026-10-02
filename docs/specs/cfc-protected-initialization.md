@@ -86,8 +86,8 @@ slot that held one before the transaction is a modification, even when the
 transaction empties the slot first, and requires the slot's ordinary writer.
 The same link staged again, as a runtime starting a piece it finds set up
 stages its argument, lands no write at the slot and is permitted whatever the
-slot's stored policy: the slot keeps its link, and no policy stored on it is
-disturbed.
+slot's stored policy: the slot keeps its link, and the labels stored with that
+link stay with it beside any entry the slot's schema declares there.
 
 The receiving slot's schema is the entry's own, so it can declare integrity the
 entry's writer adds, such as authorship by the current principal. Staging a
