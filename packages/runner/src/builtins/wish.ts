@@ -235,6 +235,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#learned":
     case "#learnedSummary":
     case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -961,6 +962,22 @@ function resolveHomeSpaceTarget(
       return [{
         cell: getHomeSpaceCell(ctx),
         pathPrefix: ["defaultPattern", "agentQueue"],
+      }];
+    }
+
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
 

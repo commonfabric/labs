@@ -2579,12 +2579,13 @@ export class CellImpl<T extends FabricValue>
         );
       }
 
-      // A whole-value set reshapes what a mergeable op intent (an earlier push /
-      // addUnique / increment / removeByValue in this transaction) refers to,
-      // both at the path it writes and anywhere beneath it — writing an
-      // enclosing object rewrites the arrays inside it too. Poison those intents,
-      // keyed on `writeLink`, the path diffAndUpdate wrote, so the commit emits
-      // this set's whole-array diff rather than a stale tail op.
+      // A whole-value set says what the value is, both at the path it writes
+      // and anywhere beneath it — writing an enclosing object rewrites the
+      // arrays inside it too. A mergeable op (a push / addUnique / increment /
+      // removeByValue in this transaction, earlier or later) resolves against
+      // whatever the store holds instead. Poison the path, keyed on
+      // `writeLink`, the path diffAndUpdate wrote, so the commit emits this
+      // set's whole-value diff rather than an op.
       //
       // Keying on the written path is what keeps this correct for the writes
       // that should NOT disturb an op: a set on a CHILD path (an element edit)

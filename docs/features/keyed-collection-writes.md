@@ -221,15 +221,15 @@ contends with every element write, a cost belonging to the reader.
 Replacing a list's whole membership in one handler — `list.set([])`, then
 `elementById(id).set(record)` and `addUnique(elementById(id))` per record, the
 shape that seeds records the runtime can address by key — mixes a whole-value
-overwrite with mergeable adds at the same path. The overwrite wins: because the
-transaction changed the array's length ahead of the recorded tail, the commit
-abandons the mergeable intent and sends the plain whole-array diff, so the
-durable list holds exactly the reseeded members. That transaction forfeits
+overwrite with mergeable adds at the same path. The overwrite wins: the
+`set([])` says what the list holds, so the adds that follow it record no
+intent, and the commit sends the plain whole-array diff, so the durable list
+holds exactly the reseeded members. That transaction forfeits
 merge-friendliness for the list (it can false-conflict with a concurrent add),
 which is the right trade — replacing a list wholesale is not an operation that
-should merge with a concurrent append. See "Mixed ops on one path fall back to
-the whole-array diff" in `mergeable-collection-writes.md`. The reseeded entity
-documents themselves are ordinary writes and are unaffected.
+should merge with a concurrent append. See "An op after a whole-value `set()`
+commits as a value write" in `mergeable-collection-writes.md`. The reseeded
+entity documents themselves are ordinary writes and are unaffected.
 
 ## The entity outlives its link: clear on remove
 

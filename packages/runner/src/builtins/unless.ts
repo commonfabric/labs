@@ -1,6 +1,7 @@
 import { type Cell } from "../cell.ts";
 import { type Action } from "../scheduler.ts";
 import { type Runtime } from "../runtime.ts";
+import { readsTruthyAtRoot } from "../schema.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { resolveLink } from "../link-resolution.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
@@ -12,6 +13,9 @@ import { ContextualFlowControl } from "../cfc.ts";
 /**
  * unless(condition, fallback) - || semantics
  * Returns condition if truthy, otherwise returns fallback
+ *
+ * Truthiness is read from the condition's root (`readsTruthyAtRoot()`), so
+ * nothing below the root of a condition that is a record or an array is read.
  */
 export function unless(
   inputsCell: Cell<{ condition: any; fallback: any }>,
@@ -38,10 +42,14 @@ export function unless(
     const resultWithLog = result.withTx(tx);
     const inputsWithLog = inputsCell.withTx(tx);
 
-    const condition = inputsWithLog.key("condition").get();
+    const truthy = readsTruthyAtRoot(
+      runtime,
+      tx,
+      conditionCell.getAsNormalizedFullLink(),
+    );
 
     // || semantics: if truthy, return condition; if falsy, return fallback
-    const ref = condition
+    const ref = truthy
       ? inputsWithLog.key("condition").getAsLink({ base: result })
       : inputsWithLog.key("fallback").getAsLink({ base: result });
     const resolvedRef = resolveLink(runtime, tx, parseLink(ref, result));
