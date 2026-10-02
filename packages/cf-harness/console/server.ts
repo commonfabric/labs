@@ -73,6 +73,7 @@ import {
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
 import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
 import {
+  DEFAULT_HARNESS_MODEL,
   type HarnessFabricCfcEnforcementMode,
   type HarnessFabricCfcFlowLabelsMode,
   type HarnessFabricSessionConfig,
@@ -283,9 +284,6 @@ const DEFAULT_FABRIC_API_URL = "http://localhost:8000";
  * per-session move, so it has its own flag and no default here.
  */
 const DEFAULT_FABRIC_CFC_POSTURE: CfcPosture = "max-enforcement";
-
-/** The CLI's own default model, so both entrypoints bill the same route. */
-const DEFAULT_MODEL = "gpt-6.1-sol";
 
 /** How often the stream publishes a liveness tick, in milliseconds. */
 const PING_INTERVAL_MS = 15_000;
@@ -910,7 +908,8 @@ export const resolveConsoleConfig = async (
       nonEmpty(env.CF_HARNESS_HOME) ??
         join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
     ),
-    model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL,
+    model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ??
+      DEFAULT_HARNESS_MODEL,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(researchReasoningEffort !== undefined
       ? { researchReasoningEffort }
@@ -1045,7 +1044,7 @@ export const resolveConsoleConfig = async (
       source: source("pattern-index-url", "CF_HARNESS_PATTERN_INDEX_URL"),
     }, {
       name: "model",
-      value: config.model ?? DEFAULT_MODEL,
+      value: config.model ?? DEFAULT_HARNESS_MODEL,
       source: source("model", "CF_HARNESS_MODEL"),
     }, {
       name: "reasoning effort",

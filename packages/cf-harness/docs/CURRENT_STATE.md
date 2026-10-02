@@ -532,7 +532,7 @@ The current package provides:
 - per-turn and aggregate token/cache usage in run reports, operator output,
   batch metadata, and interactive turn-completion events;
 - stable interactive prompt-cache affinity, configurable reasoning effort, and
-  opt-in GPT-5.6 gateway cache controls; the ChatGPT/Codex subscription backend
+  opt-in GPT-5.6/GPT-6.1 Sol gateway cache controls; the subscription backend
   uses implicit caching because it rejects the API `prompt_cache_options` field;
 - interactive NDJSON stdio sessions with optional SQLite session, turn, event,
   replay, cancellation, and restore state; a session's durable transcript

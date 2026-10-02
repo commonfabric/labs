@@ -246,7 +246,7 @@ What works today:
   cache usage detail; estimates use the public OpenAI token schedule and are
   kept distinct from provider-reported cost
 - stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6 gateway implicit/explicit cache-mode controls
+  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
@@ -431,6 +431,15 @@ section pass `--model-provider` for one run; `CF_HARNESS_MODEL_PROVIDER` selects
 one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
 
+New runs default to `gpt-6.1-sol`. `--model` or `CF_HARNESS_MODEL` selects a
+different model for a new run. Gateway resumes keep their recorded model unless
+`--model` explicitly changes it; Codex resumes require the recorded model and
+reject model changes. The console uses the same new-run default. GPT-6.1 Sol
+supports reasoning efforts `low`, `medium` (provider default), `high`, `xhigh`,
+and `max`; it does not support `none` or `minimal`. Both the gateway and Codex
+adapters reject unsupported known-model efforts before dispatch; Codex validates
+them before resolving credentials.
+
 A flag the CLI does not declare is refused, never ignored, because an ignored
 restriction is a run without it: `--allowed-tools read_file` stops before any
 model call with
@@ -480,14 +489,14 @@ deno task run -- \
   --print-transcript
 ```
 
-GPT-5.6 cache experiment:
+GPT-6.1 Sol cache experiment:
 
 ```bash
 cd packages/cf-harness
 CF_HARNESS_API_KEY=... deno task run -- \
   --workspace ../.. \
   --model-provider openai-compatible-gateway \
-  --model gpt-5.6-terra \
+  --model gpt-6.1-sol \
   --reasoning-effort low \
   --prompt-cache-mode explicit \
   --prompt "Inspect the cf-harness package and summarize its model adapters."
@@ -503,6 +512,11 @@ that total usage object. `costUsd`, when present, came from the provider;
 [public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
 for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
 subscription quota conversion.
+
+GPT-6.1 Sol estimates use $2 input, $0.10 cached input, $2.50 cache writes, and
+$10 output per million tokens. Above 272,000 input tokens, the full request uses
+2x input/cache rates and 1.5x output rates. These are standard API rates, not
+fast-mode, batch, regional-processing, or subscription prices.
 
 Interactive streams emit `turn_usage` after each completed model call with the
 root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
