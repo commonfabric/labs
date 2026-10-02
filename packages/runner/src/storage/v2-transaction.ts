@@ -26,6 +26,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { readStatsActive, recordDocumentRead } from "../read-stats.ts";
 import {
+  emptyEntityDocument,
   patchOpIsStructural,
   patchOpPointerFields,
 } from "../../../memory/v2/patch.ts";
@@ -1504,32 +1505,49 @@ export class V2StorageTransaction implements IStorageTransaction {
       // A whole-document transaction (markWholeDocumentWrites — the
       // client speculation overlay's seal) takes the same emission,
       // for the reason on that declaration.
-      if (!this.#emitsWholeDocuments) {
+      //
+      // A write to the document root takes the same emission. No patch
+      // expresses one, so the set is what carries it, and a mergeable op
+      // sent in its place would leave the root write out of the commit.
+      if (!this.#emitsWholeDocuments && !this.#writesDocumentRoot(doc)) {
         const mergeable = this.#buildMergeableOps(doc);
+        // A document with no base goes whole, as a `set`. Mergeable ops that
+        // are the transaction's only writes to it are the exception: they
+        // resolve against whatever the store holds, so a write from a session
+        // that has not loaded the document lands on durable state instead of
+        // replacing it. Any other write to the document was computed from
+        // its absence, the label envelope among them, and is sound only where
+        // the store holds no document either. Ops beside such a write are
+        // abandoned for the `set`, whose reads carry that claim: the store
+        // refuses it where it holds the document, and the transaction runs
+        // again with the document loaded. The diff against the empty document
+        // is what finds those other writes, holding nothing when the ops'
+        // suppressions cover every write.
+        const hasBase = doc.initial.value !== undefined;
+        const base = doc.initial.value ??
+          (mergeable.ops.length > 0 ? emptyEntityDocument() : undefined);
         const patch = this.#buildPatchOperation(
           id,
           type,
           scope,
           doc,
+          base,
           mergeable.suppress,
         );
         if (mergeable.ops.length > 0) {
-          // Emit the mergeable ops even when there is no base to diff against
-          // (where buildPatchOperation returns null) so a stale-base write lands
-          // against durable state instead of clobbering it with a whole-value
-          // `set`.
-          const basePatches = patch?.op === "patch" ? patch.patches : [];
-          operations.push({
-            op: "patch",
-            id,
-            type,
-            scope,
-            patches: [...mergeable.ops, ...basePatches],
-            value: doc.current.value,
-          });
-          continue;
-        }
-        if (patch) {
+          if (hasBase || patch === null) {
+            operations.push({
+              op: "patch",
+              id,
+              type,
+              scope,
+              patches: [...mergeable.ops, ...(patch?.patches ?? [])],
+              value: doc.current.value,
+            });
+            continue;
+          }
+          this.#abandonMergeableOps(doc);
+        } else if (patch) {
           operations.push(patch);
           continue;
         }
@@ -3518,21 +3536,26 @@ export class V2StorageTransaction implements IStorageTransaction {
     };
   }
 
+  /**
+   * Builds the patch operation carrying a document's writes as a diff of its
+   * working value against `base`, leaving out the candidates `suppress` names.
+   * Returns `null` when there is no patch to send: `base` or the working value
+   * is absent, or nothing differs. No patch expresses a write to the document
+   * root, so `doc` must hold none (see `#writesDocumentRoot()`).
+   */
   #buildPatchOperation(
     id: URI,
     type: MediaType,
     scope: CellScope,
     doc: WritableDocumentEntry,
-    suppress: readonly OpSuppression[] = [],
-  ): NativeStorageCommitOperation | null {
-    if (doc.initial.value === undefined || doc.current.value === undefined) {
+    base: FabricValue | undefined,
+    suppress: readonly OpSuppression[],
+  ): Extract<NativeStorageCommitOperation, { op: "patch" }> | null {
+    if (base === undefined || doc.current.value === undefined) {
       return null;
     }
 
     const details = [...doc.patchDetails.values()];
-    if (details.some((detail) => detail.address.path.length === 0)) {
-      return null;
-    }
 
     const patchDetails = new Map<string, {
       path: readonly string[];
@@ -3549,7 +3572,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         { allowArrayLength: true },
       );
       const previousValue = readValueAtPath(
-        doc.initial.value,
+        base,
         detail.address.path,
         { allowArrayLength: true },
       );
@@ -3562,7 +3585,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         { allowArrayLength: true },
       );
       const previousPresent = hasValueAtPath(
-        doc.initial.value,
+        base,
         detail.address.path,
         { allowArrayLength: true },
       );
@@ -3578,7 +3601,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
 
       const arrayPatchPath = findDeepestArrayPath(
-        doc.initial.value,
+        base,
         doc.current.value,
         detail.address.path,
       );
@@ -3612,7 +3635,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const nonCoverCandidates: PatchDraftCandidate[] = [];
     for (const arrayPath of arrayGroups.values()) {
-      const beforeValue = readValueAtPath(doc.initial.value, arrayPath, {
+      const beforeValue = readValueAtPath(base, arrayPath, {
         allowArrayLength: true,
       });
       const afterValue = readValueAtPath(doc.current.value, arrayPath, {
@@ -3623,7 +3646,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           arrayPath,
           beforeValue,
           afterValue,
-          hasValueAtPath(doc.initial.value, arrayPath, {
+          hasValueAtPath(base, arrayPath, {
             allowArrayLength: true,
           }),
           hasValueAtPath(doc.current.value, arrayPath, {
@@ -3651,6 +3674,19 @@ export class V2StorageTransaction implements IStorageTransaction {
     assertNoIndexedArrayStructuralOps(patches);
 
     return { op: "patch", id, type, scope, patches, value: doc.current.value };
+  }
+
+  /**
+   * Returns whether the transaction wrote `doc` at its root, replacing the
+   * whole document.
+   */
+  #writesDocumentRoot(doc: WritableDocumentEntry): boolean {
+    for (const detail of doc.patchDetails.values()) {
+      if (detail.address.path.length === 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

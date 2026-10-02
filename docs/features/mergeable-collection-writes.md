@@ -138,8 +138,11 @@ The same machinery carries three mergeable ops. `append` is described below;
     or past the append start). Edits to existing (pre-append) elements and
     unrelated sibling/ancestor candidates are kept, so a transaction that both
     edits an element and pushes keeps both changes.
-  - When the base is absent — where the diff would otherwise fall back to a
-    clobbering `set` — the append op is emitted instead.
+  - When the document has no base — where the diff would otherwise fall back
+    to a clobbering `set` — the append op is emitted instead, provided the
+    transaction's mergeable ops are its only writes to that document (see "An
+    op on a document with no base, beside another write, falls back to a
+    whole-document `set`" below for when they are not).
   - `getMergeableOpAddresses()` exposes the recorded addresses so the commit's
     read-set builder can drop the op's incidental reads.
 
@@ -401,6 +404,29 @@ first, since the op carries only the delta.
   update pushes onto the message list. Their commit carries `basisSeq` of NOW
   and does not export its read set, so what changes there is which local
   dependencies the transaction registers, not what the server arbitrates.
+
+- **An op on a document with no base, beside another write, falls back to a
+  whole-document `set`.** A transaction that sees no document has nothing to
+  diff its other writes against: a sibling field, or the `["cfc"]` label
+  envelope the commit stores for the document. Each was computed from the
+  document's absence — the envelope most of all, since label preparation
+  derives it from the stored one — so it is sound only where the store holds
+  no document either. An op resolves against whatever the store holds and
+  makes no such claim, so sending the two together would land the other write
+  on a document its author never saw. `getNativeCommit` therefore abandons the
+  document's intents and emits the `set`, whose reads carry the claim: the
+  store refuses it where it holds the document, and the transaction runs again
+  with the document loaded, where it has a base and the op merges. The cost is
+  that the push creating a list is not conflict-free when it carries another
+  write to that document; two sessions creating it at once conflict, and the
+  one refused retries onto the list the other created.
+
+- **A write to a document's root abandons every intent on that document.** No
+  patch expresses a root write, so `getNativeCommit` emits the document as a
+  whole-document `set`, which carries the root write and each op's local effect
+  together, and deletes and poisons the document's recorded paths as it does
+  for a whole-document transaction. An op sent in place of the `set` would
+  leave the root write out of the commit.
 
 - **A `removeByValue` that does not account for the whole local array falls back
   too.** Its suppression is `subtree: true` — the array path and everything under

@@ -104,6 +104,29 @@ async function readDurableNumber(
   }
 }
 
+// The same fresh-session read for a cell of any schema.
+async function readDurableValue(
+  server: MemoryV2Server.Server,
+  cause: string,
+  // deno-lint-ignore no-explicit-any
+  schema: any,
+): Promise<unknown> {
+  const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+  const rt = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager: storage,
+  });
+  try {
+    const cell = rt.getCell(space, cause, schema);
+    await cell.sync();
+    await cell.pull();
+    return cell.get();
+  } finally {
+    await rt.dispose();
+    await storage.close();
+  }
+}
+
 describe("mergeable array appends", () => {
   let server: MemoryV2Server.Server;
   let storage1: EmulatedStorageManager;
@@ -2571,6 +2594,158 @@ describe("mergeable op guards and single-session branches", () => {
       await rt2.dispose();
       await readBack.close();
     }
+  });
+
+  describe("a push that creates its list", () => {
+    // A document the transaction is the first to write has no base to diff
+    // against. A push that is its only write travels as an op. Beside any
+    // other write to the document it goes with that write in one
+    // whole-document set, which the store refuses where it already holds the
+    // document.
+
+    const docSchema = {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+
+    it("emits an op when it is the document's only write", () => {
+      const tx = rt.edit();
+      const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+      cell.push("x");
+
+      const { id } = cell.getAsNormalizedFullLink();
+      const operation = getDirectTransactionNativeCommit(tx, space)?.operations
+        .find((op) => op.id === id);
+      expect(operation?.op).toBe("patch");
+      expect(
+        (operation as { patches: { op: string; path: string }[] }).patches
+          .map(({ op, path }) => ({ op, path })),
+      ).toEqual([{ op: "append", path: "/value" }]);
+    });
+
+    it("commits a sibling field written beside it, in a set that drops the push's intent", async () => {
+      const cause = "push-creates-list-beside-sibling";
+      const tx = rt.edit();
+      const doc = rt.getCell(space, cause, docSchema, tx);
+      doc.key("count").set(1);
+      doc.key("tags").push("x");
+      expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
+        .toBe(1);
+
+      const { id } = doc.getAsNormalizedFullLink();
+      const operation = getDirectTransactionNativeCommit(tx, space)?.operations
+        .find((op) => op.id === id);
+      expect(operation?.op).toBe("set");
+      expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])])
+        .toEqual([]);
+
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+      expect(await readDurableValue(server, cause, docSchema)).toEqual({
+        count: 1,
+        tags: ["x"],
+      });
+    });
+
+    it("commits the rest of a whole-object `set()` made before it", async () => {
+      const cause = "push-creates-list-after-object-set";
+      const tx = rt.edit();
+      const doc = rt.getCell(space, cause, docSchema, tx);
+      doc.set({ tags: [], count: 1 });
+      doc.key("tags").push("x");
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      expect(await readDurableValue(server, cause, docSchema)).toEqual({
+        count: 1,
+        tags: ["x"],
+      });
+    });
+
+    it("is refused beside another write when the store already holds the document", async () => {
+      // The second session never loads the list, so its transaction sees no
+      // document. The write beside the push goes straight to the transaction
+      // and reads nothing, so the push's own read of the list is the only
+      // one that can refuse the commit.
+      const cause = "push-creates-list-store-holds-document";
+      const tx0 = rt.edit();
+      rt.getCell<string[]>(space, cause, stringListSchema, tx0).set(["a"]);
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      const storage2 = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const rt2 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage2,
+      });
+      try {
+        const tx = rt2.edit();
+        const list = rt2.getCell<string[]>(space, cause, stringListSchema, tx);
+        list.push("b");
+        const { id, scope } = list.getAsNormalizedFullLink();
+        tx.writeOrThrow({ space, id, scope, path: ["note"] }, "beside");
+        const result = await tx.commit({ resolveAt: "verdict" });
+        expect(result.error?.name).toBe("ConflictError");
+      } finally {
+        await rt2.dispose();
+        await storage2.close();
+      }
+
+      expect(await readDurableValue(server, cause, stringListSchema)).toEqual([
+        "a",
+      ]);
+    });
+  });
+
+  it("a push after a write to the document root emits a set and drops the push's intent", async () => {
+    // No patch expresses a write to the document root, so the whole-document
+    // set is what carries it. The append is not sent, and its intent must not
+    // survive to narrow the array read out of the commit's reads.
+    const docSchema = {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "push-after-root-write";
+    const tx0 = rt.edit();
+    rt.getCell(space, cause, docSchema, tx0).set({ tags: ["a"], count: 0 });
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const tx = rt.edit();
+    const doc = rt.getCell(space, cause, docSchema, tx);
+    const { id, scope } = doc.getAsNormalizedFullLink();
+    const rootWrite = tx.tx.write(
+      { space, id, scope, type: "application/json", path: [] },
+      { value: { tags: ["a"], count: 5 } },
+    );
+    expect(rootWrite.error).toBeUndefined();
+    doc.key("tags").push("b");
+    expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
+      .toBe(1);
+
+    const operation = getDirectTransactionNativeCommit(tx, space)?.operations
+      .find((op) => op.id === id);
+    expect(operation?.op).toBe("set");
+    expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])]).toEqual(
+      [],
+    );
+
+    await tx.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+    expect(await readDurableValue(server, cause, docSchema)).toEqual({
+      tags: ["a", "b"],
+      count: 5,
+    });
   });
 
   it("mergeable ops route through a TransactionWrapper", () => {
