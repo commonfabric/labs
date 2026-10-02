@@ -142,7 +142,9 @@ two values toolshed compares against its settings.
 Binding a mailbox and setting a watch both need a Google access token for the
 mailbox, issued through an OAuth client in `<project>`. A syncer brings its
 own client and sign-in. For a test, make a client by hand in the Cloud
-console, since `gcloud` has no command for either step:
+console, since `gcloud` has no command for either step. Both steps are on the
+Google Auth Platform pages, which **APIs & Services → OAuth consent screen**
+opens:
 
 1. **Google Auth Platform → Audience:** set the user type to Internal. That
    limits sign-in to accounts in the project's organization and needs no
