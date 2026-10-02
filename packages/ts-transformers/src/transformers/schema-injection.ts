@@ -24,6 +24,7 @@ import {
   isUnresolvedSchemaType,
   preserveSourceMapRange,
   registerSyntheticCallType,
+  TYPE_NODE_FLAGS,
   typeToSchemaTypeNode,
   unwrapCellLikeType,
   widenLiteralType,
@@ -136,11 +137,9 @@ function shouldDropFallbackTypeForSchema(
   if (!node || !type) return false;
   if (containsAnyOrUnknownTypeNode(node)) return false;
 
-  const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
-    ts.NodeBuilderFlags.UseStructuralFallback;
   let rebuilt: ts.TypeNode | undefined;
   try {
-    rebuilt = checker.typeToTypeNode(type, sourceFile, typeToNodeFlags);
+    rebuilt = checker.typeToTypeNode(type, sourceFile, TYPE_NODE_FLAGS);
   } catch (_e: unknown) {
     // typeToTypeNode can throw on deeply recursive or circular types.
     rebuilt = undefined;

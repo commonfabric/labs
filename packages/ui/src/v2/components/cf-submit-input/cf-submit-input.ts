@@ -134,18 +134,14 @@ export class CFSubmitInput extends BaseElement {
   private _seeded = false;
 
   /**
-   * Whether a submit is in flight, until the local deferred clear or a
-   * controlled value change. A second submit that arrives in that window — whether a button
-   * click or an Enter keypress — is a duplicate (the field still holds the
-   * submitted text), so its propagation to the host is stopped to suppress a
-   * second create. The flag is reset when the clear runs, including the case
-   * where the clear is skipped because the value changed, so a later submit is
-   * never blocked.
+   * Whether a submit is in flight, until its deferred completion. A second
+   * submit that arrives in that window, from a button click or an Enter
+   * keypress, is a duplicate (the field still holds the submitted text), so
+   * its propagation to the host is stopped to suppress a
+   * second create. Completion resets the flag even when clearing is disabled
+   * or the value changed, so a later submit can retry an unchanged draft.
    */
   private _submitting = false;
-
-  /** The controlled draft held until its value changes. */
-  #submittedValue: string | undefined;
 
   /**
    * Copies `initialValue` into the editable `value` once, the first time it is
@@ -154,10 +150,6 @@ export class CFSubmitInput extends BaseElement {
    */
   override willUpdate(changed: PropertyValues) {
     super.willUpdate(changed);
-    if (!this.clearOnSubmit && this.value !== this.#submittedValue) {
-      this._submitting = false;
-      this.#submittedValue = undefined;
-    }
     if (!this._seeded && this.initialValue) {
       this._seeded = true;
       this.value = this.initialValue;
@@ -215,10 +207,6 @@ export class CFSubmitInput extends BaseElement {
       return;
     }
     this._submitting = true;
-    if (!this.clearOnSubmit) {
-      this.#submittedValue = submitted;
-      return;
-    }
     // Clear the field only after the submit click has been handled — the
     // framework's host-level click listener reads `event.target.value` while
     // handling the click. A `setTimeout` runs after that dispatch (a microtask
@@ -231,7 +219,7 @@ export class CFSubmitInput extends BaseElement {
     // whether or not the clear runs, so a later submit is never blocked.
     setTimeout(() => {
       this._submitting = false;
-      if (this.value !== submitted) return;
+      if (!this.clearOnSubmit || this.value !== submitted) return;
       this.value = "";
       const input = this._input;
       if (input) input.value = "";

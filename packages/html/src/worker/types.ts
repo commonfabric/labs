@@ -324,10 +324,11 @@ export function normalizeRenderDeclassificationPolicy(
  * confidentiality a display surface admits when no authored boundary
  * narrows further. `atoms` are admitted by structural equality (the place
  * for acting-user identity atoms); `caveatKinds` admits Caveat-type atoms
- * by kind (the display-dischargeable classes). Everything else renders as
- * the blocked placeholder. Undefined = no default ceiling (today's
- * behavior); the profile may only be tightened, not loosened, without a
- * new release judgment.
+ * by kind (the prompt-caveat family, SC-54). Admitting a caveat is not
+ * discharging it: it stays on the value. Everything
+ * else renders as the blocked placeholder. Undefined = no default ceiling
+ * (today's behavior); the profile may only be tightened, not loosened,
+ * without a new release judgment (SC-54 is one).
  */
 export interface RenderConfidentialityCeiling {
   atoms?: readonly CfcConfClause[];

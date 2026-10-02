@@ -118,7 +118,9 @@ export interface IStorageError {
 /** Typed producer evidence for a required replica load that failed before an
  * at-most-once handler could dispatch. The scheduler receives typed failure
  * evidence; an error name may inform `failureClass`, but diagnostic text never
- * constitutes policy evidence or durable `permanentEvidence`. */
+ * constitutes policy evidence or durable `permanentEvidence`. A name is
+ * permanent evidence only for a refusal this process decides by construction
+ * (`IForeignScopedReadRefusedError`). */
 export type ReplicaLoadFailure = {
   failureClass: DeliveryFailureClass;
   recoveryEpoch: string;
@@ -151,13 +153,14 @@ export const toReplicaLoadFailureError = (
     aclRevision?: unknown;
   } | undefined;
   const name = typeof named?.name === "string" ? named.name : "";
+  const foreignScopedReadRefused = name === "ForeignScopedReadRefusedError";
   const failureClass: DeliveryFailureClass = name === "SessionRevokedError"
     ? "session-revoked"
     : name === "ConnectionError"
     ? "connection"
     : name === "AuthorizationError"
     ? "authorization"
-    : name === "ProtocolError"
+    : name === "ProtocolError" || foreignScopedReadRefused
     ? "protocol"
     : name === "TimeoutError"
     ? "timeout"
@@ -168,10 +171,13 @@ export const toReplicaLoadFailureError = (
   return new ReplicaLoadFailureError({
     failureClass,
     recoveryEpoch: permanentAclEvidence ? `acl:${aclRevision}` : recoveryEpoch,
-    // A name is not durable evidence. Authorization becomes permanent only
-    // when the memory server supplies the current ACL revision. Versioned
-    // protocol validators construct ReplicaLoadFailureError directly.
-    permanentEvidence: permanentAclEvidence,
+    // A name off the wire is not durable evidence. Authorization becomes
+    // permanent only when the memory server supplies the current ACL
+    // revision. A foreign scoped read refusal is minted by this process from
+    // the read's scope and its serving posture, so the same read is refused
+    // every time. Versioned protocol validators construct
+    // ReplicaLoadFailureError directly.
+    permanentEvidence: permanentAclEvidence || foreignScopedReadRefused,
   }, cause);
 };
 
@@ -320,6 +326,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * fact would leave that session reading unbounded.
    */
   setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
+
+  /**
+   * Chooses how the sessions this manager opens from here on reach their
+   * hosts: over one connection per host that they share, authenticated once
+   * per key, or over one connection per space. A manager without the method
+   * has no connections to share.
+   *
+   * @throws If a session is already open and the choice would change: the
+   * sessions would then be split across the two.
+   */
+  setSharedMemoryConnection?(enabled: boolean): void;
 
   /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space
@@ -3397,7 +3414,18 @@ export type PullError =
   | IQueryError
   | IStoreError
   | IConnectionError
-  | IAuthorizationError;
+  | IAuthorizationError
+  | IForeignScopedReadRefusedError;
+
+/** A serving runtime's refusal of a scoped read of a space other than its home
+ * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
+ * scope and the runtime's serving posture decide it, never transport or session
+ * state, so the same read from the same runtime is refused every time. A served
+ * event whose required load meets it terminalizes at once instead of spending
+ * the delivery-failure budget (events.md §5). */
+export interface IForeignScopedReadRefusedError extends IStorageError {
+  readonly name: "ForeignScopedReadRefusedError";
+}
 
 export interface IStoreError extends IStorageError {
   readonly name: "StoreError";

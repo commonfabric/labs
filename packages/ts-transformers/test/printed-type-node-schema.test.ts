@@ -352,6 +352,58 @@ export default function contextualCell() {
       });
     }
 
+    for (const tuple of ["readonly []", "[]"]) {
+      const wrap = {
+        type: "object",
+        properties: {
+          x: { type: "string" },
+          l: { type: "array", items: false },
+        },
+        required: ["x", "l"],
+      };
+
+      it(`reads an alias given \`${tuple}\` in a pattern's inferred result as its instantiation, on both sides`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+export default pattern<{ a: Wrap<${tuple}> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+
+        for (const root of [input, output]) {
+          expect(root).toEqual({
+            type: "object",
+            properties: { a: wrap },
+            required: ["a"],
+          });
+        }
+        expect(diagnostics).toEqual([]);
+      });
+
+      it(`reads an alias given \`${tuple}\` in a lift's inferred result as its instantiation`, async () => {
+        const { result } = await liftSchemas(
+          `import { lift } from "commonfabric";
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+export const f = lift((a: { w: Wrap<${tuple}> }) => ({ out: a.w }));`,
+          "a.w",
+        );
+
+        expect(result).toEqual({
+          type: "object",
+          properties: { out: wrap },
+          required: ["out"],
+        });
+      });
+    }
+
     it("keeps the cell boundary of an array of cells with an empty default", async () => {
       const { result } = await liftSchemas(
         `${IMPORTS}interface Item { title: string; attachments: Writable<any>[] | Default<[]>; }
@@ -408,6 +460,124 @@ export default pattern<{ n: number }>(() => {
         },
         required: ["host", "run"],
       });
+    });
+
+    for (
+      const [position, declaration, holder] of [
+        [
+          "an index signature",
+          "interface Dict<U> { [key: string]: U }",
+          "Dict",
+        ],
+        ["a tuple", "interface Twice<U> { items: [U, U] }", "Twice"],
+      ] as const
+    ) {
+      it(`reports a scope recursion reached through ${position} with no written reference, naming its type`, async () => {
+        // Each `Node<Readonly<…>>` is a new type, and a chain reached by type
+        // has no written reference to name, so the warning names a print of
+        // the type the chain stops at.
+        const diagnostics: TransformationDiagnostic[] = [];
+        await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Cell, pattern, PerUser } from "commonfabric";
+${declaration}
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+type Node<T> = PerUser<Cell<{ value: T; next?: ${holder}<Node<Readonly<T>>> }>>;
+export default pattern<{ a: Node<Wrap<readonly []>> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const unread = diagnostics.filter((diagnostic) =>
+          diagnostic.type === "schema-type:unread"
+        );
+
+        expect(unread.length).toBeGreaterThan(0);
+        for (const diagnostic of unread) {
+          expect(diagnostic.message).toContain("Wrap<readonly []>");
+        }
+      });
+    }
+  });
+
+  describe("a type the checker cannot print", () => {
+    // The checker prints no type node for the instance type of an anonymous
+    // class expression, which has no name to print it by, so each case below
+    // reads a result whose type has no print.
+
+    const makeObject =
+      "const makeObject = () => ({ a: new (class { v = 1 })() });";
+    const instance = {
+      type: "object",
+      properties: { v: { type: "number" } },
+      required: ["v"],
+    };
+
+    it("reports `pattern:any-result-schema` for a pattern's inferred result", async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern:any-result-schema" }]);
+    });
+
+    it('emits a `{ type: "unknown" }` result schema, and no diagnostic, for a lift taking no parameters', async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { lift } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+export const f = lift(() => ({ a: make() }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+
+      expect(callSchemas(parseModule(files["/main.tsx"]!), "lift")).toEqual([
+        false,
+        { type: "unknown" },
+      ]);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a lift's result as its authored return annotation", async () => {
+      const { result } = await liftSchemas(
+        `import { lift } from "commonfabric";
+${makeObject}
+export const f = lift((n: number): ReturnType<typeof makeObject> =>
+  n > 0 ? makeObject() : makeObject()
+);`,
+        "makeObject()",
+      );
+
+      expect(result).toEqual({
+        type: "object",
+        properties: { a: { $ref: "#/$defs/__class" } },
+        required: ["a"],
+        $defs: { __class: instance },
+      });
+    });
+
+    it("reads a lift's projected result from its parameter's annotation", async () => {
+      const { result } = await liftSchemas(
+        `import { lift } from "commonfabric";
+${makeObject}
+export const f = lift((x: ReturnType<typeof makeObject>) => x.a);`,
+        "x.a",
+      );
+
+      expect(result).toEqual(instance);
     });
   });
 
@@ -1478,6 +1648,43 @@ export default pattern<{ a: Outer<readonly ["c", "d"]> }>(({ a }) => ({ a }));`,
         expect((input.properties as Schema).a).toEqual(expected);
         expect((output.properties as Schema).a).toEqual(expected);
       });
+
+      for (
+        const [a, confidentiality] of [
+          ['Tail<readonly ["c", "d"]>', ["c", "d", "b"]],
+          ['Lead<readonly ["c", "d"]>', ["b", "c", "d"]],
+          ['Named<readonly ["c", "d"]>', ["c", "d", "b"]],
+          ['ForwardMore<readonly ["c", "d"]>', ["c", "d", "e", "b"]],
+          ['Alternatives<readonly ["c", "d"]>', [{ anyOf: ["c", "d", "b"] }]],
+        ] as const
+      ) {
+        it(`reads the spread in the label of \`${a}\` as the elements of the list it spreads, on both sides`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+import type { AnyOf } from "commonfabric/cfc";
+type Tail<L extends readonly unknown[]> = Confidential<{ x: string }, readonly [...L, "b"]>;
+type Lead<L extends readonly unknown[]> = Confidential<{ x: string }, readonly ["b", ...L]>;
+type Named<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [...rest: L, last: "b"]>;
+type ForwardMore<L extends readonly unknown[]> = Tail<readonly [...L, "e"]>;
+type Alternatives<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [AnyOf<readonly [...L, "b"]>]>;
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: "string" } },
+            required: ["x"],
+            ifc: { confidentiality },
+          };
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
     });
 
     describe("an object label with a member the syntax reader cannot name", () => {
@@ -1776,6 +1983,67 @@ export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
           );
         }
       });
+    });
+
+    describe("an authored alias that shares a label operator's name", () => {
+      // Both sides read such an alias as the type its author declared, not as
+      // the library's `AnyOf` or `PolicyOf`, with or without a spread beside
+      // it.
+
+      for (
+        const [declarations, a, confidentiality] of [
+          [
+            'type AnyOf<T> = "original";',
+            'Confidential<{ x: string }, readonly [...CD, AnyOf<readonly ["reader"]>]>',
+            ["c", "d", "original"],
+          ],
+          [
+            'type AnyOf<T> = "original";',
+            'Confidential<{ x: string }, readonly [AnyOf<readonly ["reader"]>]>',
+            ["original"],
+          ],
+          [
+            'type PolicyOf<T> = "plain";',
+            "Confidential<{ x: string }, readonly [PolicyOf<typeof rules>]>",
+            ["plain"],
+          ],
+          [
+            `type AnyOf<T> = "original";
+type Tail<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [...L, AnyOf<readonly ["reader"]>]>;`,
+            'Tail<readonly ["c"]>',
+            ["c", "original"],
+          ],
+        ] as const
+      ) {
+        it(`reads \`${a}\` with the alias its author declared, on both sides`, async () => {
+          const pipelineDiagnostics: TransformationDiagnostic[] = [];
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type CD = readonly ["c", "d"];
+const rules = { name: "r" } as const;
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics,
+          });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: "string" } },
+            required: ["x"],
+            ifc: { confidentiality },
+          };
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+          expect(pipelineDiagnostics).toEqual([]);
+        });
+      }
     });
 
     describe("an annotation whose syntax the label reader does not evaluate", () => {

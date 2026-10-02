@@ -26,6 +26,7 @@ import {
   assertPromptCacheModeSupported,
   normalizeTerminalResponse,
   providerRunAffinityKey,
+  REASONING_SUMMARY,
   type ResponsesInputItem,
   toResponsesInput,
   toResponsesTools,
@@ -538,8 +539,15 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
           } as const,
         }
         : {}),
+      // A gateway also routes models that do not reason, and those refuse a
+      // reasoning parameter, so a summary is asked for only beside an effort.
       ...(request.reasoningEffort !== undefined
-        ? { reasoning: { effort: request.reasoningEffort } }
+        ? {
+          reasoning: {
+            effort: request.reasoningEffort,
+            summary: REASONING_SUMMARY,
+          },
+        }
         : {}),
     };
     const response = await this.gatewayClient.createResponseJson(

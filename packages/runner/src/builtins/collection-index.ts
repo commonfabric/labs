@@ -10,7 +10,7 @@ import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -342,7 +342,6 @@ function createCollectionIndexInstance(
             ),
         );
         setResultCell(entry.resultCell.withTx(tx), parent);
-        setPatternCell(entry.resultCell.withTx(tx), parent.key("pattern"));
         rollback.setupIssued(entry);
       }
       if (setup.needsSetup) {
@@ -401,7 +400,6 @@ function createCollectionIndexInstance(
             },
           );
           setResultCell(entry.resultCell.withTx(tx), parent);
-          setPatternCell(entry.resultCell.withTx(tx), parent.key("pattern"));
           rollback.setupIssued(entry);
         }
       }

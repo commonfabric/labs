@@ -2861,7 +2861,9 @@
       },
       "packages/cf-harness": {
         "dependencies": [
-          "jsr:@db/sqlite@0.13.0"
+          "jsr:@db/sqlite@0.13.0",
+          "npm:entities@8",
+          "npm:marked@^18.0.6"
         ]
       },
       "packages/cli": {

@@ -909,7 +909,7 @@ const MessageCard = pattern<{
           : null}
         <cf-cfc-authorship
           $value={message}
-          $author={message.get()?.authorProfile}
+          $author={message.key("authorProfile")}
         >
           <cf-text style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
             {live

@@ -6,10 +6,11 @@ import {
   legacySpaceDid,
   Session,
 } from "@commonfabric/identity";
-import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
+import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { navigate } from "@commonfabric/navigation";
+import { PROMPT_CAVEAT_FAMILY_KINDS } from "@commonfabric/runner/cfc/prompt-caveat-kinds";
 import { slugIdForSpace } from "@commonfabric/runner/slugs";
 import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 import { NameSchema } from "@commonfabric/runner/schemas";
@@ -93,18 +94,11 @@ export function defaultRenderConfidentialityCeiling(
       cfcAtom.personalSpace(actingUser),
       actingUser,
     ],
-    // Influence-class caveat kinds, whose canonical display release is the
-    // rendered-disclosure rule (§8.10.5). Deliberately excludes
-    // PromptInjectionRiskUnscreened: a material-risk kind that keeps its
-    // ordinary discharge evidence (screening), not display disclosure.
-    caveatKinds: [
-      // The canonical influence-class concept id.
-      CFC_CONCEPT_KIND.PromptInfluence,
-      // Short-form alias minted by shipped example patterns
-      // (cfc-spec-gallery, cfc-trusted-component-examples) and matched by
-      // the cf-cfc-label disclosure UI.
-      "prompt-influence",
-    ],
+    // The whole §10.1 prompt-caveat family (SC-54, proposed §8.10.6),
+    // screening tiers included. A prompt caveat says not to trust the
+    // content as instructions to a model; a display shows it to the acting
+    // user. Admitting it is not discharging it: it stays on the value.
+    caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
   };
 }
 

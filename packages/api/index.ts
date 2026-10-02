@@ -3827,9 +3827,7 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * file's default export to run each participant pattern in its own isolated
  * runtime (own identity) against one shared space. The optional `setup`
  * pattern instantiates shared state once; each participant pattern receives
- * its result as the `setup` input, and the notices its own runtime sent with
- * `noticeSpaceAccess()` as the `spaceAccessNotices` input (see
- * `SentSpaceAccessNotice`). Participants coordinate through
+ * its result as the `setup` input. Participants coordinate through
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
@@ -4050,59 +4048,6 @@ export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,
   principal: DID,
 ): void;
-
-/**
- * Tells `principal`, a member of the space `entry`'s value lives in, about
- * `entry`: once the handler's commit is accepted, sends a message to
- * `principal`'s DID inbox naming the space and `entry`'s document, and nothing
- * else. The inbox tells the recipient who sent it; the recipient trusts none of
- * what it says, and opening the space is what checks it.
- *
- * `principal` must be a `did:key` DID, which an inbox can address, and `entry`
- * a cell at the root of a document in the space's own scope. The acting
- * principal, the event's actor, must hold `OWNER` in the space, and `principal`
- * must have an entry of its own in the space's access list, including any the
- * handler's own `grantSpaceAccess()` added to that space. Those two are checked
- * only just before the message is sent, after the handler's writes commit; a
- * notice that fails them is dropped, and only the log shows it.
- *
- * The message goes out after the handler's writes commit, and is not sent if
- * they fail. Nothing retries a send that fails, so a notice may not arrive,
- * and one arrives only if its recipient has enabled their inbox. An event
- * sends a principal at most one notice, however many times the handler runs.
- *
- * Available only in a handler on a client runtime, and throws anywhere else.
- * The call throws for a malformed `principal` or `entry`, before staging
- * anything, so one the handler catches sends nothing.
- */
-export declare function noticeSpaceAccess(
-  principal: DID,
-  entry: AnyCell<unknown>,
-): void;
-
-/**
- * A notice `noticeSpaceAccess()` sent during a pattern test, as `cf test`
- * reports it. A test pattern, or a participant of a multi-user test, that
- * declares the input `spaceAccessNotices: SentSpaceAccessNotice[]` is handed
- * the notices its own runtime has sent, in the order the inbox accepted them.
- * A send is a post-commit effect, so the list is brought up to date at each
- * `{ settle: true }` step and at no other: an assertion on it follows one. A
- * run against a caller-supplied storage host sends to that host's inbox, and
- * the list stays empty.
- */
-export interface SentSpaceAccessNotice {
-  /** The actor that sent it, as the inbox verified it from the signature. */
-  readonly sender: DID;
-
-  /** The principal it was sent to. */
-  readonly recipient: DID;
-
-  /** The space it names. */
-  readonly space: DID;
-
-  /** The id of the document it names, in `space`. */
-  readonly entry: string;
-}
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

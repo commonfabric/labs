@@ -1,4 +1,5 @@
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import { CFSubmitInput } from "./index.ts";
 
@@ -67,6 +68,7 @@ describe("CFSubmitInput", () => {
   });
 
   it("retains controlled text until its caller accepts the submission", () => {
+    using time = new FakeTime();
     const el = new CFSubmitInput();
     el.clearOnSubmit = false;
     el.value = "Shared draft";
@@ -77,12 +79,32 @@ describe("CFSubmitInput", () => {
     const duplicate = clickEvent("submit");
     internals(el)._onClick(duplicate);
     expect(duplicate.stopped).toBe(true);
+    time.tick(0);
+    expect(el.value).toBe("Shared draft");
     el.value = "";
     internals(el).willUpdate(new Map([["value", "Shared draft"]]));
     el.value = "Next message";
     const next = clickEvent("button");
     internals(el)._onClick(next);
     expect(next.stopped).toBe(false);
+  });
+
+  it("permits a fresh gesture to retry an unchanged controlled draft", () => {
+    using time = new FakeTime();
+    const el = new CFSubmitInput();
+    el.clearOnSubmit = false;
+    el.value = "Try again";
+    const first = clickEvent("button");
+    internals(el)._onClick(first);
+    expect(first.stopped).toBe(false);
+    time.tick(0);
+    expect(el.value).toBe("Try again");
+
+    const retry = clickEvent("submit");
+    internals(el)._onClick(retry);
+    expect(retry.stopped).toBe(false);
+    time.tick(0);
+    expect(el.value).toBe("Try again");
   });
 
   it("accepts an explicit false clear-on-submit attribute", () => {

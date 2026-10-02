@@ -11,6 +11,7 @@ import { connect, loopback } from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { defer } from "@commonfabric/utils/defer";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
@@ -229,7 +230,7 @@ describe("spaceAccess()", () => {
     options: {
       kind?: "lift" | "handler";
       frameSpace?: MemorySpace;
-      target?: Cell<unknown>;
+      target?: unknown;
     } = {},
   ): ReturnType<typeof spaceAccess> {
     const frame = pushFrame({
@@ -368,6 +369,32 @@ describe("spaceAccess()", () => {
         callIn(runtime, runtime.edit(), { frameSpace: home, target: link }),
       )
         .toBe("READ");
+    });
+
+    it("returns the level in the space a linked cell's value lives in, for the cell passed as its reactive proxy", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [carol.did()]: "READ" });
+      const home = carol.did() as MemorySpace;
+      await (await aclWriter(carol))({ [home]: "OWNER" });
+
+      const runtime = clientRuntime(carol);
+      await syncAcl(runtime);
+      const tx = runtime.edit();
+      const link = runtime.getCell<unknown>(
+        home,
+        "space-access link",
+        undefined,
+        tx,
+      );
+      link.set(runtime.getCell<unknown>(space, "space-access target"));
+      expect((await tx.commit()).error).toBeUndefined();
+
+      expect(
+        callIn(runtime, runtime.edit(), {
+          frameSpace: home,
+          target: link.getAsReactiveProxy(),
+        }),
+      ).toBe("READ");
     });
 
     it("returns `undefined` for a target passed as `undefined`, not the calling code's level", async () => {
@@ -746,8 +773,28 @@ describe("spaceAccess()", () => {
 
       it("runs again with the granted level when a refused open was still in flight at the retry", async () => {
         // The refusal runs the computation again, and its load opens the
-        // space once more. That open is decided on the access list as it
-        // stood before the grant, so the retry has to make its own.
+        // space once more. The memory server refuses that open on the
+        // access list as it stands before the grant, and the refusal is
+        // held back from the runtime until the retry has started, so the
+        // retry has to make its own open. The hold sits on the server's
+        // response, after its verdict, because the server decides an open
+        // some time after the open arrives, and a grant landing in between
+        // would admit it.
+
+        const refusedOpens = new ArrivalLog<void>();
+        const released = defer<void>();
+        const openSession = server.openSession.bind(server);
+        server.openSession = async (message, connection) => {
+          const response = await openSession(message, connection);
+          if (
+            message.space === space &&
+            response.error?.name === "AuthorizationError"
+          ) {
+            refusedOpens.record();
+            if (refusedOpens.entries.length > 1) await released.promise;
+          }
+          return response;
+        };
 
         const setAcl = await aclWriter();
         await setAcl({ [alice.did()]: "OWNER" });
@@ -757,13 +804,14 @@ describe("spaceAccess()", () => {
           stuckLabel: "dave's level to arrive as `none`",
         });
         const refusal = runtime.storageManager.spaceAccessError?.(space);
+        await refusedOpens.reached(2);
 
         await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
-        // The second open has reached the memory server, and its refusal
-        // has not reached the runtime, which would replace the first.
         expect(sessionOpensBy(dave)).toBe(2);
         expect(runtime.storageManager.spaceAccessError?.(space)).toBe(refusal);
-        await runtime.retrySpaceAccess(space);
+        const retried = runtime.retrySpaceAccess(space);
+        released.resolve();
+        await retried;
         expect(sessionOpensBy(dave)).toBe(3);
         await waitForCellValue(runtime, level, (v) => v === "READ", {
           stuckLabel: "dave's level to follow the retry to `READ`",

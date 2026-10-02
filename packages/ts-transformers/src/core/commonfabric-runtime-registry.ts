@@ -329,14 +329,6 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
-  // noticeSpaceAccess(principal, entry) stages a message to send once the
-  // running handler commits, and returns nothing. It builds no graph node, so
-  // it is a plain call inside the handler that makes it.
-  {
-    exportName: "noticeSpaceAccess",
-    category: "ignored",
-    reactiveOrigin: false,
-  },
 ] as const satisfies readonly CommonFabricRuntimeExportSpec[];
 
 export const COMMONFABRIC_RUNTIME_EXPORTS_BY_NAME: ReadonlyMap<

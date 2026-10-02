@@ -161,6 +161,8 @@ describe("memory v2 flags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
       presenceV1: true,
+      sessionClose: true,
+      connectionAuth: true,
       syncSchemaTableV2: false,
     });
 
@@ -188,6 +190,8 @@ describe("memory v2 flags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
       presenceV1: true,
+      sessionClose: true,
+      connectionAuth: true,
       syncSchemaTableV2: true,
     });
 
@@ -218,6 +222,8 @@ describe("memory v2 flags", () => {
         viewScopedReplicationV1: true,
         sessionReadCeiling: true,
         presenceV1: true,
+        sessionClose: true,
+        connectionAuth: true,
       },
       {
         modernCellRep: true,
@@ -242,6 +248,8 @@ describe("memory v2 flags", () => {
         // server itself, and one carrying none connects as before.
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     ));
   });
@@ -320,6 +328,8 @@ describe("parseMemoryProtocolFlags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
       presenceV1: false,
+      sessionClose: false,
+      connectionAuth: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -340,6 +350,8 @@ describe("parseMemoryProtocolFlags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
       presenceV1: false,
+      sessionClose: false,
+      connectionAuth: false,
     });
   });
 
@@ -367,6 +379,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });
@@ -406,6 +420,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
         pendingReadStacks: false,
@@ -439,6 +455,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });
@@ -467,6 +485,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });
@@ -503,6 +523,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });
@@ -532,6 +554,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });
@@ -558,6 +582,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });
@@ -571,6 +597,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       }),
       {
         genesisRoot: false,
@@ -591,6 +619,8 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionClose: false,
+        connectionAuth: false,
       },
     );
   });

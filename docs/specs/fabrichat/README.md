@@ -247,12 +247,9 @@ viewer's local state. Native clients use
 for reviewed controls. Notice delivery remains the client's responsibility
 through the manager's `outgoingNotices` and `delivered` contract.
 
-A handler on a client runtime can send a member a best-effort DID inbox notice
-with `noticeSpaceAccess()`
-([space access notices](../../features/space-access-notices.md)).
-No client in this repository reads a recipient's inbox yet, and the send has no
-delivery result, so it does not replace the manager's durable notice queue.
-
+Nothing in this repository delivers a notice end to end to a principal who
+shares no space with the sender. The manager keeps notices queued for a client
+to deliver (see [first contact](FabriChatManager.md#first-contact)).
 
 ## Identity and presentation
 
