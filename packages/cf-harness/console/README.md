@@ -907,9 +907,15 @@ turn or closing the session settles every unsettled action as canceled
 (`declined` with `result: "canceled"`, or `interrupted` with reason `canceled`).
 A request a restart left open is never replayed: startup settles it `failed`
 with `result: "interrupted"`, and a typed one with
-`{ "status": "interrupted", "reason": "restart" }`. The stdio request
-`resolve_client_action` (same params, same error codes) reads its params with
-the same reader and calls the same service method, and `start_session` and
+`{ "status": "interrupted", "reason": "restart" }`. If a request's delivery
+fails, the call fails: that request settles `failed` with
+`result: "not delivered"` (typed:
+`{ "status": "failed_to_deliver", "landed": "no" }`), a typed request delivered
+before it in the same call settles
+`{ "status": "interrupted", "reason": "delivery_failed" }`, since the Weaver may
+already be running it, and the ones after it are never requested. The stdio
+request `resolve_client_action` (same params, same error codes) reads its params
+with the same reader and calls the same service method, and `start_session` and
 `start_turn` take `clientActions: true` to opt in, off by default.
 
 ### Client protocol

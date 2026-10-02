@@ -173,7 +173,11 @@ export type HarnessClientActionVerdict =
   | { status: "mismatched"; message: string };
 
 /** Why the console settled an action nobody answered. */
-type ConsoleSettlementCause = "canceled" | "timeout" | "not_delivered";
+type ConsoleSettlementCause =
+  | "canceled"
+  | "timeout"
+  | "not_delivered"
+  | "delivery_failed";
 
 /** A settlement as the coordinator applies it. */
 type ActionSettlement =
@@ -218,6 +222,8 @@ const consoleSettlement = (
   cause: ConsoleSettlementCause,
 ): ActionSettlement => {
   if (!isTypedAction(action)) {
+    // A final action has no word for "delivered, then abandoned"; both
+    // delivery causes read as not delivered.
     return cause === "canceled"
       ? { form: "outcome", outcome: "declined", result: "canceled" }
       : cause === "timeout"
@@ -527,6 +533,8 @@ export class HarnessClientActionCoordinator {
       });
     }
     signal?.addEventListener("abort", onAbort, { once: true });
+    // The id whose request was being written when the writing stopped.
+    let failing: string | undefined;
     try {
       for (const { actionId, action } of entries) {
         // A cancel stops the writing: the rest are never requested, and
@@ -535,6 +543,7 @@ export class HarnessClientActionCoordinator {
         // An idle timeout armed by an earlier answer can settle the rest
         // while one is still being delivered; a settled action is never shown.
         if (!this.#pending.has(actionId)) continue;
+        failing = actionId;
         try {
           await this.#hooks.emit(turnId, {
             kind: "client_action_requested",
@@ -553,13 +562,19 @@ export class HarnessClientActionCoordinator {
       }
     } catch (error) {
       // A request that is in the log is settled (the person may already
-      // hold it); one never written is dropped so it cannot be answered.
+      // hold it); one never written is dropped so it cannot be answered. The
+      // request whose delivery failed is told to the client as not delivered,
+      // its resolved event following at once; one delivered before it may
+      // already be running, so it is interrupted with its effect unknown.
       emitting = false;
       const written = entries.filter(({ actionId }) => requested.has(actionId));
       await Promise.allSettled(
         written.map((entry) =>
           this.#pending.get(entry.actionId)?.settle(
-            consoleSettlement(entry.action, "not_delivered"),
+            consoleSettlement(
+              entry.action,
+              entry.actionId === failing ? "not_delivered" : "delivery_failed",
+            ),
             false,
           )
         ),

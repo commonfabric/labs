@@ -678,6 +678,39 @@ describe("coordinator", () => {
   });
 
   describe("request", () => {
+    it("settles a delivered command as interrupted when a later delivery in its batch fails, and the failed one as not delivered", async () => {
+      const h = harness({
+        calls: [{ actions: [mutation, query, catalog] }],
+        deliver: (event) => {
+          if (requestFor("id-2")(event)) throw new Error("sink down");
+        },
+      });
+      await h.start();
+      await h.delivered((event) =>
+        event.kind === "client_action_resolved" && event.actionId === "id-2"
+      );
+      expect(
+        h.events.filter((e) => e.event.kind === "client_action_requested")
+          .map((e) => (e.event as { actionId: string }).actionId),
+      ).toEqual(["id-1", "id-2"]);
+      expect(
+        h.resolved().map((event) => [
+          (event as { actionId: string }).actionId,
+          (event as { settlement?: unknown }).settlement,
+        ]),
+      ).toEqual([
+        // Delivered, and possibly already running: nothing says it did not
+        // land.
+        ["id-1", { status: "interrupted", reason: "delivery_failed" }],
+        ["id-2", {
+          status: "failed_to_deliver",
+          reason: "not delivered",
+          landed: "no",
+        }],
+      ]);
+      await h.finish();
+    });
+
     it("refuses args larger than the request limit before anything is delivered", async () => {
       const big = {
         kind: "invoke_command",
