@@ -102,6 +102,24 @@ gcloud pubsub subscriptions create <subscription> --project <project> \
   --push-auth-token-audience="<audience>"
 ```
 
+A machine on a tailnet can be made reachable for this one route with
+Tailscale Funnel, which publishes it at the machine's `ts.net` name with a
+certificate. Mounting only the push path keeps the rest of the server private,
+and the push endpoint is the route built to face the internet, since it
+refuses anything without a token Google signed. The target repeats the path,
+because Funnel strips the mounted prefix before forwarding:
+
+```bash
+tailscale funnel --bg \
+  --set-path "/api/spaces/<service space>/ingest-push/gmail" \
+  "http://localhost:8000/api/spaces/<service space>/ingest-push/gmail"
+```
+
+The public DNS record for a machine's first Funnel takes several minutes to
+appear, and until it does Pub/Sub cannot deliver. `tailscale funnel reset`
+takes it down. The subscription's audience need not be the public URL: it is
+whatever `INGEST_GMAIL_PUSH_AUDIENCE` holds.
+
 ### A deployment on a private network
 
 A deployment reachable only on a private network, a tailnet for instance,
@@ -252,9 +270,18 @@ curl -s -X POST https://gmail.googleapis.com/gmail/v1/users/me/watch \
 
 The response gives the mailbox's current `historyId` and an `expiration` in
 milliseconds, seven days out. Repeat the call before then to keep the watch;
-Google recommends daily. Gmail publishes one notification as soon as a watch
-is set, carrying that same history id, so the path can be checked before any
-mail arrives.
+Google recommends daily. Gmail publishes one notification when a watch is
+first set, carrying that same history id, so the path can be checked before
+any mail arrives. Repeating the call on a mailbox that has not changed
+publishes nothing.
+
+To test delivery without waiting for mail, publish a message in Gmail's shape
+to the topic:
+
+```bash
+gcloud pubsub topics publish <topic> --project <project> \
+  --message='{"emailAddress":"<address>","historyId":<history id>}'
+```
 
 `POST https://gmail.googleapis.com/gmail/v1/users/me/stop`, with the same
 token and no body, ends the watch.
