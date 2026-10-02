@@ -57,8 +57,10 @@ Take `Cell.increment(2)`:
    one intent, so `recordMergeableOp` poisons the path — it drops the intent and
    the commit falls back to the whole-array diff for that path (correct, but not
    merge-friendly), rather than letting the second op replace and silently drop
-   the first. A foreign write that reshapes the array after an op — a
-   whole-value `Cell.set` — poisons the same way via `poisonMergeableOp`.
+   the first. A foreign write that says what the value is — a whole-value
+   `Cell.set` — poisons the path the same way via `poisonMergeableOp`, and for
+   the rest of the transaction: an op recorded ahead of it is dropped, and one
+   that follows it, at that path or beneath it, records no intent.
 3. **Commit** — at commit the intent becomes wire ops plus the diff-suppression
    they imply (`buildMergeableIntent`), and the whole-value diff for the paths the
    op covers is dropped. The op travels in `ClientCommit.operations`. A builder
@@ -66,7 +68,12 @@ Take `Cell.increment(2)`:
    it, and the commit poisons the path as above: a tail op whose prefix no longer
    matches its base, or a `remove-by-value` whose removals applied to the base do
    not reproduce the working array — both meaning the transaction also changed
-   that array outside the op, before it or at a parent path.
+   that array outside the op, through a write that poisoned nothing. The commit
+   abandons a document's intents itself in two cases, and sends the document
+   whole: the document has no base and the transaction wrote something to it
+   besides its ops, or the transaction wrote the document's root.
+   [mergeable-collection-writes.md](./mergeable-collection-writes.md) gives the
+   reason for each.
 4. **Apply** — the durable store applies the op against live state
    (`packages/memory/v2/patch.ts`, `patchOpDescriptors[op].apply`).
 5. **React** — the store computes which paths the op touched so stale reads
