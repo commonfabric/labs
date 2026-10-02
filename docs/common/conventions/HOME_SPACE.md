@@ -95,6 +95,12 @@ most-recently-used (MRU) ordering:
   link sits under a key because a handle to a cell whose root holds a link
   denotes the cell that link names, so a link stored at the root could be set
   once and never re-pointed.
+- `homeSpaceCell.defaultPattern.legacyDefaultProfile` — a default chosen before
+  the slot, kept as a link at the root of its cell. It is the default while the
+  slot holds none, and nothing writes it. A home that has not yet run with the
+  slot keeps its default this way in `defaultProfile` itself; `#profile` reads
+  it from there, and the picker it shows for such a home offers no "Set
+  default".
 - `homeSpaceCell.defaultPattern.mru` — recency-ordered links; drives ordering
   after the default.
 

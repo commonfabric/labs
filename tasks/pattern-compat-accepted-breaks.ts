@@ -956,26 +956,27 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
-    // A SECOND entry for home, naming only the baseline recorded under the
+    // A THIRD entry for home, naming only the baseline recorded under the
     // entry above; the other 23 report the same path and stay with the two
     // entries that name them, keeping the pairs disjoint.
     //
     // Home's default profile moves from a link stored at the root of its own
     // cell to a link under `profile` in a slot cell (`DefaultProfileSlot`),
     // because a handle to a cell whose root holds a link denotes the linked
-    // cell and so the picker could not re-point it. The slot is a fresh cell,
-    // so every existing home starts with no default.
+    // cell and so the picker could not re-point it. The slot is a fresh cell;
+    // the cell the default was kept in stays, as `legacyDefaultProfile`, and
+    // is the default until one is chosen in the slot.
     pattern: "system/home.tsx",
     baselines: ["20261001T210138Z-P3RELdPaFKfIXROk"],
     paths: ["result.defaultProfile"],
     reason:
-      "home's default profile moves under `profile` in a fresh slot cell so the picker can re-point it, and existing homes start with no default",
+      "home's default profile moves under `profile` in a fresh slot cell so the picker can re-point it, and a default chosen before stays the default until one is chosen in the slot",
     record: "docs/history/home-default-profile-slot-break.md",
     requiredPatternOverride: {
       rulingBy: "Gideon",
       on: "2026-10-01",
       reason:
-        'chose "Reset defaults": keep the default in a fresh cell; existing homes start with no default and users re-pick it once, with `#profile` ordering by most recently used until then',
+        'preserve existing defaults: "i feel like we need to somehow preserve the default profile across this migration", then of the design that keeps the previous cell as the default until the slot holds one, "that sounds good to me. let\'s proceed as you suggest for 8373"',
     },
   },
   {

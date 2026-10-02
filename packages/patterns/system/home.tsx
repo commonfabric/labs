@@ -84,8 +84,12 @@ export type HomeOutput = {
   // `defaultProfile` is the slot holding the selected profile's link under
   // `profile`, and no `profile` while none is selected (`DefaultProfileSlot`).
   // It is optional, decided by the `?` marker, because a home can hold none.
+  // `legacyDefaultProfile` is a default held as a link at the root of the
+  // `defaultProfile` cell, the shape a home holds one in when it was chosen
+  // before the slot. It is the default while the slot holds none.
   profiles: Default<TrustedProfileList, []>;
   defaultProfile?: TrustedDefaultProfile;
+  legacyDefaultProfile?: BackwardsCompatibleProfile;
   mru: Default<TrustedProfileMru, []>;
   // The user's agent queue: the index of their agent runs and their
   // registered runner. `wish({ query: "#agent_queue" })` resolves to it, and
@@ -268,6 +272,13 @@ const Home = pattern(
     const defaultProfile = new Writable<TrustedDefaultProfile>({}).for(
       "defaultProfileSlot",
     );
+    // A default chosen before the slot: a link at the root of this cell. It
+    // stays the default until one is chosen in the slot, and nothing writes
+    // it, since a handle to a cell whose root holds a link denotes the linked
+    // profile rather than the cell.
+    const legacyDefaultProfile = new Writable<
+      BackwardsCompatibleProfile | undefined
+    >(undefined).for("defaultProfile");
     const mru = new Writable<BackwardsCompatibleProfile[]>([]).for("mru");
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
@@ -281,6 +292,8 @@ const Home = pattern(
     const profilePicker = ProfilePicker({
       profiles: profiles as any,
       defaultProfile: defaultProfile as any,
+      legacyDefaultProfile: legacyDefaultProfile as any,
+      offersSetDefault: true,
       mru: mru as any,
     });
 
@@ -419,6 +432,7 @@ const Home = pattern(
       defaultAppUrl,
       profiles: profiles as any,
       defaultProfile: defaultProfile as any,
+      legacyDefaultProfile: legacyDefaultProfile as any,
       mru: mru as any,
       agentQueue,
       chatManager,

@@ -1,5 +1,6 @@
 import {
   computed,
+  type Default,
   ifElse,
   NAME,
   pattern,
@@ -36,9 +37,17 @@ import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
 // `candidates` (the wish builtin owns those); its former `resultIndex` / `result`
 // computeds were vestigial after CT-1829 (#4512) and are removed (CT-1843).
 
+// `defaultProfile` is home's slot, which "Set default" writes. A home without
+// one holds its default only as `legacyDefaultProfile`, a link at the root of
+// its `defaultProfile` cell; the picker is then handed no slot and
+// `offersSetDefault: false`, since a write through that cell would land in the
+// linked profile. The default is the slot's `profile`, or
+// `legacyDefaultProfile` while the slot holds none.
 type ProfilePickerInput = {
   profiles: Writable<BackwardsCompatibleProfile[]>;
-  defaultProfile: Writable<DefaultProfileSlot>;
+  defaultProfile?: Writable<DefaultProfileSlot>;
+  legacyDefaultProfile?: Writable<BackwardsCompatibleProfile | undefined>;
+  offersSetDefault: Default<boolean, true>;
   mru: Writable<BackwardsCompatibleProfile[]>;
 };
 
@@ -95,10 +104,25 @@ const sameProfileCell = (
   return spaceA === spaceB;
 };
 
+/**
+ * The default's link: `slot`, the slot's `profile`, when it names a profile,
+ * and otherwise `legacy`. A link that resolves into the home space names none.
+ */
+const defaultLink = (
+  slot: unknown,
+  legacy: unknown,
+  homeSpace: string | undefined,
+): unknown => {
+  const space = linkSpace(slot);
+  return space && space !== homeSpace ? slot : legacy;
+};
+
 export default pattern<
   ProfilePickerInput,
   { [UI]: VNode }
->(({ profiles, defaultProfile, mru }) => {
+>((
+  { profiles, defaultProfile, legacyDefaultProfile, offersSetDefault, mru },
+) => {
   // Home space of the `profiles`/`defaultProfile`/`mru` container links — used
   // to reject entries that resolve into the home space (see sameProfileCell).
   const homeSpace = linkSpace(profiles);
@@ -107,6 +131,67 @@ export default pattern<
     profiles: profiles as any,
     inputId: "wish-profile-picker-name-input",
   });
+
+  // Named, so the rows' documents are keyed by `profileRows` rather than by
+  // the map's position among the picker's nodes.
+  const profileRows = profiles.map((p, i) => (
+    <cf-hstack gap="2" align="center">
+      <div style={{ flex: "1" }}>
+        {
+          /* Profiles are identities — rendered via cf-cell-link (the
+              identity idiom is cf-profile-badge), not the generic piece
+              chip variant. */
+        }
+        <cf-cell-link $cell={p as any} />
+      </div>
+      {ifElse(
+        computed(() => {
+          // Read the default link and this row's list entry as cell REFS
+          // (asCell) so a cross-space profile not yet loaded here doesn't
+          // collapse to `undefined`, then match by the profile's own
+          // SPACE (CT-1843) — `equals` returns false cross-space
+          // (different entity id + scope). The entry comes from the list
+          // by index, not from `p`: see sameProfileCell.
+          const entries = ((profiles as any).asSchema(
+            profileLinkListSchema(),
+          ).get() ?? []) as unknown[];
+          const entry = entries[i as any];
+          const def = defaultLink(
+            (defaultProfile as any).key("profile").asSchema(
+              profileLinkSchema(),
+            ).get(),
+            (legacyDefaultProfile as any).asSchema(profileLinkSchema())
+              .get(),
+            homeSpace,
+          );
+          return def && entry ? sameProfileCell(def, entry, homeSpace) : false;
+        }),
+        <span style={{ color: "#0a7", fontSize: "12px" }}>default</span>,
+        ifElse(
+          offersSetDefault,
+          <cf-button
+            size="sm"
+            variant="ghost"
+            data-ui-action={TRUSTED_PROFILE_SET_DEFAULT_ACTION}
+            onClick={setDefaultProfile({
+              defaultProfile: defaultProfile as any,
+              profile: p,
+            })}
+          >
+            Set default
+          </cf-button>,
+          null,
+        ),
+      )}
+      <cf-button
+        size="sm"
+        data-ui-action={TRUSTED_PROFILE_SET_MRU_ACTION}
+        onClick={setMruProfile({ mru: mru as any, profile: p })}
+      >
+        Use
+      </cf-button>
+    </cf-hstack>
+  ));
 
   return {
     [NAME]: "Choose a profile",
@@ -119,57 +204,7 @@ export default pattern<
         style={{ padding: "8px" }}
       >
         <h3 style={{ margin: 0, fontSize: "14px" }}>Your profiles</h3>
-        {profiles.map((p, i) => (
-          <cf-hstack gap="2" align="center">
-            <div style={{ flex: "1" }}>
-              {
-                /* Profiles are identities — rendered via cf-cell-link (the
-                  identity idiom is cf-profile-badge), not the generic piece
-                  chip variant. */
-              }
-              <cf-cell-link $cell={p as any} />
-            </div>
-            {ifElse(
-              computed(() => {
-                // Read the default link and this row's list entry as cell REFS
-                // (asCell) so a cross-space profile not yet loaded here doesn't
-                // collapse to `undefined`, then match by the profile's own
-                // SPACE (CT-1843) — `equals` returns false cross-space
-                // (different entity id + scope). The entry comes from the list
-                // by index, not from `p`: see sameProfileCell.
-                const entries = ((profiles as any).asSchema(
-                  profileLinkListSchema(),
-                ).get() ?? []) as unknown[];
-                const entry = entries[i as any];
-                const def = (defaultProfile as any).key("profile").asSchema(
-                  profileLinkSchema(),
-                ).get();
-                return def && entry
-                  ? sameProfileCell(def, entry, homeSpace)
-                  : false;
-              }),
-              <span style={{ color: "#0a7", fontSize: "12px" }}>default</span>,
-              <cf-button
-                size="sm"
-                variant="ghost"
-                data-ui-action={TRUSTED_PROFILE_SET_DEFAULT_ACTION}
-                onClick={setDefaultProfile({
-                  defaultProfile: defaultProfile as any,
-                  profile: p,
-                })}
-              >
-                Set default
-              </cf-button>,
-            )}
-            <cf-button
-              size="sm"
-              data-ui-action={TRUSTED_PROFILE_SET_MRU_ACTION}
-              onClick={setMruProfile({ mru: mru as any, profile: p })}
-            >
-              Use
-            </cf-button>
-          </cf-hstack>
-        ))}
+        {profileRows}
         <hr style={{ border: "none", borderTop: "1px solid #e5e5e7" }} />
         <h4 style={{ margin: 0, fontSize: "12px", color: "#888" }}>
           Add another profile

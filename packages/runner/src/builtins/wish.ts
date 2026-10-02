@@ -36,6 +36,7 @@ import {
   createSigilLinkFromParsedLink,
   isPrimitiveCellLink,
   type NormalizedFullLink,
+  parseLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -427,6 +428,28 @@ function profileCellIsValid(
 }
 
 /**
+ * Whether home `defaultPattern` keeps its default in a slot: whether its
+ * `defaultProfile` holds an object at its root, read in the cell the field
+ * names rather than through it. A home without the slot keeps its default as a
+ * link at the root of that cell, or has nothing there; one with the slot keeps
+ * such a link, chosen before the slot, as `legacyDefaultProfile`.
+ */
+function homeHasDefaultProfileSlot(
+  runtime: Runtime,
+  defaultPattern: Cell<unknown>,
+  tx: IExtendedStorageTransaction | undefined,
+): boolean {
+  const field = defaultPattern.key("defaultProfile");
+  const fieldRaw = field.getRaw();
+  const root = isPrimitiveCellLink(fieldRaw)
+    ? runtime.getCellFromLink(parseLink(fieldRaw, field), undefined, tx)
+      .getRaw()
+    : fieldRaw;
+  return isObjectOrArray(root) && !Array.isArray(root) &&
+    !isPrimitiveCellLink(root);
+}
+
+/**
  * Whether a `mru` / `defaultProfile` entry names the SAME profile as a candidate
  * from the home `profiles` list — compared by the profile's own SPACE, NOT by
  * `Cell.equals` or by entity id.
@@ -538,15 +561,33 @@ function getProfileCandidateCells(
     return { ordered: [], defaultValid: false };
   }
 
-  // Ordering inputs: the default link, held under `profile` in home's
-  // `defaultProfile` slot, and the MRU list.
-  const defaultEntry = defaultPattern.key("defaultProfile").key("profile");
-  const defaultCell = defaultEntry.resolveAsCell();
-  const defaultValid = profileCellIsValid(
-    defaultCell,
-    defaultEntry.getRaw() !== undefined,
-    homeSpaceCell.space,
+  // Ordering inputs: the default and the MRU list. The default is the link
+  // under `profile` in home's slot, or, while the slot holds none, the link a
+  // home keeps an earlier default in: `legacyDefaultProfile`, or
+  // `defaultProfile` itself for a home without the slot.
+  const hasSlot = homeHasDefaultProfileSlot(
+    ctx.runtime,
+    defaultPattern,
+    ctx.tx,
   );
+  const slotEntry = defaultPattern.key("defaultProfile").key("profile");
+  const slotCell = slotEntry.resolveAsCell();
+  const slotValid = hasSlot &&
+    profileCellIsValid(
+      slotCell,
+      slotEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
+  const legacyEntry = defaultPattern.key(
+    hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+  );
+  const defaultCell = slotValid ? slotCell : legacyEntry.resolveAsCell();
+  const defaultValid = slotValid ||
+    profileCellIsValid(
+      defaultCell,
+      legacyEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
 
   const mruCell = defaultPattern.key("mru");
   const mruRaw = mruCell.asSchema(profileLinkListSchema).get();
@@ -2115,6 +2156,8 @@ export function wish(
     input?: {
       profiles: unknown;
       defaultProfile: unknown;
+      legacyDefaultProfile: unknown;
+      offersSetDefault: boolean;
       mru: unknown;
     };
     resultCell?: Cell<any>;
@@ -2884,13 +2927,31 @@ export function wish(
     );
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
+    // A home with the slot hands it over for "Set default" and its earlier
+    // default as `legacyDefaultProfile`. A home without hands over no slot and
+    // `offersSetDefault: false`, since a write through a cell whose root holds
+    // a link lands in the linked profile; its `defaultProfile` cell, holding
+    // the default that way, goes as `legacyDefaultProfile`.
+    const hasSlot = homeHasDefaultProfileSlot(
+      runtime,
+      homeDefaultPattern,
+      ctx.tx,
+    );
     slot.input = {
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
-      defaultProfile: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+      defaultProfile: hasSlot
+        ? createSigilLinkFromParsedLink(
+          homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+        )
+        : undefined,
+      legacyDefaultProfile: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key(
+          hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+        ).getAsNormalizedFullLink(),
       ),
+      offersSetDefault: hasSlot,
       mru: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
       ),
@@ -2921,6 +2982,8 @@ export function wish(
       return slot.input && {
         profiles: bindInputCell(slot.input.profiles),
         defaultProfile: bindInputCell(slot.input.defaultProfile),
+        legacyDefaultProfile: bindInputCell(slot.input.legacyDefaultProfile),
+        offersSetDefault: slot.input.offersSetDefault,
         mru: bindInputCell(slot.input.mru),
       };
     };
