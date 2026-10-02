@@ -7,9 +7,12 @@ import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import {
+  BRIDGE_READ_REFUSED,
   type BridgeCancel,
   type BridgeCell,
+  BridgeReadRefusedError,
   type BridgeResource,
+  type BridgeSinkFailure,
   createFabricBridge,
   FabricBridgeHost,
 } from "../src/bridge.ts";
@@ -177,6 +180,68 @@ describe("Fabric iframe bridge", () => {
       await expect(pulling).resolves.toBe(2);
       expect(cell.get()).toBe(2);
       cancel();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("tells a guest of a refused read as an error of its own code, never as a value", async () => {
+    let sinkListener: ((value: FabricValue | undefined) => void) | undefined;
+    let sinkFailed: BridgeSinkFailure | undefined;
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => "shown before the seal",
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          sink: (listener, failed) => {
+            sinkListener = listener;
+            sinkFailed = failed;
+            listener("shown before the seal");
+            return () => {};
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      await expect(client.cell<string>("secret").pull()).rejects
+        .toMatchObject({ code: BRIDGE_READ_REFUSED });
+
+      const cell = client.cell<string>("secret");
+      const seen: Array<string | undefined> = [];
+      let heard = Promise.withResolvers<string>();
+      const cancelSink = cell.sink((current) => {
+        seen.push(current);
+      });
+      const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
+        heard.resolve(
+          snapshot.status === "error" ? snapshot.error.code : snapshot.status,
+        );
+      });
+      // The value the host's sink delivered first.
+      heard = Promise.withResolvers<string>();
+      await expect(heard.promise).resolves.toBe("ready");
+      expect(sinkListener).toBeDefined();
+
+      heard = Promise.withResolvers<string>();
+      sinkFailed!({
+        code: BRIDGE_READ_REFUSED,
+        message: "refused by the display ceiling",
+      });
+
+      await expect(heard.promise).resolves.toBe(BRIDGE_READ_REFUSED);
+      expect(cell.get()).toBeUndefined();
+      expect(seen).toEqual([undefined, "shown before the seal"]);
+      cancelSink();
+      cancelSnapshot();
     } finally {
       client.disconnect();
       host.disconnect();

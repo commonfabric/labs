@@ -270,12 +270,18 @@ export type BridgeResponse = {
   error: BridgeError;
 };
 
+/**
+ * One delivery to a subscription: a value, or the error that stands in its
+ * place, such as a refusal of the read (`read-refused`), which the guest
+ * hears as an error of its subscription and never as an empty value.
+ */
 export type BridgeEvent = {
   protocol: typeof BRIDGE_PROTOCOL;
   version: typeof BRIDGE_VERSION;
   type: "event";
   subscription: string;
   value?: FabricValue;
+  error?: BridgeError;
 };
 
 /**
@@ -350,7 +356,8 @@ export function isBridgeHostMessage(
 ): message is BridgeHostMessage {
   if (!hasBridgeHeader(message)) return false;
   if (message.type === "event") {
-    return typeof message.subscription === "string";
+    return typeof message.subscription === "string" &&
+      (message.error === undefined || isBridgeError(message.error));
   }
   if (message.type === "flush") {
     return typeof message.nonce === "string";
@@ -360,11 +367,16 @@ export function isBridgeHostMessage(
     typeof message.ok !== "boolean"
   ) return false;
   if (message.ok) return true;
-  return isObjectOrArray(message.error) &&
-    typeof (message.error as BridgeError).code === "string" &&
-    typeof (message.error as BridgeError).message === "string" &&
-    (!("resource" in message.error) ||
-      typeof (message.error as BridgeError).resource === "string");
+  return isBridgeError(message.error);
+}
+
+/** Whether `error` has a bridge error's shape. */
+function isBridgeError(error: unknown): error is BridgeError {
+  return isObjectOrArray(error) &&
+    typeof (error as BridgeError).code === "string" &&
+    typeof (error as BridgeError).message === "string" &&
+    (!("resource" in error) ||
+      typeof (error as BridgeError).resource === "string");
 }
 
 export type GuestAlarm = { type: "error"; data: GuestError };

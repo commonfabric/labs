@@ -848,7 +848,14 @@ export class FabricClient {
 
   #accept(message: BridgeHostMessage): void {
     if (message.type === "event") {
-      this.#subscriptions.get(message.subscription)?.update(message.value);
+      const subscription = this.#subscriptions.get(message.subscription);
+      // An error stands in place of a value, a refused read among them: it is
+      // never delivered as one.
+      if (message.error !== undefined) {
+        subscription?.error?.(new FabricBridgeError(message.error));
+      } else {
+        subscription?.update(message.value);
+      }
       return;
     }
     if (message.type === "flush") {

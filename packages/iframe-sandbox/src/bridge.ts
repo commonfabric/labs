@@ -34,6 +34,31 @@ export type BridgeMethod = (
   input: FabricValue | undefined,
 ) => FabricValue | undefined | Promise<FabricValue | undefined>;
 
+/**
+ * The code of the bridge error that stands for a read the host was refused,
+ * and for a write the host will not make from one. The guest is told so
+ * rather than handed an empty value, which would read as a cell that holds
+ * nothing.
+ */
+export const BRIDGE_READ_REFUSED = "read-refused";
+
+/**
+ * Thrown by a host's bridge cell for a read the host was refused, or a write
+ * it will not make through a cell whose read was refused. The bridge answers
+ * the guest with its code, `BRIDGE_READ_REFUSED`.
+ */
+export class BridgeReadRefusedError extends Error {
+  readonly code = BRIDGE_READ_REFUSED;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeReadRefusedError";
+  }
+}
+
+/** Hears a sink's failure, such as a refusal of the read it delivers. */
+export type BridgeSinkFailure = (error: BridgeError) => void;
+
 /** Cell-shaped capability exposed beneath one named bridge resource. */
 export type BridgeCell = {
   get(): FabricValue | undefined;
@@ -41,8 +66,14 @@ export type BridgeCell = {
   initialize?(value: FabricValue): FabricValue | Promise<FabricValue>;
   set?(value: FabricValue): void | Promise<void>;
   push?(values: readonly FabricValue[]): void | Promise<void>;
+  /**
+   * Delivers each value of the cell to `listener`, and each refusal of its
+   * read to `failed`, which the guest hears as an error of its subscription
+   * rather than as a value.
+   */
   sink?(
     listener: (value: FabricValue | undefined) => void,
+    failed: BridgeSinkFailure,
   ): BridgeCancel;
   key?(key: string | number): BridgeCell;
   resolve?(): BridgeCell | Promise<BridgeCell>;
@@ -585,6 +616,7 @@ export class FabricBridgeHost {
         let sinkResource:
           | ((
             listener: (value: FabricValue | undefined) => void,
+            failed: BridgeSinkFailure,
           ) => BridgeCancel)
           | undefined;
         let receiver: object;
@@ -592,10 +624,11 @@ export class FabricBridgeHost {
           const target = this.#requestCell(request, "sink");
           const sink = cellOperation(target.cell, "sink");
           sinkResource = sink &&
-            ((listener) => sink.call(target.cell, listener));
+            ((listener, failed) => sink.call(target.cell, listener, failed));
           receiver = target.cell;
         } else {
-          sinkResource = resource && resourceSink(resource);
+          const sink = resource && resourceSink(resource);
+          sinkResource = sink && ((listener) => sink.call(resource, listener));
           receiver = resource ?? {};
         }
         if (!sinkResource) {
@@ -616,6 +649,14 @@ export class FabricBridgeHost {
             type: "event",
             subscription,
             ...(value !== undefined && { value }),
+          });
+        }, (error) => {
+          this.#post({
+            protocol: BRIDGE_PROTOCOL,
+            version: BRIDGE_VERSION,
+            type: "event",
+            subscription,
+            error: normalizeBridgeError(error, request.resource),
           });
         });
         this.#subscriptions.set(subscription, cancel);
