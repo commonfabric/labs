@@ -118,6 +118,7 @@ export {
   type TransactionSummary,
 } from "./storage/transaction-summary.ts";
 export {
+  cellDocumentHeld,
   type CellLinkInput,
   cellRuntime,
   cellTx,

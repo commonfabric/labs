@@ -23,7 +23,11 @@ import {
   type RuntimeTelemetryMarkerResult,
 } from "@commonfabric/runner";
 import { stringSchema } from "@commonfabric/runner/schemas";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -217,6 +221,69 @@ describe("HostReadGate, for what crosses beside a value", () => {
         expect(built).toEqual(["owner"]);
       });
     }
+
+    it("decides a document this worker has not loaded on what it holds, not on finding no label", async () => {
+      // The owner's runtime writes a document only its owner may see; the
+      // visitor's, on the same store, has not loaded it.
+      const server = newLoopbackServer();
+      const connect = () =>
+        new Runtime({
+          apiUrl: new URL("http://localhost"),
+          storageManager: EmulatedStorageManager.connectTo(server, {
+            as: owner,
+          }),
+        });
+      const writer = connect();
+      const reader = connect();
+      try {
+        const tx = writer.edit();
+        const written = writer.getCell(space, "unloaded", undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: written.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { [SECRET_KEY]: SECRET_VALUE },
+          slug: "unloaded-slug",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        await writer.storageManager.synced();
+        const gate = gateFor(reader, visitor);
+        const built: string[] = [];
+        const build = () => {
+          built.push("built");
+          return Promise.resolve({ rows: [SECRET_VALUE] });
+        };
+        const unloaded = () => reader.getCell(space, "unloaded");
+
+        const slug = gate.slug(unloaded());
+        const metadata = gate.metadataRefusal(unloaded());
+        const fromCell = await gate.fromCell(unloaded(), build);
+        const fromMetadata = await gate.fromMetadata(unloaded(), build);
+
+        expect(built).toEqual([]);
+        expect(fromCell).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        expect(fromMetadata).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+        expect(slug).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        expect(metadata).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
 
     it("refuses each update of a refused collaborative field", async () => {
       await using docs = await shelf();

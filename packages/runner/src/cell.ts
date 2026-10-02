@@ -1,3 +1,4 @@
+import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import type {
   AnyBrandedCell,
   CollectionIndexData,
@@ -4583,6 +4584,21 @@ export function unwrapCell(value: unknown): Cell<unknown> | undefined {
 /** Returns the runtime `cell` belongs to. Host code only. */
 export function cellRuntime(cell: AnyCell<unknown>): Runtime {
   return runtimeOf(requireCellImpl(cell));
+}
+
+/**
+ * Whether the replica `cell`'s runtime reads from holds a complete basis for
+ * the document `cell` addresses: its value as stored, or its confirmed
+ * absence. Until it does, a read of the document, its labels included, finds
+ * nothing, which says nothing of what the document holds. A provider that
+ * cannot say holds none. A `data:` document is its own address, and always
+ * held. Host code only.
+ */
+export function cellDocumentHeld(cell: AnyCell<unknown>): boolean {
+  const link = cell.getAsNormalizedFullLink();
+  if (hasDataUriScheme(link.id)) return true;
+  return cellRuntime(cell).storageManager.open(link.space).replica
+    .hasLocalDocumentCoverage?.(link.id, link.scope) === true;
 }
 
 /**

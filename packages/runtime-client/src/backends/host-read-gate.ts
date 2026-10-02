@@ -37,6 +37,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type Cancel,
   type Cell,
+  cellDocumentHeld,
   hostValueOf,
   isStream,
   type JSONSchema,
@@ -108,6 +109,25 @@ const FIELDS_SCHEMA = {
   type: "object",
   additionalProperties: { asCell: ["cell"] },
 } as const;
+
+/** The label a decision is refused on while its documents are not yet held. */
+const UNHELD: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: [],
+  integrity: [],
+});
+
+/**
+ * Whether the replica holds `cell`'s document and the one its path resolves
+ * to, or `false` when the resolution cannot be made.
+ */
+function documentsHeld(cell: Cell<unknown>): boolean {
+  try {
+    return cellDocumentHeld(cell) && cellDocumentHeld(cell.resolveAsCell());
+  } catch {
+    return false;
+  }
+}
 
 /** What the display ceiling's refusal of a host's read says. */
 const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
@@ -250,15 +270,8 @@ export class HostReadGate {
    * document is admitted, and what it leads to is read through {@link read}.
    */
   metadataRefusal(root: Cell<unknown>): CellGetResponse | undefined {
-    const policy = this.#policy;
-    if (policy === undefined) return undefined;
-    const refusal = cellLabelRefusal(
-      root,
-      cellLabelSources(root),
-      policy,
-      this.#sources,
-    );
-    return refusal === undefined ? undefined : this.#refuse(refusal, policy);
+    const refusal = this.#cellRefusal(root);
+    return refusal === undefined ? undefined : this.#refuse(refusal);
   }
 
   /** The answer for a read that found nothing to read, such as an absent link. */
@@ -432,6 +445,7 @@ export class HostReadGate {
     root: Cell<unknown>,
     build: () => Promise<T>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
+    await this.#hold(root);
     const refusal = this.metadataRefusal(root);
     if (refusal !== undefined && "refused" in refusal) {
       return decided({ refused: refusal.refused });
@@ -450,6 +464,7 @@ export class HostReadGate {
     cell: Cell<unknown>,
     build: () => Promise<T>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
+    await this.#hold(cell);
     const refusal = this.#cellRefusal(cell);
     if (refusal !== undefined) {
       return decided({ refused: this.#refuse(refusal).refused });
@@ -664,12 +679,35 @@ export class HostReadGate {
   #hostValue = (value: unknown): FabricValue =>
     hostValueOf(value, this.#displayView);
 
-  /** The refusal of `cell`'s own labels, or `undefined` where they fit. */
+  /**
+   * The refusal of `cell`'s own labels, or `undefined` where they fit. A
+   * document the replica does not hold yet, or the one `cell`'s path
+   * resolves to, is refused as unreadable: a label read of it finds none,
+   * which says nothing of the labels it has, while what is built from it
+   * may be fetched from the store all the same.
+   */
   #cellRefusal(cell: Cell<unknown>): RenderLabelSummary | undefined {
     const policy = this.#policy;
-    return policy === undefined
-      ? undefined
-      : cellLabelRefusal(cell, cellLabelSources(cell), policy, this.#sources);
+    if (policy === undefined) return undefined;
+    if (!documentsHeld(cell)) return UNHELD;
+    return cellLabelRefusal(
+      cell,
+      cellLabelSources(cell),
+      policy,
+      this.#sources,
+    );
+  }
+
+  /**
+   * Loads `cell`'s document, and the one its path resolves to, so that a
+   * decision on their labels is made on what they hold. With no policy,
+   * nothing is decided, and nothing is loaded for it.
+   */
+  async #hold(cell: Cell<unknown>): Promise<void> {
+    if (this.#policy === undefined) return;
+    await cell.sync();
+    const resolved = cell.resolveAsCell();
+    if (!cellDocumentHeld(resolved)) await resolved.sync();
   }
 
   /**
