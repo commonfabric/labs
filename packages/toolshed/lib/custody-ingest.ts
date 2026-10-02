@@ -197,7 +197,7 @@ export const custodyIngest = {
       if (bound.get() === undefined) {
         bound.set(elements);
       } else {
-        bound.push(...elements);
+        bound.pushAll(elements);
       }
       return elements;
     }, channel);
