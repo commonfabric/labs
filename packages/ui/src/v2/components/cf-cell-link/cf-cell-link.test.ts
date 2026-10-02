@@ -270,18 +270,24 @@ describe("CFCellLink", () => {
     /**
      * A link whose target the test moves with `publish()`, a promise settled
      * when something first subscribes to it, and a count of the subscriptions
-     * taken on it and released. Each resolution waits for `resolution`, and
-     * lands on `chainEnd` where the link's target is itself a link.
+     * taken on it and released. The link is held by the cell `holderId`. Each
+     * resolution waits for `resolution`, and lands on `chainEnd` where the
+     * link's target is itself a link.
      */
     function retargetableLink(
       initialTarget: CellHandle,
-      { resolution = Promise.resolve(), chainEnd }: {
+      {
+        holderId = "of:fid1:row-holder",
+        resolution = Promise.resolve(),
+        chainEnd,
+      }: {
+        holderId?: string;
         resolution?: Promise<void>;
         chainEnd?: CellHandle;
       } = {},
     ) {
       const link = createMockCellHandle({}, {
-        id: "of:fid1:row-holder" as CellRef["id"],
+        id: holderId as CellRef["id"],
         space: "did:key:test-space" as CellRef["space"],
         path: ["rooms", "0", "room"],
       }) as CellHandle;
@@ -417,6 +423,7 @@ describe("CFCellLink", () => {
       const replaced = retargetableLink(roomCell("of:fid1:old-first"));
       const resolution = deferred<void>();
       const current = retargetableLink(roomCell("of:fid1:current"), {
+        holderId: "of:fid1:other-row-holder",
         resolution: resolution.promise,
       });
       const element = new CFCellLink() as any;
