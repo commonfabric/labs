@@ -25,6 +25,7 @@ import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
+import { readsTruthyAtRoot } from "../src/schema.ts";
 import { vnodeSchema } from "../src/schemas.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
@@ -548,8 +549,12 @@ describe("condition-builtin-reads", () => {
     // pattern's argument is typed, or through a schema carried on the link the
     // argument holds, as a typed result's link carries one.
 
-    /** How a case types its condition. */
-    type TypedBy = "argument" | "link";
+    /**
+     * How a case types its condition: through the argument schema, through the
+     * link's schema, or through the link's schema with an argument schema that
+     * types the condition as anything.
+     */
+    type TypedBy = "argument" | "link" | "link under an untyped argument";
 
     /**
      * Which branch each builtin takes over a document holding `stored`, or
@@ -562,28 +567,40 @@ describe("condition-builtin-reads", () => {
       typedBy: TypedBy,
     ): Promise<Branches> => {
       const doc = await plainDoc(cause, stored);
+      const typedFlag = (flag: JSONSchema): JSONSchema => ({
+        type: "object",
+        properties: { flag },
+      });
       const result = typedBy === "argument"
-        ? await runPattern(`${cause}-run`, allThree, { flag: doc }, {
-          type: "object",
-          properties: { flag: schema ?? {} },
-        })
-        : await runPattern(`${cause}-run`, allThree, {
-          flag: schema === undefined
-            ? linkTo(doc)
-            : createSigilLinkFromParsedLink(
-              { ...doc.getAsNormalizedFullLink(), schema },
-              { includeSchema: true },
-            ),
-        });
+        ? await runPattern(
+          `${cause}-run`,
+          allThree,
+          { flag: doc },
+          typedFlag(schema ?? {}),
+        )
+        : await runPattern(
+          `${cause}-run`,
+          allThree,
+          {
+            flag: schema === undefined
+              ? linkTo(doc)
+              : createSigilLinkFromParsedLink(
+                { ...doc.getAsNormalizedFullLink(), schema },
+                { includeSchema: true },
+              ),
+          },
+          typedBy === "link" ? undefined : typedFlag({}),
+        );
       return branchesOf(result);
     };
 
     describe("defaults, empty containers, falsy values, links and type mismatches", () => {
       // `truthy` is the condition's truthiness as its schema reads it. Typed
       // through the argument, all three builtins read it so. Typed through
-      // the link, `ifElse` does and `when` and `unless` read the stored value
-      // without the schema, which `linkTyped` records where the two part: a
-      // default stands in, or the stored value fails at the root.
+      // the link, with or without an argument schema that admits anything,
+      // `ifElse` does and `when` and `unless` read the stored value without
+      // the schema, which `linkTyped` records where the two part: a default
+      // stands in, or the stored value fails at the root.
       let zero: FabricValue;
       let empty: FabricValue;
       let object: FabricValue;
@@ -795,7 +812,13 @@ describe("condition-builtin-reads", () => {
         },
       ];
 
-      for (const typedBy of ["argument", "link"] as const) {
+      for (
+        const typedBy of [
+          "argument",
+          "link",
+          "link under an untyped argument",
+        ] as const
+      ) {
         it(`takes the branch the condition's truthiness picks when typed through the ${typedBy}`, async () => {
           const observed = [];
           for (const [index, { name, stored, schema }] of cases().entries()) {
@@ -811,7 +834,7 @@ describe("condition-builtin-reads", () => {
           expect(observed).toEqual(
             cases().map(({ name, truthy, linkTyped }) => ({
               name,
-              ...(typedBy === "link" && linkTyped || allTake(truthy)),
+              ...(typedBy !== "argument" && linkTyped || allTake(truthy)),
             })),
           );
           expect(actionErrors).toEqual([]);
@@ -882,6 +905,250 @@ describe("condition-builtin-reads", () => {
     });
   });
 
+  describe("readsTruthyAtRoot()", () => {
+    // Each case reads one cell twice in one transaction: through the eager
+    // read, `.get()`, and through `readsTruthyAtRoot()`. The two agree on
+    // every case but the last three, which fail their schema only below the
+    // root.
+
+    it("returns the eager read's truthiness wherever the value holds below its root", async () => {
+      const object = await plainDoc("object", { a: 1 });
+      const unwritten = await plainDoc("unwritten");
+      /** A stored link to `doc` carrying `schema`. */
+      const typedLinkTo = (doc: Cell<unknown>, schema: JSONSchema) =>
+        createSigilLinkFromParsedLink(
+          { ...doc.getAsNormalizedFullLink(), schema },
+          { includeSchema: true },
+        );
+      const record = {
+        type: "object",
+        required: ["box"],
+        properties: {
+          box: {
+            type: "object",
+            required: ["n"],
+            properties: { n: { type: "number" } },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const cases: Array<{
+        name: string;
+        stored?: FabricValue;
+        schema?: JSONSchema;
+        eager: boolean;
+        probe: boolean;
+      }> = [
+        {
+          name: "an absent value defaulting to `true`",
+          schema: { type: "boolean", default: true },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "an absent value defaulting to `0`",
+          schema: { type: "number", default: 0 },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an absent value defaulting to `{}`",
+          schema: { type: "object", default: {} },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "an absent value under a union defaulting to `true`",
+          schema: {
+            anyOf: [{ type: "boolean" }, { type: "null" }],
+            default: true,
+          },
+          eager: true,
+          probe: true,
+        },
+        { name: "an untyped absent value", eager: false, probe: false },
+        {
+          name: "`[]`",
+          stored: [],
+          schema: { type: "array" },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "`{}`",
+          stored: {},
+          schema: { type: "object" },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "`0`",
+          stored: 0,
+          schema: { type: "number" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: '`""`',
+          stored: "",
+          schema: { type: "string" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "`false`",
+          stored: false,
+          schema: { type: "boolean" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "`null`",
+          stored: null,
+          schema: { type: "null" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "`5` under `string`",
+          stored: 5,
+          schema: { type: "string" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an object under `string`",
+          stored: { a: 1 },
+          schema: { type: "string" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an array under `object`",
+          stored: [1],
+          schema: { type: "object" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an object under a union of scalars",
+          stored: { a: 1 },
+          schema: { anyOf: [{ type: "number" }, { type: "string" }] },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an object under `object | null`",
+          stored: { a: 1 },
+          schema: { anyOf: [{ type: "object" }, { type: "null" }] },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "`false` under `unknown`",
+          stored: false,
+          schema: { type: "unknown" },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "an object behind a handle typed `string`",
+          stored: { a: 1 },
+          schema: { type: "string", asCell: ["cell"] },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "a link typed `string` to an object, read as anything",
+          stored: typedLinkTo(object, { type: "string" }),
+          schema: {},
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "a link typed `string` to an object, read untyped",
+          stored: typedLinkTo(object, { type: "string" }),
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "a link typed `string` to an object, read as an object",
+          stored: typedLinkTo(object, { type: "string" }),
+          schema: { type: "object" },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "a link to a document not written yet",
+          stored: linkTo(unwritten),
+          schema: { type: "boolean" },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an object failing below a root default",
+          stored: { n: "bad" },
+          schema: {
+            type: "object",
+            default: { n: 7 },
+            properties: { n: { type: "number" } },
+          },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "a required property failing inside",
+          stored: { box: { n: "bad" } },
+          schema: record,
+          eager: false,
+          probe: true,
+        },
+        {
+          name: "a missing required property",
+          stored: {},
+          schema: record,
+          eager: false,
+          probe: true,
+        },
+        {
+          name: "a non-empty array no item can satisfy",
+          stored: [1],
+          schema: { type: "array", items: false },
+          eager: false,
+          probe: true,
+        },
+      ];
+
+      const observed = [];
+      for (const [index, { name, stored, schema }] of cases.entries()) {
+        await plainDoc(`unit-${index}`, stored);
+        const tx = runtime.edit();
+        try {
+          const cell = runtime.getCell(
+            patternSpace.did(),
+            `unit-${index}`,
+            schema,
+            tx,
+          );
+          observed.push({
+            name,
+            eager: Boolean(cell.get()),
+            probe: readsTruthyAtRoot(
+              runtime,
+              tx,
+              cell.getAsNormalizedFullLink(),
+            ),
+          });
+        } finally {
+          tx.abort();
+        }
+      }
+
+      expect(observed).toEqual(
+        cases.map(({ name, eager, probe }) => ({ name, eager, probe })),
+      );
+    });
+  });
+
   describe("reactivity", () => {
     // Each case types the condition through the pattern's argument, so all
     // three builtins read it through the schema.
@@ -909,12 +1176,19 @@ describe("condition-builtin-reads", () => {
       );
       const seen = [await branchesOf(result)];
 
+      await write(flag, true);
+      seen.push(await branchesOf(result));
       await write(flag, { a: 1 });
       seen.push(await branchesOf(result));
       await write(flag, 0);
       seen.push(await branchesOf(result));
 
-      expect(seen).toEqual([allTake(false), allTake(true), allTake(false)]);
+      expect(seen).toEqual([
+        allTake(false),
+        allTake(true),
+        allTake(true),
+        allTake(false),
+      ]);
     });
 
     it("takes the branch the new target's truthiness picks when the condition is pointed elsewhere", async () => {
