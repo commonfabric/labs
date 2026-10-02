@@ -75,7 +75,6 @@ describe("schema-view presence labels", () => {
       // lands, and the assertions read back the label it persisted.
       cfcEnforcementMode: "enforce-explicit",
       cfcFlowLabels: "persist",
-      experimental: { lazyMaterialization: true },
     });
   });
   afterEach(async () => {
