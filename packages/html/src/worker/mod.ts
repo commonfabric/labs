@@ -7,6 +7,16 @@
  */
 
 export { WorkerReconciler } from "./reconciler.ts";
+export {
+  admitsEverything,
+  canRenderCellUnderPolicy,
+  cellLabelRefusal,
+  cellLabelSources,
+  type DisplayFitSources,
+  type MembershipWatch,
+  readRefusal,
+  type RenderLabelSummary,
+} from "./display-fit.ts";
 export { generateChildKeys, generateKey } from "./keying.ts";
 export type {
   BindingCellRef,
@@ -15,6 +25,7 @@ export type {
   ReconcileContext,
   RenderConfidentialityCeiling,
   RenderDeclassificationPolicy,
+  RenderPolicy,
   SpaceAccessProvider,
   WorkerJSXElement,
   WorkerProps,
