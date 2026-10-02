@@ -119,69 +119,108 @@ const REFERENCE_BINDING_SINKS: ReadonlyMap<string, ReadonlySet<string>> =
   ]);
 
 /**
- * Props that make the browser fetch a URL once they are set, keyed by tag
- * name in lower case, with `*` for every element. Setting one is network
- * egress, not display, so it is decided under the fetch ceiling
- * ({@link WorkerReconciler#fetchPolicyOf}) as well as the render policy.
+ * Props that make the browser load a remote resource once they are set, keyed
+ * by tag name in lower case, with `*` for every element. Setting one is
+ * network egress, not display, so it is decided under the remote-load policy
+ * ({@link WorkerReconciler#remoteLoadPolicyOf}) as well as the render policy.
  * Prop names are compared in lower case, since a DOM property and its
- * attribute differ only in case. `style` is decided by its value
- * ({@link styleCanFetch}). A component that fetches what a prop names, or
- * renders markup that can, is listed by that prop.
+ * attribute differ only in case. `style` and `theme`, on any element, are
+ * decided by their value ({@link VALUE_DECIDED_REMOTE_LOAD_PROPS}). A
+ * component that loads what a prop names, or renders markup or a nested view
+ * that can, is listed by that prop; `test/remote-load-props.test.ts` holds every
+ * component that loads anything to this table or to a reason it need not be
+ * here. SVG `image` and `use` are absent because the renderer creates elements
+ * in the HTML namespace only, where those tags load nothing.
  */
-const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  [
-    "*",
-    new Set([
-      "src",
-      "srcset",
-      "srcdoc",
-      "poster",
-      "background",
-      "innerhtml",
-      "outerhtml",
-      "attributionsrc",
-    ]),
-  ],
-  ["object", new Set(["data"])],
-  ["link", new Set(["href", "imagesrcset"])],
-  ["base", new Set(["href"])],
-  ["meta", new Set(["content"])],
-  ["style", new Set(["textcontent", "innertext", "outertext"])],
-  ["cf-markdown", new Set(["content"])],
-  ["cf-svg", new Set(["content"])],
-  ["cf-chat", new Set(["messages"])],
-  ["cf-chat-message", new Set(["avatar", "content"])],
-  ["cf-link-preview", new Set(["url"])],
-  ["cf-cfc-authorship", new Set(["avatar"])],
-  ["cf-render", new Set(["cell"])],
+export const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> =
+  new Map([
+    [
+      "*",
+      new Set([
+        "src",
+        "srcset",
+        "srcdoc",
+        "poster",
+        "background",
+        "innerhtml",
+        "outerhtml",
+        "attributionsrc",
+      ]),
+    ],
+    ["object", new Set(["data"])],
+    ["link", new Set(["href", "imagesrcset"])],
+    ["base", new Set(["href"])],
+    ["meta", new Set(["content"])],
+    ["style", new Set(["textcontent", "innertext", "outertext"])],
+    ["cf-markdown", new Set(["content"])],
+    ["cf-svg", new Set(["content"])],
+    ["cf-chat", new Set(["messages"])],
+    ["cf-chat-message", new Set(["avatar", "content"])],
+    ["cf-fab", new Set(["previewmessage", "messages"])],
+    ["cf-link-preview", new Set(["url"])],
+    ["cf-cfc-authorship", new Set(["avatar"])],
+    ["cf-oauth", new Set(["auth"])],
+    ["cf-profile-badge", new Set(["profile"])],
+    ["cf-render", new Set(["cell"])],
+    ["cf-picker", new Set(["items"])],
+    // The sandbox admits same-origin images, and a same-origin relay
+    // (`/api/link-preview/<url>`) fetches any URL it is given.
+    ["cf-iframe", new Set(["context"])],
+    // Tiles come from a fixed host, but the viewport the data chooses tells
+    // that host where to look.
+    ["cf-map", new Set(["value", "center", "zoom", "bounds"])],
+  ]);
+
+/**
+ * Props, on any element, that load a remote resource only for some values:
+ * CSS (`style`), and a theme, whose colors become CSS custom properties that
+ * component styles read as `background`.
+ */
+const VALUE_DECIDED_REMOTE_LOAD_PROPS: ReadonlySet<string> = new Set([
+  "style",
+  "theme",
 ]);
 
 /**
- * The caveat kinds a URL fetch does not admit though a display does: the
- * material-risk tiers, which the display ceiling admits with the rest of the
- * prompt-caveat family (SC-54). Without them, a ceiling's caveat allowance is
- * what it was before the family was admitted.
+ * The caveat kinds the remote-load policy refuses though the display admits
+ * them: the material-risk tiers, which the display ceiling admits with the
+ * rest of the prompt-caveat family (SC-54). For the default host ceiling,
+ * removing them leaves the caveat allowance it had before SC-54.
  */
-const FETCH_REFUSED_CAVEAT_KINDS: ReadonlySet<string> = new Set(
+const REMOTE_LOAD_REFUSED_CAVEAT_KINDS: ReadonlySet<string> = new Set(
   MATERIAL_RISK_DISCHARGE_KINDS,
 );
 
 /**
  * A CSS value that could name a URL: a `url()`, an image function, `src()`,
- * an `@import`, or a backslash, which can spell any of those as an escape.
- * Broader than the grammar, so that a value this does not match cannot fetch.
+ * an `@import`, a backslash, which can spell any of those as an escape, or a
+ * custom property definition, whose value other CSS could read as a URL.
+ * Broader than the grammar, so that a value this does not match cannot load
+ * anything.
  */
-const STYLE_CAN_FETCH = /url|image|src\s*\(|@import|\\/i;
+const STYLE_MAY_LOAD_REMOTE =
+  /url|image|src\s*\(|@import|\\|(?:^|[;{\s])--[\w-]*\s*:/i;
 
-/** Whether a `style` value could make the browser fetch a URL. */
-function styleCanFetch(value: unknown): boolean {
+/**
+ * Whether a `style` or `theme` value could make the browser load a URL. An
+ * object is decided entry by entry, so a quoted font name, which a JSON
+ * rendering would escape, is not mistaken for an escape; a key that defines a
+ * custom property counts as one that could.
+ */
+function valueMayLoadRemote(
+  value: unknown,
+  seen = new Set<unknown>(),
+): boolean {
   if (value === null || value === undefined) return false;
-  if (typeof value === "string") return STYLE_CAN_FETCH.test(value);
-  try {
-    return STYLE_CAN_FETCH.test(JSON.stringify(value) ?? "");
-  } catch {
-    return true;
+  if (typeof value === "string") return STYLE_MAY_LOAD_REMOTE.test(value);
+  if (typeof value !== "object") return false;
+  if (seen.has(value)) return true;
+  seen.add(value);
+  for (const [key, entry] of Object.entries(value)) {
+    if (key.startsWith("--") || STYLE_MAY_LOAD_REMOTE.test(key)) return true;
+    if (valueMayLoadRemote(entry, seen)) return true;
   }
+  return false;
 }
 
 /** A prop whose value is not known where it is decided: a binding. */
@@ -189,7 +228,7 @@ const UNKNOWN_PROP_VALUE = Symbol("unknown prop value");
 
 /**
  * Why a prop that would fetch a URL was refused: the view it is in carries a
- * caveat the fetch ceiling refuses, or its own value does.
+ * caveat the remote-load policy refuses, or its own value does.
  */
 type RemoteLoadRefusal =
   | { readonly byView: true }
@@ -352,6 +391,8 @@ export class WorkerReconciler {
    * only narrow from here.
    */
   readonly #rootRenderPolicy: RenderPolicy;
+  /** {@link #remoteLoadPolicyOf}, per policy object. */
+  readonly #remoteLoadPolicies = new WeakMap<RenderPolicy, RenderPolicy>();
 
   /**
    * Runner-side display-boundary resolver, which rewrites a cell's
@@ -414,9 +455,23 @@ export class WorkerReconciler {
       cell: Cell<unknown>,
       policy: RenderPolicy,
     ): boolean;
+    /**
+     * Mounts as {@link mount} does, with the root's remote loads blocked, as
+     * when the mounted data carries a caveat the remote-load policy refuses.
+     * Separates the subtree block from the per-read fit, which today refuses
+     * most of the same loads on its own.
+     */
+    mountWithRemoteLoadsBlocked(
+      vnode: WorkerVNode | Cell<WorkerVNode> | Cell<unknown>,
+    ): Cancel;
   } {
     return {
       rootRenderPolicy: this.#rootRenderPolicy,
+      mountWithRemoteLoadsBlocked: (vnode) =>
+        this.#mount(vnode, {
+          ...this.#rootRenderPolicy,
+          remoteLoadsBlocked: true,
+        }),
       atomRenderableUnderPolicy: (atom, policy) =>
         this.#atomRenderableUnderPolicy(atom, policy),
       canRenderCellUnderPolicy: (cell, policy) =>
@@ -457,6 +512,14 @@ export class WorkerReconciler {
    * @returns A cancel function to unmount the tree
    */
   mount(vnode: WorkerVNode | Cell<WorkerVNode> | Cell<unknown>): Cancel {
+    return this.#mount(vnode, this.#rootRenderPolicy);
+  }
+
+  /** {@link mount}, under `rootPolicy` rather than the configured root policy. */
+  #mount(
+    vnode: WorkerVNode | Cell<WorkerVNode> | Cell<unknown>,
+    rootPolicy: RenderPolicy,
+  ): Cancel {
     logger.debug(
       "mount",
       () => ({
@@ -504,13 +567,13 @@ export class WorkerReconciler {
         const refusal = this.#readRefusal(
           vnode,
           [rootConsumed],
-          this.#rootRenderPolicy,
+          rootPolicy,
           rootWatch,
         );
         const accessLost = this.#cellAccessError(vnode) !== undefined;
         if (accessLost || refusal !== undefined) {
           if (!accessLost && refusal !== undefined) {
-            this.#reportRenderDenial(() => refusal, this.#rootRenderPolicy);
+            this.#reportRenderDenial(() => refusal, rootPolicy);
           }
           this.#reconcileIntoWrapper(
             ctx,
@@ -518,7 +581,7 @@ export class WorkerReconciler {
             accessLost
               ? this.#accessPlaceholderVNode()
               : this.#blockedPlaceholderVNode(),
-            this.#rootRenderPolicy,
+            rootPolicy,
           );
           this.#rootChildId = wrapperState.currentChild?.nodeId ?? null;
           return;
@@ -535,19 +598,21 @@ export class WorkerReconciler {
         // The root's data may be admitted for display yet carry a caveat a
         // URL fetch does not admit; its subtree then sets no prop that would
         // fetch one (SC-55).
-        const remoteLoadsBlocked = this.#readRefusal(
-          vnode,
-          [rootConsumed],
-          this.#fetchPolicyOf(this.#rootRenderPolicy),
-          rootWatch,
-        ) !== undefined;
+        const remoteLoadsBlocked = rootPolicy.remoteLoadsBlocked === true ||
+          this.#mayCarryRemoteRefusedCaveat(vnode, [rootConsumed]) &&
+            this.#readRefusal(
+                vnode,
+                [rootConsumed],
+                this.#remoteLoadPolicyOf(rootPolicy),
+                rootWatch,
+              ) !== undefined;
         this.#reconcileIntoWrapper(
           ctx,
           wrapperState,
           resolvedVnode as WorkerRenderNode,
-          remoteLoadsBlocked
-            ? { ...this.#rootRenderPolicy, remoteLoadsBlocked: true }
-            : this.#rootRenderPolicy,
+          remoteLoadsBlocked && !rootPolicy.remoteLoadsBlocked
+            ? { ...rootPolicy, remoteLoadsBlocked: true }
+            : rootPolicy,
         );
         // Track the root child for cleanup
         this.#rootChildId = wrapperState.currentChild?.nodeId ?? null;
@@ -557,7 +622,7 @@ export class WorkerReconciler {
         this.#sinkCell(vnode, (resolvedVnode: unknown, read) => {
           rootConsumed = read;
           renderRoot(resolvedVnode);
-        }, !this.#admitsEverything(this.#rootRenderPolicy)),
+        }, !this.#admitsEverything(rootPolicy)),
       );
     } else {
       // Static VNode - render directly into container
@@ -565,7 +630,7 @@ export class WorkerReconciler {
         ctx,
         vnode,
         new Set(),
-        this.#rootRenderPolicy,
+        rootPolicy,
       );
       if (state) {
         addCancel(state.cancel);
@@ -789,10 +854,10 @@ export class WorkerReconciler {
     nodeId: number,
   ): RenderPolicy {
     // A style element's text is CSS, which can fetch (`url()`, `@import`),
-    // so it is decided under the fetch policy; in a view whose data a fetch
+    // so it is decided under the remote-load policy; in a view whose data a remote load
     // does not admit, `#childrenForRenderPolicy` blocks it outright.
     let policy = node.name.toLowerCase() === "style"
-      ? this.#fetchPolicyOf(parentPolicy)
+      ? this.#remoteLoadPolicyOf(parentPolicy)
       : parentPolicy;
 
     if (node.name === CFC_RENDER_BOUNDARY_TAG) {
@@ -818,24 +883,19 @@ export class WorkerReconciler {
             []
         );
 
+      // Everything else is inherited as it stands: the host's caveat-kind
+      // allowance, the text-integrity policy, and the subtree's remote-load
+      // block. A boundary narrows maxConfidentiality and never sheds a field.
       policy = {
+        ...parentPolicy,
         maxConfidentiality: this.#narrowMaxConfidentiality(
           parentPolicy.maxConfidentiality,
           localMax,
         ),
-        // The host's caveat-kind allowance is part of the default ceiling
-        // profile; boundaries narrow maxConfidentiality but never widen or
-        // shed the kind allowance.
-        caveatKindAllow: parentPolicy.caveatKindAllow,
-        // Narrowing never sheds the subtree's fetch block either.
-        ...(parentPolicy.remoteLoadsBlocked
-          ? { remoteLoadsBlocked: true }
-          : {}),
         declassifyConfidentiality: [
           ...parentPolicy.declassifyConfidentiality,
           ...declassifyConfidentiality,
         ],
-        textIntegrity: parentPolicy.textIntegrity,
       };
     }
 
@@ -1097,19 +1157,19 @@ export class WorkerReconciler {
   ): boolean {
     const policy = state.renderPolicy;
     const refusal = this.#readRefusal(source, reads, policy, watch);
-    const fetchRefusal =
+    const remoteRefusal =
       refusal === undefined && this.#isRemoteLoadProp(state, key, value)
-        ? this.#fetchRefusal(source, reads, policy, watch)
+        ? this.#remoteLoadRefusal(source, reads, policy, watch)
         : undefined;
-    if (refusal === undefined && fetchRefusal === undefined) {
+    if (refusal === undefined && remoteRefusal === undefined) {
       if (changed || shown !== true) show();
       return true;
     }
     if (shown !== false) {
       if (refusal !== undefined) {
         this.#reportRenderDenial(() => refusal, policy);
-      } else if (fetchRefusal !== undefined) {
-        this.#reportRemoteLoadDenial(key, policy, fetchRefusal);
+      } else if (remoteRefusal !== undefined) {
+        this.#reportRemoteLoadDenial(key, policy, remoteRefusal);
       }
       if (shown) {
         this.#queueOps([{ op: "remove-prop", nodeId: state.nodeId, key }]);
@@ -1129,8 +1189,8 @@ export class WorkerReconciler {
     value: unknown = UNKNOWN_PROP_VALUE,
   ): boolean {
     const prop = key.toLowerCase();
-    if (prop === "style") {
-      return value === UNKNOWN_PROP_VALUE || styleCanFetch(value);
+    if (VALUE_DECIDED_REMOTE_LOAD_PROPS.has(prop)) {
+      return value === UNKNOWN_PROP_VALUE || valueMayLoadRemote(value);
     }
     return (REMOTE_LOAD_PROPS.get("*")?.has(prop) ?? false) ||
       (REMOTE_LOAD_PROPS.get(state.tagName.toLowerCase())?.has(prop) ?? false);
@@ -1138,43 +1198,87 @@ export class WorkerReconciler {
 
   /**
    * The policy a URL fetch is decided under: `policy` without the caveat
-   * kinds a fetch does not admit ({@link FETCH_REFUSED_CAVEAT_KINDS}). That is
+   * kinds a fetch does not admit ({@link REMOTE_LOAD_REFUSED_CAVEAT_KINDS}). That is
    * the display ceiling as it stood before the prompt-caveat family was
    * admitted (SC-54, SC-55).
    */
-  #fetchPolicyOf(policy: RenderPolicy): RenderPolicy {
+  #remoteLoadPolicyOf(policy: RenderPolicy): RenderPolicy {
+    const known = this.#remoteLoadPolicies.get(policy);
+    if (known !== undefined) return known;
     const kinds = policy.caveatKindAllow;
-    if (
-      kinds === undefined ||
-      !kinds.some((kind) => FETCH_REFUSED_CAVEAT_KINDS.has(kind))
-    ) {
-      return policy;
+    const derived = kinds === undefined ||
+        !kinds.some((kind) => REMOTE_LOAD_REFUSED_CAVEAT_KINDS.has(kind))
+      ? policy
+      : {
+        ...policy,
+        caveatKindAllow: kinds.filter((kind) =>
+          !REMOTE_LOAD_REFUSED_CAVEAT_KINDS.has(kind)
+        ),
+      };
+    this.#remoteLoadPolicies.set(policy, derived);
+    return derived;
+  }
+
+  /**
+   * Whether two policies decide remote loads alike. Content laid out under
+   * one is never reused under the other: a literal prop the old decision set
+   * would be skipped as unchanged.
+   */
+  #sameRemoteLoadDecision(left: RenderPolicy, right: RenderPolicy): boolean {
+    return (left.remoteLoadsBlocked ?? false) ===
+      (right.remoteLoadsBlocked ?? false);
+  }
+
+  /**
+   * Whether `reads` of `cell` could carry a caveat the remote-load policy
+   * refuses: a confidentiality atom of one of those kinds, in a clause or as
+   * an alternative, in what the reads consumed or in the cell's own labels.
+   * When none does, the remote-load policy decides exactly as the render
+   * policy already did, so the second fit is skipped.
+   */
+  #mayCarryRemoteRefusedCaveat(
+    cell: Cell<unknown>,
+    reads: readonly (SinkConsumedLabel | undefined)[],
+  ): boolean {
+    const refused = (atom: unknown): boolean =>
+      isObjectOrArray(atom) && atom.type === CFC_CAVEAT_ATOM_TYPE &&
+      typeof atom.kind === "string" &&
+      REMOTE_LOAD_REFUSED_CAVEAT_KINDS.has(atom.kind);
+    const anyRefused = (clauses: readonly unknown[]): boolean =>
+      clauses.some((clause) =>
+        refused(clause) ||
+        (isObjectOrArray(clause) && Array.isArray(clause.anyOf) &&
+          clause.anyOf.some(refused))
+      );
+    if (reads.some((read) => read === undefined)) return true;
+    if (reads.some((read) => anyRefused(read?.confidentiality ?? []))) {
+      return true;
     }
-    return {
-      ...policy,
-      caveatKindAllow: kinds.filter((kind) =>
-        !FETCH_REFUSED_CAVEAT_KINDS.has(kind)
-      ),
-    };
+    for (const source of this.#cellLabelSources(cell) ?? []) {
+      if (source.view === undefined) return true;
+      if (anyRefused(this.#confidentialityLabels(source.view))) return true;
+    }
+    return false;
   }
 
   /**
    * Why a prop that would fetch a URL, read from `source` by `reads`, may not
    * be set under `policy`, or undefined when it may: refused when the view it
-   * is in carries a caveat the fetch ceiling refuses, or when the read's own
+   * is in carries a caveat the remote-load policy refuses, or when the read's own
    * labels do.
    */
-  #fetchRefusal(
+  #remoteLoadRefusal(
     source: Cell<unknown>,
     reads: readonly (SinkConsumedLabel | undefined)[],
     policy: RenderPolicy,
     watch: MembershipWatch,
   ): RemoteLoadRefusal | undefined {
     if (policy.remoteLoadsBlocked) return { byView: true };
+    if (!this.#mayCarryRemoteRefusedCaveat(source, reads)) return undefined;
     const label = this.#readRefusal(
       source,
       reads,
-      this.#fetchPolicyOf(policy),
+      this.#remoteLoadPolicyOf(policy),
       watch,
     );
     return label === undefined ? undefined : { byView: false, label };
@@ -1182,7 +1286,7 @@ export class WorkerReconciler {
 
   /**
    * Whether a literal prop, part of the view `state` renders, would fetch a
-   * URL in a view whose data carries a caveat the fetch ceiling refuses.
+   * URL in a view whose data carries a caveat the remote-load policy refuses.
    */
   #literalRemoteLoadBlocked(
     state: NodeState,
@@ -1204,7 +1308,7 @@ export class WorkerReconciler {
       () => ({
         prop,
         ...(refusal.byView ? { blockedByView: true } : refusal.label),
-        caveatKindAllow: this.#fetchPolicyOf(policy).caveatKindAllow,
+        caveatKindAllow: this.#remoteLoadPolicyOf(policy).caveatKindAllow,
       }),
     );
   }
@@ -1624,8 +1728,7 @@ export class WorkerReconciler {
       );
 
     return maxConfidentialityEquals && caveatKindsEqual &&
-      (left.remoteLoadsBlocked ?? false) ===
-        (right.remoteLoadsBlocked ?? false) &&
+      this.#sameRemoteLoadDecision(left, right) &&
       this.#atomListsEqual(
         left.declassifyConfidentiality,
         right.declassifyConfidentiality,
@@ -2591,8 +2694,7 @@ export class WorkerReconciler {
     // be skipped as unchanged.
     if (
       oldState && oldTagName && newTagName && oldTagName === newTagName &&
-      (oldState.renderPolicy.remoteLoadsBlocked ?? false) ===
-        (policy.remoteLoadsBlocked ?? false)
+      this.#sameRemoteLoadDecision(oldState.renderPolicy, policy)
     ) {
       const sanitized = this.#sanitizeNode(newVNode!);
       if (sanitized) {
@@ -3254,7 +3356,7 @@ export class WorkerReconciler {
               : this.#cellLabelRefusal(
                 propsCell,
                 this.#cellLabelSources(propsCell),
-                this.#fetchPolicyOf(state.renderPolicy),
+                this.#remoteLoadPolicyOf(state.renderPolicy),
               );
             if (state.renderPolicy.remoteLoadsBlocked || label !== undefined) {
               if (existingState) {
@@ -4443,8 +4545,10 @@ export class WorkerReconciler {
       return false;
     }
     if (
-      (childState.elementState.renderPolicy.remoteLoadsBlocked ?? false) !==
-        (policy.remoteLoadsBlocked ?? false)
+      !this.#sameRemoteLoadDecision(
+        childState.elementState.renderPolicy,
+        policy,
+      )
     ) {
       return false;
     }
@@ -4610,17 +4714,18 @@ export class WorkerReconciler {
       // one (SC-55).
       const remoteLoadsBlocked = !blockedByPolicy &&
         (policy.remoteLoadsBlocked === true ||
-          this.#readRefusal(
-              cell,
-              [consumed],
-              this.#fetchPolicyOf(policy),
-              watch,
-            ) !== undefined);
+          this.#mayCarryRemoteRefusedCaveat(cell, [consumed]) &&
+            this.#readRefusal(
+                cell,
+                [consumed],
+                this.#remoteLoadPolicyOf(policy),
+                watch,
+              ) !== undefined);
       const contentPolicy: RenderPolicy =
         remoteLoadsBlocked && !policy.remoteLoadsBlocked
           ? { ...policy, remoteLoadsBlocked: true }
           : policy;
-      const sameFetchDecision =
+      const sameRemoteLoadDecision =
         currentRemoteLoadsBlocked === remoteLoadsBlocked;
 
       if (!isInitialRender && valueUnchanged) {
@@ -4634,7 +4739,7 @@ export class WorkerReconciler {
         }
         if (
           !blockedByPolicy && !blockedByIntegrity &&
-          currentContentState === "rendered" && sameFetchDecision
+          currentContentState === "rendered" && sameRemoteLoadDecision
         ) {
           this.#updatePieceBoundary(childState, resolvedChild, resultCell);
           return;
@@ -4745,7 +4850,7 @@ export class WorkerReconciler {
         // Case 2: VNode in-place update (same tag)
         if (
           childState.elementState && currentContentState === "rendered" &&
-          sameFetchDecision
+          sameRemoteLoadDecision
         ) {
           const newVNode = this.#extractVNode(
             resolvedChild as WorkerRenderNode,
@@ -4835,7 +4940,7 @@ export class WorkerReconciler {
         if (
           Array.isArray(resolvedChild) &&
           childState.elementState?.isArrayWrapper &&
-          currentContentState === "rendered" && sameFetchDecision
+          currentContentState === "rendered" && sameRemoteLoadDecision
         ) {
           const wrapper = childState.elementState;
           const children = resolvedChild as WorkerRenderNode[];

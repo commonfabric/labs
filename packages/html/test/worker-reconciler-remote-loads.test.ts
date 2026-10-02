@@ -21,7 +21,10 @@ import {
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
-import { WorkerReconciler } from "../src/worker/reconciler.ts";
+import {
+  REMOTE_LOAD_PROPS,
+  WorkerReconciler,
+} from "../src/worker/reconciler.ts";
 
 // The default display ceiling admits the prompt-caveat family (SC-54), so
 // text carrying an injection-risk caveat renders for its owner. A render that
@@ -587,6 +590,267 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
           ops.some((op) =>
             op.op === "remove-node" ||
             (op.op === "remove-prop" && op.key === "src")
+          ),
+          true,
+        );
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "the omnibox preview of a caveated reply is refused",
+    async () => {
+      const value = await seed(`![x](${ATTACKER_URL})`, [owner, unscreened]);
+      const id = await seed({
+        type: "vnode",
+        name: "cf-fab",
+        props: { $previewMessage: linkTo(value), $messages: linkTo(value) },
+        children: [],
+      }, [owner]);
+      const { collector, cancel } = await render(id);
+      try {
+        const ops = collector.all();
+        assertEquals(bindings(ops, "previewMessage"), 0);
+        assertEquals(bindings(ops, "messages"), 0);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "a theme that can name a URL is refused; plain colors apply",
+    async () => {
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          {
+            type: "vnode",
+            name: "cf-chat",
+            props: {
+              theme: { colors: { background: `url(${ATTACKER_URL})` } },
+            },
+            children: [],
+          },
+          {
+            type: "vnode",
+            name: "cf-button",
+            props: { theme: { colors: { background: "#ffffff" } } },
+            children: [],
+          },
+        ],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        const themes = setProps(collector.all(), "theme").map((theme) =>
+          JSON.stringify(theme)
+        );
+        assertEquals(themes.some((theme) => theme.includes("url(")), false);
+        assertEquals(themes.some((theme) => theme.includes("#ffffff")), true);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "an object style is decided entry by entry",
+    async () => {
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          {
+            type: "vnode",
+            name: "p",
+            props: { style: { fontFamily: '"Iowan Old Style", serif' } },
+            children: ["Quoted font"],
+          },
+          {
+            type: "vnode",
+            name: "p",
+            props: { style: { "--hero": `"${ATTACKER_URL}"` } },
+            children: ["Custom property"],
+          },
+        ],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        const styles = setProps(collector.all(), "style").map(String);
+        assertEquals(styles.some((style) => style.includes("Iowan")), true);
+        assertEquals(styles.some((style) => style.includes("--hero")), false);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "props read from a separate caveated document set no fetch",
+    async () => {
+      const props = await seed({ src: ATTACKER_URL, alt: "x" }, [
+        owner,
+        unscreened,
+      ]);
+      const id = await seed({
+        type: "vnode",
+        name: "img",
+        props: linkTo(props),
+        children: [],
+      }, [owner]);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  // Every component entry in the table, as a literal in a caveated view.
+  for (const [tag, props] of REMOTE_LOAD_PROPS) {
+    if (tag === "*") continue;
+    for (const prop of props) {
+      await t.step(`${tag} ${prop} is refused in a caveated view`, async () => {
+        const id = await seed({
+          type: "vnode",
+          name: tag,
+          props: { [prop]: ATTACKER_URL },
+          children: [],
+        }, [owner, unscreened]);
+        const { collector, cancel } = await render(id);
+        try {
+          const ops = collector.all();
+          assertEquals(
+            ops.filter((op) =>
+              op.op === "set-prop" && op.key.toLowerCase() === prop
+            ),
+            [],
+          );
+        } finally {
+          cancel();
+        }
+      });
+    }
+  }
+
+  // The subtree block on its own: these views' data is clean, so the per-read
+  // fit admits every load; only the block refuses them.
+  const mountBlocked = async (vnode: unknown) => {
+    const collector = createOpsCollector();
+    const reconciler = reconcilerFor(collector.onOps);
+    const cancel = reconciler.accessForTestingOnly.mountWithRemoteLoadsBlocked(
+      vnode as never,
+    );
+    await t.settle();
+    return { collector, cancel };
+  };
+
+  await t.step(
+    "under the block, a static view sets no fetch and keeps its text",
+    async () => {
+      const { collector, cancel } = await mountBlocked(pixelView());
+      try {
+        const ops = collector.all();
+        assertEquals(texts(ops).includes("Owner text"), true);
+        assertEquals(setProps(ops, "src"), []);
+        assertEquals(setProps(ops, "style").includes("color: red"), true);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "under the block, a render boundary keeps it",
+    async () => {
+      const { collector, cancel } = await mountBlocked({
+        type: "vnode",
+        name: "cf-cfc-render-boundary",
+        props: {},
+        children: [{
+          type: "vnode",
+          name: "img",
+          props: { src: ATTACKER_URL },
+          children: [],
+        }],
+      });
+      try {
+        assertEquals(setProps(collector.all(), "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "under the block, a style element's text does not render",
+    async () => {
+      const css = `body { background: url(${ATTACKER_URL}) }`;
+      const { collector, cancel } = await mountBlocked({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          { type: "vnode", name: "style", props: {}, children: [css] },
+          "Visible text",
+        ],
+      });
+      try {
+        const rendered = texts(collector.all());
+        assertEquals(rendered.includes("Visible text"), true);
+        assertEquals(rendered.includes(css), false);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "under the block, a clean document's props set no fetch",
+    async () => {
+      const id = await seed(pixelView(), [owner]);
+      const { collector, cancel } = await mountBlocked(
+        runtime.getCell(owner, id).asSchema(rendererVDOMSchema),
+      );
+      try {
+        assertEquals(setProps(collector.all(), "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "under the block, a style that comes to name a URL is removed",
+    async () => {
+      const id = "remote-loads-style-change";
+      const styled = (style: string) => ({
+        type: "vnode",
+        name: "p",
+        props: { style },
+        children: ["Styled"],
+      });
+      await seed(styled("color: red"), [owner], id);
+      const { collector, cancel } = await mountBlocked(
+        runtime.getCell(owner, id).asSchema(rendererVDOMSchema),
+      );
+      try {
+        assertEquals(setProps(collector.all(), "style"), ["color: red"]);
+        collector.clear();
+        await seed(styled(`background: url(${ATTACKER_URL})`), [owner], id);
+        await t.settle();
+        const ops = collector.all();
+        assertEquals(setProps(ops, "style"), []);
+        assertEquals(
+          ops.some((op) =>
+            op.op === "remove-node" ||
+            (op.op === "remove-prop" && op.key === "style")
           ),
           true,
         );
