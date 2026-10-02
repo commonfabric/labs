@@ -127,16 +127,10 @@ const trustedClick = () => {
  * or not the runtime stored the claim; only the claim the runtime stored for
  * the document refuses a write through a link that carries none.
  *
- * `copy` is a known residual, and the room does not refuse it. The member
- * starts an instance of the room's own pattern, its `terms` bound at the
- * room's `terms.seats`, and runs that instance's `propose` with the member's
- * seat alone; then it runs the room's own `propose` the same way. Write
- * authority is keyed by code, not by piece (normative CFC §8.15.8), so the
- * instance's `propose` is the claim's writer, and its guard reads its own
- * binding, an array, as unwritten terms. Its write leaves the room's terms
- * unreadable as terms, so the room's own guard reads them as unwritten too,
- * and the room shows the one-seat room's answer. The case asserts that, so it
- * fails, visibly, when the runtime closes the gap.
+ * `copy` attempts to start an instance of the room's own pattern with its
+ * `terms` bound at the room's `terms.seats`. Setup cannot initialize a cell
+ * owned by another piece through that binding, so the setup commit is refused
+ * and the room keeps the terms its members sealed under.
  *
  * `result` is a known residual too. The member's code, which is not
  * `propose`, writes a link to the one-seat room's terms over the room's
@@ -207,7 +201,11 @@ const sealAndRelease = async (
     const compiled = await host.patternManager.compilePattern(program, {
       space: S,
     });
-    const startRoom = async (cause: string, inputs: unknown = {}) => {
+    const startRoom = async (
+      cause: string,
+      inputs: unknown = {},
+      expectRefusal = false,
+    ) => {
       const start = host.edit();
       const piece = host.getCell<Record<string, unknown>>(
         S,
@@ -217,7 +215,15 @@ const sealAndRelease = async (
       );
       host.run(start, compiled, inputs as never, piece);
       host.prepareTxForCommit(start);
-      expect((await start.commit()).error).toBeUndefined();
+      const { error } = await start.commit();
+      if (expectRefusal) {
+        expect(error).toMatchObject({
+          name: "CfcCommitRefusalError",
+          reasons: [
+            "writeAuthorizedBy requires a trusted verified binding identity at /terms",
+          ],
+        });
+      } else expect(error).toBeUndefined();
       await host.idle();
       await host.storageManager.synced();
       return piece.withTx(undefined);
@@ -585,22 +591,17 @@ const sealAndRelease = async (
           );
           break;
         case "copy": {
-          // The member's own instance of the room's pattern, its `terms`
-          // bound beneath the room's, and then the room's own `propose`.
+          // Setup's own initialization authority stops at the binding slot;
+          // it cannot initialize the existing protected target beneath it.
           const { schema: _schema, ...link } = argument
             .getAsNormalizedFullLink();
-          const copy = await startRoom(`${file}-copy`, {
+          await startRoom(`${file}-copy`, {
             terms: host.getCellFromLink({
               ...link,
               path: [...link.path, "terms", "seats"],
             }),
             policy: room.key("policy"),
-          });
-          copy.key("propose").send({
-            seats: [host.getCellFromLink(seats[1])],
-          } as never);
-          await host.idle();
-          await host.storageManager.synced();
+          }, true);
           proposeAlone();
           break;
         }
@@ -625,7 +626,7 @@ const sealAndRelease = async (
       }
       await host.idle();
       await host.storageManager.synced();
-      if (repoint === "copy" || repoint === "result") {
+      if (repoint === "result") {
         // Known residual: the room shows the one-seat room's answer, under
         // terms that seat the member alone.
         expect(await readCustodyAnswer(hostRoom)).toBe("sushi");
@@ -637,7 +638,7 @@ const sealAndRelease = async (
         const argumentSeats = (argument.getRaw() as
           | { terms?: { seats?: unknown[] } }
           | undefined)?.terms?.seats;
-        if (repoint === "result") expect(argumentSeats).toHaveLength(2);
+        expect(argumentSeats).toHaveLength(2);
         return;
       }
       // What the room shows is still the answer its members sealed: not the
@@ -778,7 +779,7 @@ describe("sealed custody through a pattern", () => {
     await sealAndRelease(ANSWER_ROOM, "policy");
   });
 
-  it("known residual: shows the one-seat room's answer once a member's own instance of the room, bound beneath its terms, runs `propose`", async () => {
+  it("refuses a member's instance that initializes protected cells through a binding beneath the room's terms", async () => {
     await sealAndRelease(ANSWER_ROOM, "copy");
   });
 

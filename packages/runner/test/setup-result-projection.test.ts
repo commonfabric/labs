@@ -10,10 +10,10 @@ import type {
 } from "../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
-import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -211,7 +211,7 @@ describe("setup-result-projection", () => {
       return resultCell;
     }
 
-    it("records a binding of the result field naming the list, and no setup projection", async () => {
+    it("records a binding projection of the result field naming the list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       await setUpExporter(tx);
@@ -220,28 +220,25 @@ describe("setup-result-projection", () => {
       const list = runtime.getCell(space, "board", undefined, tx).key("items")
         .getAsNormalizedFullLink();
 
-      const records = tx.getCfcState().writePolicyInputs.flatMap((input) => {
-        if (
-          input.kind === "initialization" && input.target.id === exporter.id
-        ) {
-          const named = parseLink(input.value, exporter);
-          return [{
-            record: input.mode,
+      const projections = tx.getCfcState().writePolicyInputs.flatMap((
+        input,
+      ) =>
+        input.kind === "structural-provenance" &&
+          (input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION ||
+            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) &&
+          input.target.id === exporter.id
+          ? [{
+            claim: input.claim,
             path: input.target.path,
-            names: named && { id: named.id, path: named.path },
-          }];
-        }
-        return input.kind === "structural-provenance" &&
-            input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
-            input.target.id === exporter.id
-          ? [{ record: input.claim, path: input.target.path }]
-          : [];
-      });
+            sources: input.sources.map(({ id, path }) => ({ id, path })),
+          }]
+          : []
+      );
 
-      expect(records).toEqual([{
-        record: "binding",
+      expect(projections).toEqual([{
+        claim: CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
         path: ["items"],
-        names: { id: list.id, path: list.path },
+        sources: [{ id: list.id, path: list.path }],
       }]);
       tx.abort();
     });

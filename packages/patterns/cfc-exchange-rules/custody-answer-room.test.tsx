@@ -23,7 +23,6 @@ export default pattern(() => {
   // Pizza draws a `no`; tacos draws more `yes` than sushi, though sushi is
   // listed first.
   const agreed = CustodyAnswerRoom({
-    policy: true,
     box: {
       a: entry(2, ["yes", "maybe", "yes"]),
       b: entry(2, ["no", "yes", "yes"]),
@@ -31,7 +30,6 @@ export default pattern(() => {
   } as Partial<Input> as Input);
   // Three seats and two entries: the room is incomplete.
   const incomplete = CustodyAnswerRoom({
-    policy: true,
     box: {
       a: entry(3, ["yes", "yes", "yes"]),
       b: entry(3, ["yes", "yes", "yes"]),
@@ -39,7 +37,6 @@ export default pattern(() => {
   } as Partial<Input> as Input);
   // Two entries sealed under different terms.
   const mixed = CustodyAnswerRoom({
-    policy: true,
     box: {
       a: entry(2, ["yes", "yes", "yes"]),
       b: { ...entry(2, ["yes", "yes", "yes"]), terms: "{}" },
@@ -47,20 +44,17 @@ export default pattern(() => {
   } as Partial<Input> as Input);
   // Terms that are not JSON, and terms that name no seats.
   const unreadable = CustodyAnswerRoom({
-    policy: true,
     box: {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "not json" },
     },
   } as Partial<Input> as Input);
   const seatless = CustodyAnswerRoom({
-    policy: true,
     box: {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "{}" },
     },
   } as Partial<Input> as Input);
   // Terms that parse to JSON `null` rather than an object.
   const nullTerms = CustodyAnswerRoom({
-    policy: true,
     box: {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "null" },
     },

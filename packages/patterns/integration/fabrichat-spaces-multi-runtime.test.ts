@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -144,5 +145,77 @@ describe("fabrichat spaces across runtimes", () => {
       .toBe("refused");
     expect(await starter.read(["requests", "missing-room", "reason"]))
       .toBe("Choose a conversation to add.");
+  });
+
+  it("updates the creator's initially empty room after its counterpart sends first", async () => {
+    for (const session of [starter, member]) {
+      const surface = await session.link([
+        "profileWish",
+        "$UI",
+        "props",
+        "$cell",
+      ]);
+      await session.send(
+        "createProfile",
+        {
+          target: { value: session.label },
+        },
+        { surface: "ProfileCreateSurface", action: "CreateProfile" },
+        {
+          piece: surface,
+        },
+      );
+      await harness.settle();
+      expect(await session.read(["profileWish", "result", "name"]))
+        .toBe(session.label);
+    }
+    const room = await start("createGroup", {
+      requestId: "remote-first",
+      title: "Remote first message",
+      members: [member.identity.did()],
+    });
+    expect(await starter.read(["messages", "count"], { piece: room })).toBe(0);
+    expect(
+      await starter.client().call("viewText", {
+        path: ["requests", "remote-first", "entry", "room", "$UI"],
+      }),
+    ).toContain("Start the conversation.");
+    expect(await member.read(["canSend"], { piece: room })).toBe(true);
+    const body = "The invited member speaks first";
+    await member.send(
+      "sendMessage",
+      {
+        requestId: "remote-first-message",
+        version: {
+          body,
+          sentAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+        },
+      },
+      { surface: "ChatSendSurface", action: "ChatSend" },
+      { piece: room },
+    );
+    await harness.settle();
+    const author = await member.link([
+      "messages",
+      "latest",
+      "messages",
+      0,
+      "authorProfile",
+    ], { piece: room });
+    const selectedProfile = await member.link(["profileWish", "result"]);
+    expect(author).toEqual(selectedProfile);
+    expect(await starter.read(["name"], { piece: author })).toBe(member.label);
+    expect(await member.read(["messages", "count"], { piece: room })).toBe(1);
+    expect(await starter.read(["messages", "count"], { piece: room })).toBe(1);
+    expect(
+      await starter.read(["messages", "latest", "messages", 0, "body"], {
+        piece: room,
+      }),
+    ).toBe(body);
+    expect(
+      await starter.client().call("viewText", {
+        path: ["requests", "remote-first", "entry", "room", "$UI"],
+      }),
+    ).toContain(body);
   });
 });

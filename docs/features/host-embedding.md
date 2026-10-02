@@ -89,6 +89,19 @@ the real export, so a rename fails the docs check.)
 
 **Test.** `packages/ui/src/v2/runtime-context.test.ts`.
 
+Mounting a persisted piece's VDOM through `cf-render` activates its producer
+graph, including when a link reaches another space. This supplies the viewer's
+session computations as well as the stored rendering. The mount observes the
+link and starts the new target when it changes. If the piece's creation metadata
+arrives after the mount, that arrival activates its producer. Unmounting releases
+that observation and cancels pending startup; a graph already shared with other
+consumers keeps running. Ordinary VNode cells without a producing pattern
+render as data. The renderer applies its normal access and CFC checks to the
+original mounted reference. View-scoped replication supplies producers through
+its demand lifecycle; other mounts start the graph in the viewer's runtime.
+
+**Test.** `packages/runtime-client/test/backends/render-producer-start.test.ts`.
+
 ---
 
 ## 3. Event contracts

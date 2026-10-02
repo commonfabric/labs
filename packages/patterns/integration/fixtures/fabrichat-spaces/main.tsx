@@ -6,7 +6,15 @@
  * core owns the same protected records the production manager uses.
  */
 
-import { pattern, Writable } from "commonfabric";
+import {
+  NAME,
+  pattern,
+  UI,
+  VIEWS,
+  wish,
+  type WishState,
+  Writable,
+} from "commonfabric";
 import {
   FabriChatManagerCore,
   type FabriChatManagerOutput,
@@ -15,12 +23,27 @@ import { type ChatProfile } from "../../../fabrichat/schemas.ts";
 
 export default pattern<
   Record<string, never>,
-  FabriChatManagerOutput
+  FabriChatManagerOutput & { profileWish: WishState<ChatProfile> }
 >(
   () => {
     const profile = Writable.of<ChatProfile>({ name: "Starter" });
-    return FabriChatManagerCore({
+    const manager = FabriChatManagerCore({
       myProfile: profile,
     });
+    return {
+      [NAME]: manager[NAME],
+      [UI]: manager[UI],
+      [VIEWS]: manager[VIEWS],
+      rooms: manager.rooms,
+      direct: manager.direct,
+      requests: manager.requests,
+      outgoingNotices: manager.outgoingNotices,
+      openDirect: manager.openDirect,
+      createGroup: manager.createGroup,
+      accept: manager.accept,
+      forget: manager.forget,
+      delivered: manager.delivered,
+      profileWish: wish<ChatProfile>({ query: "#profile" }),
+    };
   },
 );
