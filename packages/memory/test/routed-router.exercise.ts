@@ -733,6 +733,76 @@ try {
       "the spawner's mount namespace can start systemd units",
     );
     pass("the listener unit cannot ask systemd or D-Bus to run anything");
+    // The probe enters the spawner's namespaces with only its three
+    // capabilities. It deliberately has no seccomp filter: even arbitrary
+    // code with CAP_KILL must not signal processes outside the unit. Both
+    // interfaces use signal 0, so no outside process receives a signal.
+    await command([
+      "python3",
+      "-c",
+      String.raw`
+import errno, os, signal, subprocess, sys
+
+inside = r"""
+import errno, os, signal, subprocess, sys
+
+outside_pid, outside_fd = map(int, sys.argv[1:])
+denials = {}
+for name, attempt in [
+    ("kill", lambda: os.kill(outside_pid, 0)),
+    ("pidfd_send_signal", lambda: signal.pidfd_send_signal(outside_fd, 0)),
+]:
+    try:
+        attempt()
+        denials[name] = 0
+    except OSError as error:
+        denials[name] = error.errno
+assert denials == {"kill": errno.ESRCH, "pidfd_send_signal": errno.EINVAL}, denials
+
+# Terminating a worker with a different UID must still work inside the unit.
+child = subprocess.Popen([
+    "setpriv", "--reuid=100050", "--regid=100050", "--clear-groups",
+    "python3", "-c", "import os, signal; print(os.getuid(), flush=True); signal.pause()",
+], stdout=subprocess.PIPE, text=True)
+try:
+    assert child.stdout.readline() == "100050\n"
+    fd = os.pidfd_open(child.pid)
+    try:
+        os.kill(child.pid, 0)
+        signal.pidfd_send_signal(fd, 0)
+    finally:
+        os.close(fd)
+finally:
+    child.terminate()
+    child.wait()
+"""
+
+# Open the outside pidfd before entering the namespace. Refusing a PID lookup
+# alone would not prove that a supplied host pidfd cannot bypass isolation.
+spawner = int(sys.argv[1])
+outside = subprocess.Popen(["/bin/sleep", "30"])
+try:
+    fd = os.pidfd_open(outside.pid)
+    try:
+        os.kill(outside.pid, 0)
+        signal.pidfd_send_signal(fd, 0)
+        subprocess.run([
+            "nsenter", "-t", str(spawner), "-m", "-p", "setpriv",
+            "--bounding-set=-all,+setuid,+setgid,+kill",
+            "--inh-caps=-all,+setuid,+setgid,+kill",
+            "--ambient-caps=-all,+setuid,+setgid,+kill",
+            "python3", "-c", inside, str(outside.pid), str(fd),
+        ], pass_fds=(fd,), check=True)
+        assert os.stat(f"/proc/{spawner}/ns/pid").st_ino != os.stat("/proc/self/ns/pid").st_ino
+    finally:
+        os.close(fd)
+finally:
+    outside.terminate()
+    outside.wait()
+`,
+      String(rolePid("spawner")),
+    ]);
+    pass("the spawner cannot signal host processes by PID or pidfd");
   }
   // A process with an agent's UID and GID, which a compromised spawner could
   // become without its filter, must not read that agent's memory or
