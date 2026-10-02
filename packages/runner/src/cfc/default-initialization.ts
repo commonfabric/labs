@@ -55,15 +55,18 @@ export function recordNewProtectedDefaults(
 /**
  * Records exact defaults for the protected fields of an argument document a
  * setup creates for a new piece. Every field of a new document is new, so each
- * protected field the written value fills with its schema default is a seed,
- * as an internal cell's default is; the commit verifier independently checks
- * pre-transaction absence and final bytes.
+ * protected field the setup fills with its schema default, because `supplied`,
+ * the caller's argument before defaults were merged into it, leaves the field
+ * out, is a seed, as an internal cell's default is. A field the caller supplies
+ * is the caller's write, even where it equals the default. The commit verifier
+ * independently checks pre-transaction absence and final bytes.
  */
 export function recordNewDocumentProtectedDefaults(
   tx: IExtendedStorageTransaction,
   target: NormalizedFullLink,
   schema: JSONSchema,
   defaults: FabricValue,
+  supplied: unknown,
   next: unknown,
 ): void {
   recordProtectedDefaults(
@@ -73,7 +76,7 @@ export function recordNewDocumentProtectedDefaults(
     defaults,
     next,
     "seed",
-    () => true,
+    (path) => !ownValueAtPath(supplied, path).present,
   );
 }
 

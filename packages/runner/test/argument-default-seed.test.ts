@@ -157,5 +157,22 @@ describe("argument-default-seed", () => {
         "writeAuthorizedBy requires a trusted verified binding identity at /items",
       );
     });
+
+    it(`refuses a value equal to the default that the caller supplies for a list the pattern ${use}`, async () => {
+      // The caller wrote the field, so it is no setup seed, whatever it holds.
+      const compiled = await compile(protections["its writer"], returned);
+      const tx = runtime.edit();
+      runtime.run(
+        tx,
+        compiled,
+        { items: [] },
+        runtime.getCell<Result>(space, "result", compiled.resultSchema, tx),
+      );
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /items",
+      );
+    });
   }
 });
