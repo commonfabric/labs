@@ -133,12 +133,19 @@ export class RoutedEpochStore {
       }
       requireRouted(this.#claims.size <= MAX_CLAIMS);
       // No link survives a restart: every epoch still marked live closed now.
+      // The retirement is written down, so repeated restarts cannot keep
+      // resetting its retention period and hold the epoch forever.
       const loaded = Math.floor(Date.now() / 1000);
-      for (const epochs of this.#epochs.values()) {
-        for (const [epoch, retired] of epochs) {
-          if (retired === undefined) epochs.set(epoch, loaded);
+      let retired = false;
+      for (const [router, epochs] of this.#epochs) {
+        for (const [epoch, closed] of epochs) {
+          if (closed !== undefined) continue;
+          this.#write(this.#file, ["retire", router, epoch, loaded]);
+          epochs.set(epoch, loaded);
+          retired = true;
         }
       }
+      if (retired) this.#file.syncDataSync();
       this.#forget(loaded);
       requireRouted(
         this.#epochs.size <= 16 &&
