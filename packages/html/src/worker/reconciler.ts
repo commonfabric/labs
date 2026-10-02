@@ -1240,25 +1240,23 @@ export class WorkerReconciler {
     cell: Cell<unknown>,
     reads: readonly (SinkConsumedLabel | undefined)[],
   ): boolean {
-    const refused = (atom: unknown): boolean =>
+    const refusedAtom = (atom: unknown): boolean =>
       isObjectOrArray(atom) && atom.type === CFC_CAVEAT_ATOM_TYPE &&
       typeof atom.kind === "string" &&
       REMOTE_LOAD_REFUSED_CAVEAT_KINDS.has(atom.kind);
-    const anyRefused = (clauses: readonly unknown[]): boolean =>
-      clauses.some((clause) =>
-        refused(clause) ||
-        (isObjectOrArray(clause) && Array.isArray(clause.anyOf) &&
-          clause.anyOf.some(refused))
-      );
+    const refused = (clauses: readonly CfcConfClause[]): boolean =>
+      clauses.some((clause) => clauseAlternatives(clause).some(refusedAtom));
     if (reads.some((read) => read === undefined)) return true;
-    if (reads.some((read) => anyRefused(read?.confidentiality ?? []))) {
+    if (reads.some((read) => refused(read?.confidentiality ?? []))) {
       return true;
     }
     for (const source of this.#cellLabelSources(cell) ?? []) {
       if (source.view === undefined) return true;
-      if (anyRefused(this.#confidentialityLabels(source.view))) return true;
+      if (refused(this.#confidentialityLabels(source.view))) return true;
     }
-    return false;
+    // The schema's atoms, which `#readRefusal` falls back to when the reads
+    // consumed none.
+    return this.#confidentialityLabelsFromCellSchema(cell).some(refusedAtom);
   }
 
   /**

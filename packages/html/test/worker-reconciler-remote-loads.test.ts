@@ -1,5 +1,7 @@
 import { assertEquals } from "@std/assert";
 
+import type { FabricValue } from "@commonfabric/data-model";
+
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   CFC_ATOM_TYPE,
@@ -106,7 +108,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
   let seq = 0;
   /** Seeds a document holding `value`, labelled as a whole. */
   const seed = async (
-    value: unknown,
+    value: FabricValue,
     confidentiality: readonly CfcAtom[],
     id = `remote-loads-${++seq}`,
   ) => {
@@ -149,7 +151,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     return { collector, cancel };
   };
 
-  const pixelView = (extra: Record<string, unknown> = {}) => ({
+  const pixelView = (extra: Record<string, FabricValue> = {}) => ({
     type: "vnode",
     name: "div",
     props: { style: "color: red" },
@@ -419,7 +421,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
   // admit every fetch; only the block the caveated cell sets on its subtree
   // can refuse one. The caveated cell decided which view to show, so loading
   // anything in it tells a host what it decided.
-  const pointer = async (view: unknown, caveated: boolean) => {
+  const pointer = async (view: FabricValue, caveated: boolean) => {
     const target = await seed(view, [owner]);
     const ref = await seed(
       linkTo(target),
@@ -438,7 +440,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
   // a link child. Reading the embedded view passes through neither the
   // caveated document nor a link in it, so only the block the caveated view
   // sets on its subtree can refuse a fetch inside it.
-  const embedded = async (view: unknown) => {
+  const embedded = async (view: FabricValue) => {
     const inner = await seed(view, [owner]);
     const outer = await seed({
       type: "vnode",
