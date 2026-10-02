@@ -402,6 +402,10 @@ export function createTriggerTraceEntry(state: {
     writerActionId: state.writerActionId,
     space: state.space,
     entityId: state.change.address.id,
+    ...(state.change.address.scope === undefined ||
+        state.change.address.scope === "space"
+      ? {}
+      : { scope: state.change.address.scope }),
     path: [...state.change.address.path],
     before: summarizeTriggerTraceValue(state.change.before),
     after: summarizeTriggerTraceValue(state.change.after),

@@ -42,6 +42,7 @@ import {
   isStream,
   type JSONSchema,
   type MetaField,
+  parseAddressKey,
   readProjected,
   type RuntimeTelemetryMarkerResult,
   type SinkConsumedLabel,
@@ -538,7 +539,12 @@ export class HostReadGate {
   ): TriggerTraceResponse {
     return decided({
       trace: trace.map((entry) =>
-        this.#documentRefused(documentAt, entry.space, entry.entityId)
+        this.#documentRefused(
+            documentAt,
+            entry.space,
+            entry.entityId,
+            entry.scope,
+          )
           ? {
             ...entry,
             path: [],
@@ -552,9 +558,11 @@ export class HostReadGate {
 
   /**
    * A diagnosis as a host may see it. Each run it reports keys what it read
-   * and wrote by `space/id/path` and carries the values: those of a document
-   * the policy refuses are joined under `space/id`, with the placeholder in
-   * place of their values, and the differing keys are named the same way.
+   * and wrote by `space/id/path`, the id naming its scope for a scoped
+   * instance (`parseAddressKey()`), and carries the values: those of a
+   * document the policy refuses, decided on the instance the key names, are
+   * joined under `space/id`, with the placeholder in place of their values,
+   * and the differing keys are named the same way.
    */
   diagnosis(
     result: SchedulerDiagnosisResult,
@@ -562,12 +570,18 @@ export class HostReadGate {
   ): DetectNonIdempotentResponse {
     const verdicts = new Map<string, boolean>();
     const shown = (key: string): string => {
-      const [space, id] = key.split("/", 2);
-      if (space === undefined || id === undefined) return key;
-      const document = `${space}/${id}`;
+      const address = parseAddressKey(key);
+      if (address === undefined) return key;
+      const [space, scopedId] = key.split("/", 2);
+      const document = `${space}/${scopedId}`;
       let refused = verdicts.get(document);
       if (refused === undefined) {
-        refused = this.#documentRefused(documentAt, space, id);
+        refused = this.#documentRefused(
+          documentAt,
+          address.space,
+          address.id,
+          address.scope,
+        );
         verdicts.set(document, refused);
       }
       return refused ? document : key;

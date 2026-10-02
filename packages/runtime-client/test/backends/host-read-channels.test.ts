@@ -18,6 +18,7 @@ import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/run
 import {
   type Cell,
   hostValueOf,
+  makeAddressKey,
   readProjected,
   Runtime,
   type RuntimeTelemetryMarkerResult,
@@ -382,6 +383,89 @@ describe("HostReadGate, for what crosses beside a value", () => {
         after: { kind: "string" },
       }]);
       expect(toOwner.trace).toEqual([entry]);
+    });
+
+    it("decides a trace entry and a diagnosis key on the scoped instance of a document they name", async () => {
+      // A document whose user-scoped instance only its owner may see, beside
+      // a space-scoped instance of the same id anyone may.
+      await using docs = await shelf();
+      const tx = docs.runtime.edit();
+      const id = docs.runtime.getCell(space, "scoped-pair", undefined, tx)
+        .getAsNormalizedFullLink().id;
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, {
+        space,
+        id,
+        type: "application/json",
+        path: [],
+      }, { value: { [SECRET_KEY]: "public twin" } } as FabricValue);
+      seedStoredEnvelope(tx, {
+        space,
+        id,
+        scope: "user",
+        type: "application/json",
+        path: [],
+      }, {
+        value: { [SECRET_KEY]: SECRET_VALUE },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+          },
+        },
+      } as FabricValue);
+      expect((await tx.commit()).ok).toBeDefined();
+      await docs.runtime.idle();
+      const entry = {
+        recordedAt: 1,
+        notificationType: "commit",
+        changeIndex: 1,
+        matchedActionCount: 0,
+        mode: "pull" as const,
+        space,
+        entityId: id,
+        scope: "user" as const,
+        path: [SECRET_KEY],
+        before: { kind: "string" as const, size: 3, preview: "old" },
+        after: { kind: "string" as const, size: 21, preview: SECRET_VALUE },
+        triggered: [],
+      };
+      const key = makeAddressKey({
+        space,
+        id,
+        scope: "user",
+        path: [SECRET_KEY],
+      });
+      const diagnosis = {
+        nonIdempotent: [{
+          actionId: "action:1",
+          runs: [{ timestamp: 1, reads: {}, writes: { [key]: SECRET_VALUE } }],
+          differingWriteKeys: [key],
+        }],
+        cycles: [],
+        duration: 1,
+        busyTime: 1,
+      };
+
+      const visitorGate = gateFor(docs.runtime, visitor);
+      const ownerGate = gateFor(docs.runtime, owner);
+
+      expect(
+        holds(visitorGate.triggerTrace([entry], docs.documentAt), SECRET_VALUE),
+      )
+        .toBe(false);
+      expect(ownerGate.triggerTrace([entry], docs.documentAt).trace).toEqual([
+        entry,
+      ]);
+      expect(
+        holds(visitorGate.diagnosis(diagnosis, docs.documentAt), SECRET_VALUE),
+      )
+        .toBe(false);
+      expect(ownerGate.diagnosis(diagnosis, docs.documentAt).result).toEqual(
+        diagnosis,
+      );
     });
 
     it("names a refused document alone in a diagnosis", async () => {

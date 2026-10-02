@@ -480,6 +480,60 @@ describe("CFC label view helpers", () => {
     }
   });
 
+  it("reads a scoped cell's own label from its scoped instance, not the space instance's", async () => {
+    const signer = await Identity.fromPassphrase("cfc label view scoped");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const space = signer.did();
+      const tx = runtime.edit();
+      const id = parseLink(
+        runtime.getCell(space, "scoped-label", undefined, tx).getAsLink(),
+      ).id!;
+      writeSeedEnvelopeDoc(tx, space);
+      for (
+        const [scope, label] of [["space", "space-label"], [
+          "user",
+          "user-label",
+        ]] as const
+      ) {
+        seedStoredEnvelope(tx, {
+          space,
+          id,
+          scope,
+          type: "application/json",
+          path: [],
+        }, {
+          value: label,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [label] } }],
+            },
+          },
+        } as never);
+      }
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).ok).toBeDefined();
+
+      const view = (scope: "space" | "user") =>
+        cfcLabelViewSourceForCell(
+          runtime.getCell(space, "scoped-label", undefined, undefined, scope),
+        ).view?.entries.flatMap((entry) => entry.label.confidentiality ?? []);
+
+      expect(view("user")).toEqual(["user-label"]);
+      expect(view("space")).toEqual(["space-label"]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("names the spaces of the documents a view was read from", async () => {
     // A module policy's manifest is installed beside the label that selects
     // it, so the display boundary reads it from these spaces. The labeled

@@ -90,10 +90,9 @@ const storedMetadataForCell = (
     return {
       metadata: readStoredCfcMetadata(
         cellRuntime(cell).readTx(cellTx(cell)),
-        {
-          space: link.space,
-          id: link.id,
-        },
+        // A scoped instance of a document holds labels of its own, as it
+        // holds a value of its own.
+        { space: link.space, id: link.id, scope: link.scope },
       ),
       readFailed: false,
     };

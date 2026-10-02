@@ -3,6 +3,7 @@ import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 
 import type { Module, Pattern } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
+import type { CellScope } from "../builder/types.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -238,6 +239,8 @@ export type TriggerTraceEntry = {
   writerActionId?: string;
   space: MemorySpace;
   entityId: URI;
+  /** The changed document's scoped instance, when it is not `space`. */
+  scope?: CellScope;
   path: string[];
   before: TriggerTraceValueSummary;
   after: TriggerTraceValueSummary;

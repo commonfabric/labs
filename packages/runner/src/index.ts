@@ -438,3 +438,4 @@ export {
 } from "./cell-reference.ts";
 
 export { scopeCallerEventId } from "./scheduler/event-identity.ts";
+export { makeAddressKey, parseAddressKey } from "./scheduler/diagnosis.ts";
