@@ -1659,9 +1659,10 @@ What the change exposes, for the spec edit and as follow-up work:
   that fetches its `url` makes a request when it renders. Model output that
   read injected text and the owner's data carries both labels; once the
   display admits the caveat, such output can put the owner's data in a URL a
-  render fetches. Those props need gating as network sinks, at the
-  public-only ceiling the fetch sinks already use, rather than admission as
-  display.
+  render fetches. SC-56 gates those props. (An earlier draft of this entry
+  said they should take "the public-only ceiling the fetch sinks already
+  use"; that ceiling exists only under the opt-in max-enforcement posture, and
+  the default fetch sinks have none.)
 - **Rendered output read back into a model is a model sink.** cf-harness's
   `browser` tool returns a page's snapshot and text into an agent's context
   with no label check; a page in the shell can now show it unscreened text.
@@ -1692,3 +1693,92 @@ version reads an entry's `path` and `label` and ignores any other member, so
 it would take a `root` entry for a payload label. The first such entry
 therefore needs a new label-map version, which today's readers refuse. §4.6.5
 is unchanged: an envelope member's path is never matched as a payload path.
+
+## From the render-time remote-load gate (2026-10-01)
+
+**SC-56 [normative] A render that loads a remote resource is network egress,
+decided under the remote-load policy — §8.10.6, §8.10.5.2.** `open`. Since
+SC-54 the default display ceiling admits the prompt-caveat family, so a view
+whose data carries a material-risk caveat renders for its owner. A prop that
+makes the browser load a URL when it is set is not display: setting it sends
+what the URL carries to the URL's host, with no click. That covers an `img`
+`src` or `srcset`, a `style` or `theme` that can name a URL, `innerHTML` and
+`srcdoc`, a `link` or `base` `href`, markdown or SVG content, a chat or a chat
+preview, a link preview's `url`, an avatar or profile, a nested render's `cell`
+or a picker's items, a sandboxed frame's `context`, and a map's viewport.
+Before SC-54 such a value was hidden at the display, so it never loaded
+anything.
+
+The reconciler now decides those props under the **remote-load policy**: the
+render policy with the material-risk caveat kinds taken out of its caveat
+allowance. For the default host ceiling that is the allowance as it stood
+before SC-54, which admitted only prompt influence. The reconciler derives the
+policy from the one it holds, so no host or wire field changes. Two checks
+apply:
+
+- **A prop's own read** is fitted under the remote-load policy. A literal
+  prop is fitted on the labels of the props it came from.
+- **The view.** A cell child or root whose data the remote-load policy
+  refuses renders with `remoteLoadsBlocked`. Under it, no prop that would load
+  is set anywhere in the subtree, whatever that prop's own label, because the
+  data chose it.
+  - The block is inherited; a render boundary inherits the whole parent
+    policy.
+  - A change in the block re-renders the subtree rather than reusing what the
+    old decision set.
+  - A style element's text is CSS, so it is decided under the remote-load
+    policy and blocked outright in a blocked view.
+
+Because a read's consumed labels already include every document it passed
+through (#8264), the first check refuses most of these loads on its own. The
+block keeps the subtree rule independent of that. It is what takes back a load
+when a view gains the caveat while a clean view it embeds does not change.
+
+A refused prop is not set, or is removed, and is reported as the
+`render-remote-load` denial. A style element's refused text reports as
+`render-confidentiality-ceiling`, since it goes through the display gate.
+
+`style` and `theme` are decided by value. A value counts as one that may load
+when it holds a `url`, an image function, `src(`, `@import`, a backslash, or
+a custom property definition. An object is decided entry by entry.
+
+Implemented in `packages/html/src/worker/reconciler.ts` (`REMOTE_LOAD_PROPS`,
+`#remoteLoadPolicyOf`). Tested in
+`packages/html/test/worker-reconciler-remote-loads.test.ts`.
+`packages/html/test/remote-load-props.test.ts` holds every ui component that
+shows a way to load to the table, or to a reason it loads nothing a value
+chooses.
+
+Proposed edit: §8.10.6 says the display ceiling governs what a display shows,
+not what a render loads. §8.10.5.2 names a render-time remote load as a
+network sink class whose default is the display ceiling without the
+material-risk kinds. The spec owner should say whether the default should
+instead be public-only. That would also stop an owner's own confidential image
+URLs from loading, which is email clients' default for remote images.
+
+What this costs, and what is not covered:
+
+- **Markdown, chat, a chat preview, a nested render and a picker are refused
+  whole under the caveat.** Caveated model output in a chat, or a caveated
+  nested piece, renders as nothing, so SC-54 helps plain text only. The fix is
+  a channel for the trusted renderer to tell a component its value may not
+  load: for example, a reconciler-owned prop that components honor by showing
+  images as links or alt text. cf-avatar's own `data:`-only rule is that
+  pattern.
+- **Data choosing among loads the author already wrote.** A caveated
+  `hidden`, `class` or attribute value can decide whether an author-chosen
+  lazy image or CSS background loads, or which of several fixed URLs clean
+  CSS names. The URL is the author's; which one loads is data's.
+- **A custom property value clean CSS reads as a URL.** A definition is
+  refused under the block. A value set some other way and read through
+  `image-set(var(--u))` is not decided here; no such CSS exists today.
+- **Fixed endpoints.** `/api/ai/img` sends a prompt to a fixed provider. A
+  caveated prompt reaching it through `src` is refused like any `src`.
+- **A click.** `<a href>`, forms and popups need a user action.
+- **A label change on a document a link only passes through.** A cell child
+  that follows a link subscribes to its target. A relabel of the linking
+  document is not observed until the target changes. This holds for the
+  display gate too, and predates SC-54.
+- **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
+  given. The gate keys on labels, not URLs, so a labelled value does not get
+  through; an unlabelled one is outside this entry.

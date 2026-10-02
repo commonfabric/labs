@@ -1,3 +1,4 @@
+import { NestedRenderReferenceSchema } from "@commonfabric/runner/component-read-contract";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 
 /** What a `LinkTargetWatch` reports to, and consults, as its target moves. */
@@ -116,7 +117,7 @@ export class LinkTargetWatch {
     // This schema reports the current target as a Cell. The subscription can
     // also wake for a write within that target, so the callback compares target
     // identity before reporting a retarget.
-    const linkCell = cell.asSchema<CellHandle>({ asCell: ["cell"] });
+    const linkCell = cell.asSchema<CellHandle>(NestedRenderReferenceSchema);
     try {
       const synchronizedTarget = await linkCell.sync();
       if (this.#token !== token) return undefined;

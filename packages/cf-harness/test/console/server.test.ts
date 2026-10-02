@@ -2286,6 +2286,165 @@ describe("console/server", () => {
     });
   });
 
+  describe("POST /api/client-actions", () => {
+    const loomId = "loom-0123456789abcdef";
+
+    /**
+     * A server whose model loop asks the client to open a loom through the
+     * door the service hands it, then waits for that answer.
+     */
+    const askingServer = async () => {
+      const asked = Promise.withResolvers<{
+        outcomes: Promise<readonly { outcome: string; result?: string }[]>;
+      }>();
+      const options: Record<string, unknown>[] = [];
+      let ids = 0;
+      const server = new ConsoleServer(
+        await config(),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            randomUUID: () => `id-${++ids}`,
+            createPromptLoop: (loopOptions) => {
+              options.push(loopOptions as unknown as Record<string, unknown>);
+              return {
+                runTranscript: async (run) => {
+                  const request = (loopOptions as {
+                    requestClientActions?: (
+                      actions: readonly unknown[],
+                      signal?: AbortSignal,
+                    ) => Promise<
+                      readonly { outcome: string; result?: string }[]
+                    >;
+                  }).requestClientActions;
+                  if (request !== undefined) {
+                    const outcomes = request(
+                      [{ kind: "open_loom", loomId }],
+                      run.signal,
+                    );
+                    asked.resolve({ outcomes });
+                    await outcomes;
+                  }
+                  return await answeringLoop({} as never).runTranscript(run);
+                },
+              };
+            },
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      /** The id the service minted for the one action this loop asked for. */
+      const actionId = (sessionId: string): string =>
+        server.service.events(sessionId).map((e) => e.event).find((e) =>
+          e.kind === "client_action_requested"
+        )!.actionId;
+      return { server, asked, options, actionId };
+    };
+
+    it("settles a pending action through the service and answers 200", async () => {
+      const { server, asked, actionId } = await askingServer();
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "open it", clientActions: true }),
+      )).json();
+      const { outcomes } = await asked.promise;
+
+      const response = await server.handle(jsonRequest("/api/client-actions", {
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+        outcome: "done",
+        result: "opened",
+      }));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(await outcomes).toEqual([
+        {
+          action: { kind: "open_loom", loomId },
+          outcome: "done",
+          result: "opened",
+        },
+      ]);
+      const events = server.service.events(started.sessionId).map((e) =>
+        e.event
+      );
+      expect(events.filter((e) => e.kind === "client_action_requested"))
+        .toHaveLength(1);
+      expect(events.filter((e) => e.kind === "client_action_resolved"))
+        .toHaveLength(1);
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    it("answers 404 for an unknown action, 409 for a settled one, and 400 for a bad body", async () => {
+      const { server, asked, actionId } = await askingServer();
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "open it", clientActions: true }),
+      )).json();
+      await asked.promise;
+      const answer = (body: unknown) =>
+        server.handle(jsonRequest("/api/client-actions", body));
+
+      const unknown = await answer({
+        sessionId: started.sessionId,
+        actionId: "missing",
+        outcome: "done",
+      });
+      expect(unknown.status).toBe(404);
+      expect((await unknown.json()).error.code).toBe("unknown_action");
+
+      expect(
+        (await answer({
+          sessionId: started.sessionId,
+          actionId: actionId(started.sessionId),
+          outcome: "declined",
+        })).status,
+      ).toBe(200);
+      const again = await answer({
+        sessionId: started.sessionId,
+        actionId: actionId(started.sessionId),
+        outcome: "done",
+      });
+      expect(again.status).toBe(409);
+      expect((await again.json()).error.code).toBe("action_resolved");
+
+      for (
+        const body of [
+          {},
+          { sessionId: started.sessionId },
+          {
+            sessionId: started.sessionId,
+            actionId: actionId(started.sessionId),
+            outcome: "maybe",
+          },
+          {
+            sessionId: started.sessionId,
+            actionId: actionId(started.sessionId),
+            outcome: "done",
+            result: "x".repeat(501),
+          },
+        ]
+      ) {
+        expect((await answer(body)).status).toBe(400);
+      }
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
+    it("offers the tool only to a task that sets clientActions", async () => {
+      const { server, options } = await askingServer();
+      const started = await (await server.handle(
+        jsonRequest("/api/task", { text: "no actions please" }),
+      )).json();
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+      expect(options[0].requestClientActions).toBeUndefined();
+      expect(options[0].allowedToolIds as string[]).not.toContain(
+        "weaver_action",
+      );
+
+      const refused = await server.handle(
+        jsonRequest("/api/task", { text: "x", clientActions: "yes" }),
+      );
+      expect(refused.status).toBe(400);
+    });
+  });
+
   describe("POST /api/task", () => {
     it("starts a follow-up turn in the session the request names", async () => {
       const started = await startTask({ text: "track my books" });
