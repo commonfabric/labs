@@ -27,12 +27,15 @@ import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcLabelView,
+  cfcLabelViewOriginSpaces,
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
+  redactCaveatSourcesForDisplay,
+  redactEntryPathsForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -184,6 +187,32 @@ function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
     ...source,
     view: entries.length === 0 ? undefined : { ...source.view, entries },
   };
+}
+
+/**
+ * The label view a host is shown for `cell`, whose view is `view`: with each
+ * caveat's source redacted, and, where `policy` refuses `cell`'s labels, as
+ * {@link cellLabelRefusal} fits them, joined at its root, since the path an
+ * entry sits at names a field of the document (§4.6.4.1). Every view the
+ * worker hands a host, on a ref, a link in a value or a binding, is made
+ * here, so a channel added later that carries one is held to the same
+ * display form.
+ */
+export function displayLabelView(
+  cell: Cell<unknown>,
+  view: CfcLabelView,
+  policy: RenderPolicy | undefined,
+  sources: DisplayFitSources,
+): CfcLabelView {
+  const shown = redactCaveatSourcesForDisplay(view);
+  if (policy === undefined || admitsEverything(policy)) return shown;
+  const refusal = cellLabelRefusal(
+    cell,
+    [{ view, readFailed: false, spaces: cfcLabelViewOriginSpaces(view) }],
+    policy,
+    sources,
+  );
+  return refusal === undefined ? shown : redactEntryPathsForDisplay(shown);
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */

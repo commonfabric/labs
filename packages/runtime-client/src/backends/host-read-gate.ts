@@ -23,6 +23,7 @@ import {
   cellLabelSources,
   CFC_POLICY_PLACEHOLDER_TEXT,
   type DisplayFitSources,
+  displayLabelView,
   type FitWatch,
   readRefusal,
   type RenderLabelSummary,
@@ -52,9 +53,6 @@ import {
   type CfcLabelView,
   cfcLabelViewForCell,
   cfcLabelViewForResolvedCell,
-  cfcLabelViewOriginSpaces,
-  redactCaveatSourcesForDisplay,
-  redactEntryPathsForDisplay,
   reportCfcDenial,
 } from "@commonfabric/runner/cfc";
 import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
@@ -148,15 +146,6 @@ function fieldNamesOf(value: unknown): string[] {
   return isObjectNotArray(value) ? Object.keys(value) : [];
 }
 
-/** The label view a read asked for, with each caveat's source redacted. */
-function displayLabel(
-  cfcLabel: CfcLabelView | undefined,
-): CfcLabelView | undefined {
-  return cfcLabel === undefined
-    ? undefined
-    : redactCaveatSourcesForDisplay(cfcLabel);
-}
-
 /**
  * Decides a host's reads of cells under one display policy.
  *
@@ -217,7 +206,13 @@ export class HostReadGate {
     const cfcLabel = cfcLabelViewForResolvedCell(cell, {
       kickCrossSpaceTargets: false,
     });
-    return decided({ value, ...refField, cfcLabel: displayLabel(cfcLabel) });
+    return decided({
+      value,
+      ...refField,
+      cfcLabel: cfcLabel === undefined
+        ? undefined
+        : this.#displayView(cell, cfcLabel),
+    });
   }
 
   /**
@@ -286,7 +281,13 @@ export class HostReadGate {
         type: NotificationType.CellUpdate as const,
         cell: ref,
         value,
-        ...(includeCfcLabel ? { cfcLabel: displayLabel(cfcLabel) } : {}),
+        ...(includeCfcLabel
+          ? {
+            cfcLabel: cfcLabel === undefined
+              ? undefined
+              : this.#displayView(cell, cfcLabel),
+          }
+          : {}),
       });
     const policy = this.#policy;
     if (policy === undefined) {
@@ -366,10 +367,7 @@ export class HostReadGate {
     const view = cfcLabelViewForCell(cell);
     return view === undefined ? ref : {
       ...ref,
-      cfcLabelView: this.#displayView(
-        cell,
-        redactCaveatSourcesForDisplay(view),
-      ),
+      cfcLabelView: this.#displayView(cell, view),
     };
   }
 
@@ -390,9 +388,7 @@ export class HostReadGate {
       kickCrossSpaceTargets: false,
     });
     return decided({
-      cfcLabel: view === undefined
-        ? undefined
-        : this.#displayView(cell, redactCaveatSourcesForDisplay(view)),
+      cfcLabel: view === undefined ? undefined : this.#displayView(cell, view),
     });
   }
 
@@ -613,22 +609,12 @@ export class HostReadGate {
   }
 
   /**
-   * The view a link to `cell`, or a ref to it, carries for a host: `view`,
-   * the display form of the view the cell holds, where the policy admits the
-   * cell, and the same joined at its root where it does not, since the paths
-   * its entries sit at name the document's fields.
+   * The view a link to `cell`, or a ref to it, carries for a host, as
+   * `displayLabelView()` makes every view that reaches one: `view` in display
+   * form, joined at its root where the policy refuses the cell.
    */
-  #displayView = (cell: Cell<unknown>, view: CfcLabelView): CfcLabelView => {
-    const policy = this.#policy;
-    if (policy === undefined) return view;
-    const refusal = cellLabelRefusal(
-      cell,
-      [{ view, readFailed: false, spaces: cfcLabelViewOriginSpaces(view) }],
-      policy,
-      this.#sources,
-    );
-    return refusal === undefined ? view : redactEntryPathsForDisplay(view);
-  };
+  #displayView = (cell: Cell<unknown>, view: CfcLabelView): CfcLabelView =>
+    displayLabelView(cell, view, this.#policy, this.#sources);
 
   /** A value in the form a host is handed it, each link's view decided. */
   #hostValue = (value: unknown): FabricValue =>

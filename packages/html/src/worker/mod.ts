@@ -14,6 +14,7 @@ export {
   cellLabelRefusal,
   cellLabelSources,
   type DisplayFitSources,
+  displayLabelView,
   type FitWatch,
   readRefusal,
   type RenderLabelSummary,
