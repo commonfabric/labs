@@ -650,7 +650,7 @@ function factoryFromPattern<T, R>(
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
-    spaceGrants?: InSpaceGrants,
+    spaceOptions?: InSpaceOptions,
   ): PatternFactory<T, R> => {
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
@@ -669,7 +669,7 @@ function factoryFromPattern<T, R>(
         if (defaultSpace !== undefined) {
           const targetSpace = resolveInSpaceTargetSpace(
             defaultSpace,
-            spaceGrants,
+            spaceOptions,
             frame,
           );
           if (targetSpace !== undefined) {
@@ -708,7 +708,7 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
+      const derived = makePatternFactory(scope, defaultSpace, spaceOptions);
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -716,7 +716,10 @@ function factoryFromPattern<T, R>(
       // Pattern code is not trusted to keep to the type: a created space's
       // only owner is the identity the run acts for.
       for (
-        const [principal, capability] of Object.entries(options?.grants ?? {})
+        const [principal, capability] of [
+          ...Object.entries(options?.grants ?? {}),
+          ...Object.entries(options?.grantsWithoutServerExecution ?? {}),
+        ]
       ) {
         if (capability !== "READ" && capability !== "WRITE") {
           throw new Error(
@@ -726,11 +729,7 @@ function factoryFromPattern<T, R>(
           );
         }
       }
-      const derived = makePatternFactory(
-        defaultScope,
-        space ?? "",
-        options?.grants,
-      );
+      const derived = makePatternFactory(defaultScope, space ?? "", options);
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -1139,10 +1138,13 @@ function assignComputedCellKinds(
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
  *   are derived from causes.
+ *
+ * The grants a created space takes are chosen here, by
+ * {@link inSpaceGrantsFor}.
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
-  grants: InSpaceGrants | undefined,
+  options: InSpaceOptions | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1161,6 +1163,10 @@ function resolveInSpaceTargetSpace(
   const name = typeof space === "string" && space.length > 0
     ? space
     : anonymousSpaceName(frame!);
+  const grants = inSpaceGrantsFor(
+    options,
+    runtime.experimental.serverExecution === true,
+  );
   const resolved = runtime.resolveInSpaceNameSync(
     callingSpace,
     name,
@@ -1173,6 +1179,30 @@ function resolveInSpaceTargetSpace(
   const pending = frame!.pendingSpaceNames ??= new Map();
   if (!pending.has(name)) pending.set(name, grants);
   return undefined;
+}
+
+/**
+ * Returns the access a space created for an `inSpace()` call with `options`
+ * grants beyond its owner, on a runtime whose server execution is on when
+ * `serverExecution` is `true`: `grants`, and without server execution
+ * `grantsWithoutServerExecution` over them. `undefined` when that is nothing.
+ *
+ * The choice holds for the life of the space: a space created without server
+ * execution keeps its added grants when a deployment turns server execution on
+ * later.
+ */
+function inSpaceGrantsFor(
+  options: InSpaceOptions | undefined,
+  serverExecution: boolean,
+): InSpaceGrants | undefined {
+  // TODO(danfuzz): Narrow a space created without server execution to its
+  // `grants` once the deployment turns server execution on, which needs a step
+  // that runs then and may change the space's access list.
+  const added = serverExecution
+    ? undefined
+    : options?.grantsWithoutServerExecution;
+  if (added === undefined) return options?.grants;
+  return { ...options?.grants, ...added };
 }
 
 /**

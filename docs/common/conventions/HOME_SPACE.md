@@ -124,6 +124,17 @@ Shared pieces that directly render viewer-specific profile data should use a
 user-scoped result schema for that rendered output, so each authenticated viewer
 sees their own profile.
 
+## Private Inbox
+
+The home default pattern holds the user's private inbox in
+`defaultPattern.privateInbox.piece`: a piece of
+`packages/patterns/system/private-inbox.tsx`, in a space of its own, where
+other people deliver offers to the user. Home's `ensurePrivateInbox` stream
+creates it and points each profile that points at no inbox at it, through the
+profile's `inbox` field, which is how a sender finds it. The host sends that
+stream when it brings up Home. [The private inbox](../../features/private-inbox.md)
+describes the whole arrangement.
+
 ## Spaces
 
 The home space maintains a managed list of spaces in

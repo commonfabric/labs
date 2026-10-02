@@ -392,6 +392,12 @@ server](#clients-that-are-not-built-alongside-their-server).
     F10 interim — is DELETED). Later stages add their surfaces under
     this same flag; both halves of any coupled behavior move together
     on it.
+  - **Seen by patterns.** A pattern cannot read the flag. It can ask for
+    access that a space it creates grants only in the OFF arm, with
+    `InSpaceOptions.grantsWithoutServerExecution`, which the private inbox
+    uses to admit its senders' writes
+    ([`private-inbox.md`](../features/private-inbox.md)). Deleting the OFF
+    path deletes that option with it.
 - **Current default and planned end state.** The summary table's cell
   states the current value of the ONE first-party default,
   `SERVER_EXECUTION_DEFAULT_ENABLED` in

@@ -966,6 +966,7 @@ export class RuntimeProcessor {
   #awaitedHealth = false;
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
+  #privateInboxEnsured: Promise<void> | undefined;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -2606,7 +2607,8 @@ export class RuntimeProcessor {
   /**
    * Ensures the user's Home pattern is running and returns its result cell.
    * The first time in this worker, it also adopts the Home space list's
-   * name-only entries (see `PiecesController.adoptLegacySpaces`).
+   * name-only entries (see `PiecesController.adoptLegacySpaces`), and has Home
+   * ensure the user's private inbox (see `PiecesController.ensurePrivateInbox`).
    */
   async #ensureHomePattern(): Promise<Cell<unknown>> {
     const homeCC = this.#homeController();
@@ -2620,6 +2622,13 @@ export class RuntimeProcessor {
       console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
     });
     await this.#legacySpacesAdopted;
+    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
+      (error) => {
+        this.#privateInboxEnsured = undefined;
+        console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
+      },
+    );
+    await this.#privateInboxEnsured;
     return home;
   }
 
