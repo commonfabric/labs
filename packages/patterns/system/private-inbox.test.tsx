@@ -129,6 +129,23 @@ export default pattern(() => {
     home.get().piece !== undefined && elsewhere.get().piece !== undefined &&
     !equals(home.get().piece, elsewhere.get().piece)
   );
+  // An offer naming its piece by link alone, and one naming nothing.
+  const action_receive_entry_only = action(() => {
+    inbox.receive.send({
+      kind: "fabrichat-room",
+      entry: elsewhere.get().piece?.resolveAsCell(),
+    });
+  });
+  const action_receive_neither_space_nor_entry = action(() => {
+    inbox.receive.send({ kind: "fabrichat-room", title: "Nowhere" });
+  });
+  const assert_entry_only_offer_kept_without_space = assert(() =>
+    inbox.offers.length === 3 &&
+    inbox.offers[2]?.space === undefined &&
+    equals(inbox.offers[2]?.entry, elsewhere.get().piece) &&
+    !inbox.offers.some((each) => each?.title === "Nowhere")
+  );
+
   const assert_only_the_unpointed_profile_points_at_home_inbox = assert(() =>
     equals(pointed.inbox?.piece, elsewhere.get().piece) &&
     equals(unpointed.inbox?.piece, home.get().piece)
@@ -151,6 +168,9 @@ export default pattern(() => {
       // Pointing again changes nothing.
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
+      { action: action_receive_entry_only },
+      { action: action_receive_neither_space_nor_entry },
+      { assertion: assert_entry_only_offer_kept_without_space },
     ],
   };
 });
