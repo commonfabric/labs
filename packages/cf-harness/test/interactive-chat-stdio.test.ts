@@ -2159,7 +2159,9 @@ Deno.test("interactive NDJSON transport starts a session whose protocol it serve
           sessionId: "session-1",
           turnId: "turn-1",
           input: { text: "Hello" },
-          protocol: { protocolVersion: 1, requires: ["typed_commands"] },
+          // Every feature of version 1 is served, so the turn asks for a
+          // version this console does not speak.
+          protocol: { protocolVersion: 2, requires: ["typed_commands"] },
         },
       }),
     ],
