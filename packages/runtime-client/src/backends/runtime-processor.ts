@@ -890,6 +890,12 @@ type RuntimeOperationSession = {
   clientId: ClientId;
 };
 
+/** The render policy a processor is built with, as the host configures it. */
+type RenderPolicyConfiguration = Pick<
+  InitializationData,
+  "renderDeclassificationPolicy" | "renderConfidentialityCeiling"
+>;
+
 /**
  * The worker side of a runtime client connection. An instance owns the
  * worker's `Runtime`, keeps a `PiecesController` for the home space and for
@@ -1009,11 +1015,13 @@ export class RuntimeProcessor {
   /**
    * What builds every answer to a host's read of a cell, deciding it under
    * the ceiling every mount's root renders with, with the resolver and the
-   * providers every mount is given. Rebuilt whenever the render policy is
-   * configured; with no ceiling it returns every read as read, as a root
-   * with none renders everything.
+   * providers every mount is given. Built by the constructor from the render
+   * policy it is given, so no answer is ever built by a gate that has not
+   * been, and rebuilt whenever the render policy is configured; with no
+   * ceiling it returns every read as read, as a root with none renders
+   * everything.
    */
-  #hostReadGate = new HostReadGate(undefined, {});
+  #hostReadGate: HostReadGate;
 
   /** The session's workspace, which the exchange rules resolve against. */
   readonly #workspace: DID;
@@ -1026,6 +1034,7 @@ export class RuntimeProcessor {
     identity: Identity,
     telemetry: RuntimeTelemetry,
     securityContext: RuntimeSecurityContext,
+    renderPolicy: RenderPolicyConfiguration,
     clients: () => Iterable<WorkerClient> = () => [ownerClient],
   ) {
     this.#runtime = runtime;
@@ -1033,6 +1042,7 @@ export class RuntimeProcessor {
     this.#workspace = initSpace;
     this.#spaces.set(initSpace, cc);
     this.#identity = identity;
+    this.#hostReadGate = this.#configureRenderPolicy(renderPolicy);
     this.#telemetry = telemetry;
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
@@ -3795,12 +3805,7 @@ export class RuntimeProcessor {
    * fit, as a render of the same cell, so the two never disagree about what
    * the host may see.
    */
-  #configureRenderPolicy(
-    data: Pick<
-      InitializationData,
-      "renderDeclassificationPolicy" | "renderConfidentialityCeiling"
-    >,
-  ): void {
+  #configureRenderPolicy(data: RenderPolicyConfiguration): HostReadGate {
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
     // any present-but-unknown value becomes "deny"; absent stays "allow".
@@ -3835,6 +3840,7 @@ export class RuntimeProcessor {
         modulePolicies: this.#renderModulePolicySource,
       },
     );
+    return this.#hostReadGate;
   }
 
   /**
@@ -3970,6 +3976,7 @@ export class RuntimeProcessor {
       identity: Identity,
       telemetry: RuntimeTelemetry,
       securityContext: RuntimeSecurityContext,
+      renderPolicy?: RenderPolicyConfiguration,
     ): RuntimeProcessor;
   } {
     return {
@@ -3980,6 +3987,7 @@ export class RuntimeProcessor {
         identity,
         telemetry,
         securityContext,
+        renderPolicy = {},
       ) =>
         new RuntimeProcessor(
           runtime,
@@ -3988,6 +3996,7 @@ export class RuntimeProcessor {
           identity,
           telemetry,
           securityContext,
+          renderPolicy,
         ),
     };
   }
@@ -4146,6 +4155,7 @@ export class RuntimeProcessor {
       identity,
       telemetry,
       securityContextFrom(data, identity.did()),
+      data,
       clients,
     );
     processor.#health = health;
@@ -4167,7 +4177,6 @@ export class RuntimeProcessor {
         }
       });
     }
-    processor.#configureRenderPolicy(data);
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
       undefined,

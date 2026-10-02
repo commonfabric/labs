@@ -163,6 +163,50 @@ describe("snapshot-share", () => {
     );
   });
 
+  it("decides its first answer under the ceiling it was built with", async () => {
+    await withFixture(
+      async ({ runtime }) => {
+        const tx = runtime.edit();
+        const secret = runtime.getCell<{ token: string }>(
+          identity.did(),
+          "credential-at-construction",
+          {
+            type: "object",
+            properties: { token: { type: "string" } },
+            ifc: {
+              confidentiality: [
+                cfcAtom.resource("CredentialSecret", identity.did()),
+              ],
+            },
+          },
+          tx,
+        );
+        secret.set({ token: "credential-behind-the-seal" });
+        expect((await tx.commit()).error).toBeUndefined();
+        await secret.sync();
+        // Built with the ceiling, and nothing configured after.
+        const built = buildProcessor({
+          runtime,
+          identity,
+          renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+            identity.did(),
+          ),
+        });
+        try {
+          expect(
+            built.handleCellGet({
+              type: RequestType.CellGet,
+              cell: createCellRef(secret),
+            }),
+          ).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        } finally {
+          await built.dispose();
+        }
+      },
+      { bounded: false },
+    );
+  });
+
   it("refuses the preview of a source the display ceiling refuses", async () => {
     await withFixture(
       async ({ processor, destinationRef, runtime }) => {
