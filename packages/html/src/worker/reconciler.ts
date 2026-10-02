@@ -80,6 +80,7 @@ import {
   normalizeAtomBound,
   readRefusal,
   type RenderLabelSummary,
+  rootRenderPolicyFor,
 } from "./display-fit.ts";
 import { generateChildKeys } from "./keying.ts";
 import type {
@@ -96,7 +97,6 @@ import type {
 } from "./types.ts";
 import {
   isWorkerVNode,
-  normalizeRenderConfidentialityCeiling,
   normalizeRenderDeclassificationPolicy,
 } from "./types.ts";
 
@@ -400,14 +400,9 @@ export class WorkerReconciler {
     );
     // Same seam discipline: malformed ceilings normalize to the empty
     // (public-only) ceiling rather than crashing or failing open.
-    const ceiling = normalizeRenderConfidentialityCeiling(
-      options.renderConfidentialityCeiling,
-    );
-    this.#rootRenderPolicy = ceiling === undefined ? DEFAULT_RENDER_POLICY : {
-      declassifyConfidentiality: [],
-      maxConfidentiality: [...(ceiling.atoms ?? [])],
-      caveatKindAllow: [...(ceiling.caveatKinds ?? [])],
-    };
+    this.#rootRenderPolicy =
+      rootRenderPolicyFor(options.renderConfidentialityCeiling) ??
+        DEFAULT_RENDER_POLICY;
   }
 
   /**

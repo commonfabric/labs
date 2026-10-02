@@ -40,7 +40,11 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { RenderPolicy, WorkerReconcilerOptions } from "./types.ts";
+import {
+  normalizeRenderConfidentialityCeiling,
+  type RenderPolicy,
+  type WorkerReconcilerOptions,
+} from "./types.ts";
 
 // Mirrors CFC_ATOM_TYPE.Caveat in @commonfabric/api/cfc (not a dependency of
 // this package).
@@ -84,6 +88,24 @@ export type MembershipWatch = {
   readonly addCancel: (cancel: Cancel) => void;
   reeval: () => void;
 };
+
+/**
+ * The policy a display decision starts from at the root, before any authored
+ * boundary narrows it: the host's default ceiling when one is configured
+ * (spec §8.10.6), or `undefined` for none, when nothing is gated. A malformed
+ * ceiling reads as the empty one, which admits public content only, rather
+ * than as none.
+ */
+export function rootRenderPolicyFor(
+  configured: unknown,
+): RenderPolicy | undefined {
+  const ceiling = normalizeRenderConfidentialityCeiling(configured);
+  return ceiling === undefined ? undefined : {
+    declassifyConfidentiality: [],
+    maxConfidentiality: [...(ceiling.atoms ?? [])],
+    caveatKindAllow: [...(ceiling.caveatKinds ?? [])],
+  };
+}
 
 /** Whether `policy` admits every cell, having no ceiling to fit. */
 export function admitsEverything(policy: RenderPolicy): boolean {

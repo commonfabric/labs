@@ -16,6 +16,7 @@ export {
   type MembershipWatch,
   readRefusal,
   type RenderLabelSummary,
+  rootRenderPolicyFor,
 } from "./display-fit.ts";
 export { generateChildKeys, generateKey } from "./keying.ts";
 export type {
