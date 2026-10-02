@@ -169,7 +169,7 @@ the best of the ordered candidates (default → MRU → first) — in **every** 
 (interactive, headless, and the blessed read). It does not depend on the picker
 sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
-(CT-1829). The `candidates` array holds all ordered profiles.
+(CT-1829). The `candidates` array holds the ordered profiles that loaded.
 
 Profile resolution waits for the Home root, default pattern, roster, and
 referenced profile documents to load before publishing a new result or opening
@@ -177,12 +177,17 @@ profile creation.
 While those reads are pending, the existing wish state is retained; a new wish
 can remain unset. Confirmation re-runs the wish even when a document is absent
 and no data arrives. A confirmed empty roster opens profile creation. An entry
-confirmed absent is skipped when another valid profile remains. A failed load,
-or absent entries leaving no valid profile, produces an error surface instead.
+confirmed absent is skipped when another valid profile remains. A profile whose
+load failed keeps its place in the ordering, so a failure never changes which
+profile is selected: any other failed profile is left out of `candidates`, and
+when the selected profile failed, the Wish reports the load error instead of
+selecting another one. Absent entries leaving no valid profile also produce an
+error surface rather than profile creation.
 Failed confirmations do not schedule another load on their own. Every re-run
 checks the current document before consulting a cached failure, so document
-arrival allows the same Wish instance to recover. A fresh Wish instance or a
-replica reset can request another load.
+arrival allows the same Wish instance to recover. A load that failed because
+the connection dropped is requested again when the session reconnects. A fresh
+Wish instance or a replica reset can request another load.
 
 The picker is the **switching affordance**, not the source of `.result`:
 selection is _state_, not a channel. When the picker's "Use" writes `mru` or
