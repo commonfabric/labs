@@ -727,6 +727,7 @@ export const FabriChatManagerCore = pattern<
                 onClick={streams.openDirect}
               />
               <cf-input
+                id="fabrichat-group-title"
                 $value={draft.key("title")}
                 placeholder="New group's title"
               />

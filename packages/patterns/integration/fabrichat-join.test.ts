@@ -7,8 +7,9 @@
  * the link their notice shows to the room's page. The second opens that page,
  * adds the room to their chats, and sends a message, which the first sees in
  * the room their Chats tab renders; the second's Chats tab then lists the
- * room too. Last, the first starts a second chat, which the newest-first list
- * puts above the first one, and the top row's link opens the new room.
+ * room too. Last, the first reloads their home, creates a group from the
+ * group controls of that new page, and starts another chat, which the
+ * newest-first list puts on top, and the top row's link opens the new room.
  */
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
@@ -142,6 +143,14 @@ describe("fabrichat-join", () => {
     await gotoHome(firstShell, firstIdentity);
     await clickCfButton(first, 'cf-tab[value="chats"]');
     await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+
+    // A reloaded page is a new session, whose group draft starts out empty,
+    // and a group composed there is created with the title typed into it.
+    const groupTitle = "Reload team";
+    await fillCfInput(first, "#fabrichat-group-title", groupTitle);
+    await clickButtonWithExactText(first, "Create group");
+    await waitForSettledText(first, "#fabrichat-rooms", groupTitle);
+
     const thirdAddress = thirdIdentity.did();
     await fillCfInput(first, "#fabrichat-start-direct", thirdAddress);
     await clickTrustedAction(first, START_ACTION);
