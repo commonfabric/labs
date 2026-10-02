@@ -297,23 +297,30 @@ describe("condition-builtin-reads", () => {
     };
   };
 
+  /** Which of `ifElse`, `when` and `unless` committed a run, given `runs`. */
+  const ranIn = (runs: Record<Builtin, number>): Builtin[] =>
+    (["ifElse", "unless", "when"] as const).filter((builtin) =>
+      runs[builtin] > 0
+    );
+
   /**
    * Runs `body` as {@link runPattern} does, and returns which of `ifElse`,
-   * `when` and `unless` committed a run that read `doc`.
+   * `when` and `unless` committed a run, and which committed a run that read
+   * `doc`.
    */
   const conditionBuiltinsReading = async (
     doc: Cell<unknown>,
     cause: string,
     body: (input: any) => Record<string, unknown>,
     argument: Record<string, unknown> = {},
-  ): Promise<Builtin[]> => {
+  ): Promise<{ ran: Builtin[]; reading: Builtin[] }> => {
     const watch = watchBuiltinRuns(doc);
     try {
       await runPattern(cause, body, argument);
     } finally {
       watch.stop();
     }
-    return watch.reading();
+    return { ran: ranIn(watch.runs), reading: watch.reading() };
   };
 
   describe("labels", () => {
@@ -403,13 +410,16 @@ describe("condition-builtin-reads", () => {
       it("reads nothing of the sealed document in the runs of `ifElse`, `when` and `unless`", async () => {
         const sealed = await pinPieceShowingSealedDoc();
 
-        const reading = await conditionBuiltinsReading(
+        const runs = await conditionBuiltinsReading(
           sealed,
           "all-three-wish",
           () => allThree({ flag: wishForSheet().result }),
         );
 
-        expect(reading).toEqual([]);
+        expect(runs).toEqual({
+          ran: ["ifElse", "unless", "when"],
+          reading: [],
+        });
       });
     });
 
@@ -531,14 +541,17 @@ describe("condition-builtin-reads", () => {
       it("reads the sealed document in the runs of `ifElse`, `when` and `unless`", async () => {
         const flag = await sealedDoc("sealed-false", false);
 
-        const reading = await conditionBuiltinsReading(
+        const runs = await conditionBuiltinsReading(
           flag,
           "all-three-sealed",
           allThree,
           { flag },
         );
 
-        expect(reading).toEqual(["ifElse", "unless", "when"]);
+        expect(runs).toEqual({
+          ran: ["ifElse", "unless", "when"],
+          reading: ["ifElse", "unless", "when"],
+        });
       });
     });
   });
@@ -906,12 +919,60 @@ describe("condition-builtin-reads", () => {
   });
 
   describe("readsTruthyAtRoot()", () => {
-    // Each case reads one cell twice in one transaction: through the eager
-    // read, `.get()`, and through `readsTruthyAtRoot()`. The two agree on
-    // every case but the last three, which fail their schema only below the
-    // root.
+    // Each case reads one cell twice, each read in a transaction of its own:
+    // once through the eager read, `.get()`, and once through
+    // `readsTruthyAtRoot()`.
 
-    it("returns the eager read's truthiness wherever the value holds below its root", async () => {
+    /** A value to store, the schema to read it with, and what each read returns. */
+    type ProbeCase = {
+      name: string;
+      stored?: FabricValue;
+      schema?: JSONSchema;
+      eager: boolean;
+      probe: boolean;
+    };
+
+    /** A record that fails its schema only below its root. */
+    const record = {
+      type: "object",
+      required: ["box"],
+      properties: {
+        box: {
+          type: "object",
+          required: ["n"],
+          properties: { n: { type: "number" } },
+        },
+      },
+    } as const satisfies JSONSchema;
+
+    /** Reads each case both ways, the probe first, and returns what each returned. */
+    const readBothWays = async (cases: ProbeCase[]) => {
+      const observed = [];
+      for (const [index, { name, stored, schema }] of cases.entries()) {
+        await plainDoc(`unit-${index}`, stored);
+        const readIn = <T>(
+          read: (cell: Cell<unknown>, tx: IExtendedStorageTransaction) => T,
+        ): T => {
+          const tx = runtime.edit();
+          try {
+            return read(
+              runtime.getCell(patternSpace.did(), `unit-${index}`, schema, tx),
+              tx,
+            );
+          } finally {
+            tx.abort();
+          }
+        };
+        const probe = readIn((cell, tx) =>
+          readsTruthyAtRoot(runtime, tx, cell.getAsNormalizedFullLink())
+        );
+        const eager = readIn((cell) => Boolean(cell.get()));
+        observed.push({ name, eager, probe });
+      }
+      return observed;
+    };
+
+    it("returns the eager read's truthiness for a value whose schema holds below its root", async () => {
       const object = await plainDoc("object", { a: 1 });
       const unwritten = await plainDoc("unwritten");
       /** A stored link to `doc` carrying `schema`. */
@@ -920,24 +981,7 @@ describe("condition-builtin-reads", () => {
           { ...doc.getAsNormalizedFullLink(), schema },
           { includeSchema: true },
         );
-      const record = {
-        type: "object",
-        required: ["box"],
-        properties: {
-          box: {
-            type: "object",
-            required: ["n"],
-            properties: { n: { type: "number" } },
-          },
-        },
-      } as const satisfies JSONSchema;
-      const cases: Array<{
-        name: string;
-        stored?: FabricValue;
-        schema?: JSONSchema;
-        eager: boolean;
-        probe: boolean;
-      }> = [
+      const cases: ProbeCase[] = [
         {
           name: "an absent value defaulting to `true`",
           schema: { type: "boolean", default: true },
@@ -1058,6 +1102,40 @@ describe("condition-builtin-reads", () => {
           probe: true,
         },
         {
+          name: "`false` behind a handle typed `boolean`",
+          stored: false,
+          schema: { type: "boolean", asCell: ["cell"] },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "an object under a `$ref` to `string`",
+          stored: { a: 1 },
+          schema: {
+            $ref: "#/$defs/Text",
+            $defs: { Text: { type: "string" } },
+          },
+          eager: false,
+          probe: false,
+        },
+        {
+          name: "an object under a `$ref` to `object`",
+          stored: { a: 1 },
+          schema: {
+            $ref: "#/$defs/Record",
+            $defs: { Record: { type: "object" } },
+          },
+          eager: true,
+          probe: true,
+        },
+        {
+          name: "an object under `false`",
+          stored: { a: 1 },
+          schema: false,
+          eager: false,
+          probe: false,
+        },
+        {
           name: "a link typed `string` to an object, read as anything",
           stored: typedLinkTo(object, { type: "string" }),
           schema: {},
@@ -1095,6 +1173,15 @@ describe("condition-builtin-reads", () => {
           eager: true,
           probe: true,
         },
+      ];
+
+      expect(await readBothWays(cases)).toEqual(
+        cases.map(({ name, eager, probe }) => ({ name, eager, probe })),
+      );
+    });
+
+    it("returns `true` for a record or an array failing its schema only below its root, where the eager read returns `undefined`", async () => {
+      const cases: ProbeCase[] = [
         {
           name: "a required property failing inside",
           stored: { box: { n: "bad" } },
@@ -1116,34 +1203,16 @@ describe("condition-builtin-reads", () => {
           eager: false,
           probe: true,
         },
+        {
+          name: "a record more than one `oneOf` branch admits",
+          stored: {},
+          schema: { oneOf: [{ type: "object" }, { type: "object" }] },
+          eager: false,
+          probe: true,
+        },
       ];
 
-      const observed = [];
-      for (const [index, { name, stored, schema }] of cases.entries()) {
-        await plainDoc(`unit-${index}`, stored);
-        const tx = runtime.edit();
-        try {
-          const cell = runtime.getCell(
-            patternSpace.did(),
-            `unit-${index}`,
-            schema,
-            tx,
-          );
-          observed.push({
-            name,
-            eager: Boolean(cell.get()),
-            probe: readsTruthyAtRoot(
-              runtime,
-              tx,
-              cell.getAsNormalizedFullLink(),
-            ),
-          });
-        } finally {
-          tx.abort();
-        }
-      }
-
-      expect(observed).toEqual(
+      expect(await readBothWays(cases)).toEqual(
         cases.map(({ name, eager, probe }) => ({ name, eager, probe })),
       );
     });
@@ -1211,7 +1280,7 @@ describe("condition-builtin-reads", () => {
       expect(seen).toEqual([allTake(false), allTake(true), allTake(false)]);
     });
 
-    it("runs none of `ifElse`, `when` and `unless` again when a value below the condition's root changes", async () => {
+    it("runs none of `ifElse`, `when` and `unless` again when a value below the condition's root changes, and all three when the root does", async () => {
       const flag = await plainDoc("record", { title: "first" });
       const result = await runPattern(
         "record-run",
@@ -1222,17 +1291,34 @@ describe("condition-builtin-reads", () => {
           properties: { title: { type: "string" } },
         }),
       );
-      const watch = watchBuiltinRuns(flag);
+      const below = watchBuiltinRuns(flag);
       try {
         await write(flag.key("title"), "second");
         await branchesOf(result);
         await runtime.idle();
       } finally {
-        watch.stop();
+        below.stop();
+      }
+      const afterBelow = await branchesOf(result);
+      const atRoot = watchBuiltinRuns(flag);
+      try {
+        await write(flag, false);
+        await branchesOf(result);
+        await runtime.idle();
+      } finally {
+        atRoot.stop();
       }
 
-      expect(watch.runs).toEqual({ ifElse: 0, when: 0, unless: 0 });
-      expect(await branchesOf(result)).toEqual(allTake(true));
+      expect({
+        below: { ran: ranIn(below.runs), branches: afterBelow },
+        atRoot: {
+          ran: ranIn(atRoot.runs),
+          branches: await branchesOf(result),
+        },
+      }).toEqual({
+        below: { ran: [], branches: allTake(true) },
+        atRoot: { ran: ["ifElse", "unless", "when"], branches: allTake(false) },
+      });
     });
 
     it("takes the truthy branch once a condition that was not written yet arrives", async () => {
