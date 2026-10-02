@@ -14,7 +14,7 @@
 export type Cfc<T, Meta> = T & {
   readonly __ct_cfc__?: CfcStamp<T, Meta>;
 };
-type CfcStamp<T, Meta> = {
+export type CfcStamp<T, Meta> = {
   readonly meta?: Meta;
   readonly of?: T;
 };

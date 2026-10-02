@@ -3807,4 +3807,106 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
   });
+
+  describe("a carrier that records the payload its policy was written around", () => {
+    // `CfcStamp` keeps the payload a policy names beside its metadata, and
+    // each member of a merged value keeps its declarations, so a label lands
+    // on the members that came from the payload: the whole value where all
+    // of them did, those members alone where others joined them, and nowhere
+    // where none survived.
+
+    const DECLARATIONS = `
+      type Cfc<T, M> = T & {
+        readonly __ct_cfc__?: { readonly meta?: M; readonly of?: T };
+      };
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Location = Integrity<{ lat: number; long: number }, readonly ["gps"]>;
+      type Pin = Confidential<{ pin: string }, readonly ["s"]>;
+      type EitherCoordinate = Integrity<{ lat: number } | { long: number }, readonly ["gps"]>;
+      type Select<T> = Pick<Integrity<T, readonly ["gps"]> & { name: string }, "name">;
+      declare const location: Location;
+      declare const pin: Pin;
+      declare const either: EitherCoordinate;
+      declare const other: number;
+      const spread = { ...location, name: "x" };
+      const overwriteOne = { ...location, lat: other, name: "x" };
+      const overwriteBoth = { ...location, lat: other, long: other };
+      const twoPolicies = { ...location, ...pin, name: "x" };
+      const eitherSpread = { ...either, name: "x" };
+    `;
+
+    const gps = { integrity: ["gps"] };
+
+    /** Where `schema`'s labels sit: on the whole value, and on each member. */
+    const placement = (schema: Record<string, any>) => ({
+      whole: schema.ifc,
+      members: Object.fromEntries(
+        Object.entries(schema.properties ?? {}).flatMap(([name, member]) =>
+          (member as Record<string, any>).ifc
+            ? [[name, (member as Record<string, any>).ifc]]
+            : []
+        ),
+      ),
+    });
+
+    for (
+      const [value, whole, members] of [
+        ["typeof spread", undefined, { lat: gps, long: gps }],
+        ["{ name: string } & Location", undefined, { lat: gps, long: gps }],
+        ["Readonly<{ name: string } & Location>", undefined, {
+          lat: gps,
+          long: gps,
+        }],
+        ['Omit<{ name: string } & Location, "lat">', undefined, { long: gps }],
+        ['Pick<{ name: string } & Location, "name">', undefined, {}],
+        ['Pick<{ name: string } & Location, "lat">', gps, {}],
+        ["Pick<Location, never>", undefined, {}],
+        [
+          'Integrity<{ lat: number; long: number } & { name: string }, readonly ["gps"]>',
+          gps,
+          {},
+        ],
+        ["typeof overwriteOne", undefined, { long: gps }],
+        ["typeof overwriteBoth", undefined, {}],
+        ["Select<{ lat: number; long: number }>", undefined, {}],
+        ["typeof twoPolicies", undefined, {
+          lat: gps,
+          long: gps,
+          pin: { confidentiality: ["s"] },
+        }],
+      ] as const
+    ) {
+      it(`places the labels of \`${value}\``, async () => {
+        const { type, checker } = await getTypeFromCode(
+          DECLARATIONS + `interface SchemaRoot { value: ${value} }`,
+          "SchemaRoot",
+        );
+        const schema = asObjectSchema(
+          new SchemaGenerator().generateSchema(type, checker),
+        );
+        const definitions = (schema.$defs ?? {}) as Record<string, any>;
+        const at = schema.properties?.value as Record<string, any>;
+        const resolved = typeof at.$ref === "string"
+          ? definitions[at.$ref.split("/").pop()!]
+          : at;
+        expect(placement(resolved)).toEqual({ whole, members });
+      });
+    }
+
+    it("places each alternative's labels on its own member of a union payload", async () => {
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `interface SchemaRoot { value: typeof eitherSpread }`,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const value = schema.properties?.value as Record<string, any>;
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: undefined, members: { lat: gps } },
+        { whole: undefined, members: { long: gps } },
+      ]);
+    });
+  });
 });
