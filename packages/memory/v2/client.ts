@@ -111,6 +111,7 @@ export type Transport = {
    * send opens a fresh connection; frames from the discarded one are ignored.
    * Reconnectable transports implement this so a failed session restoration
    * can retry the handshake on a connection that has not accepted `hello`.
+   * Without it, a failed reconnect terminates the client with that failure.
    */
   reset?(): void;
 
@@ -1198,10 +1199,13 @@ export class Client {
           this.#connected = false;
           this.#noteStateChange();
           const err = error instanceof Error ? error : new Error(String(error));
-          if (isPermanentConnectionFailure(err)) {
-            // A handshake the server refuses identically every time (a
-            // protocol-flag mismatch). Stop looping and remember the failure so
-            // every present and future request fails fast with it.
+          if (
+            isPermanentConnectionFailure(err) ||
+            this.#transport.reset === undefined
+          ) {
+            // A permanent failure, or a transport unable to discard the
+            // failed connection, cannot recover by repeating this handshake.
+            // Preserve the cause for every present and future request.
             this.#fatalError = err;
             // Redundant today: the notification at the top of this catch
             // has already woken every waiter, and none of them resumes
@@ -1224,7 +1228,7 @@ export class Client {
           }
           // A restore can fail after hello succeeded while the socket stays
           // open. The next hello needs a new connection and auth challenge.
-          this.#transport.reset?.();
+          this.#transport.reset();
           await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
           attempt += 1;
         }
@@ -1496,7 +1500,9 @@ export class SpaceSession {
     ) {
       this.#sendOutstandingCommit(commit.localSeq, outstanding);
     } else {
-      void this.#client.restoreConnection();
+      // A terminal recovery failure rejects this commit through the session;
+      // the background trigger must not also leave an unhandled rejection.
+      void this.#client.restoreConnection().catch(() => undefined);
     }
 
     return await pending.promise;

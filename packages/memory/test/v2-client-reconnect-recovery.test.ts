@@ -64,6 +64,49 @@ function reconnectableTransport(server: Server) {
 }
 
 describe("v2-client-reconnect-recovery", () => {
+  it("rejects pending writes with the restoration error when the transport cannot reset", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-without-reset"),
+    });
+    const wire = reconnectableTransport(server);
+    const client = await connect({
+      transport: { ...wire.transport, reset: undefined },
+    });
+    const session = await client.mount(
+      "did:key:z6Mk-reconnect-without-reset",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const failure = new Error("session restoration failed");
+    using _restore = stub(session, "restore", () => Promise.reject(failure));
+    let pending: ReturnType<typeof session.transact> | undefined;
+    try {
+      wire.drop();
+      pending = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:pending", value: { value: 1 } }],
+      });
+      pending.catch(() => {});
+      expect(
+        await Promise.race([
+          client.restoreConnection().then(() => "restored", (error) => error),
+          wire.duplicateHello,
+        ]),
+      ).toBe(failure);
+      await expect(pending).rejects.toBe(failure);
+      await expect(session.whenRestored()).rejects.toBe(failure);
+      expect(client.connectionState).toBe("failed");
+      expect(wire.connections).toBe(2);
+      await expect(client.restoreConnection()).rejects.toBe(failure);
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+
   it("gets a fresh challenge after the server rejects a stale signed reopen", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,

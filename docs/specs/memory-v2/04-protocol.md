@@ -448,7 +448,9 @@ Rules:
   transport connection before sending `hello` again. A connection accepts
   `hello` only once; the fresh connection also supplies a new authentication
   challenge. Mounted sessions retain their watch intent and unconfirmed commits
-  while they await restoration on that connection
+  while they await restoration on that connection. A transport that cannot
+  discard its failed connection stops recovery with the original failure,
+  rejecting pending writes and restoration waiters instead of repeating `hello`
 - a `session.open` denied with an `AuthorizationError` the server did NOT mark
   `retriable` is permanent: the client stops reopening that session and
   terminates it with the real error rather than retrying the identical handshake

@@ -21,6 +21,8 @@ of two kinds of reason:
   stale signed `exp`. Each reconnect attempt discards the failed transport
   connection before running `hello` on a fresh one that issues a new challenge,
   so a token-refresh window or a challenge race can heal on the next attempt.
+  A transport without connection-reset support terminates recovery with the
+  original failure instead of retrying a handshake it cannot renew.
 - **Permanent.** An audience or protocol mismatch, a malformed invocation, or an
   ACL capability shortfall (the principal lacks `READ`, a malformed or ownerless
   ACL, a genesis requirement). The same configuration or ACL state produces the
