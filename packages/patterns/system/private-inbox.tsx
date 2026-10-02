@@ -247,9 +247,9 @@ function inboxLinkOf(inbox: unknown): unknown {
  * principal's writes as well where it is not; see
  * `InSpaceOptions.grantsWithoutServerExecution`.
  *
- * The pointing is a second step, queued behind this one: the inbox piece
- * exists only once this handler's run has committed, and a profile's stream
- * reached before then receives a link to nothing.
+ * The pointing is a second step, queued behind this one. A profile is given
+ * the inbox's own result document, which this handler's run creates, so the
+ * profiles are pointed in an event of its own, once this run has committed.
  */
 export const ensurePrivateInbox = handler<
   void,
