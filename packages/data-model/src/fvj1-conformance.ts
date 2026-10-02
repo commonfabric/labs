@@ -369,6 +369,18 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => ({ constructor: 1 }),
     divergence: RESERVED_KEY_NOTE,
   },
+  {
+    name: "record with key __proto__ nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: JSON.parse('{"__proto__":1}') }),
+    divergence: RESERVED_KEY_NOTE,
+  },
+  {
+    name: "record with key constructor nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: { constructor: 1 } }),
+    divergence: RESERVED_KEY_NOTE,
+  },
 
   // Arrays, holes, and `undefined`.
   { name: "empty array", section: SECTION_HOLES, make: () => [] },
@@ -946,6 +958,37 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression with no flavor",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
+  },
+  {
+    name: "tag with no version",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/EpochNsec":"AA"}',
+  },
+  {
+    name: "special number with a numeric state",
+    section: SECTION_NUMBERS,
+    text: 'fvj1:{"/SpecialNumber@1":0}',
+  },
+  {
+    name: "error with a type that is not a string",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,' +
+      '"type":{"/Undefined@1":null}}}',
+  },
+  {
+    name: "link with a numeric payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":5}',
+  },
+  {
+    name: "link with an array payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":[]}',
+  },
+  {
+    name: "link with the empty record as payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":{}}',
   },
 ];
 
