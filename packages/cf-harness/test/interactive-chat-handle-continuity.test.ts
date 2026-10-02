@@ -112,6 +112,16 @@ const FINDINGS: HarnessResearchHandleValue = {
   },
 };
 
+/** Where a skill-context handle's skill was fetched from. */
+const SKILL_ACQUISITION = {
+  registryId: "owner/repo/ledger",
+  commitSha: "a".repeat(40),
+  sourceUrl: "https://example.test/owner/repo/ledger/SKILL.md",
+  verification: "git-commit-sha" as const,
+  valueDigest: "sha256:ledger",
+  receivedAt: "2026-10-02T00:00:00.000Z",
+};
+
 /** The tokens one turn minted, by what they stand for. */
 interface MintedTokens {
   json: string;
@@ -345,20 +355,48 @@ describe("interactive chat handle continuity", () => {
     }
   });
 
-  it("restores turn one's table after a restart with its labels, capabilities, and acquisitions intact", async () => {
+  it("leaves a skill-context handle out of the next turn, where its token names nothing", async () => {
+    const engines: CfHarnessEngine[] = [];
+    let skillToken: string | undefined;
+    let documentToken: string | undefined;
+    const known: Record<string, boolean> = {};
+    const service = new HarnessInteractiveChatService({
+      createPromptLoop: engineLoop([
+        async (engine) => {
+          documentToken = (await mintHeldResults(engine, "one")).json;
+          skillToken = await engine.mintSkillContextHandle(
+            `${CELL}/skill`,
+            SKILL_ACQUISITION,
+          );
+        },
+        async (engine) => {
+          known.skill = (await describeIn(engine, skillToken!)).known;
+          known.document = (await describeIn(engine, documentToken!)).known;
+        },
+      ], engines),
+    });
+    await startSession(service);
+
+    await runTurn(service, "turn-one");
+    await runTurn(service, "turn-two");
+
+    // The acquired scripts behind a skill-context handle belong to the run
+    // that acquired it, so a later turn holds no backing for the handle.
+    expect(known).toEqual({ skill: false, document: true });
+    expect(
+      engines[1].handleTable?.entries.some((entry) =>
+        entry.capability === "skill-context"
+      ),
+    ).toBe(false);
+  });
+
+  it("stores turn one's table whole across a restart, and starts turn two from all of it but its skill-context entries", async () => {
     const root = await Deno.makeTempDir();
     const url = toFileUrl(join(root, "chat.sqlite"));
     let store = await openSqliteHarnessChatSessionStore({ url });
     const engines: CfHarnessEngine[] = [];
-    const acquisition = {
-      registryId: "owner/repo/ledger",
-      commitSha: "a".repeat(40),
-      sourceUrl: "https://example.test/owner/repo/ledger/SKILL.md",
-      verification: "git-commit-sha" as const,
-      valueDigest: "sha256:ledger",
-      receivedAt: "2026-10-02T00:00:00.000Z",
-    };
     let kept: HarnessHandleTable | undefined;
+    let stored: HarnessHandleTable | undefined;
     let restored: HarnessHandleTable | undefined;
     let minted: MintedTokens | undefined;
     let skillToken: string | undefined;
@@ -369,7 +407,7 @@ describe("interactive chat handle continuity", () => {
           minted = await mintHeldResults(engine, "one");
           skillToken = await engine.mintSkillContextHandle(
             `${CELL}/skill`,
-            acquisition,
+            SKILL_ACQUISITION,
           );
           kept = engine.handleTable;
         }], engines),
@@ -379,6 +417,7 @@ describe("interactive chat handle continuity", () => {
       store.close();
 
       store = await openSqliteHarnessChatSessionStore({ url });
+      stored = store.getSession("session")?.handleTable;
       const restarted = new HarnessInteractiveChatService({
         sessionStore: store,
         createPromptLoop: engineLoop([(engine) => {
@@ -389,17 +428,19 @@ describe("interactive chat handle continuity", () => {
       await restarted.initializeFromStore();
       await runTurn(restarted, "turn-two");
 
-      expect(restored).toEqual(kept);
+      expect(stored).toEqual(kept);
+      const skill = stored?.entries.find((entry) => entry.token === skillToken);
+      expect(skill?.capability).toBe("skill-context");
+      expect(skill?.acquisition).toEqual(SKILL_ACQUISITION);
+      expect(restored).toEqual({
+        ...kept,
+        entries: kept?.entries.filter((entry) => entry.token !== skillToken),
+      });
       const document = restored?.referents?.find((referent) =>
         referent.token === minted?.json
       );
       expect(document?.label).toEqual({ confidentiality: [WORK] });
       expect(document?.labelSource).toBe("query");
-      const skill = restored?.entries.find((entry) =>
-        entry.token === skillToken
-      );
-      expect(skill?.capability).toBe("skill-context");
-      expect(skill?.acquisition).toEqual(acquisition);
     } finally {
       store.close();
       await Deno.remove(root, { recursive: true });

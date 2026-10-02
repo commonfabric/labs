@@ -1142,7 +1142,10 @@ The table supports swapping in both directions:
 The table is run state: it is persisted in `run-state.json` alongside the
 transcript and policy evidence, and a resumed run (`--resume-run`) carries its
 table, so tokens stay stable across resume. An interactive session also commits
-the table with each checkpoint, and the next turn's run starts from it.
+the table with each checkpoint, and the next turn's run starts from it, less its
+skill-context entries: an acquired skill's scripts are recorded on the run that
+acquired them, so a later turn holds no such handle and acquires the skill
+again.
 
 The prompt/tool loop applies the swaps at three seams. Successful tool output
 bound for model context carries tokens, while the persisted tool-output artifact

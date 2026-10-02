@@ -279,6 +279,27 @@ interface HarnessChatTurnCheckpoint {
   handleTable?: HarnessHandleTable;
 }
 
+/**
+ * The part of a session's handle table a following turn's run starts from:
+ * all of it but the skill-context entries. A skill-context handle stands for
+ * a skill whose acquired scripts were written under the acquiring run's
+ * artifact directory and recorded on that run alone, so a later run holding
+ * the token would delegate the skill's instructions without its scripts. Left
+ * out, the token names nothing in the later turn, and a delegation on it is
+ * refused as an unheld handle, which is how the model learns to acquire the
+ * skill again.
+ *
+ * SHORTCUT: the handle is reported unavailable rather than carried. To
+ * harden, carry the run's acquisition records with the checkpoint once the
+ * lifetime of the scripts' run directory is settled, and keep these entries.
+ */
+const tableForNextTurn = (table: HarnessHandleTable): HarnessHandleTable => ({
+  ...table,
+  entries: table.entries.filter((entry) =>
+    entry.capability !== "skill-context"
+  ),
+});
+
 const defaultPromptLoopFactory: HarnessInteractivePromptLoopFactory = (
   options,
 ) => new CfHarnessPromptLoop(options);
@@ -2026,7 +2047,7 @@ export class HarnessInteractiveChatService {
           }),
           ...(record.handleTable === undefined
             ? {}
-            : { inheritedHandleTable: record.handleTable }),
+            : { inheritedHandleTable: tableForNextTurn(record.handleTable) }),
         },
       );
       // The context messages announce what this turn's own run holds — its
