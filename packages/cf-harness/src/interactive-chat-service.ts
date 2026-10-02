@@ -2045,7 +2045,11 @@ export class HarnessInteractiveChatService {
             })),
             inheritedCfcModelContext: record.researchContext.cfcModelContext,
           }),
-          ...(record.handleTable === undefined
+          // A host that injects an engine or a run state has named the run
+          // every turn continues, and that run's table is the one it holds.
+          ...(record.handleTable === undefined ||
+              this.#basePromptLoopOptions.engine !== undefined ||
+              this.#basePromptLoopOptions.runState !== undefined
             ? {}
             : { inheritedHandleTable: tableForNextTurn(record.handleTable) }),
         },

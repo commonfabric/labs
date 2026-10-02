@@ -693,6 +693,38 @@ describe("interactive chat handle continuity", () => {
     expect(described).toEqual([true, true, true, true]);
   });
 
+  it("still runs a later turn when the host injects the run state each turn resumes", async () => {
+    const engines: CfHarnessEngine[] = [];
+    let ranTurnTwo = false;
+    const service = new HarnessInteractiveChatService({
+      basePromptLoopOptions: {
+        runState: createHarnessRunState({
+          runId: "run-injected",
+          currentDir: "/workspace",
+          cfcEnforcementMode: "enforce-explicit",
+        }),
+      },
+      createPromptLoop: engineLoop([
+        async (engine) => {
+          await mintHeldResults(engine, "one");
+        },
+        () => {
+          ranTurnTwo = true;
+          return Promise.resolve();
+        },
+      ], engines),
+    });
+    await startSession(service);
+
+    await runTurn(service, "turn-one");
+    await runTurn(service, "turn-two");
+
+    // The injected run state is the run every turn resumes, and its own
+    // table is the one that turn continues.
+    expect(engines).toHaveLength(2);
+    expect(ranTurnTwo).toBe(true);
+  });
+
   describe("CfHarnessEngine inheritedHandleTable", () => {
     it("starts a fresh run on the inherited table and merges new mints under its salt", async () => {
       const earlier = await mintReferentHandle(
