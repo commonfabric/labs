@@ -35,7 +35,7 @@ const SECRET_KEY = "alice-secret-key@example.invalid";
 const SECRET_VALUE = "telemetry-secret-value";
 
 /** A runtime holding documents the owner wrote, labeled as each case asks. */
-async function shelf() {
+function shelf() {
   const storageManager = StorageManager.emulate({ as: owner });
   const runtime = new Runtime({
     storageManager,
@@ -101,7 +101,7 @@ function holds(answer: unknown, text: string): boolean {
 
 describe("a worker initialized with the display ceiling", () => {
   it("refuses a visitor a read of a document only its owner may see", async () => {
-    await using docs = await shelf();
+    await using docs = shelf();
     const sealed = await docs.write("sealed", { note: SECRET_VALUE }, [
       [[], [ownerOnly]],
     ]);
@@ -121,7 +121,7 @@ describe("a worker initialized with the display ceiling", () => {
   });
 
   it("gives a visitor's label read of such a document none of its field names", async () => {
-    await using docs = await shelf();
+    await using docs = shelf();
     const sealed = await docs.write("contacts", { [SECRET_KEY]: "x" }, [
       [[], [ownerOnly]],
       [[SECRET_KEY], [ownerOnly]],
@@ -145,7 +145,7 @@ describe("a worker initialized with the display ceiling", () => {
   });
 
   it("posts a visitor no telemetry that carries a value only its owner may see", async () => {
-    await using docs = await shelf();
+    await using docs = shelf();
     const posted: unknown[] = [];
     const original = (globalThis as { postMessage?: unknown }).postMessage;
     (globalThis as { postMessage: (message: unknown) => void }).postMessage = (
