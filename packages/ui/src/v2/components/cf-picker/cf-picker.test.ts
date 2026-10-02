@@ -11,7 +11,7 @@ import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
-import { nestedRenderReadContracts } from "@commonfabric/runner/component-read-contract";
+import { componentReadContracts } from "@commonfabric/runner/component-read-contract";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { $conn, isCellHandle } from "@commonfabric/runtime-client";
@@ -89,10 +89,10 @@ describe("CFPicker", () => {
     expect(templateText(element.render())).toContain("No items");
   });
 
-  it("reads its items as the nested render registry says it does", () => {
+  it("reads its items as its component read contract says it does", () => {
     // The reconciler decides the `$items` binding on this read, and on each
     // item read as the `cf-render` it is handed to reads its cell, so the
-    // registry entry has to name the read the picker makes.
+    // contract has to name the read the picker makes.
     const { cell } = createRenderableCellHandle<unknown[]>([]);
     const subscribed = spy(cell.runtime()[$conn](), "subscribe");
     const element = new CFPicker();
@@ -101,7 +101,7 @@ describe("CFPicker", () => {
       element.willUpdate(new Map([["items", undefined]]));
       expect(subscribed.calls).toHaveLength(1);
       expect(subscribed.calls[0].args[0].ref().schema).toEqual(
-        nestedRenderReadContracts["cf-picker"].items.schema,
+        componentReadContracts["cf-picker"].items.schema,
       );
     } finally {
       element.items = [];

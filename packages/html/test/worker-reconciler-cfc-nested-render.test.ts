@@ -18,6 +18,7 @@ import {
   TILE_UI,
   UI,
 } from "@commonfabric/runner";
+import { addCfcDenialListener } from "@commonfabric/runner/cfc";
 import {
   pieceListSchema,
   rendererVDOMSchema,
@@ -1338,6 +1339,8 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           }, [[[], [sealedAtom]]]],
         ];
         const outcomes: Record<string, unknown> = {};
+        // A read refused because its space is out of reach is not a denial.
+        const deniedWhileOutOfReach: Record<string, number> = {};
         for (const [held, value, labels] of pieces) {
           const piece = await write(`unread-${held}-piece`, value, labels);
           const pins = await write(
@@ -1387,7 +1390,14 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
                   removed: mounted.removed(propName),
                 });
               look();
-              await setRevoked(true);
+              let denials = 0;
+              const stopListening = addCfcDenialListener(() => denials++);
+              try {
+                await setRevoked(true);
+              } finally {
+                stopListening();
+              }
+              deniedWhileOutOfReach[`${held}, ${way}`] = denials;
               look();
               await setRevoked(false);
               look();
@@ -1417,6 +1427,9 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           "sealed, typed": sealedSeen,
           "sealed, linked": sealedSeen,
         });
+        expect(deniedWhileOutOfReach).toEqual(
+          Object.fromEntries(Object.keys(outcomes).map((id) => [id, 0])),
+        );
       },
     );
 
@@ -1532,6 +1545,130 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
             cfRender: 0,
             cfPicker: { any: 0, typed: 0, linked: 0 },
           },
+        });
+      },
+    );
+
+    await t.step(
+      "decides each of `cf-map`'s popups as `cf-render` decides its cell, where the value's schema reads popups as references",
+      async () => {
+        // `cf-map` hands each marker's and circle's `popup` to a `cf-render`
+        // of its own, and reads its value under the schema its binding link
+        // stores. Where that schema reads each popup as a reference, a popup
+        // binds exactly where a `cf-render` bound to it binds. Read under
+        // `any`, the value is read with everything its popups reach, so a
+        // popup holding a sealed entry withholds it. A value whose schema
+        // holds the markers themselves as a reference is withheld: what its
+        // popups are is not read.
+
+        const positioned = (popup: JSONSchema, at: string): JSONSchema => ({
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              [at]: {
+                type: "object",
+                properties: {
+                  lat: { type: "number" },
+                  lng: { type: "number" },
+                },
+              },
+              title: { type: "string" },
+              popup,
+            },
+          },
+        });
+        const reference = { asCell: ["cell"] } as const;
+        const schemas: readonly [string, JSONSchema][] = [
+          ["any", true],
+          ["popups as references", {
+            type: "object",
+            properties: {
+              markers: positioned(reference, "position"),
+              circles: positioned(reference, "center"),
+            },
+          }],
+          ["markers as a reference", {
+            type: "object",
+            properties: { markers: reference },
+          }],
+        ];
+        const pieces = [
+          [
+            "a public piece",
+            await write("map-public-piece", {
+              [NAME]: "Public shelf",
+              [UI]: vnode("div", ["Shelf heading"]),
+            }),
+          ],
+          ["a piece holding a sealed entry", await shelf("map-shelf")],
+          [
+            "a sealed piece",
+            await labeled("map-sealed-piece", {
+              [NAME]: "Sealed shelf",
+              [UI]: vnode("div", [SEALED]),
+            }, sealedAtom),
+          ],
+        ] as const;
+        const outcomes: Record<string, unknown> = {};
+        for (const [pieceId, piece] of pieces) {
+          const decided: Record<string, unknown> = {
+            cfRender: await boundCount(
+              await tileView(
+                `map-render-${pieceId}`,
+                await pinned(`map-pins-${pieceId}`, piece),
+              ),
+              visitor,
+            ),
+          };
+          for (const [schemaId, schema] of schemas) {
+            const features = schemaId === "markers as a reference"
+              ? ["marker"]
+              : ["marker", "circle"];
+            for (const feature of features) {
+              const id = `map-${pieceId}-${schemaId}-${feature}`;
+              const value = await write(
+                `${id}-value`,
+                feature === "marker"
+                  ? {
+                    markers: [{
+                      position: { lat: 1, lng: 2 },
+                      title: "Pin",
+                      popup: link(piece),
+                    }],
+                  }
+                  : {
+                    circles: [{
+                      center: { lat: 1, lng: 2 },
+                      title: "Area",
+                      popup: link(piece),
+                    }],
+                  },
+              );
+              decided[`${schemaId}, ${feature}`] = await boundCount(
+                await view(
+                  `${id}-view`,
+                  vnode("cf-map", [], { $value: link(value.asSchema(schema)) }),
+                ),
+                visitor,
+                "value",
+              );
+            }
+          }
+          outcomes[pieceId] = decided;
+        }
+        const decided = (asReferences: number, underAny: number) => ({
+          cfRender: asReferences,
+          "any, marker": underAny,
+          "any, circle": underAny,
+          "popups as references, marker": asReferences,
+          "popups as references, circle": asReferences,
+          "markers as a reference, marker": 0,
+        });
+        expect(outcomes).toEqual({
+          "a public piece": decided(1, 1),
+          "a piece holding a sealed entry": decided(1, 0),
+          "a sealed piece": decided(0, 0),
         });
       },
     );

@@ -301,29 +301,24 @@ export const NestedRenderReferenceSchema = {
 } as const satisfies JSONSchema;
 
 /**
- * How a nested render root's component reads its binding: with `schema`, and,
- * when it mounts a render from each element of the list the binding names
- * rather than from the binding's own reference, each element with `elements`.
+ * A path from a bound value to a reference its component mounts a render
+ * from: each step a property name, or `"*"` for every element of an array.
+ * The empty path names the binding itself.
  */
-export type NestedRenderRead = {
-  readonly schema: JSONSchema;
-  readonly elements?: JSONSchema;
-};
+export type NestedRenderPath = readonly string[];
 
 /**
- * Nested render roots: component bindings whose component shows what they
- * name only through renders mounted from references, each with how that
- * component reads the binding. The reconciler decides such a binding on those
- * reads and leaves what each reference lands on to the renders.
+ * How a component reads a bound property: with `schema`, as
+ * {@link componentReadSchema} resolves it against the schema the bound handle
+ * carries, and, for a nested render root, the paths of the references it
+ * mounts a render from, each read as `NestedRenderReferenceSchema` reads one.
+ * A component's entry is reviewed like the component itself: what it reads
+ * through the handle beyond `schema`, or shows from beyond a reference other
+ * than through a render mounted from it, the entry does not cover.
  */
-export const nestedRenderReadContracts: Readonly<
-  Record<string, Readonly<Record<string, NestedRenderRead>>>
-> = {
-  "cf-render": { cell: { schema: NestedRenderReferenceSchema } },
-  // `cf-picker` hands each item's reference to a `cf-render` of its own.
-  "cf-picker": {
-    items: { schema: pieceListSchema, elements: NestedRenderReferenceSchema },
-  },
+export type ComponentPropRead = {
+  readonly schema: JSONSchema;
+  readonly renders?: readonly NestedRenderPath[];
 };
 
 /** Version exchanged when a renderer registers its component read contract. */
@@ -331,47 +326,58 @@ export const COMPONENT_READ_CONTRACT_VERSION = "1";
 
 /** Known component reads; undeclared dynamic reads keep their explicit watches. */
 export const componentReadContracts: Readonly<
-  Record<string, Readonly<Record<string, JSONSchema>>>
+  Record<string, Readonly<Record<string, ComponentPropRead>>>
 > = {
-  "cf-input": { value: stringSchema },
-  "cf-textarea": { value: stringSchema },
-  "cf-checkbox": { checked: booleanSchema },
-  "cf-switch": { checked: booleanSchema },
-  "cf-tabs": { value: stringSchema },
-  "cf-tab-bar": { value: stringSchema },
-  "cf-picker": { selectedIndex: numberSchema, items: pieceListSchema },
-  "cf-autocomplete": {
-    value: { anyOf: [stringSchema, stringArraySchema] },
-    items: AutocompleteItemArraySchema,
+  "cf-input": { value: { schema: stringSchema } },
+  "cf-textarea": { value: { schema: stringSchema } },
+  "cf-checkbox": { checked: { schema: booleanSchema } },
+  "cf-switch": { checked: { schema: booleanSchema } },
+  "cf-tabs": { value: { schema: stringSchema } },
+  "cf-tab-bar": { value: { schema: stringSchema } },
+  "cf-render": {
+    cell: { schema: NestedRenderReferenceSchema, renders: [[]] },
   },
-  "cf-chat": { messages: BuiltInLLMMessagesArraySchema },
-  "cf-message-beads": { messages: MessagesSchema },
-  "cf-location": { location: LocationDataSchema },
-  "cf-voice-input": { transcription: TranscriptionDataSchema },
-  "cf-tools-chip": { tools: ToolsArraySchema },
+  // `cf-picker` hands each item's reference to a `cf-render` of its own.
+  "cf-picker": {
+    selectedIndex: { schema: numberSchema },
+    items: { schema: pieceListSchema, renders: [["*"]] },
+  },
+  "cf-autocomplete": {
+    value: { schema: { anyOf: [stringSchema, stringArraySchema] } },
+    items: { schema: AutocompleteItemArraySchema },
+  },
+  "cf-chat": { messages: { schema: BuiltInLLMMessagesArraySchema } },
+  "cf-message-beads": { messages: { schema: MessagesSchema } },
+  "cf-location": { location: { schema: LocationDataSchema } },
+  "cf-voice-input": { transcription: { schema: TranscriptionDataSchema } },
+  "cf-tools-chip": { tools: { schema: ToolsArraySchema } },
   "cf-map": {
-    value: mapValueSchema,
-    center: latLngSchema,
-    bounds: boundsSchema,
-    zoom: true,
+    // Each marker's and circle's `popup` goes to a `cf-render` of its own.
+    value: {
+      schema: mapValueSchema,
+      renders: [["markers", "*", "popup"], ["circles", "*", "popup"]],
+    },
+    center: { schema: latLngSchema },
+    bounds: { schema: boundsSchema },
+    zoom: { schema: true },
   },
   "cf-code-editor": {
-    value: stringSchema,
-    mentionable: MentionableArraySchema,
-    mentioned: MentionableArraySchema,
-    references: MentionRefMapSchema,
+    value: { schema: stringSchema },
+    mentionable: { schema: MentionableArraySchema },
+    mentioned: { schema: MentionableArraySchema },
+    references: { schema: MentionRefMapSchema },
   },
-  "cf-profile-badge": { profile: ProfileBadgeSchema },
-  "cf-markdown": { content: true },
-  "cf-fab": { previewMessage: stringSchema },
-  "cf-theme": { theme: true },
-  "cf-calendar": { value: true, markedDates: true },
-  "cf-select": { value: true },
-  "cf-radio-group": { value: true },
-  "cf-modal": { open: true },
-  "cf-file-download": { data: true, filename: true },
-  "cf-prompt-input": { model: true },
-  "cf-chart": { marks: true },
+  "cf-profile-badge": { profile: { schema: ProfileBadgeSchema } },
+  "cf-markdown": { content: { schema: true } },
+  "cf-fab": { previewMessage: { schema: stringSchema } },
+  "cf-theme": { theme: { schema: true } },
+  "cf-calendar": { value: { schema: true }, markedDates: { schema: true } },
+  "cf-select": { value: { schema: true } },
+  "cf-radio-group": { value: { schema: true } },
+  "cf-modal": { open: { schema: true } },
+  "cf-file-download": { data: { schema: true }, filename: { schema: true } },
+  "cf-prompt-input": { model: { schema: true } },
+  "cf-chart": { marks: { schema: true } },
 };
 
 /** Schema choice shared with cf-autocomplete's single/multiple value binding. */
@@ -379,16 +385,22 @@ export function autocompleteValueSchema(multiple: boolean): JSONSchema {
   return multiple ? stringArraySchema : stringSchema;
 }
 
-/** Resolves explicit projections and controller defaults for a bound property. */
+/**
+ * Resolves explicit projections and controller defaults for a bound property:
+ * the schema the component reads it with, given `supplied`, the schema the
+ * bound handle carries. `props` are the element's props, which only
+ * `cf-autocomplete`'s `value` consults.
+ */
 export function componentReadSchema(
   component: string,
   property: string,
   supplied: JSONSchema | undefined,
-  props: Record<string, unknown>,
+  props: Record<string, unknown> = {},
 ): JSONSchema | undefined {
-  const declared = componentReadContracts[component]?.[property];
+  const declared = componentReadContracts[component]?.[property]?.schema;
   if (declared === undefined) return undefined;
   if (
+    (component === "cf-render" && property === "cell") ||
     (component === "cf-picker" && property === "items") ||
     component === "cf-profile-badge" || component === "cf-fab" ||
     (component === "cf-code-editor" && property !== "value")
