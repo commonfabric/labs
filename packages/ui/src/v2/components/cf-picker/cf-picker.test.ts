@@ -10,6 +10,7 @@ import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
+import { nestedRenderReadContracts } from "@commonfabric/runner/component-read-contract";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { $conn, isCellHandle } from "@commonfabric/runtime-client";
@@ -61,6 +62,27 @@ describe("CFPicker", () => {
     const element = new CFPicker();
     element.minHeight = "300px";
     expect(element.minHeight).toBe("300px");
+  });
+
+  it("reads its items as the nested render registry says it does", () => {
+    // The reconciler decides the `$items` binding on this read, and on each
+    // item read as the `cf-render` it is handed to reads its cell, so the
+    // registry entry has to name the read the picker makes.
+    const { cell } = createRenderableCellHandle([]);
+    const subscribed = spy(cell.runtime()[$conn](), "subscribe");
+    const element = new CFPicker();
+    element.items = cell;
+    try {
+      element.willUpdate(new Map([["items", undefined]]));
+      expect(subscribed.calls).toHaveLength(1);
+      expect(subscribed.calls[0].args[0].ref().schema).toEqual(
+        nestedRenderReadContracts["cf-picker"].items.schema,
+      );
+    } finally {
+      element.items = [];
+      element.willUpdate(new Map([["items", cell]]));
+      subscribed.restore();
+    }
   });
 
   it("subscribes to opaque items and keeps the selected item addressable", async () => {
