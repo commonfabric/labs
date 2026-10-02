@@ -428,8 +428,8 @@ export function describeShellPage(probe: ShellPageProbe): string {
   } else {
     lines.push("  globalThis.app: absent");
   }
-  lines.push(...describePendingRequests(probe));
-  lines.push(...describeWorkerProblems(probe));
+  for (const line of describePendingRequests(probe)) lines.push(line);
+  for (const line of describeWorkerProblems(probe)) lines.push(line);
   if (!probe.rootView) {
     const text = probe.text.replace(/\s+/g, " ");
     lines.push(`  document text: ${text || "(empty)"}`);

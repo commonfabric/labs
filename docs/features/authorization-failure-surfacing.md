@@ -12,13 +12,17 @@ describes how the pieces fit.
 ## The classification: recoverable versus permanent
 
 The pivot is telling apart an authorization failure a retry can heal from one it
-never will. A `session.open` is denied for one of two kinds of reason:
+never will. A `session.open` — or, on a connection that authenticates each key
+once, the `connection.auth` a session's reopen depends on — is denied for one
+of two kinds of reason:
 
 - **Recoverable (retriable).** The connection-challenge and invocation-freshness
   anti-replay checks: an expired, already-used, or mismatched challenge, or a
-  stale signed `exp`. Each reconnect runs a fresh `hello` that issues a new
-  challenge, so these do not recur — a token-refresh window or a challenge race
-  heals on the next attempt.
+  stale signed `exp`. Each reconnect attempt discards the failed transport
+  connection before running `hello` on a fresh one that issues a new challenge,
+  so a token-refresh window or a challenge race can heal on the next attempt.
+  A transport without connection-reset support terminates recovery with the
+  original failure instead of retrying a handshake it cannot renew.
 - **Permanent.** An audience or protocol mismatch, a malformed invocation, or an
   ACL capability shortfall (the principal lacks `READ`, a malformed or ownerless
   ACL, a genesis requirement). The same configuration or ACL state produces the
@@ -41,9 +45,12 @@ is read as permanent — the safe default for an authorization decision.
   or transact rethrows it. This holds for a denial anywhere in the reopen — the
   `session.open` itself or the watch re-establishment a fresh (non-resumed)
   reopen issues. Sessions for other spaces on the same client keep running: a
-  denial on one space is not a client-wide failure.
-- A **retriable** authorization race and every transport-level disconnect retry,
-  so a transient blip or a fresh-challenge race heals.
+  denial on one space is not a client-wide failure. A permanent denial of a
+  `connection.auth` terminates every session mounted as that key, and no
+  other.
+- A **retriable** authorization race or transport-level disconnect can recover
+  on a transport that supports resetting its connection. If restoration fails
+  and the transport cannot reset, the client terminates with the original error.
 - A **server that cannot take declared holdings** (no `sessionHoldings` in its
   hello) terminates a session whose consumer installed a holdings provider, the
   same per-session way: the declaration is what makes skipping the older
@@ -56,9 +63,10 @@ is read as permanent — the safe default for an authorization decision.
   fundamentally-incompatible transport fails fast with the real error.
 
 The reconnect loop therefore has no unbounded retry-on-anything path: a
-permanent failure ends it (per session for an authorization denial, client-wide
-for a handshake mismatch), and only recoverable and transport-level conditions
-retry.
+permanent failure ends it (per session for a session-open denial, per key for
+a connection-authentication denial, client-wide for a handshake mismatch), and
+only recoverable and transport-level conditions retry, on transports that can
+discard a failed connection.
 
 `SpaceSession.subscribeAccessLoss` also delivers an authoritative
 `AuthorizationError` immediately when an established session loses access. An
@@ -153,12 +161,17 @@ recover from that error.
 Two properties follow from terminating rather than looping:
 
 - **No in-process auto-heal after a later grant.** A terminated session does not
-  reopen on its own, so a holder that wants to pick up an ACL granted moments
-  later recreates the session (or the storage manager). Retrying a denied reopen
-  until an administrator acts is the retry-loop the engineering principles
-  forbid; the CLI reports the error and exits. A genuinely transient or
-  recoverable condition — a token-refresh window, a challenge race, every
-  transport blip — still heals, because it is classified retriable.
+  reopen on its own. A holder that wants to pick up an ACL granted later asks
+  once, on an event saying the grant may have happened:
+  `StorageManager.retrySpaceAccess(space)`, which `Runtime` and `RuntimeClient`
+  pass through, opens the session again through the same admission. If it is
+  admitted, it repeats the loads the refusal failed; if it is refused, the
+  refusal is recorded where the first one was. Retrying a denied reopen on a
+  schedule until an administrator acts is the retry-loop the engineering
+  principles forbid; the CLI reports the error and exits. A genuinely transient
+  or recoverable condition — a token-refresh window, a challenge race, a
+  transport blip — can heal on a fresh connection when the transport supports
+  reset. Classification as retriable does not supply that transport capability.
 - **A wedged-but-reachable backend still waits.** With no wall-clock guard, a
   backend that completes the handshake but then never answers the authenticated
   sync (and never closes the transport) leaves `synced()` waiting with no event

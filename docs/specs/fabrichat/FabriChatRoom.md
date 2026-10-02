@@ -1,7 +1,5 @@
 # FabriChatRoom
 
-Status: proposed design (see [`README.md`](README.md)).
-
 `FabriChatRoom` is an implementation of [`ChatRoomOutput`](ChatRoomOutput.md),
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.
@@ -14,26 +12,15 @@ implementation, because they are part of the contract: `ChatMessage`,
 
 The room keeps these `PerSpace` values, shared by everyone the space admits:
 
-- The contract's own records: `about`, its messages, `recentActivity` with its
-  next `seq` and `recentActivityExpiredThrough`, `roster`, and
-  `outgoingNotices`. The messages are a list ordered by `sentAt`. Each message's
-  reactions, and `roster`, are keyed collections, projected as lists in the
-  contract.
+- The contract's own records: `about`, its messages, and `recentActivity` with
+  its next `seq` and `recentActivityExpiredThrough`. The messages are a list
+  ordered by `sentAt`. Each message's reactions are a keyed collection,
+  projected as a list in the contract.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
 - The times the room has used, so it can make each new one unique.
-- The principals who have left, which `commitAdd` checks.
-- The admission order: when each member was admitted, from the room's creation
-  or their `add`, which `commitLeave` reads to choose whom to promote. Members
-  admitted at the room's creation are ordered by principal, so the order is
-  total. This is bookkeeping, not membership: the access list still decides who
-  is a member. Once the runtime provides member sets, the order can come from
-  them instead.
-- The membership changes in progress, each under its `requestId` (see
-  [membership changes take more than one
-  commit](#membership-changes-take-more-than-one-commit)).
-
-`participants` is computed from `roster` and the messages' authors, keyed by
+`participants` is computed from the participants the space's default pattern
+lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
 profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
 computed from the messages, and `canSend` from the reader's access and profile,
 when they're read. Neither is stored.
@@ -60,11 +47,6 @@ Every write goes through one handler per stream:
 | `commitObliterate` | `obliterateMessage` | `ChatObliterateSurface` |
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
-| `commitShowProfile` | `showProfile` | none |
-| `commitLeave` | `leave` | none |
-| `commitAdd` | `add` | `ChatMembersSurface` |
-| `commitRemove` | `remove` | `ChatMembersSurface` |
-| `commitDelivered` | `delivered` | none |
 
 `commitSend` and `commitSendReaction` store a value typed
 `AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
@@ -120,52 +102,15 @@ write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
 the runtime's write policies can split one document this way is a prerequisite
 to check.
 
-`commitShowProfile` appends to `roster` as the `loom` pattern's `addParticipant`
-does: a mergeable set add, so concurrent additions all land and a profile is not
-listed twice.
-
-`commitLeave` asks the host to remove the sender's own entry from the room
-space's access list. When the sender is the last OWNER, it first asks the host
-to grant OWNER to the remaining member admitted earliest. The room keeps the
-admission order (see [state](#state)) for that. It also records the sender in a
-keyed collection of principals who have left, which `commitAdd` checks.
-
-### Membership changes take more than one commit
-
-`add`, `remove`, and `leave` change the room space's access list, and the memory
-layer requires an access-list change to be its commit's only operation (INV-12
-in the [memory invariants](../memory-v2/09-invariants.md)). So none of them can
-change the access list and the room's own records in one transaction. Each runs
-in steps, in an order that keeps an interruption safe, and records its progress
-under its `requestId`:
-
-1. Record the intent in the room: the request, marked pending, and for `leave`
-   the sender in the set of principals who have left, so the room already
-   refuses to re-add them.
-2. Change the access list, in a commit of its own.
-3. Complete the record: the `recentActivity` entry, the notice for an `add`, and
-   the request marked done.
-
-A room finds any request left pending, and finishes its remaining steps, before
-it acts on another event. So an interruption leaves at most a short gap between
-the access list and the room's records, never a lasting one. Between steps 2 and
-3, a member added may already have access with no notice or activity yet.
-
-`commitAdd` and `commitRemove` ask the host to change the room space's access
-list. They are the only handlers that reach beyond the room's own record.
-`commitAdd` also adds a notice to `outgoingNotices`, and `commitDelivered`
-removes one.
-
 `about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
 handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves.
 
-Every handler that changes the room's own record, except `commitDelivered`,
-appends its `recentActivity` entry in the same transaction as the change, so the
-log never disagrees with the messages. A membership change appends its entry in
-its last step (see above). Entries older than the window are dropped as new ones
-are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
-remove the message's earlier entries.
+Every handler that changes the room's own record appends its `recentActivity`
+entry in the same transaction as the change, so the log never disagrees with the
+messages. Entries older than the window are dropped as new ones are appended.
+`commitObliterate`, and `commitDelete` when it obliterates, also remove the
+message's earlier entries.
 
 The message list keeps `windows` as a `PerSession` keyed collection, and
 fulfills `openWindow` and `closeWindow` by setting and removing entries in it. A
@@ -198,21 +143,13 @@ the room is created from the same settings the handlers read.
 
 ## Prerequisites
 
-- **A private space, created from a pattern.** `FabriChatRoom.inSpace()`
-  creates a space with a random DID whose genesis document names its creator as
-  the only OWNER and grants nobody else anything
-  ([random space identities](../random-space-identities.md)). A name given to
-  `inSpace(name)` names the room as the calling space calls it; two calling
-  spaces using one name get two rooms, and nobody can recompute a room's key.
-- **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
-  for a pattern to ask its host to change an access list. Today only hosts can
-  do that (`ACLManager`, the runtime client's `space:setAclEntry`).
-- **Leaving without OWNER.** `commitLeave` removes the sender's own access list
-  entry even when the sender is only a WRITE member. Whether the memory layer
-  lets a non-OWNER remove their own entry, or the host has to do it on their
-  behalf, is part of pattern-facing access control.
-- **Member sets.** Until the runtime provides them, the room keeps `roster` (see
-  [shared spaces](README.md#shared-spaces)).
+- **A private space, created from a pattern.** The manager's
+  `FabriChatRoom.inSpace()` creates a space with a random DID whose genesis
+  document names its creator as the only OWNER, plus the grants it names
+  ([random space identities](../random-space-identities.md)).
+- **The space's participants.** The room reads them from its space's default
+  pattern, which a host creates the first time someone opens the space. Until
+  then, the room's participants are only its authors.
 - **Per-session state written by a handler.** `windows` is a `PerSession` cell
   linked from the room's `PerSpace` message list, a nesting the scoped-cell
   design provides across a `Cell` boundary (see [scoped cell
@@ -236,6 +173,3 @@ the room is created from the same settings the handlers read.
   being run to completion, or dropped, within the memory, including one queued
   while its client was offline and appended much later. Whether the runtime
   guarantees this is still to check.
-- **Admitting an access-list change atomically.** The steps above are the
-  pattern-level answer to INV-12. A host facility that changes an access list
-  and the room's records together would remove the gap between steps 2 and 3.

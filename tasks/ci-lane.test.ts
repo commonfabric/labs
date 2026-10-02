@@ -9,6 +9,7 @@ import {
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   CAPABILITY_LOG_TAIL_LINES,
   type CapabilityId,
@@ -1171,7 +1172,7 @@ describe("how many lanes the full run asks for", () => {
       ["Lane", "Tests", "Projected work", "Projected job"],
       ...expected,
     ]);
-    const longest = Math.max(...laid.lanes.map((l) => l.projectedSeconds));
+    const longest = maxOf(laid.lanes.map((l) => l.projectedSeconds));
     const told = err.join("\n");
     expect(told).toContain(`## The full run's ${lanes} lane(s)`);
     expect(told).toContain(

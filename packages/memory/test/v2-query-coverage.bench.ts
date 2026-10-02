@@ -1,5 +1,6 @@
 import { toFileUrl } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
+import { spliceAll } from "@commonfabric/utils/arrays";
 import type { URI } from "../interface.ts";
 import type { GraphQuery } from "../v2.ts";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
@@ -155,7 +156,7 @@ const leafValue = (id: URI, version: number): NodeValue => ({
 
 const overlapRootValue = (): NodeValue => {
   const existing = baseChildIds().slice(0, Math.max(0, DOC_COUNT - 1));
-  existing.splice(0, HIDDEN_COUNT, ...hiddenIds());
+  spliceAll(existing, 0, HIDDEN_COUNT, hiddenIds());
   return {
     label: "overlap-root",
     version: 0,
@@ -165,7 +166,7 @@ const overlapRootValue = (): NodeValue => {
 
 const retargetedRootValue = (): NodeValue => {
   const children = baseChildIds();
-  children.splice(0, HIDDEN_COUNT, ...hiddenIds());
+  spliceAll(children, 0, HIDDEN_COUNT, hiddenIds());
   return rootValue(1, children);
 };
 

@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { type Cell, parseLink } from "@commonfabric/runner";
+import { maxOf } from "@commonfabric/utils/math";
 
 import {
   buildTopicsFixture,
@@ -118,8 +119,8 @@ function latestSendOrAddition(topic: FixtureTopic): number {
     topic.createdAt,
     topic.bodyUpdatedAt,
     topic.titleUpdatedAt,
-    ...topic.comments.map((comment) => comment.sentAt),
-    ...topic.links.map((link) => link.addedAt ?? 0),
+    maxOf(topic.comments.map((comment) => comment.sentAt)),
+    maxOf(topic.links.map((link) => link.addedAt ?? 0)),
   );
 }
 

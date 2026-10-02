@@ -93,6 +93,29 @@ checked against them. Inline data without a more specific label keeps its
 container's authorship. An empty declaration without a persistent gate does not
 shadow an ancestor during this derivation.
 
+A reference accepted through a carried label view also persists a root
+`LinkReference` entry when its source has no schema or stored CFC metadata.
+This entry bounds the container's principal claims even when the carried view
+labels only descendants. The descendants retain their carried labels; the
+reference's root evidence supplies no content authorship or represented
+principal.
+
+Each slot persists labels from its last recorded link matching the source it
+still holds: the same space, scope, document, and path. A raw write restoring an
+earlier reference therefore uses the last input for that source. A replacement
+by another reference, inline data, or absence removes the superseded link's
+contribution. Every link attempt remains subject to verification, but only the
+selected input supplies persisted link entries and the pending source view.
+Write-side integrity floors use the final references. Confidentiality consumed
+by the transaction still applies to inline values that replace a reference.
+
+A pending source view excludes stored link entries that the source's final
+writes replace or rederive, including descendants of a repeated reference with
+a changed carried view. Its final recorded references supply their own labels,
+whether or not the write carries reference-initialization evidence. Reading a
+source before its envelope is prepared therefore follows the same replacement
+rules as reading that envelope after preparation.
+
 When a link's source is a reference staged in the same transaction, or a value
 holding one, preparation derives that reference's labels through the recorded
 chain. A reference at or above the source path supplies the label there. One
@@ -154,7 +177,11 @@ runtime's authorization); the piece a handler creates, its cross-space
 children included, is initialized in the handler's own transaction, and a
 served creation carries the requester's trust snapshot. A builtin that
 instantiates a pattern from a continuation of its action declines the mark
-(`attributeInitialization: false`): the piece is nobody's act.
+(`attributeInitialization: false`): the piece is nobody's act. A served run
+that acts for no one keeps the serving runtime's own trust snapshot, so where
+it would attribute an initialization to a field with no `ownerPrincipal`, the
+write is refused rather than claimed for the service, as any of its writes
+carrying such a claim is.
 
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source

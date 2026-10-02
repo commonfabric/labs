@@ -1431,6 +1431,179 @@ describe("v2-server-acl", () => {
       }
     });
 
+    describe("a principal without `OWNER` removing its own entry", () => {
+      /**
+       * Initializes `space` on `server` with `acl`, opens a session on it as
+       * `principal`, and has that session send `value` as the whole access-list
+       * document. Returns the response, and closes nothing.
+       */
+      async function sendAclAs(
+        server: Server,
+        space: string,
+        acl: Record<string, "READ" | "WRITE" | "OWNER">,
+        principal: string,
+        value: Record<string, unknown>,
+      ): Promise<ResponseMessage<{ seq: number }>> {
+        await initializeSpaceAcl(server, space, acl);
+        const harness = await connect(server);
+        const opened = await openSession(harness, space, principal);
+        expectExists(opened.ok);
+        return await transactOperation(
+          harness,
+          space,
+          opened.ok.sessionId,
+          { op: "set", id: `of:${space}`, value },
+          1,
+        );
+      }
+
+      for (const level of ["READ", "WRITE"] as const) {
+        it(`admits a \`${level}\` member's list less its own entry, after which the member cannot open the space`, async () => {
+          const server = createAclServer(`memory://acl-leave-${level}`, {
+            mode: "enforce",
+          });
+          const space = `did:key:z6Mk-acl-leave-${level}`;
+          try {
+            const response = await sendAclAs(
+              server,
+              space,
+              { [ALICE]: "OWNER", [BOB]: level, [CAROL]: "WRITE" },
+              BOB,
+              { value: { [ALICE]: "OWNER", [CAROL]: "WRITE" } },
+            );
+
+            expectExists(response.ok);
+            expect(await server.readDocument(space, `of:${space}`)).toEqual({
+              value: { [ALICE]: "OWNER", [CAROL]: "WRITE" },
+            });
+            const reopen = await openSession(await connect(server), space, BOB);
+            expect(reopen.error?.name).toBe("AuthorizationError");
+          } finally {
+            await server.close();
+          }
+        });
+      }
+
+      it("admits the removal in `observe` mode, which refuses any other access-list write without `OWNER`", async () => {
+        const server = createAclServer("memory://acl-leave-observe", {
+          mode: "observe",
+        });
+        const space = "did:key:z6Mk-acl-leave-observe";
+        try {
+          const response = await sendAclAs(
+            server,
+            space,
+            { [ALICE]: "OWNER", [BOB]: "WRITE" },
+            BOB,
+            { value: { [ALICE]: "OWNER" } },
+          );
+
+          expectExists(response.ok);
+          expect(await server.readDocument(space, `of:${space}`)).toEqual({
+            value: { [ALICE]: "OWNER" },
+          });
+        } finally {
+          await server.close();
+        }
+      });
+
+      it('returns `AuthorizationError` and keeps the list for a session with no principal, opened under a `"*"` entry', async () => {
+        // Such a session has no entry of its own to remove; the `"*"` entry is
+        // what lets it open the space at all.
+
+        const server = createAclServer("memory://acl-leave-anonymous", {
+          mode: "enforce",
+        });
+        const space = "did:key:z6Mk-acl-leave-anonymous";
+        const acl = { [ALICE]: "OWNER", "*": "WRITE" } as const;
+        try {
+          await initializeSpaceAcl(server, space, acl);
+          const harness = await connect(server);
+          const opened = await openSession(
+            harness,
+            space,
+            undefined as unknown as string,
+          );
+          expectExists(opened.ok);
+          const response = await transactOperation(
+            harness,
+            space,
+            opened.ok.sessionId,
+            {
+              op: "set",
+              id: `of:${space}`,
+              value: { value: { [ALICE]: "OWNER" } },
+            },
+            1,
+          );
+
+          expect(response.error?.name).toBe("AuthorizationError");
+          expect(await server.readDocument(space, `of:${space}`)).toEqual({
+            value: acl,
+          });
+        } finally {
+          await server.close();
+        }
+      });
+
+      for (
+        const [description, acl, value] of [
+          [
+            "also removes another entry",
+            { [ALICE]: "OWNER", [BOB]: "WRITE", [CAROL]: "WRITE" },
+            { value: { [ALICE]: "OWNER" } },
+          ],
+          [
+            "also changes another entry's level",
+            { [ALICE]: "OWNER", [BOB]: "WRITE", [CAROL]: "WRITE" },
+            { value: { [ALICE]: "OWNER", [CAROL]: "OWNER" } },
+          ],
+          [
+            "also adds an entry",
+            { [ALICE]: "OWNER", [BOB]: "WRITE" },
+            { value: { [ALICE]: "OWNER", [CAROL]: "READ" } },
+          ],
+          [
+            "also adds a field to the document",
+            { [ALICE]: "OWNER", [BOB]: "WRITE" },
+            { value: { [ALICE]: "OWNER" }, source: { "/": "of:elsewhere" } },
+          ],
+          [
+            "keeps its own entry, at another level",
+            { [ALICE]: "OWNER", [BOB]: "WRITE" },
+            { value: { [ALICE]: "OWNER", [BOB]: "READ" } },
+          ],
+          [
+            'is sent under a `"*"` entry',
+            { [ALICE]: "OWNER", [BOB]: "WRITE", "*": "READ" },
+            { value: { [ALICE]: "OWNER", "*": "READ" } },
+          ],
+          [
+            "removes someone else's entry instead",
+            { [ALICE]: "OWNER", [BOB]: "WRITE", [CAROL]: "WRITE" },
+            { value: { [ALICE]: "OWNER", [BOB]: "WRITE" } },
+          ],
+        ] as const
+      ) {
+        it(`returns \`AuthorizationError\` and keeps the list for a write that ${description}`, async () => {
+          const server = createAclServer("memory://acl-leave-refused", {
+            mode: "enforce",
+          });
+          const space = "did:key:z6Mk-acl-leave-refused";
+          try {
+            const response = await sendAclAs(server, space, acl, BOB, value);
+
+            expect(response.error?.name).toBe("AuthorizationError");
+            expect(await server.readDocument(space, `of:${space}`)).toEqual({
+              value: acl,
+            });
+          } finally {
+            await server.close();
+          }
+        });
+      }
+    });
+
     it("grants authenticated `READ` and `WRITE` but never `OWNER` on a legacy space without an ACL", async () => {
       const directory = await Deno.makeTempDir({
         prefix: "memory-acl-public-",

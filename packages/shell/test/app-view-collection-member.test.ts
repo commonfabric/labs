@@ -138,8 +138,13 @@ function templateBindings(value: unknown, name: string): unknown[] {
   const values = template.values ?? [];
   const bound: unknown[] = [];
   for (let index = 0; index < values.length; index++) {
-    if (strings[index]?.endsWith(`.${name}="`)) bound.push(values[index]);
-    else bound.push(...templateBindings(values[index], name));
+    if (strings[index]?.endsWith(`.${name}="`)) {
+      bound.push(values[index]);
+    } else {
+      for (const binding of templateBindings(values[index], name)) {
+        bound.push(binding);
+      }
+    }
   }
   return bound;
 }

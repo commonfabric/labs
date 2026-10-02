@@ -502,7 +502,9 @@ async function readStreamLines(stream: ReadableStream): Promise<string[]> {
     pending += decoder.decode(chunk as Uint8Array, { stream: true });
     const parts = pending.split("\n");
     pending = parts.pop() ?? "";
-    lines.push(...parts.filter((line) => line !== ""));
+    for (const line of parts) {
+      if (line !== "") lines.push(line);
+    }
   }
   if (pending !== "") lines.push(pending);
   return lines;

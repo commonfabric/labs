@@ -52,6 +52,7 @@ import {
   containsSyncSchemaRefString,
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
+import { aclDocId } from "../acl.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -3765,6 +3766,37 @@ export class WavePreconditionError extends Error {
   }
 }
 
+/**
+ * A derived commit carries an operation on its space's ACL document.
+ * No derived producer may write that document, in any memory ACL mode: the
+ * derived admission checks the lease and nothing of INV-12's shape or of any
+ * user's level (`docs/specs/memory-v2/09-invariants.md`). `operationIndex`
+ * names the first such operation, so that the wave commit step can attribute
+ * the refusal to the contribution that wrote it.
+ */
+export class DerivedAclDocumentWriteError extends ProtocolError {
+  readonly #operationIndex: number;
+
+  /**
+   * Constructs an instance naming operation `operationIndex` of a commit to
+   * `space`.
+   */
+  constructor(space: string, operationIndex: number) {
+    super(
+      `derived-class commit rejected: operation ${operationIndex} writes ` +
+        `${aclDocId(space)}, the space ACL document, which no derived ` +
+        "commit may write (INV-12)",
+    );
+    this.name = "DerivedAclDocumentWriteError";
+    this.#operationIndex = operationIndex;
+  }
+
+  /** Index into the commit's operations of the first write to the document. */
+  get operationIndex(): number {
+    return this.#operationIndex;
+  }
+}
+
 /** Current head seq of one doc instance (0 when never written). */
 export const selectDocHead = (
   engine: Engine,
@@ -5059,6 +5091,16 @@ const applyCommitTransaction = (
           "admission only (protocol.md §2's delegated row); a derived " +
           "commit's identity rides its per-write annotations",
       );
+    }
+    // No derived commit writes the space's ACL document, in any memory ACL
+    // mode (INV-12). The lease check above has refused a commit naming no
+    // space.
+    const aclSpace = space!;
+    const aclOperationIndex = commit.operations.findIndex((operation) =>
+      operation.op !== "sqlite" && operation.id === aclDocId(aclSpace)
+    );
+    if (aclOperationIndex !== -1) {
+      throw new DerivedAclDocumentWriteError(aclSpace, aclOperationIndex);
     }
   } else if (
     annotations !== undefined || consequenceOf !== undefined ||
@@ -6985,11 +7027,13 @@ const newestPatchConflict = (
  * the read.
  *
  * Patches are read newest first and indexed an op at a time, so a read stops
- * at the op it conflicts with and decodes nothing older. A read that reaches
- * the last patch leaves its indexes in `scans`, and every later read of the
- * same document and exclusion at that basis or a later one is decided from
- * them in time proportional to its path's depth, whatever the number of
- * patches.
+ * at the op it conflicts with and fetches no older row. The cursor is released
+ * even on an early return or a decoding error, before the surrounding
+ * transaction ends. A scan error and a simultaneous cleanup error are reported
+ * together. A read that reaches the last patch leaves its indexes in `scans`,
+ * and every later read of the same document and exclusion at that basis or a
+ * later one is decided from them in time proportional to its path's depth,
+ * whatever the number of patches.
  */
 const findConflictSeq = (
   engine: Engine,
@@ -7063,6 +7107,21 @@ const findConflictSeq = (
     leaves: new TouchedPathIndex(),
     shapes: new TouchedPathIndex(),
   };
+  let exhausted = false;
+  // `using` retains both errors in a `SuppressedError` if the scan and its
+  // cleanup fail, rather than replacing the scan error with the cleanup error.
+  using cleanup = new DisposableStack();
+  // This guard is needed until the pinned driver resets iterators on early exit:
+  // https://github.com/denodrivers/sqlite3/issues/163
+  cleanup.defer(() => {
+    if (!exhausted) {
+      // `@db/sqlite` 0.13.0 resets an `iter()` statement only on exhaustion,
+      // so closing its generator can leave a cursor alive after rollback.
+      // `get()` resets before querying; this bound matches no valid seq,
+      // releasing the cursor with one index probe and no older row copies.
+      patchStatement.get({ ...params, after_seq: Number.MAX_SAFE_INTEGER });
+    }
+  });
   for (
     const conflict of patchStatement.iter(params) as Iterable<{
       seq: number;
@@ -7081,6 +7140,7 @@ const findConflictSeq = (
       }
     }
   }
+  exhausted = true;
   if (document !== undefined) {
     document.patches = { basis: afterSeq, indexes };
   }

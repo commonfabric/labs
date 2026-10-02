@@ -1,7 +1,11 @@
 import { assertEquals } from "@std/assert";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  CFC_CONCEPT_KIND,
+  cfcAtom,
+} from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import {
   isCell as isRuntimeCell,
@@ -11,6 +15,7 @@ import {
 import {
   buildCfcPolicyArtifactManifest,
   createRenderConfidentialityResolver,
+  PROMPT_CAVEAT_FAMILY_KINDS,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
@@ -30,7 +35,9 @@ import { normalizeRenderDeclassificationPolicy } from "../src/worker/types.ts";
 function createOpsCollector() {
   const allOps: VDomOp[] = [];
   return {
-    onOps: (ops: VDomOp[]) => allOps.push(...ops),
+    onOps: (ops: VDomOp[]) => {
+      for (const op of ops) allOps.push(op);
+    },
     clear: () => {
       allOps.length = 0;
     },
@@ -3227,6 +3234,130 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             .map((op) => op.text);
           assertEquals(renderedText.includes("Acting user's own note"), true);
           assertEquals(renderedText.includes("Other user's note"), false);
+          assertEquals(renderedText.includes("Content hidden by policy"), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "the prompt-caveat family renders the acting user's own unscreened text",
+      async () => {
+        // SC-54 (proposed §8.10.6) admits the §10.1 prompt-caveat family at
+        // the default display ceiling: a prompt caveat says not to trust the
+        // content as instructions to a model, and a display shows it to the
+        // acting user. The acting user's own note renders under the
+        // unscreened tier in either spelling. The same note stays hidden
+        // under the retired unsuffixed kind (#5661) and under a caveat kind
+        // outside the family, so the family is not "any caveat". The ceiling
+        // and resolver are the production shape lib-shell builds.
+        const seedTx = runtime.edit();
+        const seedCaveated = (id: string, value: string, kind: string) => {
+          const cell = runtime.getCell<string>(
+            signer.did(),
+            id,
+            undefined,
+            seedTx,
+          );
+          const link = cell.getAsNormalizedFullLink();
+          writeSeedEnvelopeDoc(seedTx, signer.did());
+          seedStoredEnvelope(seedTx, {
+            space: signer.did(),
+            id: link.id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value,
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: {
+                    confidentiality: [signer.did(), {
+                      type: CFC_ATOM_TYPE.Caveat,
+                      kind,
+                      source: "of:untrusted-sender",
+                    }],
+                  },
+                }],
+              },
+            },
+          });
+          return cell;
+        };
+        const unscreened = seedCaveated(
+          "cfc-render-policy-own-unscreened",
+          "Owner's own unscreened message",
+          CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+        );
+        const unscreenedShort = seedCaveated(
+          "cfc-render-policy-own-unscreened-short",
+          "Owner's own message, short spelling",
+          "prompt-injection-risk-unscreened",
+        );
+        const retired = seedCaveated(
+          "cfc-render-policy-own-retired-kind",
+          "Owner's note under the retired kind",
+          "prompt-injection-risk",
+        );
+        const offFamily = seedCaveated(
+          "cfc-render-policy-own-off-family",
+          "Owner's note under another caveat",
+          "https://example.test/cfc/concepts/not-a-prompt-caveat",
+        );
+        assertEquals((await seedTx.commit()).ok !== undefined, true);
+
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+              signer.did(),
+            ],
+            caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+          }),
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [
+            unscreened as never,
+            unscreenedShort as never,
+            retired as never,
+            offFamily as never,
+          ],
+        });
+        try {
+          await t.settle();
+          const renderedText = collector.getOpsOfType("create-text")
+            .map((op) => op.text);
+          assertEquals(
+            renderedText.includes("Owner's own unscreened message"),
+            true,
+          );
+          assertEquals(
+            renderedText.includes("Owner's own message, short spelling"),
+            true,
+          );
+          assertEquals(
+            renderedText.includes("Owner's note under the retired kind"),
+            false,
+          );
+          assertEquals(
+            renderedText.includes("Owner's note under another caveat"),
+            false,
+          );
           assertEquals(renderedText.includes("Content hidden by policy"), true);
         } finally {
           cancel();

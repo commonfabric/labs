@@ -129,7 +129,9 @@ revisited when invariant 12 is implemented." This is that revisit:
 
 1. **Close the raw seam.** `meta: "cfc"` over IPC either returns the same
    redacted view as `getCfcLabel` or is removed (no callers today — remove).
-2. **`inspectConfLabel` is the only pattern-facing surface**, implemented per
+2. **`inspectConfLabel` and `principalOf` are the only pattern-facing
+   surfaces**, both reading inside the observing transaction and taking their
+   target as a cell. `inspectConfLabel` is implemented per
    §4.6.4.1: equality predicates only; result is a runtime-labeled value
    whose label joins the consumed metadata observations + query-input
    confidentiality + PC; `notAvailable` normalization for unobservable /
@@ -253,12 +255,14 @@ consumes inbound views, redacting the outbound copies is safe.
   source-protected — the source identity's confidentiality when known (no
   carrier exists yet), else the derived-component (`derived`/`structure`)
   entry's own effective confidentiality, else fail closed. The
-  pattern-facing surface is the `inspectConfLabel` BUILTIN
+  pattern-facing surfaces are the `inspectConfLabel` BUILTIN
   (`runner/src/builtins/inspect-conf-label.ts`, exposed as
-  `commonfabric.inspectConfLabel`): builtins are the one channel pattern
-  code has into runtime capability and the node runs inside the observing
-  transaction; the target rides `asCell`, so inspecting a label never reads
-  the labeled payload; the display path (`getCfcLabel`) is untouched.
+  `commonfabric.inspectConfLabel`), whose node runs inside the observing
+  transaction, and `principalOf`, a plain function
+  (`runner/src/builder/principal-of.ts`) that reads through the calling
+  handler's or computation's own transaction; both take their target as a
+  cell, so inspecting a label never reads the labeled payload; the display
+  path (`getCfcLabel`) is untouched.
   Consumption is a `labelMetadata` observation class beside
   value/shape/followRef, recorded explicitly
   (`recordCfcLabelMetadataObservation`) with the population-rule label and

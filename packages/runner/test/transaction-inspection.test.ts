@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { NormalizedFullLink } from "../src/link-utils.ts";
@@ -93,7 +94,7 @@ describe("transaction inspection", () => {
             space: "did:key:test" as any,
             scope: "space",
             id: "of:read" as any,
-            path: ["links", "peer"],
+            path: toDocumentPath(["links", "peer"]),
             meta: {},
           },
         },
@@ -102,7 +103,7 @@ describe("transaction inspection", () => {
             space: "did:key:test" as any,
             scope: "space",
             id: "of:shallow" as any,
-            path: ["value", "items"],
+            path: toDocumentPath(["value", "items"]),
             meta: {},
             nonRecursive: true,
           },
@@ -112,7 +113,7 @@ describe("transaction inspection", () => {
             space: "did:key:test" as any,
             scope: "space",
             id: "of:write" as any,
-            path: ["meta", "updatedAt"],
+            path: toDocumentPath(["meta", "updatedAt"]),
           },
         },
       ]),
@@ -121,19 +122,19 @@ describe("transaction inspection", () => {
           space: "did:key:test",
           scope: "space",
           id: "of:read",
-          path: ["links", "peer"],
+          path: toDocumentPath(["links", "peer"]),
         }],
         shallowReads: [{
           space: "did:key:test",
           scope: "space",
           id: "of:shallow",
-          path: ["value", "items"],
+          path: toDocumentPath(["value", "items"]),
         }],
         writes: [{
           space: "did:key:test",
           scope: "space",
           id: "of:write",
-          path: ["meta", "updatedAt"],
+          path: toDocumentPath(["meta", "updatedAt"]),
         }],
       },
     );
@@ -300,7 +301,7 @@ describe("transaction inspection", () => {
     const records: IReadActivity[] = [{
       space,
       id: "test:candidate-journal",
-      path: ["value"],
+      path: toDocumentPath(["value"]),
       meta: { internalVerifierRead: false },
     }];
     const inner = {
@@ -314,7 +315,7 @@ describe("transaction inspection", () => {
     records.push({
       space,
       id: "test:later-candidate",
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     });
     expect([...wrapper.getPotentiallyExternalReadActivities()!]).toEqual(
@@ -353,7 +354,7 @@ describe("transaction inspection", () => {
     const observed: ITransactionWriteRequest[] = [];
     const wrapped = new TransactionWrapper({
       writeValuesOrThrow(batch: Iterable<ITransactionWriteRequest>) {
-        observed.push(...batch);
+        for (const write of batch) observed.push(write);
       },
       writeValueOrThrow() {
         throw new Error("wrapper should not replay batch writes");
@@ -418,7 +419,7 @@ describe("transaction inspection", () => {
         path: attempt.path,
         journalIndex: attempt.journalIndex,
       })),
-      [{ path: ["value", "count"], journalIndex: 1 }],
+      [{ path: toDocumentPath(["value", "count"]), journalIndex: 1 }],
     );
 
     // Neither a native log nor a working journal: "order unknown" — callers
@@ -464,8 +465,8 @@ describe("transaction inspection", () => {
           journalIndex: attempt.journalIndex,
         })),
         [
-          { path: [], journalIndex: 1 },
-          { path: ["value", "count"], journalIndex: 3 },
+          { path: toDocumentPath([]), journalIndex: 1 },
+          { path: toDocumentPath(["value", "count"]), journalIndex: 3 },
         ],
       );
     } finally {
@@ -726,13 +727,23 @@ describe("transaction inspection", () => {
         );
         assertEquals(details, [
           {
-            address: { space, scope: "space", id, path: ["value", "a"] },
+            address: {
+              space,
+              scope: "space",
+              id,
+              path: toDocumentPath(["value", "a"]),
+            },
             value: 10,
             previousValue: 1,
             previousPresent: true,
           },
           {
-            address: { space, scope: "space", id, path: ["value", "b"] },
+            address: {
+              space,
+              scope: "space",
+              id,
+              path: toDocumentPath(["value", "b"]),
+            },
             value: 20,
             previousValue: 2, // <- regression: was 20 (post-mutation) before fix
             previousPresent: true,
@@ -793,7 +804,12 @@ describe("transaction inspection", () => {
         // `/value/a` is a simple-path leaf write -- previousValue is the
         // seed value `1` (pre-transaction).
         assertEquals(detailByPath.get("value/a"), {
-          address: { space, scope: "space", id, path: ["value", "a"] },
+          address: {
+            space,
+            scope: "space",
+            id,
+            path: toDocumentPath(["value", "a"]),
+          },
           value: 10,
           previousValue: 1,
           previousPresent: true,
@@ -803,7 +819,12 @@ describe("transaction inspection", () => {
         // second write -- the inter-write `{a: 10}` -- not the post-write
         // `{a: 10, new: {nested: "hello"}}`.
         assertEquals(detailByPath.get("value"), {
-          address: { space, scope: "space", id, path: ["value"] },
+          address: {
+            space,
+            scope: "space",
+            id,
+            path: toDocumentPath(["value"]),
+          },
           value: { a: 10, new: { nested: "hello" } },
           previousValue: { a: 10 },
           previousPresent: true,
@@ -871,7 +892,7 @@ describe("transaction inspection", () => {
           space,
           scope: "space",
           id,
-          path: ["value"],
+          path: toDocumentPath(["value"]),
         }],
       );
     } finally {
@@ -950,12 +971,12 @@ describe("transaction inspection", () => {
           space,
           scope: "space",
           id,
-          path: ["value"],
+          path: toDocumentPath(["value"]),
         }, {
           space,
           scope: "space",
           id,
-          path: ["value", "profile", "age"],
+          path: toDocumentPath(["value", "profile", "age"]),
         }],
       );
     } finally {

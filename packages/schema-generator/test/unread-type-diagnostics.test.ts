@@ -6,7 +6,7 @@ import ts from "typescript";
 
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
-import { createTestProgram } from "./utils.ts";
+import { createTestProgram, getTypeFromCode } from "./utils.ts";
 
 const f = ts.factory;
 
@@ -107,11 +107,11 @@ describe("unread-type-diagnostics", () => {
       const original = logger.warn;
       const logged: string[] = [];
       logger.warn = (_key, ...messages) => {
-        logged.push(
-          ...messages.map((message) =>
-            String(typeof message === "function" ? message() : message)
-          ),
-        );
+        for (const message of messages) {
+          logged.push(
+            String(typeof message === "function" ? message() : message),
+          );
+        }
       };
       try {
         new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
@@ -127,6 +127,34 @@ describe("unread-type-diagnostics", () => {
 
       expect(logged.length).toBe(1);
       expect(logged[0]).toContain("`PrintedElsewhere`");
+    });
+
+    it("logs an error when a CFC recursion cannot be read and no callback is supplied", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Confidential<T, L> = T & { readonly __ct_cfc__?: { confidentiality: L } };
+        type Nest<T> = Confidential<{ value: T; next?: Nest<T[]> }, readonly ["secret"]>;
+        interface Holder { value: Nest<string> }
+      `,
+        "Holder",
+      );
+      const logger = getLogger("schema-generator.unread");
+      const original = logger.error;
+      const logged: string[] = [];
+      logger.error = (_key, ...messages) => {
+        for (const message of messages) {
+          logged.push(
+            String(typeof message === "function" ? message() : message),
+          );
+        }
+      };
+      try {
+        new SchemaGenerator().generateSchema(type, checker);
+      } finally {
+        logger.error = original;
+      }
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain("recursion limit");
     });
 
     it("reports nothing for a schema it reads in full", async () => {
@@ -286,5 +314,63 @@ describe("unread-type-diagnostics", () => {
       expect(schema).toMatchObject({ $ref: "#/$defs/Stored" });
       expect(warnings).toEqual([]);
     });
+  });
+
+  describe("a scope recursion read from a printed type", () => {
+    // A print is read as its type, so a recursion it holds is reached by type
+    // alone, with no written reference to name it by. Each
+    // `Node<Readonly<…>>` is a new type, so the nesting bound ends the
+    // reading.
+
+    /**
+     * The diagnostics generating a schema for `a` in a module declaring
+     * `declarations`, read from a placeholder printed from its type.
+     */
+    async function diagnosticsForPrinted(
+      declarations: string,
+      a: string,
+    ): Promise<SchemaGenerationDiagnostic[]> {
+      const { checker, sourceFile } = await createTestProgram(
+        `${declarations}\ninterface X { a: ${a}; }`,
+      );
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "X")!;
+      const type = checker.getTypeOfSymbolAtLocation(
+        checker.getDeclaredTypeOfSymbol(holder).getProperty("a")!,
+        sourceFile,
+      );
+      const placeholder = f.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, placeholder, {
+        printedFrom: (node) => node === placeholder ? type : undefined,
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      return diagnostics;
+    }
+
+    for (
+      const [position, holder] of [
+        ["an index signature", "interface Holder<U> { [key: string]: U }"],
+        ["a tuple", "interface Holder<U> { items: [U, U] }"],
+      ] as const
+    ) {
+      it(`names a scope recursion reached through ${position} by the type it stops at, which holds \`[]\``, async () => {
+        const diagnostics = await diagnosticsForPrinted(
+          `${holder}
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+type Node<T> = PerUser<Cell<{ value: T; next?: Holder<Node<Readonly<T>>> }>>;`,
+          "Node<Wrap<readonly []>>",
+        );
+
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toMatchObject({
+          type: "schema-type:unread",
+          severity: "warning",
+        });
+        expect(diagnostics[0]!.message).toContain("Wrap<readonly []>");
+      });
+    }
   });
 });

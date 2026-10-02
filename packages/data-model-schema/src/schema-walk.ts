@@ -192,8 +192,12 @@ const recordKeywordsFor = (
   opts: SchemaWalkOptions,
 ): readonly RecordKeyword[] => {
   const keys: RecordKeyword[] = [...RECORD_SUBSCHEMA_KEYS];
-  if (opts.includeUnused) keys.push(...UNUSED_RECORD_SUBSCHEMA_KEYS);
-  if (opts.includeDefs) keys.push(...DEFS_KEYS);
+  if (opts.includeUnused) {
+    for (const key of UNUSED_RECORD_SUBSCHEMA_KEYS) keys.push(key);
+  }
+  if (opts.includeDefs) {
+    for (const key of DEFS_KEYS) keys.push(key);
+  }
   return keys;
 };
 

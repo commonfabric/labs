@@ -646,9 +646,9 @@ export class SourceReconciler {
   }
 
   /**
-   * A pattern this deployment's toolshed serves. Its `?identity` route reports
-   * the identity the current source compiles to, so one conditional request
-   * settles whether anything moved before any source is downloaded.
+   * Follows a pattern this deployment's toolshed serves. An entry-only identity
+   * match needs no stored-source read; a mismatch loads the retained source
+   * roots and checks their combined identity before downloading an update.
    */
   async #followSystem(
     resultCell: Cell<unknown>,
@@ -659,10 +659,36 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
-    const answer = await this.#advertisedIdentity(target, fetch, signal);
+    let answer = await this.#advertisedIdentity(target, fetch, signal);
     if ("detail" in answer) {
       state.detail = answer.detail;
       return "unavailable";
+    }
+    let sourceRoots: readonly string[] = [];
+    // Attached roots participate in the stored identity. An entry-only match
+    // therefore needs no stored-source verification or compiler-stack load.
+    if (answer.identity !== state.running.identity) {
+      const stored = await this.#runtime.patternManager
+        .getPatternSourceProgramByIdentity(
+          state.running.identity,
+          state.space,
+        );
+      signal.throwIfAborted();
+      // Missing stored source permits rebuilding the entry and recording the
+      // displaced identity. Roots can only be retained from a verified program.
+      sourceRoots = stored?.sourceRoots ?? [];
+      if (sourceRoots.length > 0) {
+        answer = await this.#advertisedIdentity(
+          target,
+          fetch,
+          signal,
+          sourceRoots,
+        );
+        if ("detail" in answer) {
+          state.detail = answer.detail;
+          return "unavailable";
+        }
+      }
     }
     const advertised = answer.identity;
     state.offered = { identity: advertised, symbol: state.running.symbol };
@@ -678,6 +704,7 @@ export class SourceReconciler {
 
     const resolved = await this.#runtime.harness.resolve(
       new HttpProgramResolver(target.href, fetch),
+      { sourceRoots },
     );
     return await this.#adopt(
       resultCell,
@@ -713,9 +740,13 @@ export class SourceReconciler {
     target: URL,
     fetch: typeof globalThis.fetch,
     signal: AbortSignal,
+    sourceRoots: readonly string[] = [],
   ): Promise<{ identity: string } | { detail: string }> {
     const identityUrl = new URL(target);
     identityUrl.searchParams.set("identity", "");
+    for (const root of sourceRoots) {
+      identityUrl.searchParams.append("sourceRoot", root);
+    }
     let response: Response;
     try {
       response = await fetch(identityUrl);

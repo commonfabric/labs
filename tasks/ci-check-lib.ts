@@ -410,7 +410,7 @@ export async function fetchArtifactsForRun(
     const data = await githubGet<ArtifactsResponse>(
       `/repos/${REPO}/actions/runs/${runId}/artifacts?per_page=${perPage}&page=${page}`,
     );
-    artifacts.push(...data.artifacts);
+    for (const artifact of data.artifacts) artifacts.push(artifact);
 
     if (data.artifacts.length === 0) break;
     if (

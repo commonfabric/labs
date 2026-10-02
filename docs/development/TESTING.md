@@ -565,7 +565,9 @@ It comes in two shapes, by how the test's clients reach it:
   `StandaloneMemoryServer`, verifies signed session opens as toolshed does, and
   takes the same `serve` option for the plain HTTP requests that address
   receives. Its serving runtimes compile against `serving.url` unless given an
-  `apiUrl`.
+  `apiUrl`. Its memory server checks no access list unless given `aclMode`,
+  which also lists the service identity as the server's delegating
+  principal, as a toolshed running server execution lists its own.
 
 Both return a handle that `await using` closes, serving loop first. The host
 keeps the process's ambient server-execution flag on while it lives, so a
@@ -607,7 +609,9 @@ one, resolves it as a deployed entry point does — the explicit
 `EXPERIMENTAL_SERVER_EXECUTION`, else `SERVER_EXECUTION_DEFAULT_ENABLED` — and
 starts a serving server for ON and a plain one for OFF. The pattern
 `MultiRuntimeHarness` and `packages/cli/test/agent-connections.serial.test.ts`
-do this, so each runs on whichever arm the CI role selects.
+do this, so each runs on whichever arm the CI role selects. A test over the
+harness whose expectations differ by arm asks `resolveServerExecution()`,
+beside the harness, which arm that is.
 
 ### Tests that start Deno
 
@@ -673,9 +677,6 @@ whose child is done, or is waiting only on input the test controls, ends it by
 closing that input and then awaits its `status` rather than sending it a signal.
 A test whose subject is a child killed while it runs is not in that position:
 the kill loses that child's coverage, but it cannot truncate a profile.
-`packages/memory/test/inbox-store.test.ts` ends its writer processes by closing
-their input, and `packages/memory/test/inbox-store-child-coverage.test.ts` fails
-when any of them loses its profile.
 
 A web worker that a test starts writes coverage profiles too, and it writes them
 while it shuts down, after `terminate()` has already returned. A process that

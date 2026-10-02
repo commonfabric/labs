@@ -1,3 +1,4 @@
+import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
 import ts from "typescript";
@@ -24,6 +25,7 @@ import {
   isUnresolvedSchemaType,
   preserveSourceMapRange,
   registerSyntheticCallType,
+  TYPE_NODE_FLAGS,
   typeToSchemaTypeNode,
   unwrapCellLikeType,
   widenLiteralType,
@@ -136,11 +138,9 @@ function shouldDropFallbackTypeForSchema(
   if (!node || !type) return false;
   if (containsAnyOrUnknownTypeNode(node)) return false;
 
-  const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
-    ts.NodeBuilderFlags.UseStructuralFallback;
   let rebuilt: ts.TypeNode | undefined;
   try {
-    rebuilt = checker.typeToTypeNode(type, sourceFile, typeToNodeFlags);
+    rebuilt = checker.typeToTypeNode(type, sourceFile, TYPE_NODE_FLAGS);
   } catch (_e: unknown) {
     // typeToTypeNode can throw on deeply recursive or circular types.
     rebuilt = undefined;
@@ -779,10 +779,15 @@ function collectFunctionSchemaTypeNodes(
     }
   }
 
-  // 3. If we couldn't infer a type, we can't transform at all
-  // Both types are required for lift-applied calls to work
-  if (!argumentNode && !resultNode) {
-    return {}; // No types could be determined
+  // A result type the checker printed no node for above, and that no recovery
+  // read, stands as an `unknown` placeholder recorded as printed from it, as
+  // `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
+  // as that type. The print is not tried again: one that threw would throw
+  // again.
+  if (!resultNode && resultType && context) {
+    resultNode = createUnknownSchemaTypeNode(factory);
+    typeRegistry?.set(resultNode, resultType);
+    context.state.recordPrintedFrom(resultNode, resultType);
   }
 
   // Build result object with only defined properties
@@ -817,7 +822,7 @@ function createToSchemaCall(
 
   const args: ts.Expression[] = [];
   if (isSchemaCallOptionExpressions(options)) {
-    args.push(...options);
+    for (const option of options) args.push(option);
   } else if (options?.widenLiterals || options?.scope) {
     const properties: ts.ObjectLiteralElementLike[] = [];
     if (options.widenLiterals) {
@@ -2794,8 +2799,14 @@ function isTopLevelAnyOrUnknownTypeNode(
 function shouldReportPermissiveInferredPatternResult(
   resultNode: ts.TypeNode | undefined,
   resultType: ts.Type | undefined,
+  state: CrossStageState,
 ): boolean {
   if (!resultNode) return true;
+  // A print is read as the type it was printed from, as schema generation
+  // reads it, and that type is all a placeholder for a type with no print
+  // carries.
+  const printedFrom = state.printedFrom(resultNode);
+  if (printedFrom) return isAnyOrUnknownType(printedFrom);
   if (isTopLevelAnyOrUnknownTypeNode(resultNode)) return true;
   return isAnyOrUnknownType(resultType);
 }
@@ -2829,12 +2840,25 @@ function reportUnknownPatternResult(
   resultNode: ts.TypeNode | undefined,
   resultType: ts.Type | undefined,
 ): void {
-  if (shouldReportPermissiveInferredPatternResult(resultNode, resultType)) {
+  if (
+    shouldReportPermissiveInferredPatternResult(
+      resultNode,
+      resultType,
+      context.state,
+    )
+  ) {
     reportAnyResultSchema(context, node);
     return;
   }
   if (!resultNode) return;
-  const paths = collectUnknownResultPaths(resultNode);
+  // A placeholder for a type with no print holds none of its structure, so
+  // the type it stands for is walked in its place.
+  const placeholderFor = isTopLevelAnyOrUnknownTypeNode(resultNode)
+    ? context.state.printedFrom(resultNode)
+    : undefined;
+  const paths = placeholderFor
+    ? collectUnknownResultTypePaths(placeholderFor, context.checker)
+    : collectUnknownResultPaths(resultNode);
   if (paths.length === 0) return;
   const fields = paths.map((p) => `\`${p}\``).join(", ");
   context.reportDiagnosticOnce({
@@ -2855,7 +2879,11 @@ function reportUnknownPatternResult(
 
 /**
  * Collects dotted paths to `unknown`-typed leaves within a result type node,
- * descending object literals and array element types. A top-level `unknown` is
+ * descending object literals, array element types, tuple elements, a
+ * `readonly` type's operand, and each member of a union, whose schema the
+ * output carries as one of its alternatives. A tuple element's path is its
+ * index, written `[i...]` for a rest element, whose own element is the one
+ * walked; a union member's path is the union's. A top-level `unknown` is
  * handled by the error path above, so this only sees nested occurrences.
  */
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
@@ -2866,7 +2894,14 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
       paths.push(path || "(result)");
       return;
     }
-    if (ts.isTypeLiteralNode(unwrapped)) {
+    if (
+      ts.isTypeOperatorNode(unwrapped) &&
+      unwrapped.operator === ts.SyntaxKind.ReadonlyKeyword
+    ) {
+      walk(unwrapped.type, path);
+    } else if (ts.isUnionTypeNode(unwrapped)) {
+      for (const member of unwrapped.types) walk(member, path);
+    } else if (ts.isTypeLiteralNode(unwrapped)) {
       for (const member of unwrapped.members) {
         if (
           ts.isPropertySignature(member) && member.type && member.name &&
@@ -2878,10 +2913,94 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
       }
     } else if (ts.isArrayTypeNode(unwrapped)) {
       walk(unwrapped.elementType, `${path}[]`);
+    } else if (ts.isTupleTypeNode(unwrapped)) {
+      unwrapped.elements.forEach((element, index) => {
+        const named = ts.isNamedTupleMember(element) ? element : undefined;
+        let elementType = named?.type ?? element;
+        const rest = !!named?.dotDotDotToken || ts.isRestTypeNode(elementType);
+        if (
+          ts.isRestTypeNode(elementType) || ts.isOptionalTypeNode(elementType)
+        ) {
+          elementType = elementType.type;
+        }
+        const spread = rest ? unwrapTypeParentheses(elementType) : undefined;
+        if (spread && ts.isArrayTypeNode(spread)) {
+          elementType = spread.elementType;
+        }
+        walk(elementType, `${path}[${index}${rest ? "..." : ""}]`);
+      });
     }
   };
   walk(resultNode, "");
   return paths;
+}
+
+/**
+ * Like `collectUnknownResultPaths()`, except that it reads `type`, for a
+ * result that stands as a placeholder printed from a type the checker prints
+ * no node for. It descends an object type with no name, which a print writes
+ * out as structure; an instance of a class expression with no name, which is
+ * what leaves a type with no print; an array's element; a tuple's elements;
+ * and each member of a union, along the paths the node walk gives them.
+ */
+function collectUnknownResultTypePaths(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): string[] {
+  const paths: string[] = [];
+  // The types the walk is inside. A type with no name can hold itself, as one
+  // written with `typeof` does, and reaching one of these again ends that
+  // descent; a type reached again by another path is walked under that path.
+  const enclosing = new Set<ts.Type>();
+  const walk = (current: ts.Type, path: string): void => {
+    if (current.flags & ts.TypeFlags.Unknown) {
+      paths.push(path || "(result)");
+      return;
+    }
+    if (enclosing.has(current)) return;
+    enclosing.add(current);
+    if (current.isUnion()) {
+      for (const member of current.types) walk(member, path);
+    } else if (checker.isTupleType(current)) {
+      const tuple = current as ts.TypeReference;
+      const { elementFlags } = tuple.target as ts.TupleType;
+      checker.getTypeArguments(tuple).forEach((element, index) => {
+        const flags = elementFlags[index] ?? ts.ElementFlags.Required;
+        const rest = (flags & ts.ElementFlags.Variable) !== 0;
+        walk(element, `${path}[${index}${rest ? "..." : ""}]`);
+      });
+    } else if (checker.isArrayType(current)) {
+      const [element] = checker.getTypeArguments(current as ts.TypeReference);
+      if (element) walk(element, `${path}[]`);
+    } else if (hasNoNameToPrint(current)) {
+      for (const property of checker.getPropertiesOfType(current)) {
+        // Schema generation leaves this member out, so no consumer receives
+        // it as a field.
+        if (isInternalMemberName(property.name)) continue;
+        walk(
+          checker.getTypeOfSymbol(property),
+          path ? `${path}.${property.name}` : property.name,
+        );
+      }
+    }
+    enclosing.delete(current);
+  };
+  walk(type, "");
+  return paths;
+}
+
+/**
+ * Whether `type` is an object type with no name to print it by: an anonymous
+ * object type no alias names, or an instance of a class expression with no
+ * name.
+ */
+function hasNoNameToPrint(type: ts.Type): boolean {
+  if ((type.flags & ts.TypeFlags.Object) === 0 || type.aliasSymbol) {
+    return false;
+  }
+  return ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Anonymous) !==
+      0 ||
+    type.getSymbol()?.escapedName === ts.InternalSymbolName.Class;
 }
 
 function isMapWithPatternCallbackPatternCall(node: ts.CallExpression): boolean {

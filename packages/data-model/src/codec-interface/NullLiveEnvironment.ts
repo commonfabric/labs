@@ -34,6 +34,11 @@ export class NullLiveEnvironment extends BaseLiveEnvironment {
       }: ${this.#getCellMessage}`,
     );
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }
 
 /**

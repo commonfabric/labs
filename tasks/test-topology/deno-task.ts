@@ -158,16 +158,22 @@ export function readBatchRunnerArguments(
   };
   for (const option of rest.slice(0, separator)) {
     if (option.startsWith("--serial=")) {
-      test.serial.push(...globList(option.slice("--serial=".length)));
+      for (const glob of globList(option.slice("--serial=".length))) {
+        test.serial.push(glob);
+      }
     } else if (option.startsWith("--all-access=")) {
-      test.allAccess.push(...globList(option.slice("--all-access=".length)));
+      for (const glob of globList(option.slice("--all-access=".length))) {
+        test.allAccess.push(glob);
+      }
     } else {
       return undefined;
     }
   }
   for (const flag of rest.slice(separator + 1)) {
     if (flag.startsWith("--ignore=")) {
-      test.ignores.push(...globList(flag.slice("--ignore=".length)));
+      for (const glob of globList(flag.slice("--ignore=".length))) {
+        test.ignores.push(glob);
+      }
     } else {
       test.flags.push(flag);
     }
@@ -294,7 +300,9 @@ export function parseTestTask(
   for (; index < words.length; index++) {
     const word = words[index]!;
     if (word.startsWith("--ignore=")) {
-      ignores.push(...globList(unquote(word.slice("--ignore=".length))));
+      for (const glob of globList(unquote(word.slice("--ignore=".length)))) {
+        ignores.push(glob);
+      }
       continue;
     }
     if (word.startsWith("-")) {

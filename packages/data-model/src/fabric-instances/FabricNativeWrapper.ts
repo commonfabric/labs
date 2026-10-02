@@ -49,4 +49,9 @@ export abstract class FabricNativeWrapper<T extends object>
       }.`,
     );
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

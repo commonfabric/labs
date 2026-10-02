@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 import { expect } from "@std/expect";
+
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -25,6 +27,7 @@ import {
   setPatternSource,
   systemPatternSource,
 } from "../src/index.ts";
+import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
 const signer = await Identity.fromPassphrase("piece source reconciliation");
@@ -293,6 +296,72 @@ describe("piece source reconciliation", () => {
   });
 
   describe("a system pattern this deployment serves", () => {
+    for (const mode of ["current", "updated", "entry-only host"]) {
+      it(`retains attached source roots with a ${mode} origin`, async () => {
+        const root = await Deno.makeTempDir({ prefix: "complete-origin-" });
+        const attached = "/api/patterns/system/attached%20root.ts";
+        const attachment = "export const attached = true;\n";
+        const initialProgram = parentProgram(source("v1"));
+        initialProgram.sourceRoots = [attached];
+        initialProgram.files.push({ name: attached, contents: attachment });
+        try {
+          await Deno.mkdir(`${root}/system`);
+          await Deno.writeTextFile(
+            `${root}/system/reconcile-parent.tsx`,
+            parentSource,
+          );
+          await Deno.writeTextFile(
+            `${root}/system/reconcile-target.tsx`,
+            source(mode === "updated" ? "v2" : "v1"),
+          );
+          await Deno.writeTextFile(
+            `${root}/system/attached root.ts`,
+            attachment,
+          );
+          const route = new PatternsRoute(root);
+          createRuntime(async (input, init) => {
+            const url = new URL(
+              input instanceof Request ? input.url : input.toString(),
+            );
+            if (mode === "entry-only host") {
+              url.searchParams.delete("sourceRoot");
+            }
+            return await route.serve(new Request(url, init)) ??
+              new Response("not found", { status: 404 });
+          });
+          const space = signer.did();
+          const initial = await runtime.patternManager.compilePattern(
+            initialProgram,
+            { space },
+          );
+          const piece = runtime.getCell<{ marker?: string }>(
+            space,
+            `attached-${mode}`,
+          );
+          await runtime.setup(undefined, initial, {}, piece);
+          const originalRef = getPatternIdentityRef(piece)!;
+          await stampSource(piece, PARENT_SOURCE);
+          expect(await reconcile(piece)).toBe(
+            mode === "entry-only host" ? "unavailable" : mode,
+          );
+          const currentRef = getPatternIdentityRef(piece)!;
+          if (mode !== "updated") expect(currentRef).toEqual(originalRef);
+          const stored = await runtime.patternManager
+            .getPatternSourceProgramByIdentity(currentRef.identity, space);
+          expect(stored?.sourceRoots).toEqual([attached]);
+          expect(stored?.files.find((file) => file.name === attached)?.contents)
+            .toBe(attachment);
+          expect(await runtime.start(piece)).toBe(true);
+          await runtime.idle();
+          expect((await piece.pull())?.marker).toBe(
+            mode === "updated" ? "v2" : "v1",
+          );
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      });
+    }
+
     it("asks the identity route first, and stops there when nothing moved", async () => {
       const v1Identity = await identityFor(source("v1"));
       const requested: Array<{ href: string; cache?: RequestCache }> = [];
@@ -305,7 +374,12 @@ describe("piece source reconciliation", () => {
       );
       await stampSource(piece, PARENT_SOURCE);
 
+      using sourceReads = spy(
+        runtime.patternManager,
+        "getPatternSourceProgramByIdentity",
+      );
       expect(await reconcile(piece)).toBe("current");
+      expect(sourceReads.calls).toHaveLength(0);
       // One conditional request, and no source downloaded behind it.
       expect(requested).toEqual([{
         href: `http://toolshed.test${PARENT_PATH}?identity=`,

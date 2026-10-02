@@ -140,8 +140,8 @@ function bridgeCell(
       initialize: async (value: FabricValue) =>
         bridgeValue(await cell.initialize(value)),
       set: async (value: FabricValue) => await cell.setStrict(value),
-      push: async (...values: FabricValue[]) =>
-        await (cell as CellHandle<FabricValue[]>).pushStrict(...values),
+      push: async (values: readonly FabricValue[]) =>
+        await (cell as CellHandle<FabricValue[]>).pushAllStrict(values),
     }),
     sink: (listener) => cell.subscribe((value) => listener(bridgeValue(value))),
     key: (key) => bridgeCell(cell.key(key as never), writable),

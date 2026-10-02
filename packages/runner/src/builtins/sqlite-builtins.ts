@@ -38,7 +38,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
@@ -213,7 +213,7 @@ export function sqliteRunActingPrincipal(
   return runtime.trustSnapshotProvider()?.actingPrincipal;
 }
 
-/** Allocate a result cell linked to the parent/pattern cells, at `scope` (the
+/** Allocate a result cell linked to the parent cell, at `scope` (the
  *  author-declared scope of the SqliteDb / its query result). The base entity
  *  id is scope-independent; `scope` only re-addresses which scoped instance the
  *  value lands in, matching how the server partitions the on-disk db. */
@@ -238,7 +238,6 @@ function makeResultCell<T>(
     tx,
   );
   setResultCell(cell, parentCell);
-  setPatternCell(cell, parentCell.key("pattern"));
   cell.sync();
   return cell as Cell<T>;
 }
@@ -311,7 +310,9 @@ function staticConfidentialityOf(
   for (const p of Object.values(props)) {
     const conf = (p as { ifc?: { confidentiality?: CfcConfClause[] } })?.ifc
       ?.confidentiality;
-    if (Array.isArray(conf)) out.push(...conf);
+    if (Array.isArray(conf)) {
+      for (const clause of conf) out.push(clause);
+    }
   }
   return out;
 }
@@ -334,7 +335,8 @@ function declaredSlotConfidentiality(
       entry.path.length === resultPath.length + 1 &&
       resultPath.every((segment, i) => segment === entry.path[i])
     ) {
-      out.push(...(entry.label.confidentiality ?? []) as CfcConfClause[]);
+      const clauses = (entry.label.confidentiality ?? []) as CfcConfClause[];
+      for (const clause of clauses) out.push(clause);
     }
   }
   return out;
@@ -1059,8 +1061,8 @@ export function sqliteQuery(
       // what reaches the later ones, since a re-issue and a settled
       // request's writeback each run on a transaction of their own. The mint
       // stays `makeResultCell` rather than `ownedCell` because the cause and
-      // the result/pattern links it sets are this builtin's, and the cause
-      // is the stored cell's identity.
+      // the result link it sets are this builtin's, and the cause is the
+      // stored cell's identity.
       recordRuntimeOwnedStore(tx, parentCell, selectedResult);
       enrollRuntimeOwnedStore(tx, parentCell, selectedResult);
       initialized = true;
@@ -1304,11 +1306,9 @@ export function sqliteQuery(
     if (crossSpace && requestConfidentiality().length > 0) {
       // On the issuing transaction, whose flow join is non-empty by
       // construction — that is the condition this fires on — so route 2
-      // declares that clause on `/pending` and `/error` here. The refusal
-      // path is the one place a reader of the control state carries the
-      // parameter's label, and a pattern rendering "this query was refused"
-      // inherits it; the suite pins that beside the success path, where such
-      // a reader carries nothing.
+      // declares that clause on the control paths this writes. A pattern
+      // rendering "this query was refused" inherits it, as a reader of the
+      // flag a labeled claim raised does.
       //
       // `nonReactive`, like the claim below: the write machinery's read of
       // the region it is about to write must not make this action depend on

@@ -47,6 +47,7 @@
     "./contracts/prompt-slot": "./src/contracts/prompt-slot.ts",
     "./contracts/cfc-invocation-context": "./src/contracts/cfc-invocation-context.ts",
     "./contracts/native-model-tool": "./src/contracts/native-model-tool.ts",
+    "./contracts/client-action": "./src/contracts/client-action.ts",
     "./contracts/image": "./src/contracts/image.ts",
     "./contracts/run-manifest": "./src/contracts/run-manifest.ts",
     "./contracts/observation": "./src/contracts/observation.ts",
@@ -66,6 +67,8 @@
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
-    "@db/sqlite": "jsr:@db/sqlite@0.13.0"
+    "@db/sqlite": "jsr:@db/sqlite@0.13.0",
+    "entities": "npm:entities@^8.0.0",
+    "marked": "npm:marked@^18.0.6"
   }
 }

@@ -1,5 +1,6 @@
 import ts from "typescript";
 
+import { isCellInternalMarkerName } from "./cell-brand.ts";
 import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
 
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
@@ -183,4 +184,14 @@ export function getPropertyNameText(
   }
 
   return undefined;
+}
+
+/**
+ * Whether schema generation leaves the member named `name` out of an object's
+ * schema whatever node the object is read through: a member keyed by a
+ * symbol, whose name the checker writes starting `__@`, or a cell's internal
+ * marker.
+ */
+export function isInternalMemberName(name: string): boolean {
+  return name.startsWith("__@") || isCellInternalMarkerName(name);
 }

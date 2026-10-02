@@ -13,6 +13,7 @@ import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   DEFAULT_GATEWAY_BASE_URL,
+  DEFAULT_HARNESS_MODEL,
   type HarnessGatewayAuthMode,
   type HarnessModelProviderId,
   type HarnessPatternIndexConfig,
@@ -158,12 +159,20 @@ import {
 import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
 import { parseInputCellArgument } from "./input-cells.ts";
 import {
+  argvHolds,
+  flagWithoutValue,
+  HELP_SPELLINGS,
+  recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
+  refuseUndeclaredFlags,
+  undeclaredFlagMessage,
+} from "./cli-flags.ts";
+import {
   HarnessControlError,
   type HarnessControlErrorCode,
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
-const DEFAULT_MODEL = "gpt-5.6-sol";
 const DEFAULT_MAX_MODEL_TURNS = 8;
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
 const CLI_OUTPUT_MODES = ["operator", "batch"] as const;
@@ -541,7 +550,7 @@ Options:
                                 Execute skill scripts in sandbox or host (default: sandbox)
   --no-skill-catalog            Disable automatic skill catalog disclosure
   --no-docs-corpus              Resolve no documentation corpus for research
-  --model <name>                Model name (default: ${DEFAULT_MODEL})
+  --model <name>                Model name (default: ${DEFAULT_HARNESS_MODEL})
   --model-provider <provider>   openai-compatible-gateway | openai-codex
                                 (no default; select one here, through
                                 CF_HARNESS_MODEL_PROVIDER, or with config set)
@@ -550,7 +559,7 @@ Options:
                                 Reasoning effort for the research tool's own model
   --compact-threshold <n>       Token threshold for server-side compaction
                                 (default: 75% of the model input budget; 0 disables)
-  --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6 API gateway only)
+  --prompt-cache-mode <mode>    implicit | explicit (GPT-5.6/GPT-6.1 Sol API gateway)
   --gateway-base-url <url>      OpenAI-compatible gateway URL
   --gateway-auth-mode <mode>    bearer | none (default: bearer)
   --artifact-root <path>        Host-side artifact directory
@@ -1328,6 +1337,7 @@ export const parseCfHarnessCliArgs = async (
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+  const undeclared: string[] = [];
   const args = parseArgs([...normalizedArgv], {
     string: [...CLI_STRING_FLAGS],
     boolean: [...CLI_BOOLEAN_FLAGS],
@@ -1338,11 +1348,19 @@ export const parseCfHarnessCliArgs = async (
     default: {
       "print-transcript": false,
     },
+    unknown: recordUndeclaredFlags(undeclared),
   });
 
-  if (args.help) {
+  // A flag with no value first: the `-h` it leaves behind is not a question.
+  refuseFlagsWithoutValue(normalizedArgv, CLI_STRING_FLAGS);
+  if (argvHolds(normalizedArgv, HELP_SPELLINGS)) {
     return { help: true };
   }
+  refuseUndeclaredFlags(
+    undeclared,
+    [...CLI_STRING_FLAGS, ...CLI_BOOLEAN_FLAGS],
+    "the batch CLI",
+  );
 
   const cwd = resolve(deps.cwd ?? Deno.cwd());
   const workspace = resolve(
@@ -1663,9 +1681,8 @@ export const parseCfHarnessCliArgs = async (
     }
     compactThreshold = parsedThreshold;
   } else if (args["compact-threshold"] !== undefined) {
-    // A bare flag lands here, and so does a value the parser read as another
-    // flag: `--compact-threshold -5` leaves the option set with no string.
-    // Name the requirement, and point at the form that survives parsing.
+    // An empty value lands here, `--compact-threshold=` or one of blanks.
+    // Name the requirement, and point at the form that carries a value.
     throw new Error(
       "--compact-threshold requires a non-negative integer token count; " +
         "pass values the parser would read as a flag as " +
@@ -1982,7 +1999,9 @@ export const parseCfHarnessCliArgs = async (
     ...(typeof args.model === "string"
       ? { model: args.model }
       : resumeRun === undefined
-      ? { model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL }
+      ? {
+        model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_HARNESS_MODEL,
+      }
       : {}),
     ...(modelProvider !== undefined ? { modelProvider } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
@@ -2136,6 +2155,34 @@ const createSelectedModelClient = async (options: {
   });
 };
 
+/**
+ * Helper for the control commands, which returns the refusal of the first
+ * argument in `args` written as a flag that `allowed` does not hold, as a
+ * flag `command` does not take, or `undefined` where there is none. `allowed`
+ * is written with its dashes.
+ */
+const controlFlagRefusal = (
+  command: string,
+  args: readonly string[],
+  allowed: readonly string[],
+): string | undefined => {
+  const argument = args.find((value) =>
+    value.startsWith("-") && !allowed.includes(value)
+  );
+  if (argument === undefined) return undefined;
+  // Only the name: a value written into the argument stays out of the
+  // message, as it does for the batch CLI's flags.
+  return undeclaredFlagMessage(
+    argument.split("=")[0],
+    allowed.map((name) => name.replace(/^-+/, "")),
+    `\`${command}\``,
+  );
+};
+
+/** Helper for the control commands, which leads `usage` with `refusal`. */
+const controlUsage = (usage: string, refusal: string | undefined): string =>
+  refusal === undefined ? usage : `${refusal} ${usage}`;
+
 const runCfHarnessModelsCommand = async (
   argv: readonly string[],
   deps: RunCfHarnessCliDependencies,
@@ -2144,7 +2191,12 @@ const runCfHarnessModelsCommand = async (
   const normalized = argv[0] === "--" ? argv.slice(1) : argv;
   if (normalized[0] !== "models") return undefined;
   if (normalized.length !== 2 || normalized[1] !== "openai-codex") {
-    throw new Error("usage: models openai-codex");
+    throw new Error(
+      controlUsage(
+        "usage: models openai-codex",
+        controlFlagRefusal("models", normalized.slice(1), []),
+      ),
+    );
   }
   const env = deps.env ?? {
     CF_HARNESS_HOME: Deno.env.get("CF_HARNESS_HOME"),
@@ -2183,7 +2235,12 @@ const runCfHarnessWhoamiCommand = (
   if (normalized[0] !== "whoami") return undefined;
   const json = normalized[1] === "--json";
   if (normalized.length > 2 || (normalized.length === 2 && !json)) {
-    throw new Error("usage: whoami [--json]");
+    throw new Error(
+      controlUsage(
+        "usage: whoami [--json]",
+        controlFlagRefusal("whoami", normalized.slice(1), ["--json"]),
+      ),
+    );
   }
   const provenance = currentProvenance();
   const entries = provenanceEntries(provenance);
@@ -2264,14 +2321,15 @@ const appendStructuredResultInstructions = (
   if (structuredResult === undefined) {
     return;
   }
+  lines.push("", "Structured result contract:");
+  if (
+    allowedToolIds === undefined || allowedToolIds.includes("submit_result")
+  ) {
+    lines.push(
+      "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
+    );
+  }
   lines.push(
-    "",
-    "Structured result contract:",
-    ...(allowedToolIds === undefined || allowedToolIds.includes("submit_result")
-      ? [
-        "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
-      ]
-      : []),
     `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
@@ -2774,7 +2832,9 @@ export const formatCfHarnessCliResult = (
       }`,
     );
     if (posture.record !== undefined) {
-      lines.push(...renderCfcPostureReport(posture.record));
+      for (const line of renderCfcPostureReport(posture.record)) {
+        lines.push(line);
+      }
     }
   }
   const docsCorpus = result.runState.docsCorpus;
@@ -2886,18 +2946,6 @@ export const formatCfHarnessCliResult = (
   return `${lines.join("\n")}\n`;
 };
 
-const parseCfHarnessCliControlArgs = (
-  argv: readonly string[],
-): ReturnType<typeof parseArgs> => {
-  const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
-  return parseArgs([...normalizedArgv], {
-    boolean: ["help", "describe-capabilities"],
-    alias: {
-      h: "help",
-    },
-  });
-};
-
 export type CfHarnessCliInformationalControl =
   | "help"
   | "describe-capabilities";
@@ -2907,9 +2955,16 @@ export const cfHarnessCliInformationalControl = (
   argv: readonly string[],
 ): CfHarnessCliInformationalControl | undefined => {
   if (cfHarnessCliCommandName(argv) !== "prompt") return undefined;
-  const args = parseCfHarnessCliControlArgs(argv);
-  if (args.help) return "help";
-  if (args["describe-capabilities"]) return "describe-capabilities";
+  const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+  // A `-h` left by a flag with no value is not a question; the parse refuses
+  // the flag.
+  if (flagWithoutValue(normalizedArgv, CLI_STRING_FLAGS) !== undefined) {
+    return undefined;
+  }
+  if (argvHolds(normalizedArgv, HELP_SPELLINGS)) return "help";
+  if (argvHolds(normalizedArgv, ["--describe-capabilities"])) {
+    return "describe-capabilities";
+  }
   return undefined;
 };
 
@@ -3045,13 +3100,23 @@ const runCfHarnessConfigCommand = async (
       path: defaultHarnessProviderSettingsPath(harnessHomeForControl(deps)),
     });
   try {
+    const knownAction = action === "inspect" || action === "init" ||
+      action === "set";
+    const flagRefusal = controlFlagRefusal(
+      knownAction ? `config ${action}` : "config",
+      normalized.slice(1),
+      ["--json"],
+    );
     if (
-      (action !== "inspect" && action !== "init" && action !== "set") ||
+      !knownAction || flagRefusal !== undefined ||
       (action === "inspect" ? positional.length !== 0 : positional.length !== 1)
     ) {
       throw new HarnessControlError(
         "invalid-request",
-        "usage: config inspect|init|set [provider] [--json]",
+        controlUsage(
+          "usage: config inspect|init|set [provider] [--json]",
+          flagRefusal,
+        ),
       );
     }
     if (action === "inspect") {
@@ -3139,17 +3204,28 @@ const runCfHarnessAuthCommand = async (
     path: defaultHarnessCredentialStorePath(harnessHome),
   });
   const auth = new OpenAICodexAuthService(store, "local");
-  const allowedArguments = action === "login"
-    ? new Set(["--device", "--json"])
-    : new Set(["--json"]);
+  // Where the action is missing or unknown, a flag of any action is still a
+  // flag of `auth`, and only the usage is owed.
+  const allowedArguments = action === "status" || action === "logout"
+    ? new Set(["--json"])
+    : new Set(["--device", "--json"]);
+  const knownAction = action === "login" || action === "status" ||
+    action === "logout";
   if (
-    (action !== "login" && action !== "status" && action !== "logout") ||
+    !knownAction ||
     provider !== "openai-codex" ||
     normalized.slice(3).some((argument) => !allowedArguments.has(argument))
   ) {
     const error = new HarnessControlError(
       "invalid-request",
-      "usage: auth login|status|logout openai-codex [--device] [--json]",
+      controlUsage(
+        "usage: auth login|status|logout openai-codex [--device] [--json]",
+        controlFlagRefusal(
+          knownAction ? `auth ${action}` : "auth",
+          normalized.slice(1),
+          [...allowedArguments],
+        ),
+      ),
     );
     if (!json) throw error;
     writeJsonControlFailure(io, command, error, deps.controlSignal);

@@ -221,7 +221,12 @@ Normative behavior:
    `cfc-write-authorized-by:unread` rather than yield a schema with no write
    restriction. A reload of stored source fails the same way: the error guards
    a write restriction, not an authoring shape, and a pattern does not run
-   without the restriction its author wrote. A schema
+   without the restriction its author wrote. Plain generic interfaces and
+   object aliases preserve whole policy arguments and writer parameters through
+   their member declarations, forwarded aliases, inherited members, defaults,
+   and recursive definitions. A generic member operator that leaves a writer
+   carrier without readable binding syntax must report that unsupported form
+   rather than silently discard its restriction. A schema
    generated from a type alone, such as a computed's capture, has no reference
    to read a binding from: it carries no write claim, and nothing reports that.
 
@@ -271,8 +276,9 @@ Normative behavior:
    member. Each member's claim is stamped with its module identity where the
    list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with no
    stamp admits no writer, as a stored lone claim with none does.
-5. An `AuthoredByCurrentUser` label beside it requires every member to name a
-   contract, so every write the position admits carries a reviewed gesture.
+5. An `AuthoredByCurrentUser` label beside it needs nothing more of the list:
+   every member names a writer, which is what a claim about the current
+   principal requires, and a member naming a contract keeps its gesture.
 
 ## Pipeline Contract
 

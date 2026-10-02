@@ -750,26 +750,51 @@ clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
 parameterized out of three differently labeled reads ends up admitting all
 three and readable by whoever satisfies all three.
 
-Where that declaration is observable afterwards is `/requestHash`, and it is
-worth knowing why the other two differ. The issuing transaction declares on
-every path it writes, and the settle then rewrites `pending` — and, on a
-failure, `error` — from a transaction that reads only its own write
-destination and therefore carries nothing. The runtime re-derives a path's
-entry from what its writer carried, so those two come back empty; the hash
-does not change between the two writes, so nothing re-derives it. A reader of
-`pending` alone is tainted by nothing as a result. Everything the flow model
-says about the routing bit still holds of the request that set it; what is
-recorded durably is the hash.
+The route declares on the paths the issuing transaction writes, and which
+paths those are depends on what the claim finds stored. `/requestHash` moves
+on every issue, so every labeled issue declares there, and that is the path
+on which the declaration is always observable. `/pending` is written only by
+a claim that finds the flag down. A claim made while an earlier request of
+the same node is still in flight sets the flag to the value it already holds,
+which is no write, and declares nothing there. So a query whose labeled issue
+follows a settled one carries the parameter's clause on `/pending`, and a
+query whose only labeled issue overlapped an unlabeled one does not.
 
-The foreign-space refusal below is the exception, and the only one. It is
-written by the ISSUING transaction — the one carrying the clause it refuses
-over, since that is the condition it fires on — so the route declares that
-clause on `/pending` and `/error` there, and it stays: no settle follows to
-re-derive it. A pattern that renders "this query was refused" therefore
-inherits the atoms the refusal was about, and a store it writes them into has
-to admit them. That is the ratchet landing where the refusal did rather than
-an accident, and it is worth knowing before rendering a refusal into a store
-whose policy an author wrote.
+The settle takes no declaration back. It rewrites `pending` — and, on a
+failure, `error` — from a transaction that reads only its own write
+destination and therefore carries nothing, and a declared component grows by
+clause and gives none back (CFC spec §8.12.1), whatever the transaction
+rewriting the path carried. A reader of `pending` is tainted by every clause
+a labeled issue declared there, and stays so after the query settles. A
+pattern that copies the flag, or anything computed from it, into a store
+whose policy an author wrote has to admit those clauses there.
+
+What the flag carries is bounded by the result's top. A claim carries `S`
+and nothing of the rows: the builtin reads its own settled result as a read
+of its write destination, which stays out of the join (§18.6.2). Each settle
+that writes rows declares that same `S` on `/result`, joined with the rows'
+labels. So a reader of the flag of a settled query carries no more than a
+reader of the result's length, and none of a projected column's label. An
+issue that another superseded before its rows landed is inside the bound as
+well. Both read the same parameter cell, and what a reader of that cell
+carries grows by clause and gives none back, so the issue that settled
+carried the superseded one's `S` with its own.
+
+The bound stops at two states. While a labeled request is in flight the flag
+carries its `S` and the top does not, until the settle declares it there. And
+the settle of a FAILED issue writes `/error` and no rows, and declares
+nothing on `/result`, so after a failure the flag carries that issue's `S`
+and the top keeps what the issues that settled rows brought. That settle
+carries nothing, so it declares nothing on `/error` either.
+
+The foreign-space refusal below declares the same way. It is written by the
+ISSUING transaction — the one carrying the clause it refuses over, since that
+is the condition it fires on — so the route declares that clause on the
+control paths the refusal writes, `/error` among them. A pattern that renders
+"this query was refused" therefore inherits the atoms the refusal was about,
+and a store it writes them into has to admit them. That is the ratchet
+landing where the refusal did rather than an accident, and it is worth
+knowing before rendering a refusal into a store whose policy an author wrote.
 
 `/result`'s per-column entries are untouched — the route declines at a path a
 schema declares — and so are the row documents, because that settle
@@ -789,7 +814,7 @@ the request, recorded at issue and supplied by the settle.
 | a row's content | the row's column and row labels | the row document's own entries |
 | a row document's existence | the row's label | the row document's root entry |
 | `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
-| `/pending`, on the success path | nothing | recorded residual |
+| `/pending` | the `S` of each issue whose claim raised the flag, accumulated | route-2 declaration by the issuing transaction |
 
 All of it holds at every scope. A session-scoped result is materialized per
 reader, which limits who can read it and does not label what that reader's

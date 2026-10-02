@@ -2309,6 +2309,90 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
+    it("keeps the declaration on a path a transaction carrying nothing rewrites", async () => {
+      // The declaration is the store's policy rather than a measurement of
+      // the value at the path. It grows by clause and gives none back
+      // (§8.12.1), so it stands over a value derived from nothing labeled,
+      // and a reader of that value carries it as a floor.
+
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = newRuntime(storageManager);
+      try {
+        await seedSecretSource(runtime, "writer-fit-seam-rewrite-source");
+
+        const born = runtime.edit();
+        const result = runtime.getCell(
+          signer.did(),
+          "writer-fit-seam-rewrite-result",
+          undefined,
+          born,
+        );
+        const store = runtime.getCell<{ flag?: boolean; copied?: string }>(
+          signer.did(),
+          "writer-fit-seam-rewrite-store",
+          undefined,
+          born,
+        );
+        recordRuntimeOwnedStore(runtime, born, result, store);
+        store.set({ flag: false, copied: "public" });
+        const storeId = store.getAsNormalizedFullLink().id;
+        expect((await born.commit()).ok).toBeDefined();
+
+        const storeIn = (tx: ReturnType<Runtime["edit"]>) =>
+          runtime.getCell<{ flag?: boolean; copied?: string }>(
+            signer.did(),
+            "writer-fit-seam-rewrite-store",
+            undefined,
+            tx,
+          );
+        const declaredAtFlag = () =>
+          replicaEntries(storageManager, storeId).filter((entry) =>
+            entry.origin === "declared" && entry.path.length === 1 &&
+            entry.path[0] === "flag"
+          ).map((entry) => entry.label.confidentiality);
+
+        const labeled = runtime.edit();
+        labeled.setCfcEnforcementMode("enforce-strict");
+        const raw = runtime.getCell(
+          signer.did(),
+          "writer-fit-seam-rewrite-source",
+          undefined,
+          labeled,
+        ).getRaw() as { secret?: string };
+        storeIn(labeled).set({ flag: true, copied: `${raw.secret}!` });
+        labeled.prepareCfc();
+        expect((await labeled.commit()).ok).toBeDefined();
+        expect(declaredAtFlag()).toEqual([["secret"]]);
+
+        const unlabeled = runtime.edit();
+        unlabeled.setCfcEnforcementMode("enforce-strict");
+        storeIn(unlabeled).key("flag").set(false);
+        unlabeled.prepareCfc();
+        expect((await unlabeled.commit()).ok).toBeDefined();
+        expect(declaredAtFlag()).toEqual([["secret"]]);
+
+        const readBack = runtime.edit();
+        readBack.setCfcEnforcementMode("enforce-strict");
+        const seen = storeIn(readBack).key("flag").get();
+        const sink = runtime.getCell<{ copied?: string }>(
+          signer.did(),
+          "writer-fit-seam-rewrite-sink",
+          undefined,
+          readBack,
+        );
+        sink.set({ copied: String(seen) });
+        readBack.prepareCfc();
+        const refused = await readBack.commit();
+        expect(refused.error?.message).toContain(
+          "writer-fit confidentiality misfit",
+        );
+        expect(refused.error?.message).toContain('"secret"');
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
     it("declares on a later transaction that names no store of its own", async () => {
       // Instance 1: a piece whose result projects a list. Setup is one
       // transaction; the reactive update that appends to the list is another,

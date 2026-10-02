@@ -301,7 +301,7 @@ export function determineTriggeredActions(
 
     if (hasChanged) {
       // If the value changed, trigger the actions
-      triggeredActions.push(...current.map(({ action }) => action));
+      for (const { action } of current) triggeredActions.push(action);
     } else {
       // Otherwise, queue up the next path, keeping subscribers sorted by path
       for (const subscriber of current) {

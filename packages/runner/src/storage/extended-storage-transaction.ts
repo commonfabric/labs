@@ -17,9 +17,10 @@ import {
   SCHEMA_META_MEMBER,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { aclDocId } from "@commonfabric/memory/acl";
-import type {
-  CommitPrecondition,
-  SqliteOperation,
+import {
+  type CommitPrecondition,
+  type SqliteOperation,
+  toDocumentPath,
 } from "@commonfabric/memory/v2";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
@@ -1170,11 +1171,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       if (flowReadExcluded(read.id, read.path)) {
         continue;
       }
+      // A notification names a document-rooted address.
       this.#cfcState.triggerReads.push(deepFreeze({
         space: read.space,
         id: read.id,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeDocumentPath(read.path) as string[],
+        path: canonicalizeDocumentPath(toDocumentPath(read.path)),
       }));
     }
   }
@@ -2448,7 +2450,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
-          path: canonicalizeDocumentPath(address.path),
+          // The reactivity log records the journal's document-rooted paths.
+          path: canonicalizeDocumentPath(toDocumentPath(address.path)),
         }),
     );
 
@@ -3074,7 +3077,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       };
       // Diagnostics are read by people and by matchers; the verdict tag is
       // a classification channel and does not belong in either.
-      this.#cfcState.diagnostics.push(...reasons.map(plainReason));
+      for (const reason of reasons) {
+        this.#cfcState.diagnostics.push(plainReason(reason));
+      }
       return "";
     }
     const digest = this.#preparedDigest();
@@ -3643,7 +3648,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #clearPostCommitOutbox(handedOff = false): void {
     if (!handedOff) {
-      this.#abandonableEffects.push(...this.#cfcState.outbox);
+      for (const effect of this.#cfcState.outbox) {
+        this.#abandonableEffects.push(effect);
+      }
     }
     this.#cfcState.outbox = [];
     this.#outboxIdempotencyKeys.clear();

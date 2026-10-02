@@ -6,6 +6,11 @@
  * stored anywhere.
  */
 
+import {
+  toUnpaddedBase64url,
+  toUnpaddedBase64urlFromText,
+} from "@commonfabric/utils/base64url";
+
 export interface ServiceAccountKey {
   client_email: string;
 
@@ -16,12 +21,6 @@ export interface ServiceAccountKey {
 }
 
 const METADATA = "http://metadata.google.internal/computeMetadata/v1";
-
-const b64url = (bytes: Uint8Array): string =>
-  btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
 
 // A PEM PKCS#8 private key -> a Web Crypto RS256 signing key.
 async function importPkcs8(pem: string): Promise<CryptoKey> {
@@ -49,8 +48,7 @@ export async function saAssertion(
   nowSec: number,
   scope: string,
 ): Promise<string> {
-  const enc = (o: unknown) =>
-    b64url(new TextEncoder().encode(JSON.stringify(o)));
+  const enc = (o: unknown) => toUnpaddedBase64urlFromText(JSON.stringify(o));
   const head = enc({ alg: "RS256", typ: "JWT" });
   const body = enc({
     iss: key.client_email,
@@ -64,7 +62,7 @@ export async function saAssertion(
     await importPkcs8(key.private_key),
     new TextEncoder().encode(`${head}.${body}`),
   );
-  return `${head}.${body}.${b64url(new Uint8Array(sig))}`;
+  return `${head}.${body}.${toUnpaddedBase64url(new Uint8Array(sig))}`;
 }
 
 /**

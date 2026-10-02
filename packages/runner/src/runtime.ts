@@ -90,6 +90,8 @@ import {
 import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
 import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
+  CFC_POLICY_MANIFEST_ID_PREFIX,
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
   validateCfcPolicyArtifactManifest,
@@ -106,7 +108,11 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { type DelegatedCarriage, waveRunContextOf } from "./executor/wave.ts";
+import {
+  type DelegatedCarriage,
+  waveRunActorOf,
+  waveRunContextOf,
+} from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -155,6 +161,7 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
+import { SpaceAccessWatch } from "./space-access-watch.ts";
 import {
   normalizeSpaceHost,
   type SpaceHostRegistration,
@@ -376,6 +383,18 @@ export interface ExperimentalOptions {
 
   /** Web client override; an explicit value takes precedence over the default. */
   webViewScopedReplication?: boolean | undefined;
+
+  /**
+   * The memory sessions of every space on one host share one connection,
+   * which each key authenticates on once
+   * (`docs/specs/memory-v2/connection-multiplexing.md`). When false, each
+   * space has a connection of its own, named in the connection's address,
+   * and every `session.open` is signed. A memory server under this flag
+   * verifies `connection.auth` and advertises `connectionAuth`. Defaults to
+   * off: a deployment that routes a connection by the space its address
+   * names cannot serve a connection that carries several.
+   */
+  sharedMemoryConnection?: boolean | undefined;
 }
 
 /**
@@ -1009,11 +1028,6 @@ export const spaceCellSchema = internSchema(
   },
 );
 
-const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
-  type: "object",
-  additionalProperties: true,
-} as const satisfies JSONSchema;
-
 /** The allocation record a space holds for one `PatternFactory.inSpace`
  *  name: the DID of the space the name reaches. */
 const inSpaceAllocationSchema = {
@@ -1151,6 +1165,14 @@ const externalObservationRefusal = (
 
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
+
+/** A document a commit retry's catch-up could not load, and the reason. */
+export type CommitRetryPullFailure = {
+  space: MemorySpace;
+  id: URI;
+  scope?: CellScope;
+  error: unknown;
+};
 
 /**
  * Main Runtime class that orchestrates all services in the runner package.
@@ -1314,6 +1336,9 @@ export class Runtime {
    * subscriptions). */
   #installedSpaceOpenObserver: ((space: MemorySpace) => void) | undefined;
 
+  /** The watch `spaceAccessWatch` creates on first use. */
+  #spaceAccessWatch: SpaceAccessWatch | undefined;
+
   /**
    * Whether _this_ runtime explicitly set the `serverExecution` flag at
    * construction (the only case its dispose participates in the process-global
@@ -1463,7 +1488,9 @@ export class Runtime {
       if (next === predecessor) return true;
       if (visited.has(next)) continue;
       visited.add(next);
-      pending.push(...(spaceDelegations.get(next) ?? []));
+      for (const ancestor of spaceDelegations.get(next) ?? []) {
+        pending.push(ancestor);
+      }
     }
     return false;
   }
@@ -1502,7 +1529,9 @@ export class Runtime {
           const predecessor = pending.pop()!;
           if (predecessor === identity || inherited.has(predecessor)) continue;
           inherited.add(predecessor);
-          pending.push(...(spaceDelegations.get(predecessor) ?? []));
+          for (const ancestor of spaceDelegations.get(predecessor) ?? []) {
+            pending.push(ancestor);
+          }
         }
         if (inherited.size > 0) {
           spaceSnapshot.set(identity, [...inherited].sort());
@@ -1896,6 +1925,11 @@ export class Runtime {
       (this.storageManager as {
         setTelemetry?: (telemetry: RuntimeTelemetry) => void;
       }).setTelemetry?.(this.telemetry);
+      // Declared before any session opens, since the choice is made per
+      // session as it is created.
+      this.storageManager.setSharedMemoryConnection?.(
+        this.experimental.sharedMemoryConnection === true,
+      );
       this.moduleByteCache = options.moduleByteCache;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
@@ -2465,6 +2499,9 @@ export class Runtime {
       // released by the time it does, not whether disposal fails.
       this.scheduler.dispose();
       this.runner.dispose();
+      // The storage manager can outlive this runtime, so the subscription the
+      // watch holds on it goes now.
+      this.#spaceAccessWatch?.dispose();
 
       // Pop the default frame
       if (this.#defaultFrame) {
@@ -2739,6 +2776,17 @@ export class Runtime {
    * Undefined in the OFF arm and on serving runtimes. */
   get effectsChannel(): EffectsChannel | undefined {
     return this.#effectsChannel;
+  }
+
+  /**
+   * Runs actions again when the memory server starts or stops refusing this
+   * runtime a space, for as long as this runtime lives.
+   */
+  get spaceAccessWatch(): SpaceAccessWatch {
+    return this.#spaceAccessWatch ??= new SpaceAccessWatch(
+      this.storageManager,
+      this.scheduler,
+    );
   }
 
   /**
@@ -3311,14 +3359,21 @@ export class Runtime {
    * without scope use the space instance. If no array entry names a usable
    * address, the singular conflict supplies the recovery target.
    *
-   * Recovery is best-effort: failed waits and pulls leave the fresh retry's
-   * commit to decide whether its basis is valid. Aborting `teardownSignal`
-   * ends the wait; callers must check their lifetime before requeueing work.
+   * A policy manifest is pulled with the documents its rules live in, since
+   * a retry verifies the whole artifact.
+   *
+   * Recovery is best-effort: a failed wait or pull leaves the fresh retry's
+   * commit to decide whether its basis is valid. The pulls that failed are
+   * returned, each with its reason, so that a caller whose retry cannot
+   * succeed without a document can tell a document that could not be loaded
+   * from one that is absent. Aborting `teardownSignal` ends the wait and
+   * returns no failures; callers must check their lifetime before requeueing
+   * work.
    */
   async awaitCommitRetryReadiness(
     error: unknown,
     teardownSignal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<CommitRetryPullFailure[]> {
     const waitUnlessTeardown = async (
       operation: PromiseLike<unknown>,
     ): Promise<boolean> => {
@@ -3343,12 +3398,14 @@ export class Runtime {
       ?.readyToRetry;
     if (typeof readyToRetry === "function") {
       try {
-        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) return;
+        if (!await waitUnlessTeardown(Promise.resolve(readyToRetry()))) {
+          return [];
+        }
       } catch {
         // Readiness aborted — the retry's commit decides.
       }
     }
-    if (teardownSignal?.aborted) return;
+    if (teardownSignal?.aborted) return [];
     type ConflictAddress = { space: MemorySpace; of: URI; scope?: CellScope };
     const isPullableConflict = (value: unknown): value is ConflictAddress => {
       const conflict = value as Partial<ConflictAddress> | null | undefined;
@@ -3365,6 +3422,7 @@ export class Runtime {
       : isPullableConflict(rejection?.conflict)
       ? [rejection.conflict]
       : [];
+    const failures: CommitRetryPullFailure[] = [];
     const pulls: Promise<unknown>[] = [];
     const seen = new Set<string>();
     for (const conflict of conflicts) {
@@ -3375,23 +3433,39 @@ export class Runtime {
       });
       if (seen.has(key)) continue;
       seen.add(key);
+      const failed = (reason: unknown) => {
+        failures.push({
+          space: conflict.space,
+          id: conflict.of,
+          scope: conflict.scope,
+          error: reason,
+        });
+      };
       try {
         pulls.push(
           Promise.resolve(
             this.storageManager.open(conflict.space).sync(
               conflict.of,
-              { path: [], schema: false },
+              {
+                path: [],
+                schema: conflict.of.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX)
+                  ? CFC_POLICY_MANIFEST_DOC_SCHEMA
+                  : false,
+              },
               conflict.scope,
             ),
-          ).catch(() => undefined),
+          ).then((result) => {
+            if (result?.error !== undefined) failed(result.error);
+          }, failed),
         );
-      } catch {
-        // A synchronous pull failure leaves the retry's commit to decide.
+      } catch (reason) {
+        failed(reason);
       }
     }
-    if (pulls.length > 0) {
-      await waitUnlessTeardown(Promise.all(pulls));
+    if (pulls.length > 0 && !await waitUnlessTeardown(Promise.all(pulls))) {
+      return [];
     }
+    return failures;
   }
 
   /**
@@ -4187,10 +4261,7 @@ export class Runtime {
    */
   actingPrincipalFor(tx?: IExtendedStorageTransaction): DID | undefined {
     if (!this.servingPosture) return this.userIdentityDID;
-    const user = tx === undefined
-      ? undefined
-      : waveRunContextOf(tx)?.acting?.user;
-    return isDID(user) ? user : undefined;
+    return tx === undefined ? undefined : waveRunActorOf(tx);
   }
 
   getHomeSpaceCell(
@@ -4285,6 +4356,20 @@ export class Runtime {
     } finally {
       tx.abort();
     }
+  }
+
+  /**
+   * Asks the memory server once more for `space`, if it refused this
+   * runtime's session there, and resolves once it has decided. An admission
+   * runs again every computation whose `spaceAccess(target)` answer turned on
+   * the refusal, and repeats the loads the refusal failed; a refusal leaves
+   * the space refused. It is for a host that has reason to think the verdict
+   * changed, and does nothing for a space this runtime has not opened. It
+   * rejects on any failure other than a refusal. See
+   * `IStorageManager.retrySpaceAccess()`.
+   */
+  async retrySpaceAccess(space: MemorySpace): Promise<void> {
+    await this.storageManager.retrySpaceAccess?.(space);
   }
 
   /**

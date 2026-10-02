@@ -28,6 +28,7 @@ import type {
   CommitClass,
   CommitPrecondition,
   DeliveryFailureClass,
+  DocumentPath,
   EntityDocument,
   EntityIdListOptions,
   EntityIdListResult,
@@ -90,6 +91,12 @@ import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
+import type {
+  PendingCommitContext,
+  SpaceStorageDiagnostic,
+  StorageDiagnostics,
+} from "./diagnostics.ts";
+
 export type {
   ACL,
   DID,
@@ -118,7 +125,9 @@ export interface IStorageError {
 /** Typed producer evidence for a required replica load that failed before an
  * at-most-once handler could dispatch. The scheduler receives typed failure
  * evidence; an error name may inform `failureClass`, but diagnostic text never
- * constitutes policy evidence or durable `permanentEvidence`. */
+ * constitutes policy evidence or durable `permanentEvidence`. A name is
+ * permanent evidence only for a refusal this process decides by construction
+ * (`IForeignScopedReadRefusedError`). */
 export type ReplicaLoadFailure = {
   failureClass: DeliveryFailureClass;
   recoveryEpoch: string;
@@ -151,13 +160,14 @@ export const toReplicaLoadFailureError = (
     aclRevision?: unknown;
   } | undefined;
   const name = typeof named?.name === "string" ? named.name : "";
+  const foreignScopedReadRefused = name === "ForeignScopedReadRefusedError";
   const failureClass: DeliveryFailureClass = name === "SessionRevokedError"
     ? "session-revoked"
     : name === "ConnectionError"
     ? "connection"
     : name === "AuthorizationError"
     ? "authorization"
-    : name === "ProtocolError"
+    : name === "ProtocolError" || foreignScopedReadRefused
     ? "protocol"
     : name === "TimeoutError"
     ? "timeout"
@@ -168,10 +178,13 @@ export const toReplicaLoadFailureError = (
   return new ReplicaLoadFailureError({
     failureClass,
     recoveryEpoch: permanentAclEvidence ? `acl:${aclRevision}` : recoveryEpoch,
-    // A name is not durable evidence. Authorization becomes permanent only
-    // when the memory server supplies the current ACL revision. Versioned
-    // protocol validators construct ReplicaLoadFailureError directly.
-    permanentEvidence: permanentAclEvidence,
+    // A name off the wire is not durable evidence. Authorization becomes
+    // permanent only when the memory server supplies the current ACL
+    // revision. A foreign scoped read refusal is minted by this process from
+    // the read's scope and its serving posture, so the same read is refused
+    // every time. Versioned protocol validators construct
+    // ReplicaLoadFailureError directly.
+    permanentEvidence: permanentAclEvidence || foreignScopedReadRefused,
   }, cause);
 };
 
@@ -322,6 +335,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
 
   /**
+   * Chooses how the sessions this manager opens from here on reach their
+   * hosts: over one connection per host that they share, authenticated once
+   * per key, or over one connection per space. A manager without the method
+   * has no connections to share.
+   *
+   * @throws If a session is already open and the choice would change: the
+   * sessions would then be split across the two.
+   */
+  setSharedMemoryConnection?(enabled: boolean): void;
+
+  /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space
    * (federation site table). Optional: managers without remote resolution
    * (emulated/test) simply don't implement it. Returns true when the
@@ -416,7 +440,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * connection cannot resolve ahead of fan-out the server sent earlier on it.
    * Multi-runtime test harnesses use it to make one runtime observe another's
    * committed state deterministically; a manager with no open remote
-   * connection resolves immediately.
+   * connection resolves immediately. A space under a permanent authorization
+   * denial (see `authorizationError()`), or refused one by this call's own
+   * round trip, is passed over rather than failing the whole call: the server
+   * sends nothing on a session it refuses. Any other failure, a retriable
+   * denial among them, fails the call.
    */
   pullOpenSpacesToHead(): Promise<void>;
 
@@ -458,7 +486,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * invisible to the barrier. The registration must tolerate rejection and
    * drop the promise once it settles.
    */
-  trackPendingCommit(promise: Promise<unknown>): void;
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void;
+
+  /** Snapshot pending work without waiting for durability or starting I/O. */
+  getDiagnostics?(): StorageDiagnostics;
 
   /**
    * Whether any registered commit is still unconfirmed. Every write flows
@@ -605,14 +639,34 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<EventAttentionResolveResult>;
 
   /**
-   * THE SESSION REMOUNT's trigger: an admitted commit touched `space`'s ACL
-   * document. A space session this manager holds — revoked or denied by an
-   * EARLIER ACL verdict — is dropped so the next load re-opens it, because
-   * the ACL is the only input that decision has. Never widens authority: a
-   * genuine de-authorization is refused again at `session.open`. Implemented
-   * by the v2 StorageManager; the serving loop's host is its only caller.
+   * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
+   * `space`'s ACL document. A space session this manager holds — revoked or
+   * denied by an EARLIER ACL verdict — is dropped so the next load re-opens
+   * it, because the ACL is the only input that decision has. Never widens
+   * authority: a genuine de-authorization is refused again at `session.open`.
+   * Implemented by the v2 StorageManager; the serving loop's host is its only
+   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
+   * such commit.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
+
+  /**
+   * Asks the memory server once more for a space it refused this manager,
+   * for a host that has reason to think the verdict changed, such as word
+   * that the principal was granted access. The other trigger of the session
+   * remount besides `noteSpaceAclChanged()`: it opens the session again
+   * through the same `session.open` admission the first attempt went
+   * through, so it can admit only what that admission would.
+   *
+   * Resolves once the server has decided. An admission clears
+   * `spaceAccessError()`, notifies `subscribeSpaceAccessChange()` observers,
+   * and repeats the loads the refusal failed. A refusal leaves the space
+   * refused, as it was, and does not reject. Any other failure, of the open
+   * or of a repeated load, rejects, and a later call repeats the loads that
+   * have not yet succeeded. Does nothing for a space this manager has not
+   * opened, or one it holds no refusal for.
+   */
+  retrySpaceAccess?(space: MemorySpace): Promise<void>;
 
   /**
    * Load cell from storage. Will also subscribe to new changes.
@@ -1202,6 +1256,16 @@ export interface IStorageTransaction {
    * their reads. Event handlers retain ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
+
+  /**
+   * Whether this transaction's writes are derived from its reads, as a
+   * reactive computation's are, so that running it again reproduces them.
+   * When the space refuses such a write for lack of a grant, a replica may
+   * keep it as a local fold rather than revert it: it does so for each
+   * document the write sits directly on the confirmed version it was made
+   * over, and reverts the write to any other.
+   */
+  derivedWrites?: boolean;
 
   /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
@@ -2889,6 +2953,14 @@ export type IMemorySpaceAddress = IMemoryAddress & {
   space: MemorySpace;
 };
 
+/**
+ * A memory address as the transaction journal records it: its path is rooted
+ * at the stored document, so user data sits under `value`.
+ */
+export type IMemorySpaceDocumentAddress = IMemorySpaceAddress & {
+  path: DocumentPath;
+};
+
 export type MemoryAddressPathComponent = string;
 
 export interface Assert {
@@ -2970,6 +3042,9 @@ export interface ViewInterestLease {
 }
 
 export interface ISpaceReplica extends ISpace {
+  /** Existing session progress without starting I/O or awaiting commits. */
+  getDiagnostics?(): SpaceStorageDiagnostic;
+
   /**
    * Return a state for the requested entry or returns `undefined` if replica
    * does not have it. The state carries `since`, the commit sequence the
@@ -3363,7 +3438,18 @@ export type PullError =
   | IQueryError
   | IStoreError
   | IConnectionError
-  | IAuthorizationError;
+  | IAuthorizationError
+  | IForeignScopedReadRefusedError;
+
+/** A serving runtime's refusal of a scoped read of a space other than its home
+ * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
+ * scope and the runtime's serving posture decide it, never transport or session
+ * state, so the same read from the same runtime is refused every time. A served
+ * event whose required load meets it terminalizes at once instead of spending
+ * the delivery-failure budget (events.md §5). */
+export interface IForeignScopedReadRefusedError extends IStorageError {
+  readonly name: "ForeignScopedReadRefusedError";
+}
 
 export interface IStoreError extends IStorageError {
   readonly name: "StoreError";
@@ -3385,7 +3471,7 @@ export interface TransactionReactivityLog {
 }
 
 export interface TransactionWriteDetail {
-  address: IMemorySpaceAddress;
+  address: IMemorySpaceDocumentAddress;
   value?: FabricValue;
   previousValue?: FabricValue;
 
@@ -3443,10 +3529,10 @@ export interface NativeStorageCommit {
 
 export type Activity = Variant<{
   read: IReadActivity;
-  write: IMemorySpaceAddress;
+  write: IMemorySpaceDocumentAddress;
 }>;
 
-export interface IReadActivity extends IMemorySpaceAddress {
+export interface IReadActivity extends IMemorySpaceDocumentAddress {
   meta: Metadata;
   nonRecursive?: boolean;
 
@@ -3474,7 +3560,7 @@ export interface IReadActivity extends IMemorySpaceAddress {
  * the transaction inspection surface sees. `journalIndex` is the shared
  * activity clock (see {@link IReadActivity.journalIndex}).
  */
-export interface IWriteAttempt extends IMemorySpaceAddress {
+export interface IWriteAttempt extends IMemorySpaceDocumentAddress {
   journalIndex: number;
 }
 

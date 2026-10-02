@@ -385,7 +385,9 @@ function schemaToTypeStringInner(
     // Required is a UNION, not first-wins: every member's constraint holds at
     // once, so a field any member requires is required of the whole.
     if (Array.isArray(source.required)) {
-      conjoinedRequired.push(...(source.required as string[]));
+      for (const name of source.required as string[]) {
+        conjoinedRequired.push(name);
+      }
     }
   }
 

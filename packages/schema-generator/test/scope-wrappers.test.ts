@@ -1,7 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+
+import type { JSONSchemaObj, SchemaScope } from "@commonfabric/api";
 import ts from "typescript";
-import type { JSONSchemaObj } from "@commonfabric/api";
+
+import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
   createTestProgram,
@@ -437,17 +440,20 @@ interface SchemaRoot { head: Node<{ a: string }>; }
 `,
           "SchemaRoot",
         );
-        const diagnostics: string[] = [];
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
         const schema = new SchemaGenerator().generateSchema(
           type,
           checker,
           typeNode,
-          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.type) },
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
         ) as JSONSchemaObj;
 
-        expect(diagnostics).toEqual(["schema-type:unread"]);
-        // Each handle read keeps its scope; the innermost, past the bound,
-        // accepts any value.
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toMatchObject({
+          type: "schema-type:unread",
+          severity: "warning",
+        });
+        // The partial schema preserves the handles read before the bound.
         const handle = [{ kind: "cell", scope: "user" }];
         const handles: unknown[] = [];
         JSON.stringify(schema, (key, value) => {
@@ -476,6 +482,149 @@ interface SchemaRoot { draft: Draft | undefined; }
       expect(() =>
         new SchemaGenerator().generateSchema(type, checker, typeNode)
       ).toThrow("A scope wrapper cannot be a member of a union.");
+    });
+  });
+
+  describe("a scope wrapper around `never`", () => {
+    // `never & brand` is `never`, so the checker gives the wrapper the type of
+    // its payload. The payload accepts nothing, and its `false` becomes
+    // `{ not: true }` beside the scope.
+
+    const WRAPPER_FOR_SCOPE = {
+      space: "PerSpace",
+      user: "PerUser",
+      session: "PerSession",
+      any: "PerAny",
+    } as const satisfies Record<SchemaScope, string>;
+
+    /** The schema generated for `code`'s `SchemaRoot`. */
+    async function schemaOf(code: string): Promise<unknown> {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        code,
+        "SchemaRoot",
+      );
+      return new SchemaGenerator().generateSchema(type, checker, typeNode);
+    }
+
+    for (const [scope, wrapper] of Object.entries(WRAPPER_FOR_SCOPE)) {
+      it(`emits \`{ not: true, scope: "${scope}" }\` for a root \`${wrapper}<never>\``, async () => {
+        expect(await schemaOf(`type SchemaRoot = ${wrapper}<never>;`))
+          .toEqual({ not: true, scope });
+      });
+
+      it(`emits \`{ not: true, scope: "${scope}" }\` for a property typed \`${wrapper}<never>\``, async () => {
+        expect(
+          await schemaOf(`interface SchemaRoot { x: ${wrapper}<never>; }`),
+        ).toEqual({
+          type: "object",
+          properties: { x: { not: true, scope } },
+          required: ["x"],
+        });
+      });
+
+      it(`emits the payload's schema with \`scope: "${scope}"\` for a property typed \`${wrapper}<string>\``, async () => {
+        expect(
+          await schemaOf(`interface SchemaRoot { x: ${wrapper}<string>; }`),
+        ).toEqual({
+          type: "object",
+          properties: { x: { type: "string", scope } },
+          required: ["x"],
+        });
+      });
+    }
+
+    it("emits each property's own scope for two scopes around `never`", async () => {
+      expect(
+        await schemaOf(
+          `interface SchemaRoot { x: PerUser<never>; y: PerSession<never>; }`,
+        ),
+      ).toEqual({
+        type: "object",
+        properties: {
+          x: { not: true, scope: "user" },
+          y: { not: true, scope: "session" },
+        },
+        required: ["x", "y"],
+      });
+    });
+
+    it("emits `{ not: true, scope }` for a payload the checker reduces to `never`", async () => {
+      expect(
+        await schemaOf(`interface SchemaRoot { x: PerUser<string & number>; }`),
+      ).toEqual({
+        type: "object",
+        properties: { x: { not: true, scope: "user" } },
+        required: ["x"],
+      });
+    });
+
+    it("emits `{ not: true, scope }` for an optional property typed `PerUser<never>`", async () => {
+      expect(
+        await schemaOf(`interface SchemaRoot { x?: PerUser<never>; }`),
+      ).toEqual({
+        type: "object",
+        properties: { x: { not: true, scope: "user" } },
+      });
+    });
+
+    it("emits the scope beside a string `asCell` entry for a cell around one", async () => {
+      expect(
+        await schemaOf(`interface SchemaRoot { x: Cell<PerUser<never>>; }`),
+      ).toEqual({
+        type: "object",
+        properties: {
+          x: { not: true, scope: "user", asCell: ["cell"] },
+        },
+        required: ["x"],
+      });
+    });
+
+    it("emits the scope in the cell entry for one around a cell of `never`", async () => {
+      expect(
+        await schemaOf(`interface SchemaRoot { x: PerUser<Cell<never>>; }`),
+      ).toEqual({
+        type: "object",
+        properties: {
+          x: { asCell: [{ kind: "cell", scope: "user" }], not: true },
+        },
+        required: ["x"],
+      });
+    });
+
+    it("throws for one nested in another scope wrapper without a cell boundary", async () => {
+      await expect(
+        schemaOf(`interface SchemaRoot { x: PerUser<PerSession<never>>; }`),
+      ).rejects.toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
+    });
+
+    it("emits `false` for `never` in a later schema from the same generator", async () => {
+      // A generator keeps the names it gives definitions for every schema it
+      // writes afterward, as the transformer's one generator per program does.
+      const { checker, sourceFile } = await createTestProgram(`
+type Earlier = PerUser<never>;
+interface Later { x: never; }
+`);
+      const earlier = sourceFile.statements.find(ts.isTypeAliasDeclaration)!;
+      const later = sourceFile.statements.find(ts.isInterfaceDeclaration)!;
+      const generator = new SchemaGenerator();
+      generator.generateSchema(
+        checker.getTypeFromTypeNode(earlier.type),
+        checker,
+        earlier.type,
+      );
+
+      expect(
+        generator.generateSchema(
+          checker.getTypeAtLocation(later.name),
+          checker,
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { x: false },
+        required: ["x"],
+      });
     });
   });
 

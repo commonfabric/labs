@@ -38,6 +38,7 @@ import type {
   SchedulerGraphSnapshot,
   SettleStats,
   SettleStatsHistoryEntry,
+  StorageDiagnostics,
   TriggerTraceEntry,
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
@@ -297,6 +298,14 @@ export enum RequestType {
    */
   RegisterSpaceHostDetailed = "runtime:registerSpaceHostDetailed",
 
+  /**
+   * Asks the memory server once more for a space it refused this runtime,
+   * and is done once the server has admitted or refused it again. It is for a
+   * host that has word the runtime's principal was granted access, and does
+   * nothing for a space the runtime has not opened or was not refused.
+   */
+  RetrySpaceAccess = "runtime:retrySpaceAccess",
+
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
 
@@ -308,6 +317,9 @@ export enum RequestType {
    * round trip covering all four.
    */
   GetLoggerCounts = "runtime:getLoggerCounts",
+
+  /** Snapshot storage work without waiting for the durability barrier. */
+  GetStorageDiagnostics = "runtime:getStorageDiagnostics",
 
   /**
    * Answers with the pattern coverage collector's data, or `null` where this
@@ -816,6 +828,12 @@ export type InitializationData = {
     webViewScopedReplication?: boolean;
 
     /**
+     * Whether the memory sessions of one host share a connection, which
+     * each key authenticates on once.
+     */
+    sharedMemoryConnection?: boolean;
+
+    /**
      * Whether a link writer emits `cid:` schema-document references, each
      * closure materialized in the carrying transaction. Default on; an
      * explicit `false` is the rollback override.
@@ -900,7 +918,7 @@ export type InitializationData = {
   /**
    * The confidentiality a display surface admits by default: exact `atoms`,
    * which is where an acting user's identity atoms go, plus the Caveat
-   * `caveatKinds` a display can discharge. Absent means no ceiling.
+   * `caveatKinds` a display admits. Absent means no ceiling.
    */
   renderConfidentialityCeiling?: {
     /**
@@ -910,8 +928,9 @@ export type InitializationData = {
     atoms?: readonly CfcConfClause[];
 
     /**
-     * The kinds of Caveat a display surface can discharge, named rather
-     * than carried, so a label bearing only these is still displayable.
+     * The kinds of Caveat a display surface admits, named rather than
+     * carried, so a label bearing only these is still displayable. Admitting
+     * a caveat is not discharging it: it stays on the value.
      */
     caveatKinds?: readonly string[];
   };
@@ -1103,6 +1122,14 @@ export type CellPullRequest = BaseRequest & {
    * The cell whose producers to demand before reading its current value.
    */
   cell: CellRef;
+
+  /**
+   * Whether to cross the runtime-wide commit-aware barrier after demanding
+   * producers. Defaults to `true`. Rendering can pass `false` to read reactive
+   * state while writes remain unconfirmed; a cell with no value yet still
+   * waits, since the write that creates it may be in flight.
+   */
+  awaitDurability?: boolean;
 };
 
 /** The {@link RequestType.CellInitialize} request. */
@@ -1878,6 +1905,16 @@ export type RegisterSpaceHostDetailedRequest = BaseRequest & {
   host: string;
 };
 
+/** The {@link RequestType.RetrySpaceAccess} request. */
+export type RetrySpaceAccessRequest = BaseRequest & {
+  type: RequestType.RetrySpaceAccess;
+
+  /**
+   * The space to ask for again.
+   */
+  space: DID;
+};
+
 /**
  * Await all in-flight compile-cache write-backs (persistence durability), as
  * distinct from `Idle` (reactive/scheduler quiescence). Used by tests that
@@ -1896,8 +1933,18 @@ export type GetGraphSnapshotRequest = BaseRequest & {
 };
 
 /**
- * The {@link RequestType.GetLoggerCounts} request, which carries no payload.
+ * The {@link RequestType.GetStorageDiagnostics} request, which carries no payload.
  */
+export type GetStorageDiagnosticsRequest = BaseRequest & {
+  type: RequestType.GetStorageDiagnostics;
+};
+
+/** The pending-storage snapshot, or null for a manager without diagnostics. */
+export type StorageDiagnosticsResponse = {
+  diagnostics: StorageDiagnostics | null;
+};
+
+/** The {@link RequestType.GetLoggerCounts} request, which carries no payload. */
 export type GetLoggerCountsRequest = BaseRequest & {
   type: RequestType.GetLoggerCounts;
 };
@@ -3231,6 +3278,7 @@ export type IPCClientRequest =
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
+  | GetStorageDiagnosticsRequest
   | GetLoggerCountsRequest
   | GetPatternCoverageRequest
   | SetLoggerLevelRequest
@@ -3273,6 +3321,7 @@ export type IPCClientRequest =
   | CreateSpaceRequest
   | RegisterSpaceHostRequest
   | RegisterSpaceHostDetailedRequest
+  | RetrySpaceAccessRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -3904,6 +3953,7 @@ export type RemoteResponse =
   | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
+  | StorageDiagnosticsResponse
   | LoggerCountsResponse
   | PatternCoverageResponse
   | SettleStatsResponse
@@ -4003,6 +4053,10 @@ export type Commands = {
   [RequestType.GetGraphSnapshot]: {
     request: GetGraphSnapshotRequest;
     response: GraphSnapshotResponse;
+  };
+  [RequestType.GetStorageDiagnostics]: {
+    request: GetStorageDiagnosticsRequest;
+    response: StorageDiagnosticsResponse;
   };
   [RequestType.GetLoggerCounts]: {
     request: GetLoggerCountsRequest;
@@ -4221,6 +4275,10 @@ export type Commands = {
   [RequestType.RegisterSpaceHostDetailed]: {
     request: RegisterSpaceHostDetailedRequest;
     response: SpaceHostRegistrationResponse;
+  };
+  [RequestType.RetrySpaceAccess]: {
+    request: RetrySpaceAccessRequest;
+    response: EmptyResponse;
   };
   [RequestType.PieceGet]: {
     request: PieceGetRequest;

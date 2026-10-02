@@ -22,12 +22,12 @@ separately, under
 
 ## Claimed classes
 
-| Class         | Status                                                     | Evidence boundary                                                                                                                                                                                                                                                                                                         |
-| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core batch    | implemented; provisional conformance                       | Package unit tests cover configuration, lifecycle, context management, tools, handles, attachment integrity, artifacts, resume, and diagnostics. Real Docker, Fabric, and other external-runtime behavior requires integration tests.                                                                                     |
-| Delegation    | implemented; experimental                                  | Unit tests cover profiles, fresh child context, retained child artifacts, and sanitized/structured return handling. Children run together only when one model turn starts them; nothing schedules or budgets them across turns.                                                                                           |
-| Interactive   | implemented; experimental                                  | NDJSON v1 and SQLite-backed sessions/turns/events/replay are covered by package and Loom adapter tests, including crash-restart regressions that reconstruct a service from the same SQLite store at each mid-tool fault point and assert the transcript the next turn is given. The protocol is not yet declared stable. |
-| CFC transport | partial; reduced assurance in current product integrations | Prompt-slot, invocation-context, model-influence, mediation, and deny/recovery behavior are tested. Loom and Pattern Factory still select `observe` because trusted mediation is not wired end to end.                                                                                                                    |
+| Class         | Status                                                     | Evidence boundary                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core batch    | implemented; provisional conformance                       | Package unit tests cover configuration, lifecycle, context management, tools, handles, attachment integrity, artifacts, resume, and diagnostics. Real Docker, Fabric, and other external-runtime behavior requires integration tests.                                                                                                                                                                               |
+| Delegation    | implemented; experimental                                  | Unit tests cover profiles, fresh child context, retained child artifacts, and sanitized/structured return handling. A child inherits its parent's model-context label, and its return brings the child's label back into the parent's, since whatever crosses was derived from what the child observed. Children run together only when one model turn starts them; nothing schedules or budgets them across turns. |
+| Interactive   | implemented; experimental                                  | NDJSON v1 and SQLite-backed sessions/turns/events/replay are covered by package and Loom adapter tests, including crash-restart regressions that reconstruct a service from the same SQLite store at each mid-tool fault point and assert the transcript the next turn is given. The protocol is not yet declared stable.                                                                                           |
+| CFC transport | partial; reduced assurance in current product integrations | Prompt-slot, invocation-context, model-influence, mediation, and deny/recovery behavior are tested. Loom and Pattern Factory still select `observe` because trusted mediation is not wired end to end.                                                                                                                                                                                                              |
 
 ## Relationship to the CFC implementation profiles
 
@@ -145,16 +145,17 @@ advertised capability as dependency readiness.
   not the source of label meaning.
 - Host execution: no parent-run shell reaches the host. Bounded host-side
   surfaces exist beside the sandbox: the browser child profile's typed `browser`
-  tool and allowlisted skill scripts, bound to an explicit local CDP lease the
-  harness attaches itself, and the `run_pattern` tool, which compiles
-  model-authored pattern source and runs it against the configured Fabric space
-  over a lazy authorized session. The Fabric identity remains outside the
-  sandbox. The session runs pieces in the configured space and admits input
-  references from that space or foreign DIDs the operator lists with their
-  hosts. The separate `assign_slug` tool registers a piece the run holds a
-  handle to in that space's piece list under a caller-chosen slug. Neither
-  surface admits arbitrary host commands, and both fabric-session tools are
-  present only when a fabric session is configured. Dedicated Loom tools
+  tool, which a browser host attached to the run carries out when there is one
+  and which is otherwise bound, as allowlisted skill scripts are, to an explicit
+  local CDP lease the harness attaches itself; and the `run_pattern` tool, which
+  compiles model-authored pattern source and runs it against the configured
+  Fabric space over a lazy authorized session. The Fabric identity remains
+  outside the sandbox. The session runs pieces in the configured space and
+  admits input references from that space or foreign DIDs the operator lists
+  with their hosts. The separate `assign_slug` tool registers a piece the run
+  holds a handle to in that space's piece list under a caller-chosen slug.
+  Neither surface admits arbitrary host commands, and both fabric-session tools
+  are present only when a fabric session is configured. Dedicated Loom tools
   additionally invoke three fixed command ids through an operator-configured
   host CLI, using argv and stdin with pinned routing and attribution. This is an
   authority-only host boundary, not a new flow-aware store commit gate; see
@@ -215,9 +216,11 @@ schema for `submit_result` — and a tool the run cannot back is absent from the
 surface rather than present and failing, so an explicit allowlist naming it does
 not conjure it. `run_pattern` additionally requires the three `--fabric-*`
 session flags. `browser` exists only as a built-in used by the authorized
-browser child profile and cannot be selected as a parent CLI tool; it drives the
-host `agent-browser` CLI through a typed action vocabulary, with the Browser
-Access CDP endpoint attached by the harness rather than written by the model.
+browser child profile and cannot be selected as a parent CLI tool. It sends its
+typed action vocabulary to a browser host attached to the run when there is one,
+and otherwise drives the host `agent-browser` CLI, with the Browser Access CDP
+endpoint attached by the harness rather than written by the model. In neither
+case does an input name a session, an endpoint, or a jar.
 
 `submit_result` is how a run returns its structured result without a sandbox
 write. It takes the value as its input, validates it with the structured-result
@@ -296,13 +299,14 @@ overrides its model does not inherit parent provider controls; explicit run-wide
 compaction disablement is the exception.
 
 The session-local address handle table maps positively identified cell addresses
-to deterministic per-run `cfh:a:` tokens. Model-bound tool output and
+to deterministic `cfh:a:` tokens salted per table. Model-bound tool output and
 model-authored tool arguments pass through the table before policy evaluation
 and dispatch. Bare Fabric IDs are not converted. A delegation explicitly seeds
 the child table with only the parent handles named in its goal or context; child
 references are resolved at the child boundary and re-minted into the parent
 table, while any unheld token-shaped text is scrubbed. Raw artifacts retain
-canonical references, and the table is persisted across batch resume.
+canonical references, and the table is persisted across batch resume and
+committed with an interactive session's checkpoint for the next turn's run.
 
 Resume preserves recorded transcript/run configuration and rejects unsupported
 new inputs such as image or skill changes. The local Loom host additionally
@@ -357,13 +361,13 @@ placeholders resolve only at the SQLite query boundary.
    web tools.
 4. **Incomplete opaque-reference boundary.** Address handles cover cell
    addresses but not the reserved value-handle form. Denial-path messages are
-   not swapped, interactive restore does not persist the table, and cross-agent
-   transfer exists only across an explicit delegation boundary. Shape inspection
-   does not expose values, and there is no value dereference, release, or
-   garbage-collection contract. Raw operator reports may expose artifact paths
-   and canonical references. Owner: `cf-harness`. Retirement: every model-facing
-   path uses held opaque handles with explicit lifetime and release/readback
-   semantics while operator tooling retains resolvable provenance.
+   not swapped, and cross-agent transfer exists only across an explicit
+   delegation boundary. Shape inspection does not expose values, and there is no
+   value dereference, release, or garbage-collection contract. Raw operator
+   reports may expose artifact paths and canonical references. Owner:
+   `cf-harness`. Retirement: every model-facing path uses held opaque handles
+   with explicit lifetime and release/readback semantics while operator tooling
+   retains resolvable provenance.
 5. **Durable trusted-host pattern execution.** Each `run_pattern` call creates a
    detached Fabric piece whose source revision remains a retention root. The
    piece stays out of the piece list until `assign_slug` names it; abort stops
@@ -376,15 +380,18 @@ placeholders resolve only at the SQLite query boundary.
 6. **Side effects gated on authority rather than on flow.** Every side-effecting
    tool except `run_pattern` — and `submit_result`, which has no effect outside
    the run's own record and is admitted by its configuration — is admitted by a
-   check on the descriptor's static effect class and on whether the run carries
-   a direct-command binding. The decision is recorded before the tool runs, so
-   it is not a commit point, and it consults no sink and no label. `run_pattern`
-   is the exception and shows the shape the rest want: a named sink, an explicit
-   ceiling, and the runner's commit boundary deciding. Owner: `cf-harness` and
-   the CFC runtime. Retirement: each side-effecting tool's effect is declared as
-   a named sink whose ceiling the runner's boundary commit evaluates, so that a
-   refusal comes back as structured evidence rather than as an allow recorded in
-   advance.
+   check on its effect class and on whether the run carries a direct-command
+   binding. The class is the descriptor's static one unless the tool classes
+   each call (`effectClassOf`): `finish_task` is `side-effect` when it carries
+   client actions and `read` otherwise, so an answer, question or give-up keeps
+   the read path while actions need a direct-command binding. The decision is
+   recorded before the tool runs, so it is not a commit point, and it consults
+   no sink and no label. `run_pattern` is the exception and shows the shape the
+   rest want: a named sink, an explicit ceiling, and the runner's commit
+   boundary deciding. Owner: `cf-harness` and the CFC runtime. Retirement: each
+   side-effecting tool's effect is declared as a named sink whose ceiling the
+   runner's boundary commit evaluates, so that a refusal comes back as
+   structured evidence rather than as an allow recorded in advance.
 7. **Direct-command bindings not bound to a subject or a submitted value.** Both
    minting surfaces produce a binding from constants: the console's is a
    module-level value reused for every turn of every session, and the CLI's

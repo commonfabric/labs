@@ -194,7 +194,7 @@ const validateCurlArgs = (args: readonly string[]): BashCurlPolicyResult => {
 };
 
 const validateLocalhostCurlTarget = (target: string): BashCurlPolicyResult => {
-  if (/[`$\\{}[\]]/.test(target)) {
+  if (/[`$\\{}[\]]/.test(withoutIpv6HostBrackets(target))) {
     return {
       allowed: false,
       reason: "curl targets may not use shell expansion or URL glob syntax",
@@ -215,10 +215,15 @@ const validateLocalhostCurlTarget = (target: string): BashCurlPolicyResult => {
     };
   }
   if (!isLoopbackHost(url.hostname)) {
+    // Which host services answer on these names is the sandbox's business:
+    // under Docker, `host.docker.internal` reaches any port of the host, and
+    // under the direct driver on macOS only the ports the launch forwards
+    // into the VM. So the reason states the rule and sends the model to no
+    // host that may not answer.
     return {
       allowed: false,
       reason:
-        `curl host ${url.hostname} is not allowed from cf-harness bash; use localhost or host.docker.internal`,
+        `curl host ${url.hostname} is not allowed from cf-harness bash: curl may name only localhost, a 127.x or ::1 address, or host.docker.internal, and a service that does not answer at one of those is out of this sandbox's reach`,
     };
   }
   return { allowed: true };
@@ -235,11 +240,30 @@ const parseCurlTarget = (target: string): URL | undefined => {
   }
 };
 
+/**
+ * Helper for `validateLocalhostCurlTarget()`, which returns `target` with the
+ * brackets around an IPv6 host taken out. A URL writes an IPv6 host in
+ * brackets, and curl reads those as the host rather than as a glob; anywhere
+ * else in the target a bracket is still a glob.
+ */
+const withoutIpv6HostBrackets = (target: string): string =>
+  target.replace(
+    /^((?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?(?:[^/?#@]*@)?)\[([0-9A-Fa-f:.]+)\]/,
+    "$1$2",
+  );
+
+/**
+ * Whether `hostname`, a parsed URL's, is one curl may name: `localhost`,
+ * Docker Desktop's `host.docker.internal`, a 127.x address, or `::1`. The URL
+ * parser writes an IPv6 host in brackets and in its shortest form, so every
+ * spelling of `::1` arrives as `[::1]`; an IPv4 address written as IPv6, such
+ * as `::ffff:127.0.0.1`, is not `::1` and is not one of these.
+ */
 const isLoopbackHost = (hostname: string): boolean => {
   const normalized = hostname.toLowerCase();
   return normalized === "localhost" ||
     normalized === "host.docker.internal" ||
-    normalized === "::1" ||
+    normalized === "[::1]" ||
     /^127(?:\.\d{1,3}){1,3}$/.test(normalized);
 };
 

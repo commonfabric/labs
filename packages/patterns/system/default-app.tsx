@@ -1,5 +1,6 @@
 import {
   computed,
+  equals,
   handler,
   ifElse,
   NAME,
@@ -8,9 +9,16 @@ import {
   Stream,
   UI,
   type VNode,
+  wish,
   Writable,
 } from "commonfabric";
 
+import {
+  addParticipant,
+  participantEntries,
+  type ParticipantProfile,
+  type ParticipantRoster,
+} from "../loom/participants.tsx";
 import { default as Note, type NotePiece } from "../notes/note.tsx";
 
 import BacklinksIndex, { type MentionablePiece } from "./backlinks-index.tsx";
@@ -38,6 +46,17 @@ export interface PiecesListOutput {
   // declared type.
   pieceRegistry: MentionablePiece[];
   addPiece: Stream<{ piece: Writable<MentionablePiece> }>;
+
+  /**
+   * Fabric profiles of the space's participants, each the live profile cell
+   * in its own space, in the order they were added. Any participant may add
+   * any profile, so an entry is a claim: it does not say that the profile's
+   * principal holds access to the space.
+   */
+  participants: ParticipantProfile[];
+
+  /** Adds a labeled profile to `participants` once. */
+  addParticipant: Stream<{ profile: ParticipantProfile }>;
 }
 
 const _visit = handler<
@@ -132,12 +151,46 @@ const addPiece = handler<
   pieceRegistry.addUnique(piece);
 });
 
+/**
+ * Adds the viewer's `#profile` to the roster, through `join` so that the
+ * roster's one writer makes the write. Does nothing until the profile
+ * document reads as present: an unresolved profile arrives as an empty cell,
+ * and linking it would record no profile at all.
+ */
+const joinAsViewer = handler<
+  void,
+  {
+    join: Stream<{ profile: ParticipantProfile }>;
+    profile: ParticipantProfile | undefined;
+  }
+>((_, { join, profile }) => {
+  const target = profile?.resolveAsCell();
+  if (target === undefined || target.get() === undefined) return;
+  join.send({ profile: target });
+});
+
 // Retained stream cell for existing default-app roots. Events have no effect.
 const retiredAction = handler<unknown, Record<string, never>>(() => {});
 
 export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   // OWN the data cells (not from wish)
   const pieceRegistry = new Writable<MentionablePiece[]>([]);
+
+  // Changes only through `addParticipant`, the one writer the roster's write
+  // contract admits.
+  const participants = new Writable<ParticipantRoster>({});
+  const roster = computed(() => participantEntries(participants));
+  const join = addParticipant({ roster: participants });
+  const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
+  const viewerName = wish<string>({ query: "#profileName" });
+  // The name string is empty when no profile resolved, whereas a presence
+  // test on the profile cell reads an absent profile as present.
+  const hasProfile = computed(() => (viewerName.result ?? "").trim() !== "");
+  const isParticipant = computed(() => {
+    const mine = viewerProfile.result;
+    if (!mine) return false;
+    return roster.some((entry) => equals(entry, mine));
+  });
 
   // Dropdown menu state
   const menuOpen = new Writable(false);
@@ -270,6 +323,43 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
 
         <cf-vscroll flex showScrollbar>
           <cf-vstack gap="6" padding="6">
+            <cf-vstack gap="2">
+              <h3 style={{ margin: "0", fontSize: "16px" }}>Participants</h3>
+              <cf-hstack gap="2" wrap>
+                {roster.map((profile) => (
+                  <cf-profile-badge
+                    $profile={profile}
+                    variant="chip"
+                    size="sm"
+                  />
+                ))}
+              </cf-hstack>
+              {
+                /* The `#profile` wish's own surface: it creates a profile
+                  when the viewer has none, and picks among several when no
+                  default is set, where `.result` already names the most
+                  recently used one. A JSX ternary lowers to a static-branch
+                  `ifElse`. */
+              }
+              {isParticipant ? null : (
+                <cf-vstack gap="2">
+                  {viewerProfile[UI]}
+                  <cf-hstack>
+                    <cf-button
+                      size="sm"
+                      disabled={!hasProfile}
+                      onClick={joinAsViewer({
+                        join,
+                        profile: viewerProfile.result,
+                      })}
+                    >
+                      Join this space
+                    </cf-button>
+                  </cf-hstack>
+                </cf-vstack>
+              )}
+            </cf-vstack>
+
             <cf-vstack gap="4">
               <cf-hstack gap="2" align="center">
                 <h3 style={{ margin: "0", fontSize: "16px" }}>Pieces</h3>
@@ -332,5 +422,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
     // Exported handlers (bound to state cells for external callers)
     addPiece: addPiece({ pieceRegistry }),
     trackRecent: retiredAction({}),
+    participants: roster,
+    addParticipant: join,
   };
 });

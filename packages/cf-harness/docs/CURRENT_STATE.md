@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-29\
-Revision: `37971c23cd`
+Last verified: 2026-10-01\
+Revision: `28544790e8`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -29,6 +29,7 @@ The runtime has four main boundaries:
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
    [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
    constrained host-adjacent profile whose typed `browser` tool the harness
+   sends to a browser host attached to the run, such as the Weaver, or else
    binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
    is a distinct trusted-host path whose Fabric identity stays outside the
    sandbox. It runs pieces in the configured space and admits input references
@@ -375,9 +376,14 @@ The current package provides:
 
 - a console operator snapshot at `GET /api/health/detail`, retaining launch
   decisions for all connector grants and refusals alongside independently cached
-  observations of the selected sandbox driver and the index, with deciding
-  records, timestamps, causes, and remedies; unknown observations remain
-  distinct from failures, and reading the route never waits for a live probe;
+  observations of the selected sandbox driver — on macOS, of the direct driver's
+  VM too, holding any answer its daemon gave for the idle timeout and 30 s so
+  that watching the row does not on its own keep the VM up, and asking sooner
+  only where it holds none because the last question went unanswered, the
+  daemon's socket has changed, or a connection between questions failed — and
+  the index, with deciding records, timestamps, causes, and remedies; unknown
+  observations remain distinct from failures, and reading the route never waits
+  for a live probe;
 - owner retraction through console `POST /api/index/retract`, signed by the
   configured identity and requiring an active same-owner direct successor; the
   generic index proxy stays read-only and standalone deletion is unsupported;
@@ -394,6 +400,13 @@ The current package provides:
   publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
+- refusal of any flag an entrypoint does not declare — the batch CLI and its
+  control commands, the interactive stdio entrypoint, the local Loom host's
+  modes over them, the console and `console:launch` — naming the flag and the
+  nearest declared one, so a misspelled restriction stops a run rather than
+  going unapplied; and, on the batch CLI, the interactive stdio entrypoint, the
+  console and `console:launch`, of a flag given no value, which is what the
+  parser leaves of a value starting with `-` written as a separate word;
 - persistent provider configuration and structured config/auth control, with
   durable bounded Codex refresh health;
 - workspace, Fabric, and explicit host mounts with path containment;
@@ -519,37 +532,47 @@ The current package provides:
 - per-turn and aggregate token/cache usage in run reports, operator output,
   batch metadata, and interactive turn-completion events;
 - stable interactive prompt-cache affinity, configurable reasoning effort, and
-  opt-in GPT-5.6 gateway cache controls; the ChatGPT/Codex subscription backend
+  opt-in GPT-5.6/GPT-6.1 Sol gateway cache controls; the subscription backend
   uses implicit caching because it rejects the API `prompt_cache_options` field;
 - interactive NDJSON stdio sessions with optional SQLite session, turn, event,
   replay, cancellation, and restore state; a session's durable transcript
   normally advances at a completed turn. On failure, the Loom host can retain
   the last resumable checkpoint (a validated complete batch or opening handoff),
-  atomically with its matching research/CFC state and omission provenance.
-  Unpaired work, cancellation, and interrupted activity stay on the audit trail;
-  turn-local budget notices stay in audit artifacts and are excluded from
-  resumable history; a completed turn's history is checked before it is
-  promoted, and promotion commits with the completion or not at all; and a
-  restored session whose recorded history does not pair its tool calls with tool
-  results preserves that history and adds explicit unknown-outcome results for
-  missing results, while orphan results and duplicate call IDs refuse the
-  session locally rather than sending malformed history to a provider; and a
-  listener that cannot take an event is reported to the host as a delivery
-  failure and does not change the outcome of the turn that produced it;
+  atomically with its matching research/CFC state and omission provenance. A
+  canceled turn advances it to the turn's request and last complete batch,
+  followed by a host notice that the person stopped the turn. Unpaired work and
+  interrupted activity stay on the audit trail; turn-local budget notices stay
+  in audit artifacts and are excluded from resumable history; a completed turn's
+  history is checked before it is promoted, and promotion commits with the
+  completion or not at all; and a restored session whose recorded history does
+  not pair its tool calls with tool results preserves that history and adds
+  explicit unknown-outcome results for missing results, while orphan results and
+  duplicate call IDs refuse the session locally rather than sending malformed
+  history to a provider; and a listener that cannot take an event is reported to
+  the host as a delivery failure and does not change the outcome of the turn
+  that produced it;
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
-- parent-only `finish_task` for a question or a give-up reason, admitted through
-  ordinary policy and artifacts as the sole call in a model turn. It ends the
-  loop without another provider request, retaining the completed lifecycle and
-  reusable conversation. Reports carry the canonical task outcome; console
-  polling and SSE carry the same outcome, session identity, and current
-  continuation availability. The live pane renders the question or reason.
-  Children report blockers to the parent. Missing-input discovery distinguishes
-  released evidence, absence within an enumerated granted scope, and unknown
-  reads; it stops for input rather than repeating author delegation. Shared
-  target-selection guidance asks for an unnamed, unattached piece without a
-  registry read and preserves established conversation targets. The parent
+- parent-only, host-opt-in `weaver_action`, which asks the person's client to
+  run client actions mid-turn and waits for each settlement (idle timeout of
+  five minutes reset by each settlement; cancel declines the rest), settled
+  through the `resolve_client_action` request or the console's
+  `POST /api/client-actions`;
+- parent-only `finish_task` for a completed answer, a question, or a give-up
+  reason, admitted through ordinary policy and artifacts as the sole call in a
+  model turn. A completed answer satisfies the Fabric piece contract and may
+  carry validated client actions (`open_loom`, `command`, `open_url`). It ends
+  the loop without another provider request, retaining the completed lifecycle
+  and reusable conversation. Reports carry the canonical task outcome;
+  interactive `turn_completed` events, console polling and SSE carry the same
+  outcome with its answer and actions, session identity, and current
+  continuation availability. The live pane renders the answer, question, or
+  reason. Children report blockers to the parent. Missing-input discovery
+  distinguishes released evidence, absence within an enumerated granted scope,
+  and unknown reads; it stops for input rather than repeating author delegation.
+  Shared target-selection guidance asks for an unnamed, unattached piece without
+  a registry read and preserves established conversation targets. The parent
   resolves a user-supplied slug with `resolve_piece` before author delegation,
   using the input-cell path's exact-address resolver and space restriction. Only
   an opaque handle returns; source remains child-only. An unheld slug or a
@@ -558,10 +581,12 @@ The current package provides:
   name without a slug permits at most one registry lookup; only a unique
   released match allows work to proceed;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
-  run for cell addresses, recorded in `run-state.json`, and carried across
-  resume; the prompt loop swaps addresses to tokens in model-bound tool output
-  and resolves tokens in model-authored tool arguments before policy evaluation
-  and dispatch, `delegate_task` arguments excepted;
+  run for cell addresses, recorded in `run-state.json`, carried across resume,
+  and committed with an interactive session's checkpoint so each turn's run
+  starts from the table the session kept; the prompt loop swaps addresses to
+  tokens in model-bound tool output and resolves tokens in model-authored tool
+  arguments before policy evaluation and dispatch, `delegate_task` arguments
+  excepted;
 - cross-agent handles: a delegation seeds the child's own table with a verbatim
   copy of every parent address entry or non-cell referent whose token the `goal`
   or `context` names or a selected current research kit declares as an input,
@@ -909,7 +934,15 @@ host.
 
 Loom also has an opt-in adapter for the interactive NDJSON protocol. It is not
 the default interactive harness, and browser automation is not yet wired into
-that interactive product path.
+that interactive product path. The console's interactive path does browse: on a
+console launched with `--allow-browser-host`, a task that declares a browser
+host has its browser children drive the page that host shows the owner, under
+the confinements the [browser host section](../README.md#a-browser-host)
+describes. What a host shows enters the model's context under the unscreened
+prompt-injection caveat, sourced to the page's origin, and is withheld from a
+run whose read ceiling does not admit it. A child's return brings the child's
+model-context label into its parent's, for every child, so the caveat reaches
+the parent with whatever crosses.
 
 Loom currently forces autonomous `cf-harness` runs to `observe` mode while
 trusted `runsc-cfc` observation metadata is not wired through every local tool
@@ -986,8 +1019,9 @@ mode.
   that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
   consumed when the agent result writer links or observes a retrieved row; there
   is no general-purpose value-handle dereference or release mechanism.
-- `estimatedCostUsd` is available only for known GPT-5.6 gateway models when the
-  response includes cache reads and writes. It uses public OpenAI pricing;
+- `estimatedCostUsd` is available for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6
+  gateway models when the response includes cache reads and writes. It uses
+  [public OpenAI pricing](https://developers.openai.com/api/docs/pricing);
   gateway markup, subscription quota accounting, and provider invoices remain
   outside the harness. `estimateWithheldReason` distinguishes missing provider
   detail, unknown models, invalid counters, subscription pricing, and incomplete

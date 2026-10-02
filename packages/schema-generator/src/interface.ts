@@ -68,6 +68,7 @@ export interface SchemaGenerationDiagnostic {
   readonly type:
     | "schema-default:unresolved"
     | "schema-type:unread"
+    | "cfc-schema:recursion-limit"
     | "cfc-write-authorized-by:unread"
     | "cfc-label:unread";
   readonly message: string;
@@ -164,6 +165,14 @@ export interface GenerationContext {
   typeNode?: ts.TypeNode;
 
   /**
+   * A CFC union alternative sharing a semantic member with another written
+   * alternative. Its node is read inline, before type-based definition and
+   * cycle handling, so distinct policy bindings cannot share one definition.
+   * Consumed at that node; its payload retains ordinary cycle handling.
+   */
+  inlineUnionMember?: ts.TypeNode;
+
+  /**
    * The node whose schema hints apply at this position when it is not the node
    * read: a printed node, read by its type, keeps the hints a caller attached
    * to it.
@@ -239,11 +248,11 @@ export interface GenerationContext {
 }
 
 /**
- * Type parameters bound to their arguments, for a payload read from the
- * declaration of the alias that holds it, as written, rather than from an
- * instantiation. Wherever a bound parameter appears, its argument is read. A
- * type that still depends on one where the binding cannot reach, such as
- * `T["name"]` or a conditional type, is reported through
+ * Type parameters bound to their arguments, for a CFC payload or a plain
+ * generic carrying authored binding identities, read from its declaration
+ * rather than from an instantiation. Wherever a bound parameter appears, its
+ * argument is read. A type that still depends on one where the binding cannot
+ * reach, such as `T["name"]` or a conditional type, is reported through
  * `uninterpretedTypeNodes` as not fully read.
  */
 export interface BoundTypeParameters {
@@ -265,7 +274,11 @@ export interface BoundTypeParameters {
 export interface BoundTypeArgument {
   readonly type: ts.Type;
   readonly node?: ts.TypeNode;
-  /** The bindings `node` is written under, absent where it is under none. */
+  /**
+   * The bindings `node` is written under, or, for an argument with no node,
+   * the bindings of the place the checker gave `type` at; absent where it is
+   * under none.
+   */
   readonly bound?: BoundTypeParameters;
 }
 

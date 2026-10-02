@@ -368,7 +368,7 @@ function renderChartTimeline(slowQueries) {
   const now = Date.now();
   const tMin = sorted[0].timestamp, tMax = sorted[sorted.length - 1].timestamp;
   const tSpan = Math.max(tMax - tMin, 1);
-  const eMax = Math.max(...sorted.map(q => q.elapsed), 500);
+  const eMax = sorted.reduce((most, q) => Math.max(most, q.elapsed), 500);
 
   function dotColor(ms) { return ms > 500 ? "#f85149" : ms > 200 ? "#d29922" : "#3fb950"; }
   function dotR(sc) { return Math.max(3, Math.min(10, 3 + (sc || 1) * 0.7)); }

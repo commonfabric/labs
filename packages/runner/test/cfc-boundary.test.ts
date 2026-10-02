@@ -2795,15 +2795,36 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(stored.value?.["/"][LINK_V1_TAG]).not.toHaveProperty(
         "cfcLabelView",
       );
+      const referenceIntegrity = {
+        type: "https://commonfabric.org/cfc/atom/LinkReference",
+        source: {
+          space: signer.did(),
+          id: source.getAsNormalizedFullLink().id,
+          path: [],
+        },
+        target: {
+          space: signer.did(),
+          id: target.getAsNormalizedFullLink().id,
+          path: [],
+        },
+      };
       expect(stored.cfc?.labelMap?.entries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             path: [],
-            label: { integrity: ["selected-by-alice"] },
+            label: {
+              integrity: expect.arrayContaining([
+                referenceIntegrity,
+                "selected-by-alice",
+              ]),
+            },
           }),
           expect.objectContaining({
             path: ["title"],
-            label: { confidentiality: ["selected-title"] },
+            label: {
+              confidentiality: ["selected-title"],
+              integrity: [referenceIntegrity],
+            },
           }),
         ]),
       );
@@ -6263,13 +6284,13 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("rejects current-principal integrity without trusted UI provenance", async () => {
+  it("admits current-principal integrity from its declared writer with no `uiContract`, and labels the value with the acting principal", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-explicit");
       setCfcTrustSnapshot(tx, {
-        id: "trust-snapshot-current-missing-ui",
+        id: "trust-snapshot-current-writer-only",
         actingPrincipal: signer.did(),
       });
       setCfcImplementationIdentity(tx, {
@@ -6281,7 +6302,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
 
       const cell = runtime.getCell(
         signer.did(),
-        "cfc-current-principal-missing-ui",
+        "cfc-current-principal-writer-only",
         {
           type: "object",
           properties: {
@@ -6306,12 +6327,30 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         tx,
       );
       cell.set({ value: "hello" });
+      const target = cell.getAsNormalizedFullLink();
 
       tx.prepareCfc();
       const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "current-principal integrity requires uiContract",
-      );
+      expect(result.error).toBeUndefined();
+
+      const verify = runtime.edit();
+      const stored = verify.readOrThrow({
+        space: signer.did(),
+        scope: "space",
+        id: target.id,
+        path: [],
+      }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
+      expect(stored.cfc?.labelMap?.entries).toContainEqual({
+        path: ["value"],
+        label: {
+          integrity: [{
+            kind: "authored-by",
+            subject: signer.did(),
+          }],
+        },
+        origin: "declared",
+      });
+      verify.abort();
     } finally {
       await runtime.dispose();
       await storageManager.close();

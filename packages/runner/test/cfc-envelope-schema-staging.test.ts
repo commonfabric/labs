@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -85,7 +86,7 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
       scope: "space",
       id: targetId,
       path: ["field"],
-    }, "v");
+    }, linkRefFrom({ space, id: sourceId, path: [] }));
     tx.recordCfcWritePolicyInput({
       kind: "link-write",
       target: { space, scope: "space", id: targetId, path: ["field"] },

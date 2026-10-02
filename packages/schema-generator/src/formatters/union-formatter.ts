@@ -25,6 +25,7 @@ import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { extractLiteralValueOfSymbol } from "../typescript/literal-value.ts";
 import {
   getTypeAliasDeclaration,
+  readUnionMemberNodes,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
@@ -89,35 +90,125 @@ function orderMemberNodesBySemanticType(
   });
 }
 
+/**
+ * Whether a written union member is read as one alternative, retaining the
+ * information in `node` for every semantic member of `type`. `context` is
+ * the enclosing union's.
+ */
+export type ReadsWhole = (
+  type: ts.Type,
+  node: ts.TypeNode,
+  context: GenerationContext,
+) => boolean;
+
+/** A union member node read whole, and the type it stands for. */
+export interface WholeMemberNode {
+  readonly node: ts.TypeNode;
+  readonly type: ts.Type;
+}
+
+/**
+ * The nodes the members of a union are read at, `members` its members and
+ * `unionNode` the union node spelling it:
+ *
+ * - `ordered` holds, for each member, the node whose type it is
+ *   (`orderMemberNodesBySemanticType()`). A member node that writes a union,
+ *   through parentheses and aliases without type parameters, is read for the
+ *   members it writes (`readUnionMemberNodes()`), since the checker folds
+ *   those into `members`.
+ * - `wholeNodes` holds, by each member they stand for, the nodes `readsWhole`
+ *   accepts, in the order they are written. A node can stand for several
+ *   members, as `Confidential<A | B, …>` does, and several nodes for the same
+ *   member: two whose labels differ only in the policy a `typeof` names have
+ *   one type where the policies' bindings have one type.
+ */
+export function pairUnionMemberNodes(
+  members: readonly ts.Type[],
+  unionNode: ts.UnionTypeNode,
+  checker: ts.TypeChecker,
+  readsWhole: (type: ts.Type, node: ts.TypeNode) => boolean,
+): {
+  ordered: Array<ts.TypeNode | undefined>;
+  wholeNodes: Map<ts.Type, WholeMemberNode[]>;
+} {
+  const read = new Set<ts.TypeNode>();
+  const memberNodes = unionNode.types.flatMap((node) =>
+    readUnionMemberNodes(node, checker, read)
+  );
+  const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
+  const wholeNodes = new Map<ts.Type, WholeMemberNode[]>();
+  for (const node of memberNodes) {
+    const type = getTypeNodeMemberType(node, checker);
+    if (!type || !readsWhole(type, node)) continue;
+    for (const member of type.isUnion() ? type.types : [type]) {
+      wholeNodes.set(member, [...wholeNodes.get(member) ?? [], { node, type }]);
+    }
+  }
+  return { ordered, wholeNodes };
+}
+
 export class UnionFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
 
-  constructor(schemaGenerator: SchemaGenerator) {
+  /**
+   * Whether a written union member is read as one alternative for all the
+   * semantic members it denotes (`pairUnionMemberNodes()`).
+   */
+  #readsWhole: ReadsWhole;
+
+  constructor(schemaGenerator: SchemaGenerator, readsWhole: ReadsWhole) {
     this.#schemaGenerator = schemaGenerator;
+    this.#readsWhole = readsWhole;
   }
 
   supportsType(type: ts.Type, _context: GenerationContext): boolean {
     return (type.flags & ts.TypeFlags.Union) !== 0;
   }
 
+  /**
+   * Formats a written union whose CFC alternatives share a semantic member.
+   * Each alternative carries its own binding identities even when the checker
+   * reduces the entire union to one type. Returns `undefined` for other types.
+   */
+  formatCollapsedUnion(
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    const node = this.#getUnionTypeNode(context.typeNode, context.typeChecker);
+    if (!node) return undefined;
+    const members = type.isUnion() ? type.types : [type];
+    const paired = pairUnionMemberNodes(
+      members,
+      node,
+      context.typeChecker,
+      (member, at) => this.#readsWhole(member, at, context),
+    );
+    return members.some((member) =>
+        (paired.wholeNodes.get(member)?.length ?? 0) > 1
+      )
+      ? this.formatType(type, context)
+      : undefined;
+  }
+
   formatType(
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
-    const union = type as ts.UnionType;
-    const members = union.types ?? [];
+    const members = type.isUnion() ? type.types : [type];
     const unionNode = this.#getUnionTypeNode(
       context.typeNode,
       context.typeChecker,
     );
     const memberNodes = unionNode ? unionNode.types : undefined;
-    const orderedMemberNodes = memberNodes
-      ? orderMemberNodesBySemanticType(
+    const paired = unionNode
+      ? pairUnionMemberNodes(
         members,
-        memberNodes,
+        unionNode,
         context.typeChecker,
+        (union, node) => this.#readsWhole(union, node, context),
       )
       : undefined;
+    const orderedMemberNodes = paired?.ordered;
 
     if (members.length === 0) {
       throw new Error("UnionFormatter received empty union type");
@@ -189,7 +280,10 @@ export class UnionFormatter implements TypeFormatter {
     // null OR the other type, never both. anyOf is more easily supported.
     // Note: if undefined is also present (T | null | undefined), nonNull.length > 1,
     // so we fall through to the anyOf path which emits { type: "undefined" } explicitly.
-    if (hasNull && nonNull.length === 1) {
+    if (
+      hasNull && nonNull.length === 1 &&
+      (paired?.wholeNodes.get(nonNull[0]!)?.length ?? 0) < 2
+    ) {
       const item = generate(nonNull[0]!, members.indexOf(nonNull[0]!));
       return { anyOf: [item, { type: "null" }] };
     }
@@ -242,8 +336,29 @@ export class UnionFormatter implements TypeFormatter {
       return { enum: values };
     }
 
-    // Fallback: anyOf of member schemas (excluding null/undefined handled above)
-    let unionOptions = members.map((m, index) => generate(m, index));
+    // Fallback: anyOf of member schemas (excluding null/undefined handled above).
+    // Each accepted node is read once, as one alternative for all the members
+    // it denotes. The node retains what their types cannot, such as a policy
+    // binding in `Confidential<A | B, …>`. Nodes sharing even a single member
+    // remain separate alternatives.
+    const readWholeNodes = new Set<ts.TypeNode>();
+    let unionOptions = members.flatMap((m, index) => {
+      const wholeNodes = paired?.wholeNodes.get(m);
+      if (!wholeNodes) return [generate(m, index)];
+      return wholeNodes.filter(({ node }) => !readWholeNodes.has(node)).map(
+        ({ node, type }) => {
+          readWholeNodes.add(node);
+          return this.#schemaGenerator.formatChildType(
+            type,
+            wholeNodes.length > 1
+              ? { ...context, inlineUnionMember: node }
+              : context,
+            node,
+            type === valued[0] ? soleInstantiated : undefined,
+          );
+        },
+      );
+    });
     // When widenLiterals is true, try to merge structurally identical schemas
     // that only differ in literal enum values
     if (context.widenLiterals && unionOptions.length > 1) {

@@ -3392,7 +3392,9 @@ export class CellBridge {
     const node = this.#tree.getNode(ino);
     if (node?.kind === "dir") {
       for (const [, childIno] of this.#tree.getChildren(ino)) {
-        result.push(...this.#collectDescendantInos(childIno));
+        for (const descendantIno of this.#collectDescendantInos(childIno)) {
+          result.push(descendantIno);
+        }
       }
     }
     return result;
@@ -3422,7 +3424,9 @@ export class CellBridge {
     const staleInos: bigint[] = [];
     const propIno = this.#tree.lookup(rootIno, propName);
     if (propIno !== undefined) {
-      staleInos.push(...this.#collectDescendantInos(propIno));
+      for (const descendantIno of this.#collectDescendantInos(propIno)) {
+        staleInos.push(descendantIno);
+      }
       this.#tree.clear(propIno);
     }
     const jsonIno = this.#tree.lookup(rootIno, `${propName}.json`);
@@ -3439,7 +3443,9 @@ export class CellBridge {
           invalidatedNames.add(name);
           const fsIno = this.#tree.lookup(rootIno, name);
           if (fsIno !== undefined) {
-            staleInos.push(...this.#collectDescendantInos(fsIno));
+            for (const descendantIno of this.#collectDescendantInos(fsIno)) {
+              staleInos.push(descendantIno);
+            }
           }
         }
       }

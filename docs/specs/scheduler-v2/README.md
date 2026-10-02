@@ -1081,7 +1081,9 @@ not idle work and gets its expiry wake only from a live demander — a one-shot
 `pull()` has none once it resolves, so the retry would never run. A re-queue
 for a builtin that held its output pending document confirmation uses the same
 `retry` option on `invalidateAction` after confirmation completes, including
-confirmation of absence that writes no data. An empty
+confirmation of absence that writes no data. On a fanned-out node that re-queue
+dirties only the instances whose reads waited on the document, and their
+siblings stay current. An empty
 reactive commit rejected for changed scheduling dependencies also releases
 debounce and throttle if that node or fan-out instance has no accepted result
 yet, or no live demander to wake it. A live node with an accepted result keeps
@@ -1167,8 +1169,11 @@ What remains live here:
   trigger-read set: the addresses whose changes made this node invalid.
   Consumed into the run's transaction at start (`addCfcTriggerReads`),
   restored on retry (commit rejection / RetryImmediately) because the retry
-  still exists because of them. Self-suppressed changes (P5) never enter
-  `invalidCauses` — a change that did not cause scheduling must not taint it.
+  still exists because of them. On a fanned-out node the restore dirties no
+  instance: the causes dirtied the instances they cover when they arrived,
+  the retry dirties only the retried instance, and its siblings stay current.
+  Self-suppressed changes (P5) never enter `invalidCauses` — a change that
+  did not cause scheduling must not taint it.
 - **`attemptedWrites`** remain CFC prepare/digest evidence only — never
   dependency or scheduling evidence. Reads marked as attempted writes retain
   that evidence when they are ignored for scheduling, including no-op writes.

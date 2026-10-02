@@ -38,6 +38,7 @@ import {
   isAnyOrUnknownType,
   isCellLikeType,
   isSyntheticNode,
+  TYPE_NODE_FLAGS,
   typeToSchemaTypeNode,
   unwrapCellLikeType,
 } from "../ast/mod.ts";
@@ -916,8 +917,6 @@ function shrinkTypeToNode(
   fullShapePaths: readonly (readonly string[])[],
   visiting: ReadonlySet<string>,
 ): ts.TypeNode | undefined {
-  const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
-    ts.NodeBuilderFlags.UseStructuralFallback;
   const normalized = uniquePaths(paths);
   const normalizedFullShapePaths = uniquePaths(fullShapePaths);
   if (normalized.length === 0) {
@@ -981,7 +980,7 @@ function shrinkTypeToNode(
       type,
       { checker, factory, sourceFile, state },
       typeRegistry,
-      typeToNodeFlags,
+      TYPE_NODE_FLAGS,
     );
   }
 
@@ -992,7 +991,7 @@ function shrinkTypeToNode(
       type,
       { checker, factory, sourceFile, state },
       typeRegistry,
-      typeToNodeFlags,
+      TYPE_NODE_FLAGS,
     );
     if (
       node && (ts.isUnionTypeNode(node) ||
@@ -1054,7 +1053,7 @@ function shrinkTypeToNode(
             elementType,
             { checker, factory, sourceFile, state },
             typeRegistry,
-            typeToNodeFlags,
+            TYPE_NODE_FLAGS,
           );
         const arrayNode = factory.createArrayTypeNode(elementNode);
         ensureTypeNodeRegistered(arrayNode, checker, typeRegistry);
@@ -1073,7 +1072,7 @@ function shrinkTypeToNode(
       type,
       { checker, factory, sourceFile, state },
       typeRegistry,
-      typeToNodeFlags,
+      TYPE_NODE_FLAGS,
     );
   }
 
@@ -1082,7 +1081,7 @@ function shrinkTypeToNode(
       type,
       { checker, factory, sourceFile, state },
       typeRegistry,
-      typeToNodeFlags,
+      TYPE_NODE_FLAGS,
     );
   }
 
@@ -1120,7 +1119,7 @@ function shrinkTypeToNode(
                 constituent,
                 { checker, factory, sourceFile, state },
                 typeRegistry,
-                typeToNodeFlags,
+                TYPE_NODE_FLAGS,
               ),
             );
           }
@@ -1196,7 +1195,7 @@ function shrinkTypeToNode(
         propType,
         { checker, factory, sourceFile, state },
         typeRegistry,
-        typeToNodeFlags,
+        TYPE_NODE_FLAGS,
       );
       properties.push(
         factory.createPropertySignature(
@@ -1238,7 +1237,7 @@ function shrinkTypeToNode(
         propType,
         { checker, factory, sourceFile, state },
         typeRegistry,
-        typeToNodeFlags,
+        TYPE_NODE_FLAGS,
       );
 
     properties.push(
@@ -2386,12 +2385,10 @@ function getArrayElementTypeNode(
     return undefined;
   }
 
-  const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
-    ts.NodeBuilderFlags.UseStructuralFallback;
   const elementNode = checker.typeToTypeNode(
     elementType,
     sourceFile,
-    typeToNodeFlags,
+    TYPE_NODE_FLAGS,
   );
   if (elementNode) {
     ensureTypeNodeRegistered(elementNode, checker, typeRegistry);
@@ -3817,12 +3814,10 @@ function createIdentityOnlyNullishTypeNode(
   factory: ts.NodeFactory,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): ts.TypeNode {
-  const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
-    ts.NodeBuilderFlags.UseStructuralFallback;
   const nullishNode = checker.typeToTypeNode(
     type,
     node.getSourceFile(),
-    typeToNodeFlags,
+    TYPE_NODE_FLAGS,
   ) ?? (
     (type.flags & ts.TypeFlags.Null) !== 0
       ? factory.createLiteralTypeNode(factory.createNull())
@@ -3880,8 +3875,7 @@ function createIdentityOnlyRootTypeNode(
           checker.typeToTypeNode(
             memberType,
             node.getSourceFile(),
-            ts.NodeBuilderFlags.NoTruncation |
-              ts.NodeBuilderFlags.UseStructuralFallback,
+            TYPE_NODE_FLAGS,
           ) ?? factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
           memberType,
           forceOpaque,

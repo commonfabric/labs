@@ -844,7 +844,9 @@ function evalConf(
             "alternative (CFC spec §3.1.8)",
         );
       }
-      alternatives.push(...evalConf(t, row, ctx));
+      for (const alternative of evalConf(t, row, ctx)) {
+        alternatives.push(alternative);
+      }
     }
     return [{ anyOf: alternatives }];
   }

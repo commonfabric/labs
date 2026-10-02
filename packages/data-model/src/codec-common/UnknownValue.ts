@@ -101,6 +101,11 @@ export class UnknownValue extends BaseFabricInstance {
     return new UnknownValue(this.wireTypeTag, this.state);
   }
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #codec = Object.freeze(
     new (class UnknownValueCodec extends BaseNonterminalCodec {
       /** Constructs an instance. */

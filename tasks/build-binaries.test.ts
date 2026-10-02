@@ -6,6 +6,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
 import { exists, walk } from "@std/fs";
 import {
   dirname,
@@ -253,14 +254,20 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
     const [patterns, connector] = config.patternPaths();
     const served = [
       join(patterns, "counter", "counter.tsx"),
+      join(patterns, "counter", "counter.test.tsx"),
+      // These four tests are attached by Loom's shared-loom-runtime.ts publicationRoot().
+      join(patterns, "loom", "main.test.tsx"),
+      join(patterns, "loom", "presentation-refusals.test.tsx"),
+      join(patterns, "loom", "multi-user.test.tsx"),
+      join(patterns, "loom", "url-view.test.tsx"),
       join(patterns, "iframe-game", "main.tsx"),
       join(patterns, "iframe-game", "contract.ts"),
       join(patterns, "notebook", "guest.ts"),
       join(connector, "main.tsx"),
+      join(connector, "main.test.tsx"),
     ];
     const unserved = [
       join(patterns, "counter", "counter.test.ts"),
-      join(patterns, "counter", "counter.test.tsx"),
       join(patterns, "iframe-game", "guest.ts"),
       join(patterns, "iframe-game", "editor", "guest.tsx"),
       join(patterns, "iframe-game", "interaction.browser.test.ts"),
@@ -275,9 +282,9 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
     const isExcluded = (file: string) =>
       excluded.some((at) => isWithin(at, file));
 
-    assertEquals(unserved.filter((file) => !isExcluded(file)), []);
-    assertEquals(served.filter(isExcluded), []);
-    assertEquals(config.excludePaths("cf"), []);
+    expect(unserved.filter((file) => !isExcluded(file))).toEqual([]);
+    expect(served.filter(isExcluded)).toEqual([]);
+    expect(config.excludePaths("cf")).toEqual([]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -537,7 +544,8 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   for (const binary of BINARY_NAMES) {
     for (const at of config.includePaths(binary)) {
       if (unread.has(at)) continue;
-      roots.push(...await followedModules(at, config.excludePaths(binary)));
+      const followed = await followedModules(at, config.excludePaths(binary));
+      for (const module of followed) roots.push(module);
     }
   }
   const { modules, rootModule } = await moduleGraph(repo, roots);
@@ -574,7 +582,8 @@ Deno.test("the toolshed's pattern trees reach no npm package of their own", asyn
   for (const at of config.includePaths("toolshed")) {
     if (unread.has(at)) continue;
     const modules = await followedModules(at, config.excludePaths("toolshed"));
-    (trees.includes(at) ? patterns : server).push(...modules);
+    const into = trees.includes(at) ? patterns : server;
+    for (const module of modules) into.push(module);
   }
   assert(patterns.length > 0);
   const serverPackages = importedNpmPackages(await moduleGraph(repo, server));

@@ -94,17 +94,20 @@ Beyond authentication, per-space **ACLs** are wired into the v2 server itself.
 A space can carry an ACL document (addressed by the wire entity id
 `of:<space DID>`; types in `packages/memory/acl.ts`, managed by the runner's
 `ACLManager` and surfaced as `cf acl`) granting READ/WRITE/OWNER capabilities.
+A pattern's handler changes it with `grantSpaceAccess()` and
+`revokeSpaceAccess()`.
 The server evaluates them per message — session-open, queries, and watches need
-READ; `transact` needs WRITE; writing the ACL itself needs OWNER. A fresh space
-is read-only until its space identity (or a configured service DID) writes a
-valid ACL with at least one concrete OWNER, and that genesis is the only thing
-the space identity may do as the space. Creating a space (`cf space create`,
-the Home pattern's Spaces tab, or `Runtime.createSpace()`) generates a random
-key, uses it once to write the genesis ACL — the creator as the only OWNER,
-plus any grants the creator chose — and drops it. Opening a space never
-creates one, except a user's Home space: it uses the user's own identity for
-both roles and is born private on its first open by claiming
-`{ [space]: "OWNER" }`.
+READ; `transact` needs WRITE; writing the ACL itself needs OWNER, except that
+any member may remove their own entry from a list with no `"*"` entry
+(`cf acl leave`). A fresh space is read-only until its space identity (or a
+configured service DID) writes a valid ACL with at least one concrete OWNER, and
+that genesis is the only thing the space identity may do as the space. Creating
+a space (`cf space create`, the Home pattern's Spaces tab, or
+`Runtime.createSpace()`) generates a random key, uses it once to write the
+genesis ACL — the creator as the only OWNER, plus any grants the creator chose —
+and drops it. Opening a space never creates one, except a user's Home space: it
+uses the user's own identity for both roles and is born private on its first
+open by claiming `{ [space]: "OWNER" }`.
 
 As a temporary pre-launch compatibility rule, a populated space that has never
 had an ACL is authenticated-public READ/WRITE but never OWNER. A malformed,
@@ -128,8 +131,8 @@ cf acl ls --identity ./my.key --api-url https://api.example.com --space "$SPACE"
 
 That prints a bordered `DID` / `CAPABILITY` table (or `No ACL entries found.`
 if the space has no ACL yet). For the space you just created it is one row:
-your own DID with `OWNER`. Grant and revoke are the other two subcommands
-(`packages/cli/commands/acl.ts`):
+your own DID with `OWNER`. Grant, revoke and leave are the other three
+subcommands (`packages/cli/commands/acl.ts`):
 
 ```bash
 # Grant, or change an existing grant. Capability is READ, WRITE, or OWNER.
@@ -144,6 +147,9 @@ cf acl set ANYONE WRITE --space "$SPACE"
 
 # Drop the wildcard — this is what makes an open space private again.
 cf acl remove ANYONE --space "$SPACE"
+
+# Remove your own identity, giving up the access it had.
+cf acl leave --space "$SPACE"
 ```
 
 **A wildcard entry changes what the per-identity commands mean.** The server
@@ -172,14 +178,21 @@ resolves to one. `ANYONE`
 is the CLI spelling of the `"*"` wildcard, so the shell does not glob-expand it
 before the CLI sees it — `cf acl ls` still prints the raw `*`.
 
-All three commands act as the identity in the key file, and writing the ACL
-needs OWNER, so you can only administer a space you own. Two guardrails come
-from the server rather than the CLI: it refuses any mutation that would leave
-the space with no concrete (non-`"*"`) OWNER, so this is not a way to lock
-yourself out; and it requires an ACL change to arrive as a single
-whole-document replacement, which is why `ACLManager` writes the entire ACL on
-every grant. That rule and the genesis rule are catalogued as INV-12 and INV-13
-in [`docs/specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md).
+All four commands act as the identity in the key file, and writing the ACL needs
+OWNER, so you can only administer a space you own. Leaving is the exception: any
+member may remove their own entry, whatever its level, and nothing else.
+`cf acl leave` refuses, saying why, a space whose ACL has a `*` entry, since
+that entry would still admit you, and a space you are the last concrete OWNER
+of; make someone else OWNER first. Once you have left, a server in `enforce`
+mode ends your session there, and you can no longer read the space; in `observe`
+and `off` modes it ends no session for a lost entry, and does not stop the reads
+those modes allow. Two guardrails come from the server rather than the CLI: it
+refuses any mutation that would leave the space with no concrete (non-`"*"`)
+OWNER, so this is not a way to lock yourself out; and it requires an ACL change
+to arrive as a single whole-document replacement, which is why `ACLManager`
+writes the entire ACL on every grant. That rule and the genesis rule are
+catalogued as INV-12 and INV-13 in
+[`docs/specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md).
 
 ## Running untrusted code: three rings
 

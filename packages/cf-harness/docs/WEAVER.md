@@ -285,7 +285,12 @@ Mac. Then, in Weaver's settings under Services:
 - `/patterns <query>` lists index hits with their ids.
 - `/cf-harness <task>` starts a fresh session and places the live panel in the
   current loom. A turn runs for minutes; the panel streams throughout, and the
-  piece replaces it when the turn ends.
+  piece replaces it when the turn ends. On a console launched with
+  `--allow-browser-host`, the Weaver declares itself the turn's
+  [browser host](../console/README.md#browser-hosts), so the browser children of
+  a task that needs the web drive a page the Weaver shows the owner, who takes
+  it over when an agent hands it to them. Such a task may end with a Markdown
+  answer in the live panel instead of a piece.
 - `/feedback <patternId> up|down` records one vote on a pattern the index holds,
   signed with the console's fabric identity; the pill answers "recorded up for
   <patternId>" or the console's own refusal. An up vote is what promotes a
@@ -309,12 +314,13 @@ writes it to `packages/cf-harness/local-dev-console.log` under the labs checkout
 it vendors.
 
 A task over a connector needs the console to hold that connector's grant: the
-printout carries a line such as `grant gmail-work (email)` or
-`grant plaid-sim (finance)`, naming both connection and class. A line reading
-`(none: …)` is a handle the instance injected that the console could not name,
-for the reason it prints; a connector the instance has not injected has no line
-at all. Either way a task over that connector authors against nothing. Each task
-below names the grants it reads.
+printout carries a line such as `grant gmail-work (email)`,
+`grant gmail-work (message, call)` or `grant plaid-sim`, naming the connection,
+with every class the store's contract declares in parentheses, comma-separated,
+when it declares any. A line reading `(none: …)` is a handle the instance
+injected that the console could not name, for the reason it prints; a connector
+the instance has not injected has no line at all. Either way a task over that
+connector authors against nothing. Each task below names the grants it reads.
 
 ### Bills this month, from mail and bank together
 

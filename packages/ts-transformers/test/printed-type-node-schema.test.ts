@@ -352,6 +352,58 @@ export default function contextualCell() {
       });
     }
 
+    for (const tuple of ["readonly []", "[]"]) {
+      const wrap = {
+        type: "object",
+        properties: {
+          x: { type: "string" },
+          l: { type: "array", items: false },
+        },
+        required: ["x", "l"],
+      };
+
+      it(`reads an alias given \`${tuple}\` in a pattern's inferred result as its instantiation, on both sides`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+export default pattern<{ a: Wrap<${tuple}> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+
+        for (const root of [input, output]) {
+          expect(root).toEqual({
+            type: "object",
+            properties: { a: wrap },
+            required: ["a"],
+          });
+        }
+        expect(diagnostics).toEqual([]);
+      });
+
+      it(`reads an alias given \`${tuple}\` in a lift's inferred result as its instantiation`, async () => {
+        const { result } = await liftSchemas(
+          `import { lift } from "commonfabric";
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+export const f = lift((a: { w: Wrap<${tuple}> }) => ({ out: a.w }));`,
+          "a.w",
+        );
+
+        expect(result).toEqual({
+          type: "object",
+          properties: { out: wrap },
+          required: ["out"],
+        });
+      });
+    }
+
     it("keeps the cell boundary of an array of cells with an empty default", async () => {
       const { result } = await liftSchemas(
         `${IMPORTS}interface Item { title: string; attachments: Writable<any>[] | Default<[]>; }
@@ -409,6 +461,300 @@ export default pattern<{ n: number }>(() => {
         required: ["host", "run"],
       });
     });
+
+    for (
+      const [position, declaration, holder] of [
+        [
+          "an index signature",
+          "interface Dict<U> { [key: string]: U }",
+          "Dict",
+        ],
+        ["a tuple", "interface Twice<U> { items: [U, U] }", "Twice"],
+      ] as const
+    ) {
+      it(`reports a scope recursion reached through ${position} with no written reference, naming its type`, async () => {
+        // Each `Node<Readonly<…>>` is a new type, and a chain reached by type
+        // has no written reference to name, so the warning names a print of
+        // the type the chain stops at.
+        const diagnostics: TransformationDiagnostic[] = [];
+        await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Cell, pattern, PerUser } from "commonfabric";
+${declaration}
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+type Node<T> = PerUser<Cell<{ value: T; next?: ${holder}<Node<Readonly<T>>> }>>;
+export default pattern<{ a: Node<Wrap<readonly []>> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const unread = diagnostics.filter((diagnostic) =>
+          diagnostic.type === "schema-type:unread"
+        );
+
+        expect(unread.length).toBeGreaterThan(0);
+        for (const diagnostic of unread) {
+          expect(diagnostic.message).toContain("Wrap<readonly []>");
+        }
+      });
+    }
+  });
+
+  describe("a type the checker cannot print", () => {
+    // The checker prints no type node for the instance type of an anonymous
+    // class expression, which has no name to print it by, so each case below
+    // reads a result whose type has no print.
+
+    const makeObject =
+      "const makeObject = () => ({ a: new (class { v = 1 })() });";
+    const instance = {
+      type: "object",
+      properties: { v: { type: "number" } },
+      required: ["v"],
+    };
+
+    /**
+     * The transformed module whose `make()` returns an anonymous class
+     * instance and whose remaining source is `body`, with the diagnostics its
+     * transform reports.
+     */
+    async function transformWithMake(
+      body: string,
+    ): Promise<
+      { root: ts.SourceFile; diagnostics: TransformationDiagnostic[] }
+    > {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { lift, pattern } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+${body}`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      return { root: parseModule(files["/main.tsx"]!), diagnostics };
+    }
+
+    it("reads a pattern's inferred result as its type", async () => {
+      const { root, diagnostics } = await transformWithMake(
+        "export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));",
+      );
+
+      expect(patternSchemas(root).output).toEqual({
+        type: "object",
+        properties: { a: { $ref: "#/$defs/__class" }, n: { type: "number" } },
+        required: ["a", "n"],
+        $defs: { __class: instance },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports `pattern-result:unknown-type` for each field and array element of a pattern's inferred result typed `unknown`", async () => {
+      const { diagnostics } = await transformWithMake(
+        "export default pattern<{ u: unknown }>(({ u }) => ({ a: make(), u, us: [u] }));",
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern-result:unknown-type" }]);
+      expect(diagnostics[0]!.message).toContain("fields `u`, `us[]` have");
+    });
+
+    for (
+      const [shape, result, fields] of [
+        ["the result itself", "makeHolding()", "field `u` has"],
+        ["a field of the result", "({ a: makeHolding() })", "field `a.u` has"],
+        [
+          "each of two fields of the result",
+          "({ a: makeHolding(), b: makeHolding() })",
+          "fields `a.u`, `b.u` have",
+        ],
+      ] as const
+    ) {
+      it(`reports \`pattern-result:unknown-type\` for the \`unknown\` field of an anonymous class instance that is ${shape}`, async () => {
+        const { diagnostics } = await transformWithMake(
+          `function makeHolding() { return new (class { v = 1; u: unknown = "u"; })(); }
+export default pattern<Record<string, never>>(() => ${result});`,
+        );
+
+        expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+          .toEqual([{
+            severity: "error",
+            type: "pattern-result:unknown-type",
+          }]);
+        expect(diagnostics[0]!.message).toContain(fields);
+      });
+    }
+
+    for (
+      const [holder, result] of [
+        ["an anonymous class instance that is the result", "makeBranded()"],
+        [
+          "an anonymous class instance that is a field of the result",
+          "({ a: makeBranded() })",
+        ],
+        ["the result itself", "({ a: make(), [brand]: u })"],
+      ] as const
+    ) {
+      it(`reports nothing for an \`unknown\` symbol-keyed member of ${holder}, which the schema leaves out`, async () => {
+        const { diagnostics } = await transformWithMake(
+          `const brand = Symbol("brand");
+function makeBranded() { return new (class { v = 1; [brand]: unknown = "b"; })(); }
+export default pattern<{ u: unknown }>(({ u }) => ${result});`,
+        );
+
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads a pattern's inferred result holding a type that refers to itself through `typeof`", async () => {
+      // The type of `tree` has no name, and holds itself through `typeof`.
+      const { root, diagnostics } = await transformWithMake(
+        `const tree: { children: (typeof tree)[] } = { children: [] };
+export default pattern<Record<string, never>>(() => ({ a: make(), tree }));`,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(Object.keys(
+        (patternSchemas(root).output.properties ?? {}) as Schema,
+      )).toEqual(["a", "tree"]);
+    });
+
+    it("reports `pattern:any-result-schema` for a pattern whose result is its callback's type parameter", async () => {
+      // A result typed by a bare type parameter has neither a print nor a
+      // type to read, so it is read as permissive.
+      const { diagnostics } = await transformWithMake(
+        "export default pattern<{ v: string }>(<T,>({ v }: { v: T }) => v);",
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern:any-result-schema" }]);
+    });
+
+    for (
+      const [parameters, callback, schema] of [
+        ["no parameters", "() => ({ a: make() })", {
+          properties: { a: { $ref: "#/$defs/__class" } },
+          required: ["a"],
+        }],
+        ["a parameter", "(n: number) => ({ a: make(), n })", {
+          properties: {
+            a: { $ref: "#/$defs/__class" },
+            n: { type: "number" },
+          },
+          required: ["a", "n"],
+        }],
+      ] as const
+    ) {
+      it(`reads the result of a lift taking ${parameters} as its type`, async () => {
+        const { root, diagnostics } = await transformWithMake(
+          `export const f = lift(${callback});`,
+        );
+
+        expect(callSchemas(root, "lift").at(-1)).toEqual({
+          type: "object",
+          ...schema,
+          $defs: { __class: instance },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads a lift's result as its authored return annotation", async () => {
+      const { result } = await liftSchemas(
+        `import { lift } from "commonfabric";
+${makeObject}
+export const f = lift((n: number): ReturnType<typeof makeObject> =>
+  n > 0 ? makeObject() : makeObject()
+);`,
+        "makeObject()",
+      );
+
+      expect(result).toEqual({
+        type: "object",
+        properties: { a: { $ref: "#/$defs/__class" } },
+        required: ["a"],
+        $defs: { __class: instance },
+      });
+    });
+
+    it("reads a lift's projected result from its parameter's annotation", async () => {
+      const { result } = await liftSchemas(
+        `import { lift } from "commonfabric";
+${makeObject}
+export const f = lift((x: ReturnType<typeof makeObject>) => x.a);`,
+        "x.a",
+      );
+
+      expect(result).toEqual(instance);
+    });
+  });
+
+  describe("a pattern result holding `unknown` in a tuple, a `readonly` type, or a union", () => {
+    // Each `unknown` below lowers to `{ type: "unknown" }` somewhere in the
+    // schema, as a field typed `unknown` does, so it is reported the same
+    // way, whether the result is printed or read from a placeholder for a
+    // type with no print.
+
+    /**
+     * The diagnostics transforming a pattern over `u: unknown` whose callback
+     * returns `result`, beside a module-level `make()` returning an anonymous
+     * class instance.
+     */
+    async function diagnosticsFor(
+      result: string,
+    ): Promise<TransformationDiagnostic[]> {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      return diagnostics;
+    }
+
+    for (
+      const [reading, before] of [
+        ["printed", ""],
+        ["read from a placeholder for a type with no print", "a: make(), "],
+      ] as const
+    ) {
+      for (
+        const [value, field] of [
+          ["[u, 1] as [unknown, number]", "f[0]"],
+          ["[1, u] as [first: number, second: unknown]", "f[1]"],
+          ["[1, u] as [number, unknown?]", "f[1]"],
+          ["[1, u] as [number, ...unknown[]]", "f[1...]"],
+          ["[u, 1] as const", "f[0]"],
+          ["[[u], 1] as const", "f[0][0]"],
+          ["[u] as readonly unknown[]", "f[]"],
+          ["[1, { v: u }] as [number, { v: unknown }?]", "f[1].v"],
+          ["[1, [u]] as [number, unknown[]?]", "f[1][]"],
+          ["[1, [u]] as [number, [unknown]?]", "f[1][0]"],
+          ["{ v: u } as { v: unknown } | null", "f.v"],
+        ] as const
+      ) {
+        it(`reports \`pattern-result:unknown-type\` for \`${field}\` of \`${value}\` in a result ${reading}`, async () => {
+          const diagnostics = await diagnosticsFor(
+            `{ ${before}f: ${value} }`,
+          );
+
+          expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+            .toEqual([{
+              severity: "error",
+              type: "pattern-result:unknown-type",
+            }]);
+          expect(diagnostics[0]!.message).toContain(`field \`${field}\` has`);
+        });
+      }
+    }
   });
 
   describe("a printed result type that holds CFC labels", () => {
@@ -1030,7 +1376,8 @@ export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
           }
           expect(
             diagnostics.filter((diagnostic) =>
-              diagnostic.type === "schema-type:unread"
+              diagnostic.type === "schema-type:unread" ||
+              diagnostic.type === "cfc-schema:recursion-limit"
             ),
           ).toEqual([]);
         });
@@ -1058,7 +1405,8 @@ export default pattern<{ a: Nest<string> }>(({ a }) => ({ a }));`,
         }
         expect(
           diagnostics.filter((diagnostic) =>
-            diagnostic.type === "schema-type:unread"
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
           ).length,
         ).toBeGreaterThan(0);
       });
@@ -1095,11 +1443,13 @@ export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
             expect((root.properties as Record<string, Schema>).a)
               .toBeDefined();
           }
-          expect(
-            diagnostics.filter((diagnostic) =>
-              diagnostic.type === "schema-type:unread"
-            ).length,
-          ).toBe(2);
+          // Both schema uses point to the same recursive reference, so the
+          // compilation reports one error at that declaration.
+          const errors = diagnostics.filter((diagnostic) =>
+            diagnostic.type === "cfc-schema:recursion-limit"
+          );
+          expect(errors).toHaveLength(1);
+          expect(errors[0]!.severity).toBe("error");
         });
       }
 
@@ -1139,7 +1489,8 @@ export default pattern<{ a: Sec<string> }>(({ a }) => ({ a }));`,
         }
         expect(
           diagnostics.filter((diagnostic) =>
-            diagnostic.type === "schema-type:unread"
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
           ),
         ).toEqual([]);
       });
@@ -1184,7 +1535,8 @@ export default pattern<{ a: Sec<[string, number], [number, string]> }>(({ a }) =
         }
         expect(
           diagnostics.filter((diagnostic) =>
-            diagnostic.type === "schema-type:unread"
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
           ),
         ).toEqual([]);
       });
@@ -1252,7 +1604,8 @@ export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
           }
           expect(
             diagnostics.filter((diagnostic) =>
-              diagnostic.type === "schema-type:unread"
+              diagnostic.type === "schema-type:unread" ||
+              diagnostic.type === "cfc-schema:recursion-limit"
             ),
           ).toEqual([]);
         });
@@ -1439,6 +1792,75 @@ export default pattern<{
           ifc: { confidentiality: ["secret"] },
         });
       });
+
+      it("reads a nested label that spreads a parameter as the list its argument writes, on both sides", async () => {
+        // The spread element stands for the elements of the argument's list,
+        // not for the list as one atom.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Outer<L extends readonly unknown[]> = Confidential<
+  { inner: Confidential<{ x: string }, readonly [...L, "b"]> },
+  ["z"]
+>;
+export default pattern<{ a: Outer<readonly ["c", "d"]> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const expected = {
+          type: "object",
+          properties: {
+            inner: {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+              ifc: { confidentiality: ["c", "d", "b"] },
+            },
+          },
+          required: ["inner"],
+          ifc: { confidentiality: ["z"] },
+        };
+        expect((input.properties as Schema).a).toEqual(expected);
+        expect((output.properties as Schema).a).toEqual(expected);
+      });
+
+      for (
+        const [a, confidentiality] of [
+          ['Tail<readonly ["c", "d"]>', ["c", "d", "b"]],
+          ['Lead<readonly ["c", "d"]>', ["b", "c", "d"]],
+          ['Named<readonly ["c", "d"]>', ["c", "d", "b"]],
+          ['ForwardMore<readonly ["c", "d"]>', ["c", "d", "e", "b"]],
+          ['Alternatives<readonly ["c", "d"]>', [{ anyOf: ["c", "d", "b"] }]],
+        ] as const
+      ) {
+        it(`reads the spread in the label of \`${a}\` as the elements of the list it spreads, on both sides`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+import type { AnyOf } from "commonfabric/cfc";
+type Tail<L extends readonly unknown[]> = Confidential<{ x: string }, readonly [...L, "b"]>;
+type Lead<L extends readonly unknown[]> = Confidential<{ x: string }, readonly ["b", ...L]>;
+type Named<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [...rest: L, last: "b"]>;
+type ForwardMore<L extends readonly unknown[]> = Tail<readonly [...L, "e"]>;
+type Alternatives<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [AnyOf<readonly [...L, "b"]>]>;
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: "string" } },
+            required: ["x"],
+            ifc: { confidentiality },
+          };
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
     });
 
     describe("an object label with a member the syntax reader cannot name", () => {
@@ -1549,6 +1971,77 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           expect((output.properties as Schema).a).toEqual(expected);
         });
       }
+
+      describe("a user's generic alias of one", () => {
+        // The alias is read with each of its parameters as the argument it
+        // is given, so both sides read it as the alias it names written out
+        // with those arguments in place.
+
+        const schemasOf = async (declarations: string, a: string) => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, readonly ["a"]>;
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          return {
+            input: (input.properties as Schema).a,
+            output: (output.properties as Schema).a,
+          };
+        };
+
+        for (
+          const [declarations, a, written, ifc] of [
+            [
+              'type Select<T extends { x: string }> = Pick<T, "x">;',
+              "Select<Sec<{ x: string; y: number }>>",
+              'Pick<Sec<{ x: string; y: number }>, "x">',
+              { confidentiality: ["a"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Pick<Confidential<{ x: string; y: number }, L>, "x">;',
+              'Select<readonly ["b"]>',
+              'Pick<Confidential<{ x: string; y: number }, readonly ["b"]>, "x">',
+              { confidentiality: ["b"] },
+            ],
+            [
+              `type Select<T extends { x: string }> = Pick<T, "x">;
+type Outer<T extends { x: string }> = Select<Sec<T>>;`,
+              "Outer<{ x: string; y: number }>",
+              'Pick<Sec<{ x: string; y: number }>, "x">',
+              { confidentiality: ["a"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Pick<Confidential<{ x: string; y: number }, readonly [...L, "b"]>, "x">;',
+              'Select<readonly ["c", "d"]>',
+              'Pick<Confidential<{ x: string; y: number }, readonly ["c", "d", "b"]>, "x">',
+              { confidentiality: ["c", "d", "b"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Omit<Confidential<{ x: string; y: number }, readonly [...L, "b"]>, "y">;',
+              'Select<readonly ["c", "d"]>',
+              'Omit<Confidential<{ x: string; y: number }, readonly ["c", "d", "b"]>, "y">',
+              { confidentiality: ["c", "d", "b"] },
+            ],
+          ] as const
+        ) {
+          it(`reads \`${a}\` as \`${written}\`, on both sides`, async () => {
+            const read = await schemasOf(declarations, a);
+            const expected = {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+              ifc,
+            };
+            expect(read).toEqual({ input: expected, output: expected });
+            expect(await schemasOf(declarations, written)).toEqual(read);
+          });
+        }
+      });
     });
 
     describe("a default-library alias mapping a labelled type the checker builds apart", () => {
@@ -1666,6 +2159,67 @@ export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
           );
         }
       });
+    });
+
+    describe("an authored alias that shares a label operator's name", () => {
+      // Both sides read such an alias as the type its author declared, not as
+      // the library's `AnyOf` or `PolicyOf`, with or without a spread beside
+      // it.
+
+      for (
+        const [declarations, a, confidentiality] of [
+          [
+            'type AnyOf<T> = "original";',
+            'Confidential<{ x: string }, readonly [...CD, AnyOf<readonly ["reader"]>]>',
+            ["c", "d", "original"],
+          ],
+          [
+            'type AnyOf<T> = "original";',
+            'Confidential<{ x: string }, readonly [AnyOf<readonly ["reader"]>]>',
+            ["original"],
+          ],
+          [
+            'type PolicyOf<T> = "plain";',
+            "Confidential<{ x: string }, readonly [PolicyOf<typeof rules>]>",
+            ["plain"],
+          ],
+          [
+            `type AnyOf<T> = "original";
+type Tail<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [...L, AnyOf<readonly ["reader"]>]>;`,
+            'Tail<readonly ["c"]>',
+            ["c", "original"],
+          ],
+        ] as const
+      ) {
+        it(`reads \`${a}\` with the alias its author declared, on both sides`, async () => {
+          const pipelineDiagnostics: TransformationDiagnostic[] = [];
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type CD = readonly ["c", "d"];
+const rules = { name: "r" } as const;
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics,
+          });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: "string" } },
+            required: ["x"],
+            ifc: { confidentiality },
+          };
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+          expect(pipelineDiagnostics).toEqual([]);
+        });
+      }
     });
 
     describe("an annotation whose syntax the label reader does not evaluate", () => {
@@ -1838,6 +2392,20 @@ export default pattern<{ ${declaration} }>(
             "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | undefined",
           ),
         ).toMatchObject({ ifc: { confidentiality: [policy] } });
+      });
+
+      it("reads the policy of the members a CFC alias over a union distributes into", async () => {
+        // `Confidential<Secret | Other, …>` is one node for two members.
+        expect(
+          await optionalCapture(
+            "secret?: Confidential<Secret | Other, [PolicyOf<typeof rules>]>",
+          ),
+        ).toMatchObject({
+          anyOf: [
+            { type: "undefined" },
+            { ifc: { confidentiality: [policy] } },
+          ],
+        });
       });
     });
 

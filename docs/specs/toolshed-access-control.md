@@ -24,7 +24,6 @@ These routes require a first-party HTTP request proof:
 - `POST /api/sandbox/exec`
 - `POST /api/spaces/:space/ingest-channels/{mint,list,rotate,revoke,gmail-bind,gmail-unbind}`
 - `POST /api/ingest-channels/list`
-- `POST /api/inbox/{enable,status,send,list,get,acknowledge}`
 
 The first three were selected because first-party code calls them through the
 fetch builtins, and each route spends server-held or local runtime authority.
@@ -46,10 +45,6 @@ that remains possible later. See
 The protected routes do not expose wildcard CORS. Same-origin shell calls do not
 need CORS. Cross-origin callers must not get a credentialed wildcard surface for
 these routes.
-
-The [DID inbox](../features/did-inboxes.md) routes authenticate each sender and
-restrict private reads and acknowledgments to the recipient signer. They are
-not in the pattern fetch signer allowlist.
 
 ## Request Proof Format
 

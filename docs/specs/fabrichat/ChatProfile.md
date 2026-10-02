@@ -1,7 +1,5 @@
 # ChatProfile
 
-Status: proposed design (see [`README.md`](README.md)).
-
 The part of a person's profile that FabriChat reads. It is not a record
 FabriChat keeps: it is a view of the person's shared profile, which lives in
 that person's own profile space ([shared profile

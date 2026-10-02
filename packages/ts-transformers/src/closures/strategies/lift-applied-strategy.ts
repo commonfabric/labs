@@ -263,9 +263,12 @@ function buildLiftAppliedInputObject(
   }
 
   // Add captures with potentially renamed property names
-  properties.push(
-    ...buildCapturePropertyAssignments(captureTree, factory, captureNameMap),
+  const captureProperties = buildCapturePropertyAssignments(
+    captureTree,
+    factory,
+    captureNameMap,
   );
+  for (const property of captureProperties) properties.push(property);
 
   return factory.createObjectLiteralExpression(
     properties,

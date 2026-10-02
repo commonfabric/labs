@@ -86,7 +86,7 @@ export class ContextShim {
         parent[String(path.at(-1))] = value;
         this.set({} as CommonIframeSandboxElement, key, root);
       },
-      push: (...values) => {
+      push: (values) => {
         const current = get();
         if (!Array.isArray(current)) {
           throw new TypeError("push() requires an array value.");

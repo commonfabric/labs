@@ -159,4 +159,9 @@ export class RealmEncodeAct
   get marker(): RealmFormatMarker {
     return this.#marker;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

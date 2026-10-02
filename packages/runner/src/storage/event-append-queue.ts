@@ -46,6 +46,7 @@
 // session by construction, no leader election, no shared persisted
 // session.
 
+import { spliceAll } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
   type ClientCommit,
@@ -276,7 +277,7 @@ export class EventAppendQueue {
       // Intents a dead predecessor replica left in the manager-shared
       // store were fired EARLIER than anything this instance enqueues:
       // they discharge first.
-      this.#queue.unshift(...persisted);
+      spliceAll(this.#queue, 0, 0, persisted);
       for (const entry of persisted) {
         if (entry.clientSeq >= this.#clientSeq) {
           this.#clientSeq = entry.clientSeq + 1;

@@ -208,9 +208,10 @@ describe("scheduler event drop predicate", () => {
     const parked = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     releaseRetry = release.resolve;
-    runtime.awaitCommitRetryReadiness = () => {
+    runtime.awaitCommitRetryReadiness = async () => {
       parked.resolve();
-      return release.promise;
+      await release.promise;
+      return [];
     };
 
     await runtime.runner.start(resultCell);

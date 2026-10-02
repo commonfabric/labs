@@ -8,7 +8,7 @@
 // `assertExists` stays where `expect()` has no equal: it asserts neither
 // `null` nor `undefined` in one call, and narrows the value's type for the
 // lines that follow. `toBeDefined()` does neither.
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assertExists } from "@std/assert";
 import { expect } from "@std/expect";
 
@@ -36,18 +36,127 @@ const createMockRuntimeClient = () => {
   } as any;
 };
 
+/** Stand-in for `MutationRecord`. */
+interface MockMutationRecord {
+  /** Name of the attribute written, or `null` when children were replaced. */
+  attributeName: string | null;
+}
+
+/**
+ * Defines `property` on `prototype` in the way a browser defines a property
+ * that reads and writes the attribute `attribute`.
+ */
+function reflect(prototype: object, property: string, attribute: string) {
+  Object.defineProperty(prototype, property, {
+    get(this: Element) {
+      return this.getAttribute(attribute) ?? "";
+    },
+    set(this: Element, value: unknown) {
+      this.setAttribute(attribute, String(value));
+    },
+  });
+}
+
+/** Stand-in for `HTMLElement.prototype`. */
+const mockElementPrototype = {};
+reflect(mockElementPrototype, "title", "title");
+reflect(mockElementPrototype, "className", "class");
+Object.defineProperty(mockElementPrototype, "textContent", {
+  get(this: { text?: string }) {
+    return this.text ?? "";
+  },
+  set(
+    this: { text?: string; mutationRecords: Set<MockMutationRecord[]> },
+    value: unknown,
+  ) {
+    this.text = String(value);
+    for (const records of this.mutationRecords) {
+      records.push({ attributeName: null });
+    }
+  },
+});
+
+/**
+ * Stand-in for `HTMLInputElement.prototype`. On a checkbox, `.value` reads and
+ * writes the `value` attribute, and is `on` when the attribute is absent. On a
+ * text input, `.value` holds the typed text, and the `value` attribute gives
+ * only its starting value.
+ */
+const mockInputPrototype = Object.create(mockElementPrototype);
+reflect(mockInputPrototype, "placeholder", "placeholder");
+Object.defineProperty(mockInputPrototype, "value", {
+  get(this: Element & { typedValue?: string }) {
+    return this.getAttribute("type") === "checkbox"
+      ? this.getAttribute("value") ?? "on"
+      : this.typedValue ?? this.getAttribute("value") ?? "";
+  },
+  set(this: Element & { typedValue?: string }, value: unknown) {
+    if (this.getAttribute("type") === "checkbox") {
+      this.setAttribute("value", String(value));
+    } else {
+      this.typedValue = String(value);
+    }
+  },
+});
+
+/**
+ * Prototype of the mock `cf-input` custom element. It defines its own
+ * `placeholder` property, as a Lit component does.
+ */
+const mockCfInputPrototype = Object.create(mockElementPrototype);
+Object.defineProperty(mockCfInputPrototype, "placeholder", {
+  get(this: { placeholderValue?: unknown }) {
+    return this.placeholderValue;
+  },
+  set(this: { placeholderValue?: unknown }, value: unknown) {
+    this.placeholderValue = value;
+  },
+});
+
+/**
+ * Stand-in for `MutationObserver`, recording attribute writes and replaced
+ * children. A record of replaced children has no `attributeName`.
+ */
+class MockMutationObserver {
+  readonly #records: MockMutationRecord[] = [];
+  readonly #targets = new Set<any>();
+
+  observe(target: any): void {
+    target.mutationRecords.add(this.#records);
+    this.#targets.add(target);
+  }
+
+  takeRecords(): MockMutationRecord[] {
+    return this.#records.splice(0);
+  }
+
+  disconnect(): void {
+    for (const target of this.#targets) {
+      target.mutationRecords.delete(this.#records);
+    }
+  }
+}
+
 // Create a minimal DOM environment for testing
 // Note: This doesn't fully replicate HTMLElement behavior
-function createMockDocument() {
+//
+// With `upgrade` false, the document behaves like one that
+// `createHTMLDocument()` returns. An element with a custom element's name stays
+// a plain element there, without the custom element class's properties.
+function createMockDocument({ upgrade = true } = {}) {
   let idCounter = 0;
 
   const createElement = (tagName: string) => {
     const attributes = new Map<string, string>();
     const eventListeners = new Map<string, ((event: unknown) => void)[]>();
     const childNodes: any[] = [];
+    const mutationRecords = new Set<MockMutationRecord[]>();
 
     const element: Record<string, any> = {
+      ownerDocument: doc,
+      mutationRecords,
       tagName: tagName.toUpperCase(),
+      localName: tagName,
       _id: `mock-${idCounter++}`,
       nodeType: 1, // ELEMENT_NODE
       parentNode: null,
@@ -69,6 +178,9 @@ function createMockDocument() {
 
       setAttribute(name: string, value: string) {
         attributes.set(name, value);
+        for (const records of mutationRecords) {
+          records.push({ attributeName: name });
+        }
       },
       getAttribute(name: string) {
         return attributes.get(name) ?? null;
@@ -76,8 +188,18 @@ function createMockDocument() {
       hasAttribute(name: string) {
         return attributes.has(name);
       },
+      innerHTML: "",
+      getAttributeNames() {
+        return [...attributes.keys()];
+      },
+      get attributes() {
+        return [...attributes].map(([name, value]) => ({ name, value }));
+      },
       removeAttribute(name: string) {
-        attributes.delete(name);
+        if (!attributes.delete(name)) return;
+        for (const records of mutationRecords) {
+          records.push({ attributeName: name });
+        }
       },
       appendChild(child: any) {
         // Remove from current position if already a child (handles move)
@@ -139,6 +261,15 @@ function createMockDocument() {
       },
     };
 
+    Object.setPrototypeOf(
+      element,
+      tagName === "input"
+        ? mockInputPrototype
+        : tagName === "cf-input" && upgrade
+        ? mockCfInputPrototype
+        : mockElementPrototype,
+    );
+
     return element;
   };
 
@@ -151,10 +282,23 @@ function createMockDocument() {
     };
   };
 
-  return {
+  const importNode = (node: Element) => {
+    const copy = createElement(node.localName);
+    for (const name of node.getAttributeNames()) {
+      copy.setAttribute(name, node.getAttribute(name));
+    }
+    return copy;
+  };
+
+  const doc = {
     createElement,
     createTextNode,
-  } as unknown as Document;
+    importNode,
+    implementation: {
+      createHTMLDocument: () => createMockDocument({ upgrade: false }),
+    },
+  };
+  return doc as unknown as Document;
 }
 
 describe("DomApplicator", () => {
@@ -178,6 +322,184 @@ describe("DomApplicator", () => {
         });
         expect(element.hasAttribute("aria-label")).toBe(false);
       });
+      describe("property removal", () => {
+        const observerDescriptor = Object.getOwnPropertyDescriptor(
+          globalThis,
+          "MutationObserver",
+        );
+
+        beforeEach(() => {
+          Object.defineProperty(globalThis, "MutationObserver", {
+            configurable: true,
+            value: MockMutationObserver,
+          });
+        });
+
+        afterEach(() => {
+          if (observerDescriptor) {
+            Object.defineProperty(
+              globalThis,
+              "MutationObserver",
+              observerDescriptor,
+            );
+          } else {
+            Reflect.deleteProperty(globalThis, "MutationObserver");
+          }
+        });
+
+        function removeAfterSetting(
+          tagName: string,
+          attributes: Record<string, string>,
+          props: Record<string, string>,
+          removedKey: string,
+        ): any {
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            onEvent: () => {},
+            onError: (error) => {
+              throw error;
+            },
+          });
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [{ op: "create-element", nodeId: 1, tagName }],
+          });
+          const element = applicator.getNode(1) as any;
+          for (const [name, value] of Object.entries(attributes)) {
+            element.setAttribute(name, value);
+          }
+          applicator.applyBatch({
+            batchId: 2,
+            ops: Object.entries(props).map(([key, value]) => ({
+              op: "set-prop" as const,
+              nodeId: 1,
+              key,
+              value,
+            })),
+          });
+          applicator.applyBatch({
+            batchId: 3,
+            ops: [{ op: "remove-prop", nodeId: 1, key: removedKey }],
+          });
+          return element;
+        }
+
+        it("removes the attribute that a built-in element's property writes", () => {
+          const reflected: Record<string, string> = {
+            title: "title",
+            placeholder: "placeholder",
+            className: "class",
+          };
+          for (const [key, attribute] of Object.entries(reflected)) {
+            const element = removeAfterSetting("input", {}, {
+              title: "Hint",
+              placeholder: "Name",
+              className: "wide",
+            }, key);
+            expect(element[key]).toBe("");
+            expect(element.getAttributeNames().sort()).toStrictEqual(
+              Object.values(reflected).filter((name) => name !== attribute)
+                .sort(),
+            );
+          }
+        });
+
+        it("removes the attribute a property wrote when the value is already the default", () => {
+          const element = removeAfterSetting(
+            "input",
+            {},
+            { title: "", className: "wide" },
+            "title",
+          );
+          expect(element.getAttributeNames()).toStrictEqual(["class"]);
+        });
+
+        it("returns a property that writes no attribute to a new element's value", () => {
+          const element = removeAfterSetting(
+            "input",
+            { type: "text" },
+            { value: "typed" },
+            "value",
+          );
+          expect(element.value).toBe("");
+          expect(element.getAttributeNames()).toStrictEqual(["type"]);
+        });
+
+        it("clears the children that a property wrote", () => {
+          const element = removeAfterSetting(
+            "div",
+            { title: "Hint" },
+            { textContent: "text" },
+            "textContent",
+          );
+          expect(element.textContent).toBe("");
+          expect(element.getAttributeNames()).toStrictEqual(["title"]);
+        });
+
+        it("returns a property that writes no attribute to the default the element's attributes give", () => {
+          const element = removeAfterSetting(
+            "input",
+            { type: "text", value: "default" },
+            { value: "typed" },
+            "value",
+          );
+          expect(element.value).toBe("default");
+          expect(element.getAttributeNames().sort()).toStrictEqual([
+            "type",
+            "value",
+          ]);
+        });
+
+        it("removes the attribute a property writes only on some kinds of element", () => {
+          const element = removeAfterSetting(
+            "input",
+            { type: "checkbox" },
+            { value: "yes", title: "Agree" },
+            "value",
+          );
+          expect(element.value).toBe("on");
+          expect(element.getAttributeNames().sort()).toStrictEqual([
+            "title",
+            "type",
+          ]);
+        });
+
+        it("removes the attribute written by a property a custom element inherits", () => {
+          const element = removeAfterSetting(
+            "cf-input",
+            {},
+            { title: "Hint", placeholder: "Name" },
+            "title",
+          );
+          expect(element.title).toBe("");
+          expect(element.getAttributeNames()).toStrictEqual([]);
+          expect(element.placeholder).toBe("Name");
+        });
+
+        it("sets a property a custom element defines to `undefined`", () => {
+          const element = removeAfterSetting(
+            "cf-input",
+            {},
+            { placeholder: "Name", title: "Hint" },
+            "placeholder",
+          );
+          expect(element.placeholder).toBeUndefined();
+          expect(element.getAttributeNames()).toStrictEqual(["title"]);
+        });
+
+        it("sets an element's own property to `undefined`", () => {
+          const element = removeAfterSetting(
+            "div",
+            { title: "Hint" },
+            { note: "kept by the element" },
+            "note",
+          );
+          expect(Object.hasOwn(element, "note")).toBe(true);
+          expect(element.note).toBeUndefined();
+          expect(element.getAttributeNames()).toStrictEqual(["title"]);
+        });
+      });
+
       describe("create elements", () => {
         it("creates an element from create-element op", () => {
           const doc = createMockDocument();

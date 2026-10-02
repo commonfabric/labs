@@ -8,6 +8,7 @@
 
 import type { AssertPart, AssertRecord } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
+import { maxOf } from "@commonfabric/utils/math";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -53,7 +54,7 @@ export function formatAssertRecord(record: AssertRecord): string {
       : "Expected true, got false";
   }
 
-  const width = Math.max(...record.parts.map((part) => part.src.length));
+  const width = maxOf(record.parts.map((part) => part.src.length));
   const lines = record.parts.map((part) =>
     `  ${part.src.padEnd(width)} = ${part.rendered}`
   );

@@ -27,8 +27,6 @@ import patternLifecycle from "@/routes/pattern-lifecycle/pattern-lifecycle.index
 
 import spaceInvites from "@/routes/space-invites/space-invites.index.ts";
 
-import inbox from "./routes/inbox/inbox.index.ts";
-
 const app = createApp();
 
 configureOpenAPI(app);
@@ -57,7 +55,6 @@ const routes = [
   ingestChannels,
   ingestPush,
   spaceInvites,
-  inbox,
   patternLifecycle,
 ];
 

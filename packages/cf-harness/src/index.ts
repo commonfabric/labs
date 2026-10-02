@@ -44,6 +44,7 @@ export * from "./contracts/cfc-policy-snapshot.ts";
 export * from "./contracts/handle-table.ts";
 export * from "./handle-table.ts";
 export * from "./contracts/browser-access.ts";
+export * from "./contracts/client-action.ts";
 export * from "./contracts/run-manifest.ts";
 export * from "./contracts/invalid-tool-call.ts";
 export * from "./contracts/observation.ts";

@@ -102,6 +102,7 @@ import {
   selectStaleBasisInstances,
 } from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/utils/logger";
+import { minOf } from "@commonfabric/utils/math";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
@@ -1591,14 +1592,13 @@ export class SpaceServer implements TransactionSealDestination {
     // surfacing, never a wedge).
     if (foreignReadInstances.length > 0) {
       try {
-        stale.push(
-          ...await selectForeignStaleInstances(
-            engine,
-            { branch: "", space },
-            (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
-            stale,
-          ),
+        const foreignStale = await selectForeignStaleInstances(
+          engine,
+          { branch: "", space },
+          (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
+          stale,
         );
+        for (const entry of foreignStale) stale.push(entry);
       } catch (error) {
         logger.warn("basis-foreign-remark-failed", () => [
           `${foreignReadInstances.length} basis instance(s) carry ` +
@@ -2114,8 +2114,10 @@ export class SpaceServer implements TransactionSealDestination {
           // with the intent lost. Noted INSIDE the seal chain, so the
           // flush's pre-commit `await #sealChain` barrier guarantees
           // the mark precedes commitWave. Non-event contexts note
-          // nothing (noteSealFailure filters).
-          wave.noteSealFailure(waveRunContextOf(tx));
+          // nothing (noteSealFailure filters, and it also leaves out a
+          // durable entry's ACL-document refusal, whose consequence is the
+          // error the scheduler seals for it).
+          wave.noteSealFailure(waveRunContextOf(tx), result.error);
         } else {
           // The drain's in-flight guard: an ACCEPTED event-handler seal
           // for a drained copy means its consequence mark now rides an
@@ -2257,7 +2259,8 @@ export class SpaceServer implements TransactionSealDestination {
   demandedIdentitiesOf(id: string): ScopeKeyIdentity[] {
     const identities: ScopeKeyIdentity[] = [];
     for (const [key, demanders] of this.#demandersByKey) {
-      if (key.endsWith(`\0${id}`)) identities.push(...demanders.values());
+      if (!key.endsWith(`\0${id}`)) continue;
+      for (const identity of demanders.values()) identities.push(identity);
     }
     return identities;
   }
@@ -5114,8 +5117,10 @@ export class SpaceServer implements TransactionSealDestination {
                 // admitted during the pass, or foreign novelty the replica
                 // still shadows, which lies at or above its floor.
                 const invalidatedAt = Math.min(
-                  ...[...verdict.observedDocIds, ...confirmed.observedDocIds]
-                    .map((id) => changedDocs.get(id) ?? Infinity),
+                  minOf(
+                    [...verdict.observedDocIds, ...confirmed.observedDocIds]
+                      .map((id) => changedDocs.get(id) ?? Infinity),
+                  ),
                   runtime.storageManager.open(this.#options.space)
                     .replica.unappliedForeignSeqFloor?.() ?? Infinity,
                 );
@@ -5623,7 +5628,7 @@ export class SpaceServer implements TransactionSealDestination {
     // even when that input sits below the floor.
     const visible = Math.min(
       eventVisible,
-      ...[...this.#rearmedAwaitingSettle.values()].map((seq) => seq - 1),
+      minOf([...this.#rearmedAwaitingSettle.values()].map((seq) => seq - 1)),
     );
     return { shadowFloor, shadowVisible, visible };
   }

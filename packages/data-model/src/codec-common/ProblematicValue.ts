@@ -153,6 +153,11 @@ export class ProblematicValue extends BaseFabricInstance {
     return new ProblematicValue(this.wireTypeTag, this.state, this.error);
   }
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #codec = Object.freeze(
     new (class ProblematicValueCodec
       extends BaseNonterminalCodec<never, ProblematicValueState> {

@@ -30,31 +30,44 @@ import {
 import { cellRefToIdentityKey, cellRefToKey } from "@/shared/utils.ts";
 
 describe("cell-handle", () => {
-  it("pulls lazy producers before caching the returned value", async () => {
-    const requests: unknown[] = [];
-    const ref: CellRef = {
-      id: "of:lazy-cell" as CellRef["id"],
-      space: "did:key:test" as CellRef["space"],
-      scope: "session",
-      path: [],
-    };
-    const runtime = {
-      [$conn]: () => ({
-        request: (request: unknown) => {
-          requests.push(request);
-          return Promise.resolve({ value: { ready: true } });
-        },
-      }),
-    } as unknown as RuntimeClient;
-    const cell = new CellHandle<{ ready: boolean }>(runtime, ref);
+  for (const awaitDurability of [undefined, false, true]) {
+    it(
+      awaitDurability === undefined
+        ? "pulls lazy producers before caching the returned value"
+        : `caches a pulled value with awaitDurability=${awaitDurability}`,
+      async () => {
+        const requests: unknown[] = [];
+        const ref: CellRef = {
+          id: "of:lazy-cell" as CellRef["id"],
+          space: "did:key:test" as CellRef["space"],
+          scope: "session",
+          path: [],
+        };
+        const runtime = {
+          [$conn]: () => ({
+            request: (request: unknown) => {
+              requests.push(request);
+              return Promise.resolve({ value: { ready: true } });
+            },
+          }),
+        } as unknown as RuntimeClient;
+        const cell = new CellHandle<{ ready: boolean }>(runtime, ref);
 
-    await expect(cell.pull()).resolves.toEqual({ ready: true });
-    expect(cell.get()).toEqual({ ready: true });
-    expect(requests).toEqual([{
-      type: RequestType.CellPull,
-      cell: ref,
-    }]);
-  });
+        const pull = awaitDurability === undefined
+          ? cell.pull()
+          : cell.pull({ awaitDurability });
+        await expect(pull).resolves.toEqual({
+          ready: true,
+        });
+        expect(cell.get()).toEqual({ ready: true });
+        expect(requests).toEqual([{
+          type: RequestType.CellPull,
+          cell: ref,
+          ...(awaitDurability === undefined ? {} : { awaitDurability }),
+        }]);
+      },
+    );
+  }
 
   describe("SQLite IPC", () => {
     const ref: CellRef = {
@@ -1704,6 +1717,37 @@ describe("cell-handle", () => {
       expect(request.values).toEqual([3]);
       expect(request).toMatchObject({ awaitCommit: true });
       expect(cell.get()).toEqual([1, 2, 3]);
+    });
+
+    it("sends a list given to pushAll as one CellPush of every member", () => {
+      const members = Array.from({ length: 200_000 }, (_, index) => index);
+      const requests: unknown[] = [];
+      const cell = new CellHandle<number[]>(runtimeCapturing(requests), ref);
+      cell[$onCellUpdate]([-1]);
+
+      cell.pushAll(members);
+
+      expect(requests.length).toBe(1);
+      const request = requests[0] as { type: unknown; values: unknown };
+      expect(request.type).toBe(RequestType.CellPush);
+      expect(request.values).toEqual(members);
+      expect(cell.get()).toEqual([-1, ...members]);
+    });
+
+    it("reports a refused strict pushAll to capability callers", async () => {
+      const refused = new Error("push refused");
+      const runtime = {
+        [$conn]: () => ({
+          request: () => Promise.reject(refused),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          signal: { aborted: false },
+        }),
+      } as unknown as RuntimeClient;
+      const cell = new CellHandle<number[]>(runtime, ref, [1]);
+
+      await expect(cell.pushAllStrict([2, 3])).rejects.toBe(refused);
+      expect(cell.get()).toEqual([1]);
     });
 
     it("reports a refused strict push to capability callers", async () => {

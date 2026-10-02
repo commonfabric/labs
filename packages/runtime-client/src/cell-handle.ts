@@ -435,11 +435,18 @@ export class CellHandle<T = unknown> {
     this: CellHandle<U[]>,
     ...values: T extends (infer U)[] ? U[] : never
   ): void {
-    void this.#pushValues(values).catch((error) => {
-      if (!this.#conn.signal.aborted) {
-        console.error("[CellHandle] Push failed:", error);
-      }
-    });
+    this.#pushValuesReportingFailure(values);
+  }
+
+  /**
+   * Like `push()`, except that it takes the values to append as one list, so
+   * the list can be of any length.
+   */
+  pushAll<U>(
+    this: CellHandle<U[]>,
+    values: T extends (infer U)[] ? readonly U[] : never,
+  ): void {
+    this.#pushValuesReportingFailure(values);
   }
 
   /** Append values and reject when the runtime refuses the mergeable write. */
@@ -450,7 +457,30 @@ export class CellHandle<T = unknown> {
     return this.#pushValues(values);
   }
 
-  #pushValues<U>(values: U[]): Promise<void> {
+  /**
+   * Like `pushStrict()`, except that it takes the values to append as one
+   * list, so the list can be of any length.
+   */
+  pushAllStrict<U>(
+    this: CellHandle<U[]>,
+    values: T extends (infer U)[] ? readonly U[] : never,
+  ): Promise<void> {
+    return this.#pushValues(values);
+  }
+
+  /**
+   * Helper for `push()` and `pushAll()`, which appends `values` and logs a
+   * refusal instead of returning it, unless the connection has been aborted.
+   */
+  #pushValuesReportingFailure(values: readonly unknown[]): void {
+    void this.#pushValues(values).catch((error) => {
+      if (!this.#conn.signal.aborted) {
+        console.error("[CellHandle] Push failed:", error);
+      }
+    });
+  }
+
+  #pushValues(values: readonly unknown[]): Promise<void> {
     const serializedValues = values.map((value) =>
       CellHandle.serialize(value as ClientCellValue)
     );
@@ -460,7 +490,7 @@ export class CellHandle<T = unknown> {
         "sigil",
       );
       return applyValue(snapshot, value, this);
-    }) as U[];
+    });
     const cached = this.#value;
     const fallback = cached === undefined ? undefined : applyValue(
       CellHandle.#serialize(cached as ClientCellValue, "sigil"),
@@ -474,7 +504,7 @@ export class CellHandle<T = unknown> {
       if (!Array.isArray(current)) {
         throw new Error("push() can only be used on array cells");
       }
-      const value = [...current, ...snapshots] as unknown as U[];
+      const value = [...current, ...snapshots];
       const updateGeneration = this.#updateGeneration;
       queue.value = value;
       queue.hasValue = true;
@@ -637,8 +667,16 @@ export class CellHandle<T = unknown> {
     return value;
   }
 
-  /** Demand lazy producers and their durable commits before fetching a value. */
-  async pull(): Promise<Readonly<T> | undefined> {
+  /**
+   * Demands lazy producers before fetching a value. By default, also waits for
+   * the runtime-wide commit-aware barrier. Rendering can pass
+   * `awaitDurability: false` to read reactive state while writes remain
+   * unconfirmed; a cell with no value yet still waits, since the write that
+   * creates it may be in flight.
+   */
+  async pull(
+    options: { awaitDurability?: boolean } = {},
+  ): Promise<Readonly<T> | undefined> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
     const { value, authoritative } = await this.#enqueueOperation(
@@ -647,6 +685,9 @@ export class CellHandle<T = unknown> {
         const response = await this.#conn.request<RequestType.CellPull>({
           type: RequestType.CellPull,
           cell: this.ref(),
+          ...(options.awaitDurability === undefined
+            ? {}
+            : { awaitDurability: options.awaitDurability }),
         });
         const value = CellHandle.deserialize<T>(this, response.value) as T;
         const authoritative = updateGeneration === this.#updateGeneration &&

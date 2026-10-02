@@ -152,6 +152,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
   //
 
   static {
+    Object.freeze(this);
     Object.freeze(this.prototype);
   }
 

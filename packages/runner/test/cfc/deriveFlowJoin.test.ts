@@ -6,6 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { atomPropagationClass } from "../../src/cfc/atom-classes.ts";
 import { uniqueCfcAtoms } from "../../src/cfc/observation.ts";
@@ -78,15 +79,14 @@ function scan(
     buckets.set(bucket, group);
   }
   const consumed = [...buckets.values()].flatMap((group) => {
-    const longest = Math.max(...group.map((entry) => entry.path.length));
+    const longest = maxOf(group.map((entry) => entry.path.length));
     return group.filter((entry) => entry.path.length === longest);
   });
   if (!nonRecursive) {
-    consumed.push(
-      ...selected.filter((entry) =>
-        entry.path.length > path.length && isPrefix(path, entry.path)
-      ),
+    const descendants = selected.filter((entry) =>
+      entry.path.length > path.length && isPrefix(path, entry.path)
     );
+    for (const entry of descendants) consumed.push(entry);
   }
   return {
     confidentiality: uniqueCfcAtoms(
@@ -107,7 +107,7 @@ function corpus(): string[][] {
     level = level.flatMap((path) =>
       ["a", "b", "*", ""].map((segment) => [...path, segment])
     );
-    paths.push(...level);
+    for (const path of level) paths.push(path);
   }
   return paths;
 }

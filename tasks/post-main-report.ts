@@ -243,7 +243,7 @@ export async function outcomesFromStore(
     for (const objectName of await listObjects({ bucket, prefix })) {
       objects++;
       const object = await readObject({ bucket, objectName });
-      records.push(...object.records);
+      for (const record of object.records) records.push(record);
       for (const report of object.reports) {
         if (report.context !== undefined) commits.add(report.context.commit);
       }

@@ -286,7 +286,7 @@ export function census(
         mandatory.set(key, reason ?? "unknown");
         continue;
       }
-      entries.push(...recorded);
+      for (const entry of recorded) entries.push(entry);
       if (reason === undefined) continue;
       for (const entry of recorded) {
         mandatory.set(testIdentityKey(entry.test), reason);

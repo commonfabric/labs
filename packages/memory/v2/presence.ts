@@ -2,7 +2,7 @@
  * The presence relay: the bounds a publication is held to, shared by the
  * server that refuses one and the client that declines to send one, and the
  * rooms the server keeps. A room lives under a space and holds one
- * membership per connection; it remembers each member's latest record and
+ * membership per session; it remembers each member's latest record and
  * nothing else, and forgets a member the moment their membership ends. The
  * relay validates the envelope of a record and bounds its size; it does not
  * read facet contents (04-protocol.md §4.13).
@@ -158,9 +158,13 @@ export type PresenceSend = (
   message: PresenceUpsertMessage | PresenceRemoveMessage,
 ) => void;
 
-/** One connection's place in one room. */
+/** One session's place in one room. */
 type Member = {
   participantId: string;
+
+  /** The key of the room the membership is in. */
+  roomKey: string;
+
   connectionId: string;
   sessionId: string;
   principal: string | undefined;
@@ -176,6 +180,10 @@ type Member = {
 
 const roomKey = (space: string, room: string): string => `${space}\0${room}`;
 
+/** The key of a membership within its room. */
+const memberKey = (connectionId: string, sessionId: string): string =>
+  `${connectionId}\0${sessionId}`;
+
 const recordOf = (member: Member): PresenceRecord | null =>
   member.publication === null ? null : {
     participantId: member.participantId,
@@ -186,23 +194,23 @@ const recordOf = (member: Member): PresenceRecord | null =>
   };
 
 /**
- * The rooms one server relays. Membership is keyed by connection, so a
- * connection is in a room at most once, and every push a member receives is
- * addressed to the session it joined through. Nothing here is durable, and
- * nothing here reads facet contents.
+ * The rooms one server relays. A membership belongs to one session on one
+ * connection, so a session is in a room at most once, and every push a
+ * member receives is addressed to the session that joined. Nothing here is
+ * durable, and nothing here reads facet contents.
  */
 export class PresenceRooms {
+  /** Per room key, the room's memberships by member key. */
   #rooms = new Map<string, Map<string, Member>>();
 
-  /** The room keys each connection is a member of. */
-  #roomsByConnection = new Map<string, Set<string>>();
+  /** The memberships each connection holds. */
+  #membersByConnection = new Map<string, Set<Member>>();
 
   /**
-   * Adds the connection to the room, or refreshes its membership if it is
+   * Adds the session to the room, or refreshes its membership if it is
    * already there, and returns its participant id with the latest record of
    * every other member that has published. Throws a `PresenceError` when the
-   * room is full, or when the connection already holds the membership through
-   * another session: a membership belongs to the session that opened it.
+   * room is full.
    */
   join(input: {
     space: string;
@@ -218,13 +226,15 @@ export class PresenceRooms {
       room = new Map();
       this.#rooms.set(key, room);
     }
-    let member = room.get(input.connectionId);
+    const ownKey = memberKey(input.connectionId, input.sessionId);
+    let member = room.get(ownKey);
     if (member === undefined) {
       if (room.size >= MAX_PRESENCE_ROOM_MEMBERS) {
         throw new PresenceError("Presence room is full");
       }
       member = {
         participantId: crypto.randomUUID(),
+        roomKey: key,
         connectionId: input.connectionId,
         sessionId: input.sessionId,
         principal: input.principal,
@@ -232,19 +242,14 @@ export class PresenceRooms {
         publication: null,
         send: input.send,
       };
-      room.set(input.connectionId, member);
-      let keys = this.#roomsByConnection.get(input.connectionId);
-      if (keys === undefined) {
-        keys = new Set();
-        this.#roomsByConnection.set(input.connectionId, keys);
+      room.set(ownKey, member);
+      let members = this.#membersByConnection.get(input.connectionId);
+      if (members === undefined) {
+        members = new Set();
+        this.#membersByConnection.set(input.connectionId, members);
       }
-      keys.add(key);
+      members.add(member);
     } else {
-      if (member.sessionId !== input.sessionId) {
-        throw new PresenceError(
-          "Presence room is joined by another session on this connection",
-        );
-      }
       member.principal = input.principal;
       member.send = input.send;
     }
@@ -258,10 +263,10 @@ export class PresenceRooms {
   }
 
   /**
-   * Replaces the connection's record in the room and pushes it to every
-   * other member. Throws a `PresenceError` when the connection is not a
-   * member through `sessionId`, when `revision` does not exceed the last
-   * accepted one, or when the publication fails a bound.
+   * Replaces the session's record in the room and pushes it to every other
+   * member. Throws a `PresenceError` when the session is not a member, when
+   * `revision` does not exceed the last accepted one, or when the
+   * publication fails a bound.
    */
   publish(input: {
     space: string;
@@ -273,10 +278,10 @@ export class PresenceRooms {
     facets: PresenceFacets;
   }): void {
     const room = this.#rooms.get(roomKey(input.space, input.room));
-    if (room === undefined) {
+    const member = room?.get(memberKey(input.connectionId, input.sessionId));
+    if (room === undefined || member === undefined) {
       throw new PresenceError("Presence room is not joined");
     }
-    const member = this.#memberOf(room, input.connectionId, input.sessionId);
     if (
       !Number.isSafeInteger(input.revision) || input.revision <= member.revision
     ) {
@@ -298,89 +303,68 @@ export class PresenceRooms {
     }
   }
 
-  /**
-   * Ends the connection's membership in the room, if it has one. Throws a
-   * `PresenceError` when the membership belongs to another session.
-   */
+  /** Ends the session's membership in the room, if it has one. */
   leave(
     space: string,
     room: string,
     connectionId: string,
     sessionId: string,
   ): void {
-    const key = roomKey(space, room);
-    const members = this.#rooms.get(key);
-    if (members === undefined || !members.has(connectionId)) return;
-    this.#memberOf(members, connectionId, sessionId);
-    this.#end(key, connectionId);
+    const member = this.#rooms.get(roomKey(space, room))?.get(
+      memberKey(connectionId, sessionId),
+    );
+    if (member !== undefined) this.#end(member);
   }
 
   /** Ends every membership the connection holds. */
   leaveConnection(connectionId: string): void {
-    const keys = this.#roomsByConnection.get(connectionId);
-    if (keys === undefined) return;
-    for (const key of [...keys]) this.#end(key, connectionId);
+    const members = this.#membersByConnection.get(connectionId);
+    if (members === undefined) return;
+    for (const member of [...members]) this.#end(member);
   }
 
   /** Ends every membership the connection joined through the session. */
   leaveSession(space: string, sessionId: string, connectionId: string): void {
-    const keys = this.#roomsByConnection.get(connectionId);
-    if (keys === undefined) return;
-    for (const key of [...keys]) {
-      const member = this.#rooms.get(key)?.get(connectionId);
+    const members = this.#membersByConnection.get(connectionId);
+    if (members === undefined) return;
+    for (const member of [...members]) {
       if (
-        member !== undefined && member.sessionId === sessionId &&
-        key.startsWith(`${space}\0`)
+        member.sessionId === sessionId &&
+        member.roomKey.startsWith(`${space}\0`)
       ) {
-        this.#end(key, connectionId);
+        this.#end(member);
       }
     }
   }
 
-  /** How many connections are in the room; `0` for a room nobody is in. */
+  /** How many memberships the room holds; `0` for a room nobody is in. */
   memberCount(space: string, room: string): number {
     return this.#rooms.get(roomKey(space, room))?.size ?? 0;
   }
 
   /**
-   * The connection's membership in `room` through `sessionId`, or a
-   * `PresenceError` when there is none or it is another session's.
+   * Helper for the methods that end a membership, which removes `member`
+   * from its room and tells the room's other members, if it had published.
    */
-  #memberOf(
-    room: Map<string, Member>,
-    connectionId: string,
-    sessionId: string,
-  ): Member {
-    const member = room.get(connectionId);
-    if (member === undefined) {
-      throw new PresenceError("Presence room is not joined");
+  #end(member: Member): void {
+    const room = this.#rooms.get(member.roomKey);
+    if (room === undefined) return;
+    room.delete(memberKey(member.connectionId, member.sessionId));
+    const members = this.#membersByConnection.get(member.connectionId);
+    members?.delete(member);
+    if (members?.size === 0) {
+      this.#membersByConnection.delete(member.connectionId);
     }
-    if (member.sessionId !== sessionId) {
-      throw new PresenceError(
-        "Presence room is joined by another session on this connection",
-      );
-    }
-    return member;
-  }
-
-  #end(key: string, connectionId: string): void {
-    const room = this.#rooms.get(key);
-    const member = room?.get(connectionId);
-    if (room === undefined || member === undefined) return;
-    room.delete(connectionId);
-    const keys = this.#roomsByConnection.get(connectionId);
-    keys?.delete(key);
-    if (keys?.size === 0) this.#roomsByConnection.delete(connectionId);
     if (room.size === 0) {
-      this.#rooms.delete(key);
+      this.#rooms.delete(member.roomKey);
       return;
     }
     // A member that never published was never announced, so there is
     // nothing for the others to remove.
     if (member.publication === null) return;
-    const separator = key.indexOf("\0");
-    const space = key.slice(0, separator);
-    const roomId = key.slice(separator + 1);
+    const separator = member.roomKey.indexOf("\0");
+    const space = member.roomKey.slice(0, separator);
+    const roomId = member.roomKey.slice(separator + 1);
     for (const other of room.values()) {
       other.send({
         type: "presence/remove",

@@ -1,6 +1,8 @@
+import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   isObjectNotArray,
   isPlainObject,
@@ -10,6 +12,8 @@ import {
 import {
   type ClientCommit,
   compatibleMemoryProtocolFlags,
+  type ConnectionAuthResult,
+  type ConnectionChallengeResult,
   decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
   type EntityId,
@@ -75,6 +79,22 @@ import { type ArmedTurn, armTurn } from "./turn.ts";
  */
 const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
 
+/**
+ * Returned by `Client.#authenticate()` and a signed open's turn when the
+ * connection they signed for is gone: the caller waits for the reconnect and
+ * signs again.
+ */
+const STALE: unique symbol = Symbol("stale connection");
+
+/** Thrown inside the shared authentication to settle it as `STALE`. */
+const STALE_AUTHENTICATION: unique symbol = Symbol("stale authentication");
+
+/** The error a reopen fails with when the connection drops under it. */
+const connectionLostWhileRestoring = (): Error =>
+  toConnectionError(
+    new Error("memory connection lost while restoring the session"),
+  );
+
 const logger = getLogger("memory.v2.client", {
   enabled: true,
   level: "error",
@@ -86,11 +106,25 @@ export type Transport = {
 
   send(payload: string): Promise<void>;
   close(): Promise<void>;
+
+  /**
+   * Discards the current connection without disposing the transport. The next
+   * send opens a fresh connection; frames and close callbacks from the
+   * discarded one are ignored.
+   * Reconnectable transports implement this so a failed session restoration
+   * can retry the handshake on a connection that has not accepted `hello`.
+   * Without it, a failed reconnect terminates the client with that failure.
+   */
+  reset?(): void;
+
   setReceiver(receiver: (payload: string) => void): void;
   setCloseReceiver?(receiver: (error?: Error) => void): void;
 
   /** Enables compression after a successful capability handshake. */
   setMessageCompressionEnabled?(enabled: boolean): void;
+
+  /** Selects bounded version-2 envelopes after routed authentication negotiation. */
+  setRoutedMessagesEnabled?(enabled: boolean): void;
 
   /**
    * Resolves once every server frame this transport held at the call has been
@@ -147,6 +181,8 @@ export type SessionOpenAuth = {
 export type SessionOpenAuthContext = {
   challenge: SessionOpenChallenge;
   audience: string;
+  /** Pinned deployment for a routed connection-auth invocation. */
+  deployment?: string;
 };
 
 export type SessionOpenAuthFactory = (
@@ -154,6 +190,38 @@ export type SessionOpenAuthFactory = (
   session: MountOptions,
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
+
+/** Signed direct invocation/authorization, or a routed binary statement transport. */
+export type ConnectionAuth = {
+  invocation: FabricPlainObject;
+  authorization: FabricValue;
+} | { statement: string };
+
+/** Signs a `connection.auth` over the audience and challenge in `context`. */
+export type ConnectionAuthFactory = (
+  context: SessionOpenAuthContext,
+) => Promise<ConnectionAuth> | ConnectionAuth;
+
+/**
+ * The key a session acts as, and how that key signs. Against a server
+ * advertising `connectionAuth` the key signs once per connection, whatever
+ * the number of sessions mounted as it. Routed challenges require fresh signing
+ * for renewal on that connection; against any other server it signs
+ * each `session.open`.
+ */
+export type SessionPrincipal = {
+  /** DID of the key. */
+  readonly did: string;
+
+  /** Signs the key's `connection.auth`. */
+  readonly authorizeConnection: ConnectionAuthFactory;
+
+  /** Signs a `session.open`, for a server that verifies only those. */
+  readonly authorizeSessionOpen: SessionOpenAuthFactory;
+};
+
+/** How a session is authenticated when it opens and each time it reopens. */
+export type SessionAuth = SessionOpenAuthFactory | SessionPrincipal;
 
 /**
  * What a presence room delivers to an observer, in the order it happens. A
@@ -299,6 +367,42 @@ export class Client {
   #helloPending: PromiseWithResolvers<void> | null = null;
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
+
+  /**
+   * Per key, the `connection.auth` it made on the current connection,
+   * settling with the principal the server admitted it as. Emptied by every
+   * `hello`, since a new connection has authenticated nobody.
+   */
+  #authenticated = new Map<string, Promise<string>>();
+  #routedSigners = new Map<string, SessionPrincipal>();
+
+  /**
+   * Per authenticated key, the timer that renews its authentication before
+   * the lease the server granted runs out.
+   */
+  #renewals = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * The keys that have signed the challenge `#sessionOpenAuthContext` holds.
+   * A challenge accepts each key once, so a key in here authenticates over a
+   * challenge it asks for.
+   */
+  #challengeSigners = new Set<string>();
+
+  /**
+   * Settles once every signed `session.open` issued so far has been
+   * responded to. Each one uses the connection's single current challenge
+   * and receives the next, so they are issued one at a time.
+   */
+  #signedOpens: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Counts the connections this client has opened. A signature made under
+   * one count and sent under another is over a challenge of a connection
+   * that is gone.
+   */
+  #connectionEpoch = 0;
+
   #reconnecting: Promise<void> | null = null;
   #cancelReconnectDelay: (() => void) | null = null;
   #connected = false;
@@ -378,6 +482,7 @@ export class Client {
     this.#connected = false;
     this.#noteStateChange();
     this.#cancelReconnectDelay?.();
+    this.#cancelRenewals();
     this.#rejectPending(new Error("memory client closed"));
     await Promise.all([...this.#spaces].map((space) => space.close()));
     this.#spaces.clear();
@@ -388,7 +493,7 @@ export class Client {
   async mount(
     space: string,
     options: MountOptions = {},
-    openAuthFactory?: SessionOpenAuthFactory,
+    auth?: SessionAuth,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
     options = {
@@ -397,25 +502,28 @@ export class Client {
         genesisRoot: cloneIfNecessary(options.genesisRoot, { frozen: false }),
       }),
     };
-    const auth = await runWithAbortSignal(
-      signal,
-      "memory session mount cancelled",
-      () =>
-        openAuthFactory?.(
-          space,
-          options,
-          this.sessionOpenAuthContext(),
-        ),
-    );
-    const result = await runWithAbortSignal(
-      signal,
-      "memory session mount cancelled",
-      () => this.openSession(space, options, auth),
-    );
-    if (signal?.aborted) {
-      throw signal.reason instanceof Error
-        ? signal.reason
-        : new Error("memory session mount cancelled");
+    let opening: Promise<SessionOpenResult> | undefined;
+    let result: SessionOpenResult;
+    try {
+      result = await runWithAbortSignal(
+        signal,
+        "memory session mount cancelled",
+        () => (opening = this.openSession(space, options, auth)),
+      );
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new Error("memory session mount cancelled");
+      }
+    } catch (error) {
+      // A cancelled mount hands out no session, so one the server opened for
+      // it has no holder to close it.
+      if (signal?.aborted) {
+        void opening?.then(({ sessionId }) =>
+          this.#closeUnheldSession(space, sessionId)
+        ).catch(() => undefined);
+      }
+      throw error;
     }
     // Between openSession resolving (the session now exists server-side)
     // and the registration below, a session-scoped frame would find no
@@ -429,7 +537,7 @@ export class Client {
       result.sessionId,
       result.sessionToken,
       result.serverSeq,
-      openAuthFactory,
+      auth,
       signal,
       options.actingAs,
       options.readCeiling,
@@ -443,7 +551,20 @@ export class Client {
     this.#spaces.delete(session);
   }
 
-  async request<Result>(message: FabricPlainObject): Promise<Result> {
+  /**
+   * Sends `message` and returns the `ok` of the server's response, or throws
+   * its error. A request made while the connection is down waits for the
+   * reconnect, unless `options.whileConnected` is set, in which case it
+   * throws a `ConnectionError`: a request a session's restore makes would
+   * otherwise wait for the reconnect that is running that restore.
+   */
+  async request<Result>(
+    message: FabricPlainObject,
+    options: { whileConnected?: boolean } = {},
+  ): Promise<Result> {
+    if (options.whileConnected === true && !this.#connected) {
+      throw connectionLostWhileRestoring();
+    }
     await this.#ensureConnected();
     // `ensureConnected()` is async even when the transport is already live, so
     // close() can run while this request is suspended there. Recheck before
@@ -498,12 +619,45 @@ export class Client {
     return result.ok as Result;
   }
 
+  /**
+   * Ends the authentication of the key `did` on the current connection.
+   * Sessions mounted as it stay open, and a later mount as it authenticates
+   * again. Sends nothing for a key this connection has not authenticated.
+   */
+  async release(did: string): Promise<void> {
+    this.#cancelRenewal(did);
+    this.#routedSigners.delete(did);
+    if (!this.#authenticated.delete(did)) return;
+    await this.request({
+      type: "connection.release",
+      requestId: this.#nextRequestId(),
+      principal: did,
+    });
+  }
+
+  /**
+   * Opens or reopens a session, authenticated as `auth` says: named as a
+   * principal the connection has authenticated where the server advertises
+   * `connectionAuth`, and otherwise signed for this one session. A reopen
+   * that a session's restore makes sets `options.restoring`, and is then
+   * rejected with a `ConnectionError` if the connection drops under it.
+   */
   async openSession(
     space: string,
     session: MountOptions,
-    auth?: SessionOpenAuth,
+    auth?: SessionAuth,
     holdings?: SessionHolding[],
+    options: { restoring?: boolean } = {},
   ): Promise<SessionOpenResult> {
+    const whileConnected = options.restoring === true;
+    // A mount made while the connection is down waits for the reconnect to
+    // finish, restores included, before it joins the key's authentication
+    // or the signed-open chain: joined earlier, the restores would wait for
+    // it while it waited for them. A reopen is part of that reconnect and
+    // fails instead when the connection drops under it.
+    if (!whileConnected) {
+      await this.#ensureConnected();
+    }
     // Every open passes through here — a first mount and each reopen after
     // a dropped connection alike — so this is where a declared ceiling is
     // held to the server it is declared to. A server that does not
@@ -527,16 +681,74 @@ export class Client {
         "memory server does not support a custom root intent",
       );
     }
-    const result = await this.request<SessionOpenResult>({
-      type: "session.open",
-      requestId: this.#nextRequestId(),
-      space,
-      session,
-      ...(auth ? auth : {}),
-      ...(holdings !== undefined ? { holdings } : {}),
-    });
-    this.#updateSessionOpenAuthContext(result.sessionOpen);
-    return result;
+    // A drop while an open is being signed leaves it with a challenge of
+    // the connection that is gone. A reopen fails then, for its reconnect
+    // to retry; a mount waits for the reconnect and signs again.
+    for (;;) {
+      if (
+        typeof auth === "object" && this.serverFlags?.connectionAuth === true
+      ) {
+        const principal = await this.#authenticate(auth, whileConnected);
+        if (principal === STALE) {
+          await this.#ensureConnected();
+          continue;
+        }
+        const result = await this.request<SessionOpenResult>({
+          type: "session.open",
+          requestId: this.#nextRequestId(),
+          space,
+          principal,
+          session,
+          ...(holdings !== undefined ? { holdings } : {}),
+        }, { whileConnected });
+        return result;
+      }
+      const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;
+      const opened = this.#signedOpens.then(
+        async (): Promise<SessionOpenResult | typeof STALE> => {
+          if (!this.#connected) {
+            if (whileConnected) throw connectionLostWhileRestoring();
+            return STALE;
+          }
+          const epoch = this.#connectionEpoch;
+          const signed = await sign?.(
+            space,
+            session,
+            this.sessionOpenAuthContext(),
+          );
+          if (this.#staleSince(epoch)) {
+            if (whileConnected) throw connectionLostWhileRestoring();
+            return STALE;
+          }
+          const result = await this.request<SessionOpenResult>({
+            type: "session.open",
+            requestId: this.#nextRequestId(),
+            space,
+            session,
+            ...(signed ? signed : {}),
+            ...(holdings !== undefined ? { holdings } : {}),
+          }, { whileConnected });
+          this.#updateSessionOpenAuthContext(result.sessionOpen);
+          return result;
+        },
+      );
+      this.#signedOpens = opened.catch(() => undefined);
+      const result = await opened;
+      if (result === STALE) {
+        await this.#ensureConnected();
+        continue;
+      }
+      return result;
+    }
+  }
+
+  /**
+   * Whether a signature begun under connection `epoch` is over a challenge
+   * of a connection that is gone: the connection dropped, or a new one
+   * replaced it, while the signing ran.
+   */
+  #staleSince(epoch: number): boolean {
+    return !this.#connected || this.#connectionEpoch !== epoch;
   }
 
   isConnected(): boolean {
@@ -613,6 +825,155 @@ export class Client {
 
   #updateSessionOpenAuthContext(sessionOpen: unknown): void {
     this.#sessionOpenAuthContext = requireSessionOpenAuthMetadata(sessionOpen);
+    this.#challengeSigners.clear();
+  }
+
+  /**
+   * Helper for `mount()`, which ends a session the server holds on this
+   * connection and no `SpaceSession` stands for. A server that does not
+   * advertise `sessionClose` keeps it until the connection closes.
+   */
+  async #closeUnheldSession(space: string, sessionId: string): Promise<void> {
+    if (
+      this.#closed || !this.#connected ||
+      this.serverFlags?.sessionClose !== true
+    ) return;
+    await this.request({
+      type: "session.close",
+      requestId: this.#nextRequestId(),
+      space,
+      sessionId,
+    });
+  }
+
+  /**
+   * Helper for `openSession()`, which authenticates the key of `principal`
+   * on the current connection unless it already has, or is about to have.
+   * Every caller naming one key waits for the same `connection.auth`, whose
+   * requests are made `whileConnected` if the first of those callers asks.
+   */
+  async #authenticate(
+    principal: SessionPrincipal,
+    whileConnected: boolean,
+    freshChallenge = false,
+    routedChallenge?: SessionOpenAuthContext["challenge"],
+  ): Promise<string | typeof STALE> {
+    this.#routedSigners.set(principal.did, principal);
+    const existing = this.#authenticated.get(principal.did);
+    if (existing !== undefined) {
+      return await existing;
+    }
+    // A connection that is down holds the challenge of the one that is gone.
+    if (!this.#connected) {
+      if (whileConnected) throw connectionLostWhileRestoring();
+      return STALE;
+    }
+    const epoch = this.#connectionEpoch;
+    const held = this.sessionOpenAuthContext();
+    // The server refuses a challenge that has expired, and one this key has
+    // already signed, so either case takes a challenge of its own. The
+    // expiry is read by this clock, which may lag the server's: a refusal
+    // the server marks retriable is answered once with a challenge asked
+    // for outright.
+    const needsChallenge = routedChallenge !== undefined || freshChallenge ||
+      this.#challengeSigners.has(principal.did) ||
+      held.challenge.expiresAt <= Math.floor(Date.now() / 1000);
+    if (!needsChallenge) {
+      this.#challengeSigners.add(principal.did);
+    }
+    const authenticated = (async () => {
+      const context = needsChallenge
+        ? {
+          audience: held.audience,
+          ...(held.deployment === undefined
+            ? {}
+            : { deployment: held.deployment }),
+          challenge: routedChallenge ??
+            (await this.request<ConnectionChallengeResult>({
+              type: "connection.challenge",
+              requestId: this.#nextRequestId(),
+            }, { whileConnected })).challenge,
+        }
+        : held;
+      const signed = await principal.authorizeConnection(context);
+      // A drop while the key signed leaves the signature over a challenge
+      // of the connection that is gone; `hello` has emptied the map, so the
+      // next caller starts over on the new connection.
+      if (this.#staleSince(epoch)) {
+        if (whileConnected) throw connectionLostWhileRestoring();
+        throw STALE_AUTHENTICATION;
+      }
+      const result = await this.request<ConnectionAuthResult>({
+        type: "connection.auth",
+        requestId: this.#nextRequestId(),
+        ...signed,
+      }, { whileConnected });
+      this.#scheduleRenewal(principal, epoch, result.expiresAt);
+      return result.principal;
+    })();
+    this.#authenticated.set(principal.did, authenticated);
+    try {
+      return await authenticated;
+    } catch (error) {
+      if (this.#authenticated.get(principal.did) === authenticated) {
+        this.#authenticated.delete(principal.did);
+      }
+      if (error === STALE_AUTHENTICATION) return STALE;
+      if (
+        !needsChallenge && isRetriableAuthorizationError(error) &&
+        !this.#staleSince(epoch)
+      ) {
+        return await this.#authenticate(principal, whileConnected, true);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Helper for `#authenticate()`, which arms the renewal of `principal`'s
+   * authentication ahead of `expiresAt`, the unix second its lease runs out
+   * at: two minutes ahead, or halfway through a lease shorter than four. A
+   * renewal signs a challenge asked for outright, since the one held may be
+   * one the key has signed. A renewal the server refuses for good ends the
+   * sessions mounted as the key, as a refused reopen ends a session.
+   */
+  #scheduleRenewal(
+    principal: SessionPrincipal,
+    epoch: number,
+    expiresAt: number,
+  ): void {
+    this.#cancelRenewal(principal.did);
+    const leaseMs = expiresAt * 1000 - Date.now();
+    const delay = Math.max(0, leaseMs - Math.min(120_000, leaseMs / 2));
+    const timer = setTimeout(() => {
+      this.#renewals.delete(principal.did);
+      if (this.#closed || !this.#connected || epoch !== this.#connectionEpoch) {
+        return;
+      }
+      this.#authenticated.delete(principal.did);
+      void this.#authenticate(principal, false, true).catch((error) => {
+        if (!isPermanentAuthorizationError(error)) return;
+        for (const session of [...this.#spaces]) {
+          if (session.principal === principal.did) {
+            session.handleConnectionFailure(error);
+          }
+        }
+      });
+    }, delay);
+    this.#renewals.set(principal.did, timer);
+  }
+
+  #cancelRenewal(did: string): void {
+    const timer = this.#renewals.get(did);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.#renewals.delete(did);
+    }
+  }
+
+  #cancelRenewals(): void {
+    for (const timer of this.#renewals.values()) clearTimeout(timer);
+    this.#renewals.clear();
   }
 
   /** Waits for the transport handshake and restoration of existing sessions. */
@@ -623,6 +984,16 @@ export class Client {
 
   async #hello(): Promise<void> {
     this.#transport.setMessageCompressionEnabled?.(false);
+    this.#connectionEpoch += 1;
+    this.#authenticated.clear();
+    this.#routedSigners.clear();
+    this.#transport.setRoutedMessagesEnabled?.(false);
+    this.#cancelRenewals();
+    this.#challengeSigners.clear();
+    // Signed opens waiting on the old connection's chain settle on their
+    // own, as stale, and the restores that follow this handshake must not
+    // wait behind them.
+    this.#signedOpens = Promise.resolve();
     const ack = Promise.withResolvers<void>();
     this.#helloPending = ack;
     const expectedFlags = getMemoryProtocolFlags();
@@ -632,6 +1003,7 @@ export class Client {
         protocol: MEMORY_PROTOCOL,
         flags: {
           ...expectedFlags,
+          routedAuthV1: this.#transport.setRoutedMessagesEnabled !== undefined,
           messageCompressionV1: expectedFlags.messageCompressionV1 &&
             this.#transport.supportsMessageCompression === true,
         },
@@ -677,6 +1049,15 @@ export class Client {
 
     if (this.#helloPending !== null) {
       const helloOk = parseHelloOk(message);
+      if (
+        helloOk?.flags.routedAuthV1 === true &&
+        this.#transport.setRoutedMessagesEnabled === undefined
+      ) {
+        this.#helloPending.reject(
+          new Error("Routed transport codec unavailable"),
+        );
+        return;
+      }
       if (helloOk !== null) {
         const expectedFlags = getMemoryProtocolFlags();
         if (!helloOk.flags.stableExpressionResultIds) {
@@ -702,11 +1083,6 @@ export class Client {
         // consumers (e.g. the runner's sqlite write-gate relaxation) read
         // these; absent-on-old-server keys parse to false — fail closed.
         this.#serverFlags = helloOk.flags;
-        this.#transport.setMessageCompressionEnabled?.(
-          expectedFlags.messageCompressionV1 &&
-            this.#transport.supportsMessageCompression === true &&
-            helloOk.flags.messageCompressionV1,
-        );
         try {
           this.#sessionOpenAuthContext = requireSessionOpenAuthMetadata(
             helloOk.sessionOpen,
@@ -717,6 +1093,24 @@ export class Client {
           );
           return;
         }
+        const routed = this.#sessionOpenAuthContext.deployment !== undefined;
+        if (
+          routed !== helloOk.flags.routedAuthV1 ||
+          (routed && !helloOk.flags.connectionAuth)
+        ) {
+          this.#helloPending.reject(
+            permanentProtocolError(
+              "Routed authentication metadata does not match negotiated flags",
+            ),
+          );
+          return;
+        }
+        this.#transport.setRoutedMessagesEnabled?.(routed);
+        this.#transport.setMessageCompressionEnabled?.(
+          expectedFlags.messageCompressionV1 &&
+            this.#transport.supportsMessageCompression === true &&
+            helloOk.flags.messageCompressionV1,
+        );
         this.#helloPending.resolve();
         return;
       }
@@ -740,6 +1134,35 @@ export class Client {
       return;
     }
 
+    if (isObjectNotArray(message) && message.type === "connection/challenge") {
+      const principal = typeof message.principal === "string"
+        ? this.#routedSigners.get(message.principal)
+        : undefined;
+      if (
+        principal === undefined ||
+        this.#sessionOpenAuthContext?.deployment === undefined
+      ) {
+        this.#rejectPending(
+          permanentProtocolError("Unexpected routed authentication challenge"),
+        );
+        return;
+      }
+      try {
+        const context = requireSessionOpenAuthMetadata({
+          ...this.#sessionOpenAuthContext,
+          challenge: message.challenge,
+        });
+        this.#authenticated.delete(principal.did);
+        this.#cancelRenewal(principal.did);
+        void this.#authenticate(principal, false, true, context.challenge)
+          .catch((error) => this.#rejectPending(error));
+      } catch (error) {
+        this.#rejectPending(
+          error instanceof Error ? error : protocolError(String(error)),
+        );
+      }
+      return;
+    }
     if (isSessionEffect(message)) {
       for (const session of this.#spaces) {
         if (
@@ -832,18 +1255,27 @@ export class Client {
       while (!this.#closed) {
         try {
           await this.#hello();
-          for (const session of this.#spaces) {
-            await session.restore();
+          // Every session restores at once. A failure is thrown only after
+          // all of them have settled, so a retry starts from a connection
+          // nothing is still using.
+          const restored = await Promise.allSettled(
+            [...this.#spaces].map((session) => session.restore()),
+          );
+          for (const outcome of restored) {
+            if (outcome.status === "rejected") throw outcome.reason;
           }
           return;
         } catch (error) {
           this.#connected = false;
           this.#noteStateChange();
           const err = error instanceof Error ? error : new Error(String(error));
-          if (isPermanentConnectionFailure(err)) {
-            // A handshake the server refuses identically every time (a
-            // protocol-flag mismatch). Stop looping and remember the failure so
-            // every present and future request fails fast with it.
+          if (
+            isPermanentConnectionFailure(err) ||
+            this.#transport.reset === undefined
+          ) {
+            // A permanent failure, or a transport unable to discard the
+            // failed connection, cannot recover by repeating this handshake.
+            // Preserve the cause for every present and future request.
             this.#fatalError = err;
             // Redundant today: the notification at the top of this catch
             // has already woken every waiter, and none of them resumes
@@ -860,7 +1292,16 @@ export class Client {
             }
             return;
           }
-          this.#rejectPending(err);
+          // Requests lost with this connection have no server verdict. Keep
+          // their commits outstanding for replay, regardless of which error
+          // caused a session's restore to fail.
+          this.#rejectPending(toConnectionError(err));
+          for (const session of this.#spaces) {
+            session.handleDisconnect();
+          }
+          // A restore can fail after hello succeeded while the socket stays
+          // open. The next hello needs a new connection and auth challenge.
+          this.#transport.reset();
           await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
           attempt += 1;
         }
@@ -1016,7 +1457,7 @@ export class SpaceSession {
   }[] = [];
 
   readonly #client: Client;
-  readonly #openAuthFactory?: SessionOpenAuthFactory;
+  readonly #auth?: SessionAuth;
   readonly #routeSignal?: AbortSignal;
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
@@ -1028,14 +1469,14 @@ export class SpaceSession {
     sessionId: string,
     sessionToken: string | undefined,
     serverSeq: number,
-    openAuthFactory?: SessionOpenAuthFactory,
+    auth?: SessionAuth,
     routeSignal?: AbortSignal,
     actingAs?: "space-owner",
     readCeiling?: SessionReadCeiling,
     genesisRoot?: GenesisRoot,
   ) {
     this.#client = client;
-    this.#openAuthFactory = openAuthFactory;
+    this.#auth = auth;
     this.#routeSignal = routeSignal;
     this.#actingAs = actingAs;
     this.#readCeiling = readCeiling;
@@ -1054,6 +1495,11 @@ export class SpaceSession {
 
   get sessionToken(): string | undefined {
     return this.#sessionToken;
+  }
+
+  /** DID of the key this session acts as, when it was mounted with one. */
+  get principal(): string | undefined {
+    return typeof this.#auth === "object" ? this.#auth.did : undefined;
   }
 
   get serverSeq(): number {
@@ -1075,10 +1521,18 @@ export class SpaceSession {
     }
   }
 
-  /** Waits for restored session identity before constructing an ordinary request. */
+  /**
+   * Waits for restored session identity before constructing an ordinary
+   * request: for this session's own restore where one is pending, whatever
+   * the client's other sessions are doing, and otherwise for the connection.
+   */
   async #ensureSessionRestored(): Promise<void> {
     this.#assertOpen();
-    await this.#client.restoreConnection();
+    if (this.#restoreComplete !== undefined) {
+      await this.#restoreComplete.promise;
+    } else if (!this.#client.isConnected()) {
+      await this.#client.restoreConnection();
+    }
     this.#assertOpen();
   }
 
@@ -1119,7 +1573,9 @@ export class SpaceSession {
     ) {
       this.#sendOutstandingCommit(commit.localSeq, outstanding);
     } else {
-      void this.#client.restoreConnection();
+      // A terminal recovery failure rejects this commit through the session;
+      // the background trigger must not also leave an unhandled rejection.
+      void this.#client.restoreConnection().catch(() => undefined);
     }
 
     return await pending.promise;
@@ -1772,7 +2228,7 @@ export class SpaceSession {
       this.#readyOnConnection = true;
       replayedThroughLocalSeq = Math.max(
         0,
-        ...this.#outstandingCommits.keys(),
+        maxOf(this.#outstandingCommits.keys()),
       );
       const replayTasks = [...this.#outstandingCommits.entries()].map((
         [localSeq, pendingCommit],
@@ -1861,18 +2317,33 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
-    // The relay keeps a membership until it hears otherwise, and a closed
-    // session sends nothing further on its own, so each room is left now;
-    // the leave is not waited for. Observers hear the close as a failure.
-    for (const state of this.#presenceRooms.values()) {
+    if (
+      this.#client.serverFlags?.sessionClose === true &&
+      this.#client.isConnected() && this.#readyOnConnection
+    ) {
+      // The server ends the session, and with it the session's presence
+      // memberships. The response is not waited for.
       void this.#client.request({
-        type: "presence.leave",
+        type: "session.close",
         requestId: crypto.randomUUID(),
         space: this.space,
         sessionId: this.#sessionId,
-        room: state.room,
       }).catch(() => undefined);
+    } else {
+      // The relay keeps a membership until it hears otherwise, and a closed
+      // session sends nothing further on its own, so each room is left now;
+      // the leave is not waited for.
+      for (const state of this.#presenceRooms.values()) {
+        void this.#client.request({
+          type: "presence.leave",
+          requestId: crypto.randomUUID(),
+          space: this.space,
+          sessionId: this.#sessionId,
+          room: state.room,
+        }).catch(() => undefined);
+      }
     }
+    // Observers hear the close as a failure.
     this.#endPresenceRooms(this.#closeError);
     this.#restoreComplete?.reject(this.#closeError);
     this.#restoreComplete = undefined;
@@ -1956,6 +2427,12 @@ export class SpaceSession {
       return;
     }
     this.#readyOnConnection = false;
+    // The restore this session now needs is pending from here on, so a
+    // request made before the reconnect reaches it waits for it.
+    if (this.#restoreComplete === undefined) {
+      this.#restoreComplete = Promise.withResolvers<void>();
+      this.#restoreComplete.promise.catch(() => {});
+    }
   }
 
   async #joinPresence(state: PresenceRoomState): Promise<void> {
@@ -2253,9 +2730,9 @@ export class SpaceSession {
   /**
    * Whether a watch mutation sent now would reach a session its server does
    * not have open: the connection is down, or this session has not reopened
-   * on the current connection. The second is separate because a reconnect
-   * restores its client's sessions one after another, so a session can sit
-   * connected with its restore not yet begun. `#readyOnConnection` is false
+   * on the current connection. The second is separate because a session's
+   * restore takes as long as its own reopening takes, so a session can sit
+   * connected with its restore unfinished. `#readyOnConnection` is false
    * only while a reconnect is running, while this session's restore is
    * pending, or once the session has closed, and `#waitForSessionRestore()`
    * waits on the first two and throws on the third, so a turn waiting on this
@@ -2266,8 +2743,8 @@ export class SpaceSession {
   }
 
   /**
-   * Helper for `#runWatchMutation()`, which waits for the reconnect in
-   * progress, if any, and then for this session's restore, if one is pending.
+   * Helper for `#runWatchMutation()`, which waits for this session's restore,
+   * if one is pending, and otherwise for the reconnect in progress, if any.
    * The caller checks `#watchMutationWaitsForRestore()` again afterwards, in
    * the same synchronous step as its send, since the connection can drop in
    * between. Throws the session's close error when the session closes, and the
@@ -2275,8 +2752,11 @@ export class SpaceSession {
    */
   async #waitForSessionRestore(): Promise<void> {
     this.#assertOpen();
-    await this.#client.restoreConnection();
-    await this.#restoreComplete?.promise;
+    if (this.#restoreComplete !== undefined) {
+      await this.#restoreComplete.promise;
+    } else if (!this.#client.isConnected()) {
+      await this.#client.restoreConnection();
+    }
   }
 
   /**
@@ -2447,23 +2927,19 @@ export class SpaceSession {
         ? { readCeiling: this.#readCeiling }
         : {}),
     };
-    const auth = await runWithAbortSignal(
-      this.#routeSignal,
-      "memory session route cancelled",
-      () =>
-        this.#openAuthFactory?.(
-          this.space,
-          session,
-          this.#client.sessionOpenAuthContext(),
-        ),
-    );
     const holdings = this.#declaredHoldings();
     const restored = await runWithAbortSignal(
       this.#routeSignal,
       "memory session route cancelled",
       () => {
         this.#throwIfDisconnectedDuringRestore();
-        return this.#client.openSession(this.space, session, auth, holdings);
+        return this.#client.openSession(
+          this.space,
+          session,
+          this.#auth,
+          holdings,
+          { restoring: true },
+        );
       },
     );
     const sessionChanged = restored.sessionId !== oldSessionId;
@@ -2931,13 +3407,27 @@ const protocolError = (message: string): Error => {
 const permanentProtocolError = (message: string): Error =>
   Object.assign(new Error(message), { name: "ProtocolError", permanent: true });
 
-// An authorization denial retrying cannot change. A retriable auth failure — an
-// anti-replay race the server marked `retriable` (an expired/used/mismatched
-// challenge, a stale signed `exp`) — is excluded, so the client keeps reopening
-// through a token-refresh window or a challenge race a fresh handshake heals.
-const isPermanentAuthorizationError = (error: unknown): boolean =>
+/**
+ * Whether `error` is an authorization denial the server marked `retriable`:
+ * an anti-replay race (an expired, used, or mismatched challenge, a stale
+ * signed `exp`) or a lease that has run out, each of which a new signature
+ * heals.
+ */
+const isRetriableAuthorizationError = (error: unknown): boolean =>
   error instanceof Error && error.name === "AuthorizationError" &&
-  (error as { retriable?: unknown }).retriable !== true;
+  (error as { retriable?: unknown }).retriable === true;
+
+/**
+ * Whether `error` is an authorization denial retrying cannot change. A
+ * retriable auth failure — an anti-replay race the server marked `retriable`
+ * (an expired/used/mismatched challenge, a stale signed `exp`) — is excluded,
+ * so the client keeps reopening through a token-refresh window or a challenge
+ * race a fresh handshake heals.
+ */
+export function isPermanentAuthorizationError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AuthorizationError" &&
+    (error as { retriable?: unknown }).retriable !== true;
+}
 
 // A reconnect handshake failure the whole client must give up on rather than
 // retry: an incompatible protocol negotiation at hello. An authorization denial
@@ -2964,6 +3454,7 @@ const requireSessionOpenAuthMetadata = (
   const sessionOpen = value as {
     audience?: unknown;
     challenge?: unknown;
+    deployment?: unknown;
   };
   if (sessionOpen.challenge === undefined) {
     throw protocolError(
@@ -2998,12 +3489,27 @@ const requireSessionOpenAuthMetadata = (
     );
   }
   return {
-    audience: sessionOpen.audience,
+    audience: sessionOpen.deployment === undefined ||
+        isCanonicalEd25519DID(sessionOpen.audience)
+      ? sessionOpen.audience
+      : (() => {
+        throw protocolError("malformed routed audience");
+      })(),
+    ...(sessionOpen.deployment === undefined ? {} : {
+      deployment: requireDeployment(sessionOpen.deployment),
+    }),
     challenge: {
       value: challenge.value,
       expiresAt: challenge.expiresAt,
     },
   };
+};
+
+const requireDeployment = (value: unknown): string => {
+  if (typeof value !== "string" || !/^[\x21-\x7e]{1,256}$/.test(value)) {
+    throw protocolError("memory server sent malformed routed deployment");
+  }
+  return value;
 };
 
 const parseHelloOk = (

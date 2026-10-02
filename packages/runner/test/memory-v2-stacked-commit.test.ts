@@ -41,6 +41,7 @@ import {
   getLogger,
   getLoggerCountsBreakdown,
 } from "@commonfabric/utils/logger";
+import { maxOf } from "@commonfabric/utils/math";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { applyPatch } from "../../memory/v2/patch.ts";
@@ -187,7 +188,7 @@ type ResultRecord = {
 // The staleness-bearing top of a pending read's dependency set: the highest
 // listed layer (scalar reads are their own top).
 const localSeqTop = (read: { localSeq: number | number[] }): number =>
-  Array.isArray(read.localSeq) ? Math.max(...read.localSeq) : read.localSeq;
+  Array.isArray(read.localSeq) ? maxOf(read.localSeq) : read.localSeq;
 
 class ScriptedServerModel {
   connectionCount = 0;
@@ -2249,6 +2250,11 @@ describe("memory-v2-stacked-commit", () => {
         );
         await expectResultOk(patch);
         expect(hasPendingOverlay(harness, DOCS.A)).toBe(true);
+        expect(harness.provider.replica.getDiagnostics?.()).toMatchObject({
+          caughtUpLocalSeq: 1,
+          parkedAcceptCount: 1,
+          parkedAcceptLocalSeqs: [2],
+        });
         let applied = false;
         const barrier = replica.whenApplied(2).then(() => {
           applied = true;
@@ -2264,6 +2270,11 @@ describe("memory-v2-stacked-commit", () => {
         harness.pushSync({ caughtUpLocalSeq: 2 });
         await barrier;
         expect(applied).toBe(true);
+        expect(harness.provider.replica.getDiagnostics?.()).toMatchObject({
+          caughtUpLocalSeq: 2,
+          parkedAcceptCount: 0,
+          parkedAcceptLocalSeqs: [],
+        });
         expect(hasPendingOverlay(harness, DOCS.A)).toBe(false);
       } finally {
         await harness.close();

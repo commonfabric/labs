@@ -31,8 +31,11 @@ import {
 } from "../builder/types.ts";
 import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
+import { resolveLink } from "../link-resolution.ts";
 import {
   createSigilLinkFromParsedLink,
+  isPrimitiveCellLink,
+  type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -59,7 +62,7 @@ import {
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -308,7 +311,7 @@ type SharedHashtagState = {
   result?: Cell<unknown>;
   candidates: Cell<unknown>[];
   error?: unknown;
-  [UI]?: VNode;
+  [UI]?: VNode | Cell<unknown>;
 };
 
 type SharedHashtagResolver = {
@@ -643,7 +646,13 @@ function searchFavoritesForHashtag(
   return measureWishPhase(
     "favorites-result-map",
     queryKey,
-    () => matches.map((match) => ({ cell: match.cell, pathPrefix })),
+    () =>
+      matches.flatMap((match) => {
+        const cell = match.cell.resolveAsCell();
+        return ctx.readiness.requireDocument(cell, ctx.tx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -810,9 +819,12 @@ function searchByHashtag(
   const allMatches: BaseResolution[] = [];
 
   if (searchFavorites) {
-    allMatches.push(
-      ...searchFavoritesForHashtag(ctx, searchTermWithoutHash, parsed.path),
+    const matches = searchFavoritesForHashtag(
+      ctx,
+      searchTermWithoutHash,
+      parsed.path,
     );
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchMentionables) {
@@ -821,7 +833,7 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchProfile) {
@@ -830,7 +842,7 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   // Search mentionables in arbitrary DID spaces
@@ -843,7 +855,7 @@ function searchByHashtag(
       parsed.path,
       didSpaceCell,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   if (allMatches.length === 0) {
@@ -1550,16 +1562,17 @@ function createSharedHashtagResolver(
                 index,
           ),
       );
+      // The phase keeps its name so its timings compare with earlier runs.
       const resultUI = measureWishPhase(
         "shared-result-ui-get",
         queryKey,
-        () => uniqueResultCells[0].key(UI).get(),
-      ) as VNode | undefined;
+        () => foundPieceUI(ctx.runtime, tx, uniqueResultCells[0]),
+      );
 
       stateCell.set({
         result: uniqueResultCells[0],
         candidates: uniqueResultCells,
-        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+        [UI]: resultUI,
       });
     } catch (error) {
       if (error instanceof DocumentPending) return;
@@ -1821,14 +1834,71 @@ function cellLinkUI(cell: Cell<unknown>): VNode {
   return h("cf-cell-link", { $cell: cell });
 }
 
+/** What a view slot holds, as far as choosing a view needs to know. */
+type ViewSlotKind = "link" | "view node" | "other";
+
+/**
+ * Returns what the slot at `slot` holds: `"link"` for a link, `"view node"`
+ * for a value whose `type` is `vnode`, and `"other"` for any other value or
+ * for nothing.
+ *
+ * Reads through `tx`, resolving links on the way to the slot but not a link
+ * the slot holds. It makes two reads: a shape read of the slot, which observes
+ * whether the slot exists and whether it holds a link, and, for a value that
+ * is a record, a read of its `type`. It reads nothing else inside the slot and
+ * hands back no part of it, so a caller that needs more reads it itself.
+ */
+function viewSlotKind(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  slot: NormalizedFullLink,
+): ViewSlotKind {
+  const address = resolveLink(runtime, tx, slot, "top", {
+    markIfcCrossings: true,
+  });
+  const held = tx.readValueOrThrow(address, { nonRecursive: true });
+  if (isPrimitiveCellLink(held)) return "link";
+  if (!isObjectOrArray(held) || Array.isArray(held)) return "other";
+  const type = tx.readValueOrThrow({
+    ...address,
+    path: [...address.path, "type"],
+  });
+  return type === "vnode" ? "view node" : "other";
+}
+
+/**
+ * Returns the view a wish shows for the piece it found: a reference to the
+ * piece's own `[UI]` slot when that slot holds a link or a view node, and a
+ * `cf-cell-link` to the piece otherwise.
+ *
+ * A wish result is a reference to what it found (CFC spec §8.2), and its view
+ * is a reference too, so the choice is made from the `[UI]` slot of the piece's
+ * own document, through `tx`, by {@link viewSlotKind}. A link in the slot is
+ * not followed: the document behind it can be one a computation derived from
+ * sealed data, and its labels are consumed where the view is rendered.
+ */
+function foundPieceUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  resultCell: Cell<unknown>,
+): VNode | Cell<unknown> {
+  // The reference carries no schema: a view is read under the renderer's own.
+  const ui = resultCell.asSchema(undefined).key(UI);
+  return viewSlotKind(runtime, tx, ui.getAsNormalizedFullLink()) === "other"
+    ? cellLinkUI(resultCell)
+    : ui;
+}
+
 function wishResultUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
   parsed: ParsedWishTarget,
   resultCell: Cell<unknown>,
-): VNode | undefined {
+): VNode | Cell<unknown> {
   if (isProfilePersonaTarget(parsed)) {
     return cellLinkUI(resultCell);
   }
-  return resultCell.key(UI).get() as VNode | undefined;
+  return foundPieceUI(runtime, tx, resultCell);
 }
 
 function projectWishCellValue(
@@ -2144,7 +2214,6 @@ export function wish(
     recordRuntimeOwnedStore(tx, parentCell, scoped);
     enrollRuntimeOwnedStore(tx, parentCell, scoped);
     setResultCell(scoped, parentCell.withTx(tx));
-    setPatternCell(scoped, parentCell.withTx(tx).key("pattern"));
     scoped.set(value);
     surfaceWishStateCommitFailure(tx, scoped);
     sendResult(tx, scoped);
@@ -3124,11 +3193,13 @@ export function wish(
               profileHasValidDefault
             ) {
               // Single result or headless mode - fast path with unified shape
-              // Prefer the result cell's own [UI]; fall back to cf-cell-link
+              // The phase keeps its name so its timings compare with earlier
+              // runs.
               const resultUI = measureWishPhase(
                 "result-ui-get",
                 queryKey,
-                () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                () =>
+                  wishResultUI(runtime, tx, activeParsed, uniqueResultCells[0]),
               );
               measureWishPhase(
                 "send-fast",
@@ -3142,7 +3213,7 @@ export function wish(
                         schema,
                       ),
                       candidates: candidatesCell,
-                      [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                      [UI]: resultUI,
                     },
                     outputScope,
                     schema,
@@ -3173,10 +3244,18 @@ export function wish(
                 );
               } else {
                 // Surface not open yet — send first result, start opening it
+                // The phase keeps its name so its timings compare with earlier
+                // runs.
                 const resultUI = measureWishPhase(
                   "result-ui-get",
                   queryKey,
-                  () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                  () =>
+                    wishResultUI(
+                      runtime,
+                      tx,
+                      activeParsed,
+                      uniqueResultCells[0],
+                    ),
                 );
                 measureWishPhase(
                   "send-fast-before-suggestion",
@@ -3190,7 +3269,7 @@ export function wish(
                           schema,
                         ),
                         candidates: candidatesCell,
-                        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                        [UI]: resultUI,
                       },
                       outputScope,
                       schema,

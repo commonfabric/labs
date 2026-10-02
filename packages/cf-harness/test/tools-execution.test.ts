@@ -574,7 +574,7 @@ Deno.test("bash tool denies curl to non-localhost targets before sandbox executi
     outputId: "run-1:bash:1",
     stdout: "",
     stderr:
-      "bash command denied: curl host example.com is not allowed from cf-harness bash; use localhost or host.docker.internal",
+      "bash command denied: curl host example.com is not allowed from cf-harness bash: curl may name only localhost, a 127.x or ::1 address, or host.docker.internal, and a service that does not answer at one of those is out of this sandbox's reach",
     exitCode: 126,
     cwd: "/workspace/new",
   });

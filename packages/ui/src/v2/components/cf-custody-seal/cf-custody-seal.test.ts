@@ -158,7 +158,7 @@ function renderedText(element: CFCustodySeal): string {
     else if (Array.isArray(value)) value.forEach(walk);
     else if (value && typeof value === "object" && "values" in value) {
       const template = value as { strings: string[]; values: unknown[] };
-      parts.push(...template.strings);
+      for (const part of template.strings) parts.push(part);
       template.values.forEach(walk);
     }
   };
