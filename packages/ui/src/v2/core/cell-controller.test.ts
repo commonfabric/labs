@@ -729,6 +729,19 @@ describe("CellController — a refusal that arrives while a write waits", () => 
     time.restore();
   });
 
+  /** What the handle logged while `act` ran: a write it was asked for. */
+  const handleErrors = (act: () => void): unknown[][] => {
+    const logged: unknown[][] = [];
+    const real = console.error;
+    console.error = (...args: unknown[]) => logged.push(args);
+    try {
+      act();
+    } finally {
+      console.error = real;
+    }
+    return logged;
+  };
+
   it("drops the debounced write and the pending edit", () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "debounce", delay: 200 },
@@ -738,10 +751,25 @@ describe("CellController — a refusal that arrives while a write waits", () => 
     ctrl.setValue("typed");
 
     pushRefusal(cell, { refusedBy: "display-ceiling" });
-    time.tick(200);
+    expect(handleErrors(() => time.tick(200))).toEqual([]);
 
     expect(writesSent(cell)).toEqual([]);
     expect(ctrl.getValue()).toBe("");
+  });
+
+  it("shows no edit typed into it while refused, even while the write would wait", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "debounce", delay: 200 },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    pushRefusal(cell, { refusedBy: "display-ceiling" });
+
+    ctrl.setValue("typed over the seal");
+
+    expect(ctrl.getValue()).toBe("");
+    expect(handleErrors(() => time.tick(200))).toEqual([]);
+    expect(writesSent(cell)).toEqual([]);
   });
 });
 

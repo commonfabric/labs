@@ -3846,6 +3846,15 @@ describe("the data panel", () => {
       expect(shows(menu)).toContain("piece-action-sync");
     });
 
+    it("lists a handler the schema declares that the value does not carry", async () => {
+      const piece = statefulPiece({ pieceSchema: schema });
+      await piece.cell.set({ title: "Inbox importer" });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("actions");
+
+      expect(shows(menu)).toContain("piece-action-sync");
+    });
+
     it("shows a refused argument field by field when its address is given", async () => {
       const piece = statefulPiece({
         argumentRefused: true,

@@ -757,6 +757,31 @@ describe("cf-iframe cell bridge", () => {
       });
     }
 
+    it("resolves a refused context to the resources its schema declares", async () => {
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) =>
+            Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: request.cell }
+                : { refused: refusal },
+            ),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      const bridge = await resolveCellContextBridge(context, {
+        database: "cell",
+      });
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(
+        ["count", "database", "events", "locked"],
+      );
+    });
+
     it("names the resources a refused context's schema declares", () => {
       const { runtime } = refusing();
       const context = new CellHandle<Record<string, unknown>>(runtime, ref);
