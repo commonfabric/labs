@@ -1,7 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
-import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
+import type {
+  SchemaGenerationDiagnostic,
+  SchemaHints,
+} from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import {
   asObjectSchema,
@@ -4256,6 +4259,39 @@ describe("Schema: CFC authoring aliases", () => {
         "error cfc-write-authorized-by:unread",
       ]);
       expect(diagnostics[0]!.message).toContain("`WritePolicyAnyOf`");
+    });
+
+    it("reports a writer unread under a node the `definesDocument` hint marks, in a schema that otherwise views a document", async () => {
+      // A fresh value a pattern's inferred result returns is data the result
+      // document holds itself, inside a result that views other documents.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${DECLARATIONS} type SchemaRoot = {
+          fresh: { [key: string]: WriteAuthorizedBy<string, typeof save> };
+          viewed: { [key: string]: WriteAuthorizedBy<string, typeof save> };
+        };`,
+        "SchemaRoot",
+      );
+      const [fresh] = (typeNode as ts.TypeLiteralNode).members;
+      const generate = (schemaHints?: SchemaHints) => {
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
+        new SchemaGenerator().generateSchema(
+          type,
+          checker,
+          typeNode,
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+          schemaHints,
+        );
+        return diagnostics.map((diagnostic) => diagnostic.type);
+      };
+
+      expect(generate()).toEqual([]);
+      expect(
+        generate(
+          new WeakMap([[(fresh as ts.PropertySignature).type!, {
+            definesDocument: true,
+          }]]),
+        ),
+      ).toEqual(["cfc-write-authorized-by:unread"]);
     });
 
     it("leaves an owner policy's principal claims out of a view with the writer it cannot read", async () => {
