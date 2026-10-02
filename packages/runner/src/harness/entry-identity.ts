@@ -118,11 +118,11 @@ export function computeEntryIdentity(
       idPrefix: `/${ENTRY_ID}`,
       ...(rootPaths.length || dataPaths.length
         ? {
-          sourcePackage: {
+          sourcePackages: [{
             entryPath: entryKey,
             rootPaths: rootPaths.map(prefixName),
             dataPaths: dataPaths.map(prefixName),
-          },
+          }],
         }
         : {}),
     },
