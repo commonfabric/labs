@@ -99,9 +99,10 @@ export class MemoryRouterPolicy {
    * Rereads the directory only when it may have changed. Ownership is checked
    * on every protected engine turn, so reading the whole file each time costs
    * the event loop O(spaces) per message. File timestamps advance in coarse
-   * ticks, so two same-size writes within one tick share a stamp: the stamp
-   * alone is trusted only once the file has been unchanged for a second, and
-   * until then the bytes are compared.
+   * ticks, so two same-size writes within one tick share a stamp. A stamp is
+   * therefore recorded only from a read made after the file had been unchanged
+   * for a second; until then every call compares bytes, so a later write in
+   * the same tick cannot hide behind a recorded stamp.
    */
   #refresh(): void {
     const info = Deno.statSync(this.config.directory);
@@ -114,10 +115,11 @@ export class MemoryRouterPolicy {
     ].join(":");
     const settled = info.ctime !== null &&
       Date.now() - info.ctime.getTime() > 1000;
-    if (stamp === this.#stamp && settled) return;
+    if (stamp === this.#stamp) return;
     const source = Deno.readTextFileSync(this.config.directory);
+    const recorded = settled ? stamp : undefined;
     if (source === this.#source) {
-      this.#stamp = stamp;
+      this.#stamp = recorded;
       return;
     }
     const directory = routedObject(
@@ -152,10 +154,14 @@ export class MemoryRouterPolicy {
         owners.set(did, placement.epoch);
       }
     }
+    // Placement changes for other toolsheds leave this one's contexts valid,
+    // so only a change in its own ownership triggers the fence.
+    const changed = owners.size !== this.#owners.size ||
+      [...owners].some(([did, epoch]) => this.#owners.get(did) !== epoch);
     this.#owners = owners;
     this.#source = source;
-    this.#stamp = stamp;
-    this.#generation++;
+    this.#stamp = recorded;
+    if (changed || !this.#available) this.#generation++;
     if (!this.#available) {
       console.error(
         JSON.stringify({
