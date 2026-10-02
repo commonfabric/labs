@@ -1464,8 +1464,13 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
   the position, in definitions of its own, with nothing reported, and only for
   its labels: a type no CFC wrapper holds, other than a union or an
-  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A value that
-  may be `undefined` or `null` has the labels of its one other member. A node
+  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A cell has
+  the labels of its value, read at the value's own node where its wrapper is
+  written out. A value that may be `undefined` or `null` has the labels of its
+  one other member, and where the node's schema is such a union whose value
+  member declares labels of its own and the union none, they are combined into
+  that member's, where formatting put the part of them it could read
+  (`labeledValueMember` in `ifc-labels.ts`). A node
   narrowed from any other union stands for any of its members, so it has the
   union's labels, every member's confidentiality, and each other label every
   member declares alike (`joinMemberIfcLabels`). A member is spelled by the
@@ -1479,8 +1484,8 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   labels are all retained, including through optional and nullable reads.
   A member with no such node is read by its type. A schema whose own reference
   chain already holds every label is left as it is (`holdsIfcLabels`).
-- **`spelledBy`** is the annotation of the member a printed node holds the
-  value of, where that annotation names a value binding, as
+- **`spelledBy`** is the annotation of the member or binding a printed node
+  holds the value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural
   type of the value it names, from which no reader can tell the binding, so
   the node is read as the annotation spells the type at hand (`#spelling` in
