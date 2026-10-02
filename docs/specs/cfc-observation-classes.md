@@ -36,8 +36,8 @@ observation classes exist to separate.
 Better than the audit implied — most of the plumbing is present:
 
 - **A provenance axis on the persisted entry.** `LabelMapEntry.origin`
-  (`declared` | `link` | `derived` | `structure` | `external-ingest`,
-  `packages/runner/src/cfc/types.ts`) already tags *update discipline*. This is
+  (`declared` | `link` | `derived` | `structure` | `minted` |
+  `external-ingest`, `packages/runner/src/cfc/types.ts`) already tags *update discipline*. This is
   orthogonal to the *consumption* axis this epic adds.
 - **Reads already distinguish shape.** `IReadActivity.nonRecursive`
   (`storage/interface.ts`) marks shape-only observations (key-add, length);

@@ -379,8 +379,8 @@ spec test failing.
   map ([`atom-classes.ts:30`,`:34`](../../packages/runner/src/cfc/atom-classes.ts),
   both `provenance`) — so no runner code is needed. The residual is spec-side:
   promote them from spec example-only into the §15 atom registry, and reconcile the
-  `structure`/`external-ingest` `LabelComponent` values that extend the spec's
-  3-value enum. (SC-10/20.)
+  `structure`/`minted`/`external-ingest` `LabelComponent` values that extend
+  the spec's 3-value enum. (SC-10/20.)
 
 ---
 

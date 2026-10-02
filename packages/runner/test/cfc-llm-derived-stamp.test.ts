@@ -28,7 +28,8 @@ const signer = await Identity.fromPassphrase("runner-cfc-llm-derived-stamp");
 // carry an explicit LlmDerived provenance stamp instead of representing
 // untrust as mere absence of integrity. This file starts with the stamping
 // MECHANISM kernel: a builtin-identity write through an item schema carrying
-// ifc.addIntegrity persists the atom on the written element.
+// ifc.addIntegrity persists the atom on exactly the written element — and
+// only there (a sibling written through the plain schema stays unstamped).
 
 const LLM_DERIVED_ATOM = {
   type: "https://commonfabric.org/cfc/atom/LlmDerived",
@@ -108,6 +109,67 @@ describe("CFC LlmDerived stamping mechanism", () => {
       await storageManager.close();
     }
   });
+
+  for (
+    const [order, modelIndex, userIndex] of [
+      ["the model's element first", 0, 1],
+      ["the user's element first", 1, 0],
+    ] as const
+  ) {
+    it(`leaves an element pushed through the plain schema unstamped, ${order}`, async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const cause = `llm-derived-sibling-${modelIndex}`;
+        const pushModel = async () => {
+          const tx = runtime.edit();
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: "llm-dialog",
+          });
+          runtime.getCell(signer.did(), cause, stampingMessagesSchema, tx)
+            .push({ role: "assistant", content: "model bytes" });
+          tx.prepareCfc();
+          expect((await tx.commit()).ok).toBeDefined();
+        };
+        const pushUser = async () => {
+          const tx = runtime.edit();
+          runtime.getCell(signer.did(), cause, messagesSchema, tx)
+            .push({ role: "user", content: "typed by the user" });
+          tx.prepareCfc();
+          expect((await tx.commit()).ok).toBeDefined();
+        };
+        for (
+          const push of modelIndex === 0
+            ? [pushModel, pushUser]
+            : [pushUser, pushModel]
+        ) {
+          await push();
+        }
+
+        const readTx = runtime.edit();
+        const messages = runtime.getCell(
+          signer.did(),
+          cause,
+          messagesSchema,
+          readTx,
+        );
+        const integrityAt = (index: number) =>
+          (cfcLabelViewForCell(messages.key(index))?.entries ?? []).flatMap(
+            (entry) => entry.label.integrity ?? [],
+          );
+        expect(integrityAt(modelIndex)).toContainEqual(LLM_DERIVED_ATOM);
+        expect(integrityAt(userIndex)).not.toContainEqual(LLM_DERIVED_ATOM);
+        readTx.commit();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
 
   it("stamps a split element on its own doc", async () => {
     // Exercises the generic split mechanism directly, via frame anchoring.
