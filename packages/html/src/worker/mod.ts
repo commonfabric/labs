@@ -13,7 +13,7 @@ export {
   cellLabelRefusal,
   cellLabelSources,
   type DisplayFitSources,
-  type MembershipWatch,
+  type FitWatch,
   readRefusal,
   type RenderLabelSummary,
   rootRenderPolicyFor,
