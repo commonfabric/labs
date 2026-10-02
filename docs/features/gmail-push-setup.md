@@ -114,17 +114,20 @@ gcloud projects add-iam-policy-binding <project> \
   --role="roles/iam.serviceAccountTokenCreator"
 ```
 
-A machine on a tailnet can be made reachable for this one route with
-Tailscale Funnel, which publishes it at the machine's `ts.net` name with a
-certificate. Mounting only the push path keeps the rest of the server private,
-and the push endpoint is the route built to face the internet, since it
-refuses anything without a token Google signed. The target repeats the path,
-because Funnel strips the mounted prefix before forwarding.
+A machine on a tailnet can be made reachable for this route with Tailscale
+Funnel, which publishes the machine's HTTPS port at its `ts.net` name with a
+certificate. The push endpoint is the route built to face the internet, since
+it refuses anything without a token Google signed.
 
-Funnel opens the machine's whole HTTPS port to the internet, not one path. A
-route already mounted on that port with `tailscale serve` becomes public along
-with this one, so check `tailscale serve status` first, and expect only the
-push path there:
+Funnel opens that whole port, not one path: every route mounted on it becomes
+public, whether this command mounted it or an earlier `tailscale serve` did.
+So the rest of the server stays private only while the push path is the sole
+route on the port. Run `tailscale serve status` before and after, and expect
+to see the push path and nothing else. A path with no route mounted returns
+Tailscale's own 404 and never reaches the server.
+
+The command mounts the push path alone. Its target repeats the path, because
+Funnel strips the mounted prefix before forwarding:
 
 ```bash
 tailscale funnel --bg \
