@@ -216,6 +216,34 @@ describe("schema-view presence labels", () => {
     });
   });
 
+  describe("a union", () => {
+    it("carries the existence label of the key that decides which branch matches", async () => {
+      // A union the value's type does not settle is evaluated whole, by the
+      // traversal an eager read uses, so the branch it selects is read.
+      await seed("union", { secret: "s" }, [existence(["secret"], "seal")]);
+      expect(
+        await readAndCopy(
+          "union",
+          {
+            anyOf: [
+              {
+                type: "object",
+                properties: { secret: { type: "string" } },
+                required: ["secret"],
+              },
+              {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"],
+              },
+            ],
+          } as const,
+          (argument) => argument === undefined,
+        ),
+      ).toContain("seal");
+    });
+  });
+
   describe("an enumeration", () => {
     const OPTIONAL_SECRET: JSONSchema = {
       type: "object",
