@@ -849,11 +849,12 @@ event: it is kept, its resolved event follows the request in the log, and its
 200 does not wait for that event to be written.
 
 The wait has an idle clock of five minutes, reset whenever any action of the
-call settles; on expiry every unsettled action fails with `result: "timeout"`.
-Canceling the turn or closing the session declines every unsettled action with
-`result: "canceled"`. The stdio request `resolve_client_action` (same params,
-same error codes) calls the same service method, and `start_session` and
-`start_turn` take `clientActions: true` to opt in, off by default.
+call settles; on expiry every unsettled action fails with `result: "timeout"`,
+and one not yet requested is never requested. Canceling the turn or closing the
+session declines every unsettled action with `result: "canceled"`. The stdio
+request `resolve_client_action` (same params, same error codes) calls the same
+service method, and `start_session` and `start_turn` take `clientActions: true`
+to opt in, off by default.
 
 ### Cancel route
 

@@ -1865,6 +1865,9 @@ export class HarnessInteractiveChatService {
         // A cancel stops the writing: the rest are never requested, and
         // settle below as canceled without an event.
         if (signal?.aborted) break;
+        // An idle timeout armed by an earlier answer can settle the rest
+        // while one is still being delivered; a settled action is never shown.
+        if (!pendingMap.has(actionId)) continue;
         try {
           await this.#emit(sessionId, turnId, {
             kind: "client_action_requested",

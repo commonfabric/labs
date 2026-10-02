@@ -953,3 +953,45 @@ Deno.test("an answer given while its request is still being delivered is kept, w
     await Deno.remove(path).catch(() => undefined);
   }
 });
+
+Deno.test("an idle timeout while a request is being delivered settles the unwritten ones without ever showing them", async () => {
+  using time = new FakeTime();
+  const held = Promise.withResolvers<void>();
+  // The first answer arms the idle clock while the requests are still being
+  // written; the second request's delivery is held past its deadline.
+  const h: ReturnType<typeof harness> = harness({
+    idleMs: 10,
+    calls: [{ actions: [open, command, url] }],
+    deliver: async (e) => {
+      if (e.kind !== "client_action_requested") return;
+      if (e.actionId === "id-1") {
+        await h.request("resolve_client_action", {
+          sessionId: "s",
+          actionId: "id-1",
+          outcome: "done",
+        });
+      }
+      if (e.actionId === "id-2") await held.promise;
+    },
+  });
+  await h.start();
+  await h.delivered(request("id-2"));
+  await time.tickAsync(10);
+  held.resolve();
+  await h.callsDone;
+  // The third action timed out before it was written, so the person never
+  // sees a request they could no longer answer.
+  assertEquals(requestedIds(h), ["id-1", "id-2"]);
+  assertEquals(resolvedIds(h), [["id-1", undefined], ["id-2", "timeout"]]);
+  assertEquals(h.toolResults, [{
+    outputId: "out-1",
+    status: "ok",
+    outcomes: [
+      { action: open, outcome: "done" },
+      { action: command, outcome: "failed", result: "timeout" },
+      { action: url, outcome: "failed", result: "timeout" },
+    ],
+  }]);
+  h.release.resolve();
+  await h.service.waitForIdle();
+});
