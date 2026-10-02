@@ -110,6 +110,11 @@ part of that. They credit the floor whichever schema declares it, the writer's
 or the document's stored one. A writer that stamps nothing does not pass a
 floor on the strength of an earlier writer's stamp.
 
+Commit preparation decides a document's stamps once: which schema branches the
+written values take, and which atoms the write's author may mint. The floor
+check and the stored `minted` entries are both read from that decision, so a
+floor is never credited by a stamp that is not stored.
+
 In a union, the floor applies whichever branch the written value takes, and a
 branch's stamp lands only on a value that takes the branch. So a stamp credits
 the floor in two cases: it lands on the written value, or the floor's own

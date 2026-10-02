@@ -7216,6 +7216,14 @@ const valueStampsOf = (
   ) ?? []).filter(isValueStamp);
 };
 
+/**
+ * One stamp a transaction's own schema names at a position, with the atoms
+ * the write's author may mint. `lands` says whether the stamp is minted onto
+ * the value written there: a union branch's stamp lands only on a value that
+ * takes the branch.
+ */
+type ValueStamp = IntegrityMint & { readonly lands: boolean };
+
 const OWNING_SPACE_PLACEHOLDER = "__ctOwningSpace";
 
 const resolvePolicyOfConfidentiality = (
@@ -9767,14 +9775,9 @@ const verifyWriteFloor = function* (
     linkWriteInputs: readonly LinkWritePolicyInput[];
     linkLabels: LinkLabelDeriver;
     flowIntegrity: readonly CfcAtom[];
-    // The value stamps the transaction's own schemas name at a path: the
-    // ones that `land` on the value written there, and all the ones `named`
-    // there, by any branch of a union. A stamp is never read off the schema
-    // the document stores.
-    valueStampsAt: (path: readonly string[]) => {
-      readonly land: readonly CfcAtom[];
-      readonly named: readonly CfcAtom[];
-    };
+    // The stamp decision persistence consumes too (`ValueStamp`), so that a
+    // floor is credited by what is stored and by nothing else.
+    valueStamps: readonly ValueStamp[];
   },
 ): Generator<void, string[]> {
   const failures: string[] = [];
@@ -9852,19 +9855,19 @@ const verifyWriteFloor = function* (
     // provided the writer's schema names them: a branch that both requires
     // and stamps an atom is satisfied by a write through it. A stamp another
     // branch names, which the value does not take, credits nothing.
-    const stamps = ctx.valueStampsAt(entry.path);
-    const base = gateRuntimeMintedIntegrity(
-      {
-        integrity: mergeLabelValues(
-          declared.integrity,
-          stamps.land,
-          valueStampsOf(tx, entry.schema, mint).filter((atom) =>
-            stamps.named.some((named) => deepEqual(named, atom))
-          ),
-        ),
-      },
-      ctx.identityForPath(entry.path),
-    ).integrity ?? [];
+    const stampsHere = ctx.valueStamps.filter((stamp) =>
+      arraysEqual(stamp.path, entry.path)
+    );
+    const ownStamps = valueStampsOf(tx, entry.schema, mint);
+    const base = mergeLabelValues(
+      gateRuntimeMintedIntegrity(declared, ctx.identityForPath(entry.path))
+        .integrity,
+      stampsHere.filter((stamp) => stamp.lands)
+        .flatMap((stamp) => stamp.integrity),
+      stampsHere.flatMap((stamp) => stamp.integrity).filter((atom) =>
+        ownStamps.some((own) => deepEqual(own, atom))
+      ),
+    ) ?? [];
 
     // One contribution per link written at/under the floor path (each linked
     // value must individually carry the floor), plus one `value` contribution
@@ -10451,37 +10454,38 @@ export function* prepareBoundaryCommitSteps(
     };
 
     // The stamps this transaction's own schemas name for the values it
-    // writes (`ifc.addIntegrity`, principal claims excepted), each at the
-    // schema position naming it and before the runtime-minted gate. Two
-    // branches of a union are two positions at one path, and a branch's
-    // stamp `lands` only on a value that takes the branch.
-    const valueStamps: {
-      path: ValuePath;
-      stamps: readonly CfcAtom[];
-      lands: boolean;
-    }[] = [];
+    // writes, decided once: floor enforcement and persistence consume the
+    // same branch selection and the same author-gated atoms.
+    const valueStamps: ValueStamp[] = [];
     const stampingSchema = stampingSchemas.get(key);
     if (stampingSchema !== undefined) {
       for (const entry of cfcSchemaEntries(stampingSchema)) {
-        const stamps = valueStampsOf(
-          tx,
-          entry.schema,
-          labelMintOptionsAt(tx, target, entry.path),
-        );
-        if (stamps.length > 0) {
-          valueStamps.push({
-            path: canonicalizeLogicalPath(entry.path),
-            stamps,
-            lands: ifcEntryAppliesToAttemptedWrite(
-              tx,
-              target,
-              entry.path,
-              entry.schema,
-              entry.root,
-              entry.conditional === true,
-            ),
-          });
-        }
+        const path = canonicalizeLogicalPath(entry.path);
+        const integrity = gateRuntimeMintedIntegrity(
+          {
+            integrity: [
+              ...valueStampsOf(
+                tx,
+                entry.schema,
+                labelMintOptionsAt(tx, target, entry.path),
+              ),
+            ],
+          },
+          identityForSchemaPath(writeAuthorIdentities.get(key), path),
+        ).integrity ?? [];
+        if (integrity.length === 0) continue;
+        valueStamps.push({
+          path,
+          integrity,
+          lands: ifcEntryAppliesToAttemptedWrite(
+            tx,
+            target,
+            entry.path,
+            entry.schema,
+            entry.root,
+            entry.conditional === true,
+          ),
+        });
       }
     }
 
@@ -10589,16 +10593,9 @@ export function* prepareBoundaryCommitSteps(
         const failures = yield* verifyWriteFloor(tx, schema, target, {
           identityForPath: (path) =>
             identityForSchemaPath(writeAuthorIdentities.get(key), path),
-          valueStampsAt: (path) => {
-            const at = valueStamps.filter((stamped) =>
-              arraysEqual(stamped.path, path)
-            );
-            return {
-              land: at.filter((stamped) => stamped.lands)
-                .flatMap((stamped) => stamped.stamps),
-              named: at.flatMap((stamped) => stamped.stamps),
-            };
-          },
+          // A commit that stores none of its payload's claims stores none
+          // of its stamps either, so they credit nothing.
+          valueStamps: ingestVerificationFailed ? [] : valueStamps,
           linkWriteInputs: currentLinkWrites.get(key) ?? [],
           linkLabels,
           // Only PERSISTED flow integrity may credit the floor: `observe` mode
@@ -11882,20 +11879,7 @@ export function* prepareBoundaryCommitSteps(
       }
     }
 
-    // The value stamps land at the positions this transaction wrote, gated
-    // by who authored each write, and are reconciled with the ones the
-    // document stores.
-    const valueStampMints: IntegrityMint[] = [];
-    if (mintsValueStamps) {
-      for (const { path, stamps, lands } of valueStamps) {
-        if (!lands) continue;
-        const integrity = gateRuntimeMintedIntegrity(
-          { integrity: [...stamps] },
-          identityForSchemaPath(writeAuthorIdentities.get(key), path),
-        ).integrity ?? [];
-        if (integrity.length > 0) valueStampMints.push({ path, integrity });
-      }
-    }
+    // The stamps that land are reconciled with the ones the document stores.
     const storedMintedEntries = (existing?.labelMap.entries ?? [])
       .filter((entry) => entry.origin === MINTED_ORIGIN)
       .map((entry) => ({
@@ -11904,7 +11888,7 @@ export function* prepareBoundaryCommitSteps(
       }));
     const mintedEntries = reconcileMintedEntries({
       existing: storedMintedEntries,
-      mints: valueStampMints,
+      mints: mintsValueStamps ? valueStamps.filter((stamp) => stamp.lands) : [],
       changedPaths: valueTarget?.paths ?? [],
       attemptedPaths: writtenValuePaths,
       value: () =>
