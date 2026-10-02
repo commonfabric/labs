@@ -405,6 +405,20 @@ first, since the op carries only the delta.
   and does not export its read set, so what changes there is which local
   dependencies the transaction registers, not what the server arbitrates.
 
+- **An `increment` that does not account for the local number falls back
+  too.** Its suppression drops the value candidate at its path, so the op is
+  the commit's only carrier for that number, and it carries a delta rather
+  than a value. The builder therefore checks, at commit, that applying the
+  recorded delta to the base reproduces the working value, a missing base
+  counting as zero the way the store applies the op. A `set()` landing ahead
+  of the increment breaks the equality with no intent yet to poison: `set(10)`
+  and then `increment(1)` holds 11 locally, and the op alone would store the
+  base plus one. A base that is not a number breaks it too, since the store
+  refuses to increment one. The intent is abandoned and the diff commits the
+  local value. The comparison is exact, so several fractional increments in
+  one transaction can fall back as well: the op carries their sum, and adding
+  that sum to the base need not round the way adding them one at a time did.
+
 - **An op on a document with no base, beside another write, falls back to a
   whole-document `set`.** A transaction that sees no document has nothing to
   diff its other writes against: a sibling field, or the `["cfc"]` label

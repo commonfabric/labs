@@ -2552,6 +2552,39 @@ describe("mergeable op guards and single-session branches", () => {
     expect(await readDurableNumber(server)).toBe(5);
   });
 
+  describe("a `set()` then an `increment()` in one transaction", () => {
+    // The increment's op carries only its delta. With a `set()` ahead of it
+    // the working value is not the base plus that delta, so the value is
+    // committed as written and the op is not sent.
+
+    it("commits the number the transaction computed, over an existing one", async () => {
+      const tx0 = rt.edit();
+      rt.getCell<number>(space, COUNTER_CAUSE, numberSchema, tx0).set(5);
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      const tx = rt.edit();
+      const cell = rt.getCell<number>(space, COUNTER_CAUSE, numberSchema, tx);
+      cell.set(10);
+      cell.increment(1);
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      expect(await readDurableNumber(server)).toBe(11);
+    });
+
+    it("commits the number the transaction computed, on a new document", async () => {
+      const tx = rt.edit();
+      const cell = rt.getCell<number>(space, COUNTER_CAUSE, numberSchema, tx);
+      cell.set(10);
+      cell.increment(1);
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      expect(await readDurableNumber(server)).toBe(11);
+    });
+  });
+
   it("mergeable ops on two fields of one entity both commit", async () => {
     const docSchema = {
       type: "object",
@@ -2666,14 +2699,15 @@ describe("mergeable op guards and single-session branches", () => {
       });
     });
 
-    it("is refused beside another write when the store already holds the document", async () => {
-      // The second session never loads the list, so its transaction sees no
-      // document. The write beside the push goes straight to the transaction
-      // and reads nothing, so the push's own read of the list is the only
-      // one that can refuse the commit.
+    it("is refused beside another write when another session's push created the list first", async () => {
+      // Both sessions see no document. The first one's push lands as an op and
+      // creates the list. The second one's set would replace that list with
+      // its own single element, so it has to be refused. Its write beside the
+      // push goes straight to the transaction and reads nothing, so the
+      // push's own read of the list is the only one that can refuse it.
       const cause = "push-creates-list-store-holds-document";
       const tx0 = rt.edit();
-      rt.getCell<string[]>(space, cause, stringListSchema, tx0).set(["a"]);
+      rt.getCell<string[]>(space, cause, stringListSchema, tx0).push("a");
       await tx0.commit({ resolveAt: "verdict" });
       await rt.storageManager.synced();
 

@@ -74,13 +74,17 @@ export type OpSuppression = {
  * `initialArray` is that base array itself (undefined when there was no base
  * array), which a tail op checks its recorded tail against — length and hole
  * layout both, since the diff it suppresses can only express a prefix that
- * matches the base in both.
+ * matches the base in both. `workingValue` and `initialValue` are whatever the
+ * working document and the base hold at the op's path (undefined when the
+ * path holds nothing), which an increment checks its recorded delta against.
  */
 export interface MergeableBuildContext {
   readonly workingArray?: readonly FabricValue[];
   readonly hadInitialArray: boolean;
   readonly hadInitialValue: boolean;
   readonly initialArray?: readonly FabricValue[];
+  readonly workingValue?: FabricValue;
+  readonly initialValue?: FabricValue;
 }
 
 /**
@@ -321,6 +325,51 @@ const buildRemoveByValue = (
   };
 };
 
+type IncrementIntent = Extract<MergeableOpIntent, { op: "increment" }>;
+
+// An increment says "add `by` to whatever number the store holds", and its
+// suppression drops the value candidate at its path, so the op is the commit's
+// only carrier for that number. It is honest only while applying it to the
+// base reproduces the working value, a missing base counting as zero the way
+// the wire op applies (`incrementAtPath` in `@commonfabric/memory/v2/patch`). A
+// `set()` landing ahead of the increment breaks that equality with no intent
+// yet to poison, and so does a base the wire op refuses, one that is not a
+// number. Either way the intent is abandoned and the diff commits the local
+// value.
+const buildIncrement = (
+  intent: IncrementIntent,
+  ctx: MergeableBuildContext,
+): MergeableBuildResult => {
+  // Increments that summed to zero (a +1 and a -1) are a no-op: the working
+  // value already reflects no change, so emit nothing (and nothing to
+  // suppress). Deliberately NOT abandoned: with the value unchanged the diff
+  // has no candidate at this path either, so there is no replacement write
+  // whose reads need restoring — abandoning would only put the op's own read
+  // back into the conflict set and make a net-zero increment false-conflict
+  // with a concurrent one.
+  if (intent.by === 0) {
+    return { ops: [], suppress: [] };
+  }
+  const base = ctx.initialValue;
+  if (
+    (base !== undefined && typeof base !== "number") ||
+    ctx.workingValue !== (base ?? 0) + intent.by
+  ) {
+    return { ops: [], suppress: [], abandon: true };
+  }
+  return {
+    ops: [
+      {
+        op: "increment",
+        path: encodePointer(intent.path),
+        by: intent.by,
+        ...(ctx.hadInitialValue ? {} : { createsKey: true }),
+      },
+    ],
+    suppress: [{ path: intent.path }],
+  };
+};
+
 const mergeableOpDescriptors: Record<MergeableWireOp, MergeableOpDescriptor> = {
   append: descriptor<AppendIntent, AppendDelta>({
     op: "append",
@@ -337,7 +386,7 @@ const mergeableOpDescriptors: Record<MergeableWireOp, MergeableOpDescriptor> = {
     payloadContains: tailOpPayloadContains,
   }),
   increment: descriptor<
-    Extract<MergeableOpIntent, { op: "increment" }>,
+    IncrementIntent,
     Extract<MergeableOpDelta, { op: "increment" }>
   >({
     op: "increment",
@@ -346,25 +395,7 @@ const mergeableOpDescriptors: Record<MergeableWireOp, MergeableOpDescriptor> = {
       path,
       by: (existing?.op === "increment" ? existing.by : 0) + delta.by,
     }),
-    // Increments that summed to zero (a +1 and a -1) are a no-op: the working
-    // value already reflects no change, so emit nothing (and nothing to
-    // suppress). Deliberately NOT abandoned: with the value unchanged the diff
-    // has no candidate at this path either, so there is no replacement write
-    // whose reads need restoring — abandoning would only put the op's own read
-    // back into the conflict set and make a net-zero increment false-conflict
-    // with a concurrent one.
-    build: (intent, ctx) =>
-      intent.by === 0 ? { ops: [], suppress: [] } : {
-        ops: [
-          {
-            op: "increment",
-            path: encodePointer(intent.path),
-            by: intent.by,
-            ...(ctx.hadInitialValue ? {} : { createsKey: true }),
-          },
-        ],
-        suppress: [{ path: intent.path }],
-      },
+    build: buildIncrement,
   }),
   "remove-by-value": descriptor<
     Extract<MergeableOpIntent, { op: "remove-by-value" }>,

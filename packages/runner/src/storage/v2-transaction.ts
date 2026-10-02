@@ -3807,6 +3807,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       initialArray: Array.isArray(initial)
         ? initial as readonly FabricValue[]
         : undefined,
+      workingValue: working,
+      initialValue: initial,
     };
   }
 }
