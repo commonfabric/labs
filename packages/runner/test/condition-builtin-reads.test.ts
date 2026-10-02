@@ -1180,6 +1180,44 @@ describe("condition-builtin-reads", () => {
       );
     });
 
+    it("leaves the transaction cfc-relevant for a record whose schema carries `ifc`, as the eager read does", async () => {
+      const declared: JSONSchema = {
+        type: "object",
+        ifc: { confidentiality: [cfcAtom.user("did:key:zOther")] },
+      };
+      const observed = [];
+      for (
+        const [cause, schema] of [["declared", declared], ["plain", {
+          type: "object",
+        }]] as const
+      ) {
+        await plainDoc(cause, { a: 1 });
+        const relevantAfter = (
+          read: (cell: Cell<unknown>, tx: IExtendedStorageTransaction) => void,
+        ): boolean => {
+          const tx = runtime.edit();
+          try {
+            read(runtime.getCell(patternSpace.did(), cause, schema, tx), tx);
+            return tx.getCfcState().relevant;
+          } finally {
+            tx.abort();
+          }
+        };
+        observed.push({
+          cause,
+          probe: relevantAfter((cell, tx) =>
+            readsTruthyAtRoot(runtime, tx, cell.getAsNormalizedFullLink())
+          ),
+          eager: relevantAfter((cell) => cell.get()),
+        });
+      }
+
+      expect(observed).toEqual([
+        { cause: "declared", probe: true, eager: true },
+        { cause: "plain", probe: false, eager: false },
+      ]);
+    });
+
     it("returns `true` for a record or an array failing its schema only below its root, where the eager read returns `undefined`", async () => {
       const cases: ProbeCase[] = [
         {
