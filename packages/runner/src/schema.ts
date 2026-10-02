@@ -11,6 +11,7 @@ import {
   type FabricValue,
   hashStringOf,
   isDeepFrozen,
+  isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   shallowMutableClone,
 } from "@commonfabric/data-model";
@@ -64,6 +65,7 @@ import {
   createQueryResultProxy,
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
+import { getReaderSchemaPrecedenceConfig } from "./reader-schema-precedence-config.ts";
 import type { Runtime } from "./runtime.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
 import { markIfcBearingLinkCrossing, schemaHasIfc } from "./schema-ifc.ts";
@@ -1073,6 +1075,49 @@ function readValueAtResolvedLink(
   return typeof parent === "string" ? parent.length : value;
 }
 
+/**
+ * Helper for `validateAndTransform()`, which returns the schema a read
+ * addressed at a slot holding a link projects the link's target by. That
+ * crossing is resolved by the same reader precedence as every hop the
+ * traversal crosses (`combineSchemaForLink()`): a shaped reader stands, and an
+ * agnostic one — `true`, `{}`, or a flag-only wrapper — adopts the stored
+ * schema. `docs/specs/link-schema-precedence.md`, "The read entry", states the
+ * rule.
+ *
+ * `readerSchema` is the schema the read carried in, `travelingSchema` what it
+ * resolved to across any write redirect, and `storedSchema` what value
+ * resolution hands back: the nearest stored schema that constrains, or the
+ * traveling schema where none does.
+ *
+ * Four cases keep the stored schema whatever the reader declared: a stored
+ * `false`, which selects nothing; a stored `unknown`, which holds the read to
+ * a reference; a reader typed `unknown`, which adopts what the stored schema
+ * says the target is; and the strict rollback of `readerSchemaPrecedence`,
+ * under which the entry follows link resolution's rule.
+ */
+function entrySelectorSchema(
+  readerSchema: JSONSchema | undefined,
+  travelingSchema: JSONSchema,
+  storedSchema: JSONSchema | undefined,
+): JSONSchema {
+  if (storedSchema === undefined) return travelingSchema;
+  const stored = resolveSchema(storedSchema);
+  const isUnknown = (schema: JSONSchema | undefined) =>
+    isObjectOrArray(schema) && schema.type === "unknown";
+  if (
+    !getReaderSchemaPrecedenceConfig() ||
+    readerSchema === undefined ||
+    ContextualFlowControl.isTrueSchema(readerSchema) ||
+    isUnknown(readerSchema) ||
+    stored === undefined ||
+    ContextualFlowControl.isFalseSchema(stored) ||
+    isUnknown(stored)
+  ) {
+    return storedSchema;
+  }
+  return combineSchemaForLink(travelingSchema, storedSchema);
+}
+
 export interface ValidateAndTransformOptions {
   /** When true, also read into each Cell created for asCell fields to capture dependencies */
   traverseCells?: boolean;
@@ -1095,14 +1140,14 @@ export interface ValidateAndTransformOptions {
   viewChild?: boolean;
 
   /**
-   * Set by a render read, which mounts a value under the renderer's own
-   * schema. At the read's entry, the stored schema of a link the read crosses
-   * combines with the reader's under reader precedence, as it does at a hop,
-   * rather than replacing it: a link typed by a narrow view of a piece still
-   * renders the piece's `[UI]`. See "The read entry" in
-   * `docs/specs/link-schema-precedence.md`.
+   * Set by a reader that uses only whether the result is truthy, such as a
+   * builtin branching on a condition. A record or an array is then read at its
+   * root alone, and the read returns `true` where the schema it validates
+   * against is an opaque handle or accepts the container's type, and
+   * `undefined` where it refuses it. Every other value reads as it does
+   * without the option.
    */
-  renderRead?: boolean;
+  truthinessOnly?: boolean;
 }
 
 export function validateAndTransform(
@@ -1411,15 +1456,38 @@ export function validateAndTransform(
       ? asCellCompoundSchemaForValue(effectiveSchema, value)
       : undefined;
     // If we have a ref with a schema, use that; otherwise, use the link's
-    // schema. A render read keeps its own schema across the entry crossing,
-    // combining the way a hop does.
-    const entrySchema = options?.renderRead === true
-      ? combineOptionalSchema(effectiveSchema, resolvedValueLink.schema)
-      : resolvedValueLink.schema;
+    // schema. An eager read then resolves that crossing by reader precedence
+    // below, and a view combines the two its own way.
     selector = {
       path: doc.address.path,
-      schema: valueSelectedSchema ?? entrySchema ?? link.schema!,
+      schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
     };
+    // The schema an eager read validates the value against where the value
+    // selects no handle branch of its own.
+    const eagerSchema = (): JSONSchema =>
+      entrySelectorSchema(
+        resolvedSchema,
+        link.schema!,
+        resolvedValueLink.schema,
+      );
+    // A record or an array read for its truthiness alone is truthy whatever it
+    // holds, so only the eager read's checks at its root decide, and nothing
+    // below the root is read: an opaque handle stands for any value, and any
+    // other schema has to accept the container's type. The branch a value
+    // selects for itself is chosen by what lies below the root, so it plays no
+    // part here. Any other value is the whole of what it is, and reads on as
+    // it would anyway.
+    if (options?.truthinessOnly === true && isKeyableObjectOrArray(value)) {
+      tx.readValueOrThrow(resolvedValueLink, { nonRecursive: true });
+      const schema = eagerSchema();
+      const rootHandle = ContextualFlowControl.getAsCellValues(
+        resolveSchema(schema),
+      ).at(0);
+      return ContextualFlowControl.getAsCellKind(rootHandle) === "opaque" ||
+          schemaAcceptsType(schema, Array.isArray(value) ? "array" : "object")
+        ? true
+        : undefined;
+    }
     if (tx.isLazyMaterialize()) {
       // Crossing the last link is a hop the eager traverser combines schemas
       // across (`linkHopSelector`), because a link's own schema describes the
@@ -1525,6 +1593,8 @@ export function validateAndTransform(
         );
       }
       selector.schema = viewSchema;
+    } else if (valueSelectedSchema === undefined) {
+      selector.schema = eagerSchema();
     }
   }
 
@@ -1612,6 +1682,20 @@ export function validateAndTransform(
   // we need some other way to indicate success to our caller. For now, I'm
   // still just returning undefined in the error case.
   return val;
+}
+
+/**
+ * Returns whether the value at `sourceRef`, read through `tx`, is truthy, as
+ * `validateAndTransform()` reads it with `truthinessOnly` set.
+ */
+export function readsTruthyAtRoot(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  sourceRef: NormalizedFullLink | CellViewRef,
+): boolean {
+  return Boolean(
+    validateAndTransform(runtime, tx, sourceRef, [], { truthinessOnly: true }),
+  );
 }
 
 /**

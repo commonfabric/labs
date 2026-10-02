@@ -96,6 +96,8 @@ export type SessionState = {
 
   expiresAt: number | null;
   ownerConnectionId: string | null;
+  /** Originating routed authority survives detach and is replaced only by admission. */
+  routedAuthority?: () => boolean;
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
@@ -151,11 +153,15 @@ export class SessionRegistry {
     ownerConnectionId = "session-registry",
     principal?: string,
     actingPrincipal?: string,
+    routed = false,
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
     const key = sessionKey(space, sessionId);
     const existing = this.#sessions.get(key);
+    if (existing?.routedAuthority !== undefined && !routed) {
+      throw authorizationError("A routed session requires a routed connection");
+    }
     if (
       existing?.principal !== undefined &&
       principal !== existing.principal
@@ -214,6 +220,7 @@ export class SessionRegistry {
         : {}),
       expiresAt: null,
       ownerConnectionId,
+      routedAuthority: existing?.routedAuthority,
       principal: existing?.principal ?? principal,
       // Fresh per open (never inherited), like the binding below: a
       // resuming client re-declares its ceiling, and an open declaring none
@@ -309,6 +316,26 @@ export class SessionRegistry {
     }
     session.seenSeq = Math.max(session.seenSeq, seenSeq);
     return session;
+  }
+
+  /** Clears a routed context's retained interests before a fresh-context restore. */
+  clearRoutedInterests(space: string, sessionId: string): void {
+    const session = this.#sessions.get(sessionKey(space, sessionId));
+    if (session === undefined) return;
+    session.watches = [];
+    session.views = [];
+    session.operationWatches = [];
+    session.watchIndex = new Map();
+    session.graphs = new Map();
+    session.entities = new Map();
+    session.trackedIds = new Set();
+    session.operationTrackedIds = new Set();
+    session.operationCursors = new Map();
+    session.viewEpochs = new Map();
+    session.viewSelections = new Map();
+    session.viewDemandGraphs = new Map();
+    session.viewDemandEntities = new Map();
+    session.forceFullResync = true;
   }
 
   detach(space: string, sessionId: string, ownerConnectionId: string): void {

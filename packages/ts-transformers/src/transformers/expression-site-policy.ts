@@ -677,7 +677,12 @@ function isWithinEventHandlerJsxAttribute(
   return false;
 }
 
-function isArrayMethodOwnedExpressionSite(
+/**
+ * Whether `expression` sits in the body of a reactive collection callback,
+ * such as the callback of `.map()` on a reactive array, which runs as a
+ * pattern of its own over each element.
+ */
+export function isArrayMethodOwnedExpressionSite(
   expression: ts.Expression,
   context: TransformationContext,
 ): boolean {

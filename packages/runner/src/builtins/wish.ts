@@ -62,7 +62,7 @@ import {
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -235,6 +235,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#learned":
     case "#learnedSummary":
     case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -646,7 +647,13 @@ function searchFavoritesForHashtag(
   return measureWishPhase(
     "favorites-result-map",
     queryKey,
-    () => matches.map((match) => ({ cell: match.cell, pathPrefix })),
+    () =>
+      matches.flatMap((match) => {
+        const cell = match.cell.resolveAsCell();
+        return ctx.readiness.requireDocument(cell, ctx.tx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -955,6 +962,22 @@ function resolveHomeSpaceTarget(
       return [{
         cell: getHomeSpaceCell(ctx),
         pathPrefix: ["defaultPattern", "agentQueue"],
+      }];
+    }
+
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
 
@@ -2208,7 +2231,6 @@ export function wish(
     recordRuntimeOwnedStore(tx, parentCell, scoped);
     enrollRuntimeOwnedStore(tx, parentCell, scoped);
     setResultCell(scoped, parentCell.withTx(tx));
-    setPatternCell(scoped, parentCell.withTx(tx).key("pattern"));
     scoped.set(value);
     surfaceWishStateCommitFailure(tx, scoped);
     sendResult(tx, scoped);

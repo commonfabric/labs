@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import type { JSONSchema } from "@commonfabric/runner";
+import type { JSONSchemaObj } from "@commonfabric/api";
+import { containsExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
+import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
+import { decomposeSchema, type JSONSchema } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { schemaForSelection } from "../lib/cell-selection.ts";
+import { externalizeSchema } from "../../runner/src/link-utils.ts";
 
 /** A value of the shape the runtime reads each `ifc` key as. */
 const SAMPLES = {
@@ -156,5 +161,59 @@ describe("schemaForSelection()", () => {
     };
     expect(rewritten.ifc).toBeUndefined();
     expect(rewritten.properties.self).toBe(cyclic);
+  });
+
+  describe("a schema naming a content-addressed document", () => {
+    const claimed: JSONSchemaObj = {
+      type: "string",
+      ifc: {
+        confidentiality: ["source-secret"],
+        writeAuthorizedBy: ["a-builtin"],
+      },
+    };
+
+    /** Whether any position `schema` holds states `key` in its `ifc`. */
+    const states = (schema: JSONSchema, key: string): boolean =>
+      anySchema(
+        schema,
+        (node) =>
+          isObjectNotArray(node.schema) && isObjectNotArray(node.schema.ifc) &&
+          Object.hasOwn(node.schema.ifc, key),
+        { includeDefs: true, includeUnused: true },
+      );
+
+    it("returns the document's positions inline, without the keys it drops", () => {
+      for (
+        const schema of [
+          externalizeSchema({
+            type: "object",
+            properties: { name: claimed },
+          }),
+          {
+            type: "object",
+            properties: { name: externalizeSchema(claimed) },
+          } as JSONSchema,
+        ]
+      ) {
+        const rewritten = schemaForSelection(schema);
+        expect(containsExternalSchemaRef(rewritten)).toBe(false);
+        expect(states(rewritten, "writeAuthorizedBy")).toBe(false);
+        expect(states(rewritten, "confidentiality")).toBe(true);
+      }
+    });
+
+    it("returns a schema naming a document the registry does not hold as written", () => {
+      // Decomposing without a registry hands back the reference a document
+      // would have, and registers nothing.
+      const { rootRef } = decomposeSchema({
+        ...claimed,
+        description: "held by no registry",
+      });
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { name: { $ref: rootRef } },
+      };
+      expect(schemaForSelection(schema)).toBe(schema);
+    });
   });
 });

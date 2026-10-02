@@ -17,6 +17,7 @@ import {
   normalizeBindingName,
   reserveIdentifier,
 } from "../../utils/identifiers.ts";
+import { createPathRead } from "../../transformers/destructuring-lowering.ts";
 import { createReactiveWrapperForExpression } from "../../transformers/expression-rewrite/rewrite-helpers.ts";
 import { unwrapExpression } from "../../utils/expression.ts";
 import {
@@ -97,13 +98,10 @@ function lowerMapReceiverMemberAccess(
   }
 
   return preserveSourceMapRange(
-    context.factory.createCallExpression(
-      context.factory.createPropertyAccessExpression(
-        context.factory.createIdentifier(current.text),
-        context.factory.createIdentifier("key"),
-      ),
-      undefined,
+    createPathRead(
+      context.factory.createIdentifier(current.text),
       segments,
+      context.factory,
     ),
     expression,
   );

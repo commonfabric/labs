@@ -285,7 +285,12 @@ Mac. Then, in Weaver's settings under Services:
 - `/patterns <query>` lists index hits with their ids.
 - `/cf-harness <task>` starts a fresh session and places the live panel in the
   current loom. A turn runs for minutes; the panel streams throughout, and the
-  piece replaces it when the turn ends.
+  piece replaces it when the turn ends. On a console launched with
+  `--allow-browser-host`, the Weaver declares itself the turn's
+  [browser host](../console/README.md#browser-hosts), so the browser children of
+  a task that needs the web drive a page the Weaver shows the owner, who takes
+  it over when an agent hands it to them. Such a task may end with a Markdown
+  answer in the live panel instead of a piece.
 - `/feedback <patternId> up|down` records one vote on a pattern the index holds,
   signed with the console's fabric identity; the pill answers "recorded up for
   <patternId>" or the console's own refusal. An up vote is what promotes a

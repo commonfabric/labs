@@ -296,7 +296,7 @@ by any repo test.
 | Dictionary with both string and number index | treated as object map, not array | `type-utils.ts` | untested directly |
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties` (checker-driven property enumeration) | via `ObjectFormatter`; fixture `record-union-keys` | record-mapped-types.test.ts |
-| Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property | skip: `type-utils.ts`, `object-formatter.ts`; exception: `object-formatter.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
+| Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
 | `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
@@ -1097,6 +1097,26 @@ Mechanics:
   (`type Id<X> = X`) denotes the argument it writes for that parameter, so the
   chain, and the labels and defaults read from its syntax, start at that
   argument (`readThroughIdentityAliases`, `src/typescript/type-node.ts`).
+- A plain generic interface or object alias whose arguments carry authored
+  `typeof` identities binds its parameters to those written arguments before
+  reading members. Forwarded alias references and inherited interface members
+  use the bindings of their own declarations, and defaults read under preceding
+  parameters. A readable property or index-signature value is read from its
+  declaration under those bindings, with its instantiated type retained beside
+  it. This preserves both a whole policy passed as a parameter
+  (`Box<WriteAuthorizedBy<string, typeof save>>`) and a writer passed into a
+  member's policy (`Pair<typeof save, typeof other>`). `Record` reads its value
+  argument by syntax when it carries an authored query, including through a
+  named policy alias. Recursive definitions retain those same bindings and query
+  origins: same-typed writers remain distinct below `$ref` boundaries. Plain
+  generics without authored query arguments retain their type-based analysis.
+  An indexed access or conditional member over bound parameters can leave a
+  writer policy's instantiated carrier without readable binding syntax. That
+  authored read reports `cfc-write-authorized-by:unread` and explains the
+  unsupported operator; compilation cannot silently discard its restriction.
+  See `packages/ts-transformers/test/generic-writer-policy.test.ts` for both
+  pattern schemas and `packages/runner/test/generic-writer-policy.test.ts` for
+  authorized and refused writes, including stored reloads.
 - The payload is read from the declaration of the last alias along the chain,
   as written, with each parameter bound to its argument
   (`GenerationContext.boundTypeParameters`), never from a substituted node,
@@ -1233,9 +1253,13 @@ Mechanics:
   alias chain reaching it reports a `cfc-schema:recursion-limit` error, including
   one whose writer-query key cannot settle. Its unread remainder would discard
   confidentiality or write policies, so the schema must not be used. A chain
-  reached by its alias is located at its type node where available. The separate
+  reached by its alias is located at the type node its context reads where
+  there is one, and is otherwise reported without a location. The separate
   bound on a type read under bindings and a scope-wrapper chain reaching its
-  nesting bound continue to report an unread-type warning.
+  nesting bound continue to report an unread-type warning. A scope-wrapper
+  chain reached by its alias, with no type node to name, is named in that
+  warning by a print of the type it stops at, made with `IgnoreErrors` so that
+  every type has one, a type holding `[]` among them.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a
@@ -1246,13 +1270,23 @@ Mechanics:
   a label's syntax is read first, each node paired with the part of the type
   it denotes: literal nodes, tuples, type literals, `readonly`, `typeof` value
   reads, and alias references, with the alias's arguments substituted into its
-  body. Syntax the reader does not evaluate, such as a conditional or mapped
-  alias, a spread, rest, or optional tuple element, or a parameter an alias
-  leaves to its default, is read from the paired type instead, and so is a
-  label with no syntax at all. Read from nodes, the extraction recognizes
-  `AnyOf<X>` as
-  `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
-  `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
+  body. A spread tuple element (`...X`, named or not) stands for the
+  elements of the list its operand reads as, so `readonly [...L, "b"]` with
+  `L` bound to `readonly ["c", "d"]` reads as `["c", "d", "b"]`; the tuple's
+  type holds those elements spread already, so no element node pairs with a
+  part of it, and each is read alone. Syntax the reader does not evaluate,
+  such as a conditional or mapped alias, an optional tuple element, a spread
+  whose operand reads as no list (a rest element over an array type), a tuple
+  any of whose elements a spread leaves unread, or a parameter an alias leaves
+  to its default, is read from the paired type instead, and so is a label
+  with no syntax at all. Read from nodes, the extraction recognizes
+  `AnyOf<X>` as `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom
+  containing `__ctPolicyIdentityOf: { file, path }`, each where the alias the
+  reference names is that operator's brand:
+  `{ readonly __ct_cfc_any_of__?: X }` or
+  `{ readonly __ct_cfc_policy_of__?: Rules }`. An alias an author declares
+  under either name, and not as its brand, is read as the type it is, from
+  its syntax as from its type. Read from a type, an object type's
   member is read at its declared annotation, paired with its type, wherever
   that annotation denotes the member's type apart from the `undefined` an
   optional member's `?` adds (`readMemberAnnotation`,
@@ -1430,8 +1464,13 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
   the position, in definitions of its own, with nothing reported, and only for
   its labels: a type no CFC wrapper holds, other than a union or an
-  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A value that
-  may be `undefined` or `null` has the labels of its one other member. A node
+  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A cell has
+  the labels of its value, read at the value's own node where its wrapper is
+  written out. A value that may be `undefined` or `null` has the labels of its
+  one other member, and where the node's schema is such a union whose value
+  member declares labels of its own and the union none, they are combined into
+  that member's, where formatting put the part of them it could read
+  (`labeledValueMember` in `ifc-labels.ts`). A node
   narrowed from any other union stands for any of its members, so it has the
   union's labels, every member's confidentiality, and each other label every
   member declares alike (`joinMemberIfcLabels`). A member is spelled by the
@@ -1445,8 +1484,8 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   labels are all retained, including through optional and nullable reads.
   A member with no such node is read by its type. A schema whose own reference
   chain already holds every label is left as it is (`holdsIfcLabels`).
-- **`spelledBy`** is the annotation of the member a printed node holds the
-  value of, where that annotation names a value binding, as
+- **`spelledBy`** is the annotation of the member or binding a printed node
+  holds the value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural
   type of the value it names, from which no reader can tell the binding, so
   the node is read as the annotation spells the type at hand (`#spelling` in

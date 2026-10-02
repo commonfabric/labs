@@ -1,4 +1,8 @@
-export { decomposeSchema, recomposeSchema } from "./schema-decompose.ts";
+export {
+  decomposeSchema,
+  recomposeSchema,
+  SchemaNotDecomposableError,
+} from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
 export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";

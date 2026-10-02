@@ -53,6 +53,7 @@ const delegateCall: HarnessTranscriptMessage = {
 const childReadCall: HarnessTranscriptMessage = {
   role: "assistant",
   content: "",
+  reasoning: "The notes are in the workspace, so read them first.",
   toolCalls: [{
     id: "child-tool-1",
     type: "function",
@@ -182,6 +183,7 @@ describe("interactive-chat subagent events", () => {
       "turn_started",
       "tool_started",
       "subagent_started",
+      "assistant_reasoning",
       "tool_started",
       "tool_completed",
       "assistant_delta",
@@ -192,6 +194,20 @@ describe("interactive-chat subagent events", () => {
       "assistant_completed",
       "turn_completed",
     ]);
+  });
+
+  it("reports a child's reasoning before the call it led to, tagged with the child", async () => {
+    const service = await runDelegatingTurn();
+
+    const reasoning = service.events("session-1").find((envelope) =>
+      envelope.event.kind === "assistant_reasoning"
+    )?.event;
+
+    expect(reasoning).toEqual({
+      kind: "assistant_reasoning",
+      text: "The notes are in the workspace, so read them first.",
+      subagent: subagentContext,
+    });
   });
 
   it("reports the child's profile and goal on subagent_started", async () => {

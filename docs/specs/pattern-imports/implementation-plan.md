@@ -1044,15 +1044,13 @@ Algorithm (spec § Resolution rule — implement hops exactly):
 No cycle guard needed (≤3 hops, no recursion).
 
 Tests (`packages/runner/test/fabric-ref-resolution.test.ts`): build, in an
-in-process runtime: a fake piece cell carrying `meta("pattern")` /
-`meta("patternIdentity")` (use the real setters — `setPatternCell` in
-`packages/runner/src/result-utils.ts` writes `meta("pattern")`, and
-`Runner.#applySetupState` writes `meta("patternIdentity")` — and mirror them);
-slug → piece; slug → plain data cell (error + chain); missing slug; `of:`
-directly to a piece cell. Add a direct `pattern:` subpath test that proves the scope
-guard runs before the otherwise-terminal identity is returned. Add a CLI
-pin/update regression that resolves a valid slug but rejects its subpath rather
-than writing the slug target's entry identity.
+in-process runtime: a fake piece cell carrying `meta("patternIdentity")` (use
+the real setter — `Runner.#applySetupState` writes `meta("patternIdentity")` —
+and mirror it); slug → piece; slug → plain data cell (error + chain); missing
+slug; `of:` directly to a piece cell. Add a direct `pattern:` subpath test that
+proves the scope guard runs before the otherwise-terminal identity is returned.
+Add a CLI pin/update regression that resolves a valid slug but rejects its
+subpath rather than writing the slug target's entry identity.
 
 ### M2.3 Pin rewriting (byte-precise source surgery)
 

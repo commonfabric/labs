@@ -315,4 +315,62 @@ describe("unread-type-diagnostics", () => {
       expect(warnings).toEqual([]);
     });
   });
+
+  describe("a scope recursion read from a printed type", () => {
+    // A print is read as its type, so a recursion it holds is reached by type
+    // alone, with no written reference to name it by. Each
+    // `Node<Readonly<…>>` is a new type, so the nesting bound ends the
+    // reading.
+
+    /**
+     * The diagnostics generating a schema for `a` in a module declaring
+     * `declarations`, read from a placeholder printed from its type.
+     */
+    async function diagnosticsForPrinted(
+      declarations: string,
+      a: string,
+    ): Promise<SchemaGenerationDiagnostic[]> {
+      const { checker, sourceFile } = await createTestProgram(
+        `${declarations}\ninterface X { a: ${a}; }`,
+      );
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "X")!;
+      const type = checker.getTypeOfSymbolAtLocation(
+        checker.getDeclaredTypeOfSymbol(holder).getProperty("a")!,
+        sourceFile,
+      );
+      const placeholder = f.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, placeholder, {
+        printedFrom: (node) => node === placeholder ? type : undefined,
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      return diagnostics;
+    }
+
+    for (
+      const [position, holder] of [
+        ["an index signature", "interface Holder<U> { [key: string]: U }"],
+        ["a tuple", "interface Holder<U> { items: [U, U] }"],
+      ] as const
+    ) {
+      it(`names a scope recursion reached through ${position} by the type it stops at, which holds \`[]\``, async () => {
+        const diagnostics = await diagnosticsForPrinted(
+          `${holder}
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+type Node<T> = PerUser<Cell<{ value: T; next?: Holder<Node<Readonly<T>>> }>>;`,
+          "Node<Wrap<readonly []>>",
+        );
+
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toMatchObject({
+          type: "schema-type:unread",
+          severity: "warning",
+        });
+        expect(diagnostics[0]!.message).toContain("Wrap<readonly []>");
+      });
+    }
+  });
 });

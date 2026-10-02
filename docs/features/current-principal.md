@@ -143,7 +143,7 @@ which the CFC spec's `canWrite` (§8.12.4) measures a transaction's taint
 against. A transaction that read the parent carries the parent's readers in its
 taint, and those now fit. Data labeled for any other reader still misfits, the
 writer's own private data included, so moving it into the owner's list still
-needs a declassification. SC-55 in
+needs a declassification. SC-57 in
 [the CFC spec change list](../specs/cfc-spec-changes.md) records the rule for
 the spec.
 

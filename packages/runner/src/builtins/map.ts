@@ -7,7 +7,7 @@ import { type AddCancel } from "../cancel.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -29,7 +29,10 @@ import {
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
 import { listInstanceCoordinator } from "./list-instance-coordinator.ts";
-import { LIST_OP_REFERENCED_ARGUMENT_FIELDS } from "./list-op-argument-usage.ts";
+import {
+  LIST_OP_CAPTURED_ARGUMENT_FIELDS,
+  LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+} from "./list-op-argument-usage.ts";
 import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
 import { resumeSettleRunKind } from "./resume-republish.ts";
@@ -143,14 +146,13 @@ function createMapInstance(
   // next reconcile issues them again. See list-element-rollback.ts.
   const containerSetup: SetupRecord = { needsSetup: false };
 
-  // An element's links back to this coordinator. They are setup writes like the
+  // An element's link back to this coordinator. It is a setup write like the
   // element's pattern run: issued when the element is created, and again when
-  // the transaction carrying them did not commit. Without them the element's
+  // the transaction carrying it did not commit. Without it the element's
   // document names no owning piece, so nothing can start that piece for an
   // event addressed to it.
   const linkElementCell = (cell: Cell<any>): void => {
     setResultCell(cell, parentCell);
-    setPatternCell(cell, parentCell.key("pattern"));
   };
 
   // The Action the runner registers with the scheduler. `reconcile` below is
@@ -427,12 +429,13 @@ function createMapInstance(
               awaitSyncBeforeInitialRun: elementAwaitSync,
               parentPieceRootId,
               referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+              capturedArgumentFields: LIST_OP_CAPTURED_ARGUMENT_FIELDS,
             },
           );
           // The whole setup, every time, because issuing it takes the debt for
-          // it: an overlapping reconcile that wrote the links and has not
-          // settled hands them to this one, and a partial issuance would leave
-          // nobody owing them. Links already durable cost a comparison, since
+          // it: an overlapping reconcile that wrote the link and has not
+          // settled hands it to this one, and a partial issuance would leave
+          // nobody owing it. A link already durable costs a comparison, since
           // a write of the value a leaf already holds does not reach storage.
           linkElementCell(existing.resultCell.withTx(tx));
           rollback.setupIssued(existing);
@@ -463,6 +466,7 @@ function createMapInstance(
             awaitSyncBeforeInitialRun: elementAwaitSync,
             parentPieceRootId,
             referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
+            capturedArgumentFields: LIST_OP_CAPTURED_ARGUMENT_FIELDS,
           },
         );
         linkElementCell(boundResultCell);
