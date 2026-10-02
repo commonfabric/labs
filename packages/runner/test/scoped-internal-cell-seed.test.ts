@@ -111,7 +111,11 @@ describe("scoped-internal-cell-seed", () => {
   }
 
   /** The pattern that holds a draft cell of the given scope. */
-  function draftHolder(runtime: Runtime, scope: "space" | "user" | "session") {
+  function draftHolder(
+    runtime: Runtime,
+    scope: "space" | "user" | "session",
+    initial = EMPTY_DRAFT,
+  ) {
     const { pattern, Cell } = createTrustedBuilder(runtime).commonfabric;
     const scoped = scope === "space"
       ? Cell.perSpace
@@ -119,7 +123,7 @@ describe("scoped-internal-cell-seed", () => {
       ? Cell.perUser
       : Cell.perSession;
     return pattern(
-      () => ({ draft: scoped.of<Draft>(EMPTY_DRAFT) }),
+      () => ({ draft: scoped.of<Draft>(initial) }),
       { type: "object", properties: {} },
       resultSchema,
     );
@@ -336,6 +340,50 @@ describe("scoped-internal-cell-seed", () => {
       );
     });
   }
+
+  it("initializes the requested pattern when its stored manifest changes during naming", async () => {
+    const first = await load("user", owner);
+    const original = first.runtime.getCell(space, "draft holder", resultSchema);
+    const second = openRuntime(visitor);
+    const piece = second.getCell(space, "draft holder", resultSchema);
+    const requested = draftHolder(second, "user");
+    await piece.sync();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    second.runner.accessForTestingOnly.dependencySyncer = async (
+      cell,
+      pattern,
+      inputs,
+      sync,
+    ) => {
+      entered.resolve();
+      await release.promise;
+      return await sync(cell, pattern, inputs);
+    };
+    try {
+      const tx = second.edit();
+      second.run(tx, requested, {}, piece);
+      expect((await tx.commit()).error).toBeUndefined();
+      await entered.promise;
+      await first.runtime.runSynced(
+        original,
+        draftHolder(first.runtime, "user", {
+          title: "new default",
+          members: "",
+        }),
+        {},
+      );
+      await first.runtime.idle();
+      await piece.sync();
+    } finally {
+      release.resolve();
+      await second.idle();
+      second.runner.accessForTestingOnly.dependencySyncer = undefined;
+    }
+    expect(piece.key("draft").resolveAsCell().getRawUntyped()).toEqual(
+      EMPTY_DRAFT,
+    );
+  });
 
   it("keeps a caller-owned setup's defaults inside its commit", async () => {
     await load("user", owner);

@@ -386,8 +386,13 @@ Dependency synchronization alone never initializes a default. A speculative
 start keeps its initialization in the speculative transaction and cannot vouch
 for durable initialization on a later authored start. A caller-owned
 setup keeps initialization in the caller's commit, including its abort. A run
-that continues after dependency loading rejects also initializes within its own
-commit, under the same CFC checks; it does not claim a separate preparation ran.
+whose preparation sees a superseded declaration, or that continues after
+dependency loading rejects, initializes within the commit that accepts its
+requested setup, under the same CFC checks. Neither case vouches for completed
+preparation in the naming cache. A cold start by a non-serving client with a
+confirmed READ-only space membership can resume persisted output without
+writing the viewer's absent scoped defaults. Their schema defaults remain
+readable; an explicit write still requires write access.
 
 Pattern argument setup materializes missing declared scoped properties even
 when the caller supplies the argument object through a Cell reference. The

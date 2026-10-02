@@ -12,6 +12,7 @@ import {
   refuseFabricInstance,
   valueEqual,
 } from "@commonfabric/data-model";
+import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -91,6 +92,7 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
+import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
@@ -5932,6 +5934,7 @@ export class Runner {
         undefined,
         {
           isCurrent: () => this.#isStartAttemptCurrent(attempt),
+          allowReadOnly: true,
         },
       );
       if (!this.#isStartAttemptCurrent(attempt)) return false;
@@ -6301,9 +6304,9 @@ export class Runner {
       return { pattern: resolved.pattern, entryKey, identity };
     }
     if (named?.landed === entryKey) {
-      // A failed dependency load can still run over what is local. Initialize
-      // in that run rather than claiming preparation succeeded or retrying
-      // the same failed load without a bound.
+      // A failed load or superseded manifest can leave preparation incomplete.
+      // Initialize in the actual setup that accepts the requested pattern,
+      // rather than caching success or retrying an obsolete declaration.
       if (named.seedInRun) this.#callerOwnedSetupTransactions.add(tx);
       if (
         named.defaultsPrepared || this.#callerOwnedSetupTransactions.has(tx)
@@ -6574,9 +6577,7 @@ export class Runner {
       }
       return inFlight.pending;
     }
-    let syncFailed = false;
     const onSyncError = (error: unknown) => {
-      syncFailed = true;
       logger.warn("runner-start", "naming a piece before its run rejected", [
         resultLink.id,
         error,
@@ -6600,12 +6601,12 @@ export class Runner {
         identity,
       )
         .catch(onSyncError);
-    const pending = preparation.then(() => {
+    const pending = preparation.then((defaultsPrepared) => {
       if (isCurrent()) {
         this.#namedFamilies.set(key, {
           landed: toName.entryKey,
-          defaultsPrepared: initializeDefaults && !syncFailed,
-          seedInRun: initializeDefaults && syncFailed,
+          defaultsPrepared: initializeDefaults && defaultsPrepared === true,
+          seedInRun: initializeDefaults && defaultsPrepared !== true,
         });
       } else this.#namedFamilies.delete(key);
     }, (error: unknown) => {
@@ -8230,6 +8231,8 @@ export class Runner {
    * that an accepted setup already declared. Each seed has a transaction of
    * its own: binding the piece's other values must not label a constant
    * default with their confidentiality, nor can one private seed label another.
+   * Returns whether every eligible default was verified or seeded; a stale
+   * declaration must not stand in for completed preparation in the run cache.
    */
   async #prepareCellsForRunningPattern(
     resultCell: Cell<any>,
@@ -8239,6 +8242,7 @@ export class Runner {
       identity?: ScopeKeyIdentity;
       isCurrent?: () => boolean;
       onSyncError?: (error: unknown) => void;
+      allowReadOnly?: boolean;
     } = {},
   ): Promise<boolean> {
     const sourceIdentity = options.identity ??
@@ -8252,9 +8256,9 @@ export class Runner {
       !this.#runtime.writeTeardownSignal.aborted &&
       (options.isCurrent?.() ?? true);
     const instances: ResumePatternInstance[] = [];
-    let synced: boolean;
+    let defaultsPrepared = true;
     try {
-      synced = await this.#syncCellsForRunningPattern(
+      await this.#syncCellsForRunningPattern(
         resultCell,
         pattern,
         inputs,
@@ -8264,8 +8268,9 @@ export class Runner {
     } catch (error) {
       if (options.onSyncError === undefined) throw error;
       options.onSyncError(error);
-      synced = false;
+      return false;
     }
+    const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
       for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
         const resultLink = instance.resultCell.getAsNormalizedFullLink();
@@ -8280,9 +8285,36 @@ export class Runner {
           ? descriptor.schema.default
           : undefined;
         if (schemaDefault === undefined) continue;
-        if (!isCurrent()) return synced;
+        if (!isCurrent()) return false;
+        if (options.allowReadOnly && !this.#runtime.servingPosture) {
+          let readOnly = readOnlySpaces.get(derivedLink.space);
+          if (readOnly === undefined) {
+            const acl = this.#runtime.getCellFromLink<ACL>({
+              space: derivedLink.space,
+              id: aclDocId(derivedLink.space) as URI,
+              path: [],
+            });
+            await this.#syncFamilyCell(acl, identity);
+            const readTx = this.#familyReadTx(identity);
+            markDurableReadTx(readTx);
+            const principal = this.#runtime.actingPrincipalFor(readTx);
+            readOnly = principal !== undefined &&
+              spaceReaderRole(acl.withTx(readTx).get(), principal) === "reader";
+            readOnlySpaces.set(derivedLink.space, readOnly);
+          }
+          // A confirmed READ member can resume persisted output and read a
+          // schema default without creating an actor instance. Unknown or
+          // invalid ACLs supply no exemption from ordinary write checks.
+          if (readOnly) {
+            defaultsPrepared = false;
+            continue;
+          }
+        }
         const outcome = await this.#runtime.editWithRetry((tx) => {
-          if (!isCurrent()) return;
+          if (!isCurrent()) {
+            defaultsPrepared = false;
+            return;
+          }
           if (identity !== undefined) {
             tx.tx.scopeKeyIdentity = identity;
             if (identity.principal !== undefined) {
@@ -8316,7 +8348,10 @@ export class Runner {
               !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
             (current !== undefined && (expected === undefined ||
               patternIdentityKey(current) !== patternIdentityKey(expected)))
-          ) return;
+          ) {
+            defaultsPrepared = false;
+            return;
+          }
           const manifest = convertibleJsFromFabricValue(
             owner.getMetaRaw("internal", {
               meta: ignoreReadForScheduling,
@@ -8333,7 +8368,10 @@ export class Runner {
               isObjectOrArray(entry) && "link" in entry &&
               valueEqual(fabricFromConvertibleJsValue(entry.link), expectedLink)
             )
-          ) return;
+          ) {
+            defaultsPrepared = false;
+            return;
+          }
           if (
             derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
               undefined
@@ -8355,7 +8393,7 @@ export class Runner {
         }
       }
     }
-    return synced;
+    return defaultsPrepared;
   }
 
   /**
