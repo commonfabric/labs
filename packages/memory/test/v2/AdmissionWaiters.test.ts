@@ -11,6 +11,13 @@ const CAROL = "did:key:z6Mk-waiters-carol";
 const everyone = () => true;
 
 describe("AdmissionWaiters", () => {
+  describe("constructor()", () => {
+    it("throws given a limit that holds no entry", () => {
+      expect(() => new AdmissionWaiters(0)).toThrow(RangeError);
+      expect(() => new AdmissionWaiters(1.5)).toThrow(RangeError);
+    });
+  });
+
   describe("instance members", () => {
     describe("take()", () => {
       it("returns each entry for the space whose principal is admitted, once", () => {

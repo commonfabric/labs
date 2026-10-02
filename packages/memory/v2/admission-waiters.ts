@@ -1,3 +1,5 @@
+import { debugStr } from "@commonfabric/data-model";
+
 /** How many entries one connection holds before its oldest is dropped. */
 const ADMISSION_WAITERS_PER_CONNECTION = 1024;
 
@@ -22,8 +24,17 @@ export class AdmissionWaiters {
 
   readonly #limit: number;
 
-  /** Constructs an instance holding at most `limit` entries per connection. */
+  /**
+   * Constructs an instance holding at most `limit` entries per connection.
+   *
+   * @throws RangeError when `limit` is not a positive integer.
+   */
   constructor(limit = ADMISSION_WAITERS_PER_CONNECTION) {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError(
+        debugStr`An entry limit must be a positive integer, not $quote${limit}.`,
+      );
+    }
     this.#limit = limit;
   }
 
