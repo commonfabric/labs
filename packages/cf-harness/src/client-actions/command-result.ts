@@ -7,7 +7,9 @@
  */
 
 import type { JSONObject } from "@commonfabric/api";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
+  HARNESS_COMMAND_ID_MAX_LENGTH,
   type HarnessCommandAttribution,
   type HarnessCommandCatalog,
   type HarnessCommandCatalogEntry,
@@ -19,6 +21,7 @@ import {
   type HarnessCommandSettlementRecord,
   type HarnessTypedClientAction,
   legacyOutcomeOfHarnessCommandSettlement,
+  readHarnessCommandCatalog,
   readHarnessCommandResultProvenance,
 } from "../contracts/client-command.ts";
 import type { HarnessClientActionOutcomeKind } from "../contracts/client-action.ts";
@@ -47,6 +50,12 @@ export type HarnessCommandModelSettlement =
 
     /** How many entries came back without their schema and description. */
     compacted?: number;
+
+    /** How many entries the Weaver sent that the contract refused. */
+    droppedEntries?: number;
+
+    /** The ids of the first few refused entries. */
+    droppedCommands?: string[];
   }
   | Extract<
     HarnessCommandSettlement,
@@ -65,6 +74,73 @@ export type HarnessCommandModelCatalogEntry =
  * commands its request named.
  */
 export const HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES = 32 * 1024;
+
+/**
+ * The catalog entries a settlement arrived with that the contract refused:
+ * how many, and the ids of the first {@link HARNESS_COMMAND_DROPPED_NAMED}.
+ */
+export interface HarnessCommandCatalogDrop {
+  count: number;
+  commands: string[];
+}
+
+/** How many refused catalog entries a drop names. */
+export const HARNESS_COMMAND_DROPPED_NAMED = 5;
+
+/**
+ * Admits a typed answer's catalog entry by entry, before the contract reads
+ * the answer: each entry the contract's catalog reader refuses on its own is
+ * removed and counted, so one malformed or newer-than-the-contract command
+ * does not cost the whole catalog and leave the request waiting out its
+ * timeout. Anything but an executed catalog settlement whose entries are an
+ * array is returned unchanged, so a malformed envelope is still the
+ * contract's to refuse.
+ */
+export const admitHarnessCommandCatalogEntries = (
+  body: unknown,
+): { body: unknown; dropped?: HarnessCommandCatalogDrop } => {
+  if (!isObjectNotArray(body)) return { body };
+  const settlement = (body as Record<string, unknown>).settlement;
+  if (
+    !isObjectNotArray(settlement) ||
+    (settlement as Record<string, unknown>).status !== "executed" ||
+    !Object.hasOwn(settlement, "catalog")
+  ) {
+    return { body };
+  }
+  const catalog = (settlement as Record<string, unknown>).catalog;
+  if (!isObjectNotArray(catalog)) return { body };
+  const entries = (catalog as Record<string, unknown>).entries;
+  if (!Array.isArray(entries)) return { body };
+  const kept: unknown[] = [];
+  const commands: string[] = [];
+  let count = 0;
+  for (const entry of entries) {
+    if (readHarnessCommandCatalog({ entries: [entry] }) !== undefined) {
+      kept.push(entry);
+      continue;
+    }
+    count += 1;
+    if (commands.length < HARNESS_COMMAND_DROPPED_NAMED) {
+      const id = isObjectNotArray(entry)
+        ? (entry as Record<string, unknown>).command
+        : undefined;
+      commands.push(
+        typeof id === "string"
+          ? id.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
+          : "(no command id)",
+      );
+    }
+  }
+  if (count === 0) return { body };
+  return {
+    body: {
+      ...body,
+      settlement: { ...settlement, catalog: { ...catalog, entries: kept } },
+    },
+    dropped: { count, commands },
+  };
+};
 
 /**
  * Holds a command's result body in the run's handle table under its
@@ -168,12 +244,15 @@ export interface HarnessCommandSettlementProjection {
  * Projects a typed settlement onto the resolved event and the model's view.
  * The receipt goes to the event, for the person; the model reads the
  * outcome's metadata and the handle, never the receipt or the body. `detail`
- * is the catalog request's, whose commands the model's catalog keeps whole.
+ * is the catalog request's, whose commands the model's catalog keeps whole;
+ * `dropped` names the catalog entries refused on arrival, to the model and
+ * in the event's result text.
  */
 export const projectHarnessCommandSettlement = (
   settlement: HarnessCommandSettlement,
   handle: string | undefined,
   detail?: readonly string[],
+  dropped?: HarnessCommandCatalogDrop,
 ): HarnessCommandSettlementProjection => {
   const outcome = legacyOutcomeOfHarnessCommandSettlement(settlement);
   if (settlement.status === "executed") {
@@ -181,6 +260,13 @@ export const projectHarnessCommandSettlement = (
       const bounded = boundHarnessCommandCatalog(settlement.catalog, detail);
       return {
         outcome,
+        ...(dropped !== undefined
+          ? {
+            result: `${dropped.count} catalog ${
+              dropped.count === 1 ? "entry was" : "entries were"
+            } dropped as malformed: ${dropped.commands.join(", ")}`,
+          }
+          : {}),
         record: {
           status: "executed",
           catalogEntries: settlement.catalog.entries.length,
@@ -190,6 +276,12 @@ export const projectHarnessCommandSettlement = (
           catalog: { entries: bounded.entries },
           ...(bounded.compacted !== undefined
             ? { compacted: bounded.compacted }
+            : {}),
+          ...(dropped !== undefined
+            ? {
+              droppedEntries: dropped.count,
+              droppedCommands: dropped.commands,
+            }
             : {}),
         },
       };

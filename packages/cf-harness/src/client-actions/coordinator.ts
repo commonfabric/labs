@@ -40,6 +40,8 @@ import type {
   HarnessChatStructuredEvent,
 } from "../contracts/interactive-chat.ts";
 import {
+  admitHarnessCommandCatalogEntries,
+  type HarnessCommandCatalogDrop,
   type HarnessCommandModelSettlement,
   type HarnessCommandResultHolder,
   harnessCommandResultProvenance,
@@ -97,7 +99,13 @@ export const readHarnessMidTurnClientAction = (
 /** A host's answer to one pending action, as the shared reader admits it. */
 export type HarnessClientActionAnswer =
   | { form: "outcome"; params: HarnessChatResolveClientActionParams }
-  | { form: "settlement"; params: HarnessCommandResolveBody };
+  | {
+    form: "settlement";
+    params: HarnessCommandResolveBody;
+
+    /** Catalog entries refused on arrival, the rest having been admitted. */
+    dropped?: HarnessCommandCatalogDrop;
+  };
 
 /** What the reader says when it admits nothing. */
 export const HARNESS_CLIENT_ACTION_ANSWER_REQUIREMENT =
@@ -106,7 +114,9 @@ export const HARNESS_CLIENT_ACTION_ANSWER_REQUIREMENT =
 /**
  * Reads a host's answer: the HTTP route's body and the stdio request's
  * params alike. A body carrying `settlement` settles a typed request and is
- * read by the contract's reader; any other settles a final action.
+ * read by the contract's reader, after a catalog's entries are admitted one
+ * by one ({@link admitHarnessCommandCatalogEntries}); any other settles a
+ * final action.
  */
 export const readHarnessClientActionAnswer = (
   value: unknown,
@@ -114,8 +124,14 @@ export const readHarnessClientActionAnswer = (
   if (!isObjectNotArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (Object.hasOwn(record, "settlement")) {
-    const params = readHarnessCommandResolveBody(value);
-    return params === undefined ? undefined : { form: "settlement", params };
+    const { body, dropped } = admitHarnessCommandCatalogEntries(value);
+    const params = readHarnessCommandResolveBody(body);
+    if (params === undefined) return undefined;
+    return {
+      form: "settlement",
+      params,
+      ...(dropped !== undefined ? { dropped } : {}),
+    };
   }
   const { sessionId, actionId, outcome, result } = record;
   if (
@@ -186,7 +202,11 @@ type ActionSettlement =
     outcome: HarnessClientActionOutcomeKind;
     result?: string;
   }
-  | { form: "settlement"; settlement: HarnessCommandSettlement };
+  | {
+    form: "settlement";
+    settlement: HarnessCommandSettlement;
+    dropped?: HarnessCommandCatalogDrop;
+  };
 
 /** One requested action nobody has settled yet. */
 interface PendingClientAction {
@@ -365,7 +385,15 @@ export class HarnessClientActionCoordinator {
     if (this.#pending.get(actionId) !== pending) {
       return this.#settledVerdict(answer);
     }
-    await pending.settle({ form: "settlement", settlement }, true, handle);
+    await pending.settle(
+      {
+        form: "settlement",
+        settlement,
+        ...(answer.dropped !== undefined ? { dropped: answer.dropped } : {}),
+      },
+      true,
+      handle,
+    );
     return { status: "accepted" };
   }
 
@@ -683,6 +711,8 @@ const resolvedEvent = (
   const projection = projectHarnessCommandSettlement(
     settlement.settlement,
     handle,
+    undefined,
+    settlement.dropped,
   );
   return {
     kind: "client_action_resolved",
@@ -713,6 +743,7 @@ const modelOutcome = (
       settlement.settlement,
       handle,
       action.kind === "list_commands" ? action.request.detail : undefined,
+      settlement.dropped,
     ).model,
   };
 };

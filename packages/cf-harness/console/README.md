@@ -826,8 +826,10 @@ check the route contract before starting a model turn.
 
 A task started with `"clientActions": true` on `POST /api/task` offers the model
 `weaver_action` for that session's turns, and opens the session with guidance on
-using the Weaver's commands. The tool takes `actions`, one to eight, in the
-order they should run:
+using the Weaver's commands, which names the common ones (`looms.list`,
+`loom.inspect`, `loom.open`, `loom.add`, `loom.move`, `page.write`,
+`create.note`) so a simple task invokes one without listing the catalog first.
+The tool takes `actions`, one to eight, in the order they should run:
 
 - `invoke_command` with an `invocation` of
   `{ command, args, target?, approval }` runs one Weaver command: `command` is a
@@ -883,11 +885,14 @@ answered with, origin loom). The body and the receipt never reach the model: the
 receipt is the resolved event's `result`, for the person, and the event's
 `settlement` record carries the same metadata and handle. A body over 256 KiB
 arrives omitted, with its size, and is held nowhere; its outcome still says
-whether the command happened. A catalog is returned to the model, with the
-schemas and descriptions of entries past 32 KiB left out, except for the
-commands the request named in `detail`, which are kept whole. A version conflict
-is an executed command whose outcome is `ok: false`, not a failure of the
-channel.
+whether the command happened. A catalog entry the contract refuses (a malformed
+entry, or an id outside the pattern) is dropped and the rest are kept: the model
+reads `droppedEntries` and the first five `droppedCommands`, and the resolved
+event's `result` names them; only a settlement whose envelope is malformed
+answers 400. A catalog is returned to the model, with the schemas and
+descriptions of entries past 32 KiB left out, except for the commands the
+request named in `detail`, which are kept whole. A version conflict is an
+executed command whose outcome is `ok: false`, not a failure of the channel.
 
 An answer may arrive while its request is still being delivered, as when a
 client answers from the handler that receives the event: it is kept, its

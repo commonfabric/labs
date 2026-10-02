@@ -285,6 +285,90 @@ describe("coordinator", () => {
       await h.finish();
     });
 
+    it("takes the Weaver's real catalog, dropping and naming only the entries the contract refuses", async () => {
+      const posted = JSON.parse(
+        Deno.readTextFileSync(
+          fromFileUrl(
+            new URL(
+              "../fixtures/client-actions/weaver-catalog-settle.json",
+              import.meta.url,
+            ),
+          ),
+        ),
+      );
+      const h = harness({ calls: [{ actions: [catalog] }] });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      const answered = await h.answer({
+        ...posted,
+        sessionId: "s",
+        actionId: "id-1",
+      });
+      expect(answered.ok).toBe(true);
+      await h.callsDone;
+
+      const settlement = outcomesOf(h)[0].settlement as {
+        catalog: { entries: { command: string }[] };
+        droppedEntries?: number;
+        droppedCommands?: string[];
+      };
+      expect(settlement.catalog.entries).toHaveLength(230);
+      expect(settlement.droppedEntries).toBe(11);
+      expect(settlement.droppedCommands).toEqual([
+        "connector.connectDevice",
+        "connector.deviceStatus",
+        "connector.msgvaultCutover",
+        "connector.msgvaultRetireLegacy",
+        "connector.msgvaultRollback",
+      ]);
+      const [event] = h.resolved() as {
+        settlement: unknown;
+        result?: string;
+      }[];
+      expect(event.settlement).toEqual({
+        status: "executed",
+        catalogEntries: 230,
+      });
+      expect(event.result).toContain("11");
+      await h.finish();
+    });
+
+    it("drops a malformed catalog entry and keeps the rest, but refuses a malformed catalog", async () => {
+      const h = harness({ calls: [{ actions: [catalog] }] });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      const body = settle("resolve-executed-catalog", "id-1") as unknown as {
+        settlement: { catalog: { entries: Record<string, unknown>[] } };
+      };
+      const entries = body.settlement.catalog.entries;
+      const broken = {
+        ...body,
+        settlement: {
+          status: "executed",
+          catalog: { entries: [...entries, { command: "page.broken" }] },
+        },
+      };
+      // The envelope is the contract's to refuse.
+      const malformed = await h.answer({
+        ...body,
+        settlement: { status: "executed", catalog: { entries: "all" } },
+      });
+      expect(malformed.ok === false && malformed.error.code).toBe(
+        "invalid_request",
+      );
+      expect((await h.answer(broken)).ok).toBe(true);
+      await h.callsDone;
+      const settlement = outcomesOf(h)[0].settlement as {
+        catalog: { entries: unknown[] };
+        droppedEntries?: number;
+        droppedCommands?: string[];
+      };
+      expect(settlement.catalog.entries).toEqual(entries);
+      expect(settlement.droppedEntries).toBe(1);
+      expect(settlement.droppedCommands).toEqual(["page.broken"]);
+      await h.finish();
+    });
+
     it("answers a version conflict as an executed command, not a broken channel", async () => {
       const h = harness({ calls: [{ actions: [mutation] }] });
       await h.start();

@@ -1,0 +1,5080 @@
+{
+  "settlement": {
+    "status": "executed",
+    "catalog": {
+      "entries": [
+        {
+          "effect": "read",
+          "summary": "List the looms this Weaver holds, or find one by name.",
+          "scope": "global",
+          "executes": "weaver",
+          "command": "looms.list",
+          "approval": "automatic",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "limit": { "minimum": 1, "type": "integer", "maximum": 256 },
+              "query": { "type": "string" },
+              "include_archived": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Bring a loom forward on the person's screen.",
+          "scope": "global",
+          "executes": "weaver",
+          "command": "loom.open",
+          "approval": "person",
+          "inputSchema": {
+            "properties": {
+              "focus": { "type": "boolean" },
+              "loom": { "type": "string" },
+              "wait": { "type": "boolean" }
+            },
+            "required": ["loom"],
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start pairing Amazon: mint this Mac's hosted session identity.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "amazon.pair",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Finish pairing Amazon, naming the account email.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "amazon.pair-complete",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "number": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["number"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Stop holding an Amazon session on this Mac.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "amazon.unpair",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Retain a supplied public picture URL on an existing folder Page.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "artifact.fetch-image",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "page": { "type": "string" }
+            },
+            "required": ["url", "page", "name", "request_id"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "What's on a day, or a window of days, across every connected",
+          "scope": "global",
+          "executes": "loom",
+          "command": "calendar.day",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "all_calendars": {
+                "type": "boolean",
+                "description": "read every calendar, not only the Home selection"
+              },
+              "days": {
+                "type": "integer",
+                "description": "days from the date, inclusive (1..62); 1 by default"
+              },
+              "zone": {
+                "type": "string",
+                "description": "IANA zone the days are placed in; the daemon's by default"
+              },
+              "date": {
+                "type": "string",
+                "description": "YYYY-MM-DD; today by default"
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "The owner says something about one calendar: what it asks of them",
+          "scope": "global",
+          "executes": "loom",
+          "command": "calendar.state-calendar",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "unanswered": {
+                "type": "string",
+                "enum": ["automatic", "busy", "free"],
+                "description": "an invitation I never answered there (Google calendars only)"
+              },
+              "source": {
+                "type": "string",
+                "description": "the calendar's source, as `calendar.statements` lists it (google:<connection> or apple)"
+              },
+              "asks": {
+                "type": "string",
+                "description": "what this calendar asks of me: a preset (mine, someone-elses, tasks, focus, away, location) or a code"
+              },
+              "calendar": {
+                "type": "string",
+                "description": "the calendar's id within that source"
+              }
+            },
+            "required": ["source", "calendar"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Every calendar this instance knows and what it asks of the owner:",
+          "scope": "global",
+          "executes": "loom",
+          "command": "calendar.statements",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Withdraw what was said about a calendar: it returns to its defaults.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "calendar.unstate-calendar",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "calendar": {
+                "type": "string",
+                "description": "the calendar's id within that source"
+              },
+              "source": {
+                "type": "string",
+                "description": "the calendar's source, as `calendar.statements` lists it (google:<connection> or apple)"
+              }
+            },
+            "required": ["source", "calendar"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Dismiss a capture by path, or by its results filename with --results_file.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "capture.dismiss",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string", "x-source": "rest" },
+              "results_file": { "type": "string" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Restore a dismissed capture to the working set by its capture-file path.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "capture.restore",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "path": { "type": "string", "x-source": "rest" } },
+            "required": ["path"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Bind a sentence to ONE command: the rewrite with that command's",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.bind",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "nonce": { "type": "string" },
+              "text": {
+                "type": "string",
+                "x-echo": "elide",
+                "x-source": "rest"
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["id", "text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Record that a routed line was not taken: the person captured a note",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.dismiss",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "nonce": { "type": "string" },
+              "text": { "type": "string", "x-echo": "elide" }
+            },
+            "required": ["nonce"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start the palette's learned ordering over. The usage ledger is",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.rank-reset",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Rewrite a sentence as a command: the answer is a candidate line",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.rewrite",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Route a sentence to command candidates: a table lookup, no model.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.route",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "x-echo": "elide",
+                "x-source": "rest"
+              }
+            },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Inspect private offline phrase proposals; these are not served.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.router-phrases",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Build a private offline phrase proposal report from human outcomes.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.router-rebuild",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Acknowledge missing outcomes and resume capture with a fresh evidence window.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.router-recover",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "acknowledge_gap": { "type": "boolean", "enum": [true] }
+            },
+            "required": ["acknowledge_gap"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Show command-router generation, signal scope and cache counters.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.router-status",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start one fixed-duration prospective study of human router outcomes.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.router-study-start",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "duration_seconds": { "type": "integer" } },
+            "required": ["duration_seconds"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Inspect and, at its fixed horizon, finalize the prospective router study.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "command.router-study-status",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "The person's report or submission into a ceremony: `guide`'s",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.advance",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "type": "boolean",
+                "title": "the person says the step is done"
+              },
+              "bound": {
+                "type": "object",
+                "x-echo": "elide",
+                "title": "a beat's submitted values"
+              },
+              "connection": {
+                "type": "string",
+                "title": "connection id",
+                "x-source": "context.connection"
+              },
+              "ceremony": {
+                "type": "string",
+                "x-accepts": ["ceremony-handle"],
+                "title": "the ceremony handle"
+              },
+              "connector": {
+                "type": "string",
+                "title": "connector id",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "ceremony"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Stop a sync that is running — or, given a `ceremony` handle, stop",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.cancel",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "ceremony": {
+                "title": "a ceremony handle to cancel",
+                "type": "string",
+                "x-accepts": ["ceremony-handle"]
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "The running ceremonies for a connector — the re-attach listing (§4):",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.ceremonies",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "title": "connector id",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "type": "string",
+                "title": "connection id",
+                "x-source": "context.connection"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "One ceremony's snapshot — the 1s poll while a beat is",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.ceremony",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "ceremony": {
+                "title": "the ceremony handle",
+                "type": "string",
+                "x-accepts": ["ceremony-handle"]
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "ceremony"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Save a connector's configuration — a picker's selection, a setting.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.configure",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "title": "connector id",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "type": "string",
+                "title": "connection id",
+                "x-source": "context.connection"
+              },
+              "config": {
+                "type": "object",
+                "title": "the connector's own config"
+              }
+            },
+            "required": ["connector", "config"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Link this connector — a QR pairing, a Google consent.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.connect",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "title": "a new account's email (gmail add, §9)",
+                "type": "string"
+              },
+              "accountChoice": { "title": "Account", "type": "string" },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Give this device its ingest channel, binding it on first sight.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.connectDevice",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "device_name": {
+                "type": "string",
+                "title": "what to call this device in the pool"
+              },
+              "keep_pause": {
+                "type": "boolean",
+                "title": "leave a pause alone on reconnect"
+              },
+              "claim": {
+                "title": "the opaque claim the device minted once and keeps (its Keychain holds it)",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest"
+              },
+              "connector": {
+                "type": "string",
+                "title": "the connector the device writes into (loom.context.location)",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "claim"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Fetch a connection's older history.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.deepen",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "title": "'year', 'everything', 'here', or YYYY-MM-DD",
+                "type": "string"
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "stream": {
+                "title": "which history, e.g. 'mail'",
+                "type": "string"
+              },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "to"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Per channel: who holds it, the newest point the poller has SEEN",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.deviceStatus",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "title": "the connector to report on (loom.context.location)",
+                "x-source": "context.connector"
+              },
+              "claim": {
+                "type": "string",
+                "x-echo": "elide",
+                "title": "narrow to the channel bound to this device claim"
+              },
+              "pause_seen": {
+                "type": "string",
+                "title": "the newest pause stamp this device has seen (with claim)"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Turn a connector's syncing off.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.disable",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "title": "which half of a scoped connector (gmail: mail)",
+                "type": "string"
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Stop syncing a connector and (by default) delete its synced data.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.disconnect",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "type": "string", "title": "connector id" },
+              "deleteData": {
+                "type": "boolean",
+                "title": "also delete the synced store (the routes' default: yes)"
+              },
+              "connection": { "type": "string", "title": "connection id" }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Decline a connector's offer everywhere.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.dismiss-recommendation",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "source": {
+                "title": "surface the no came from",
+                "enum": ["home", "page"],
+                "type": "string",
+                "default": "page"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Turn a connector's syncing on.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.enable",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "title": "connector id",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "type": "string",
+                "title": "connection id",
+                "x-source": "context.connection"
+              },
+              "scope": {
+                "type": "string",
+                "title": "which half of a scoped connector (gmail: mail)"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Map a connector account to the identity facets it belongs to (an",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.facet-set",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "title": "where to write it: `connection` (default, this one connector) or `account` (every connection behind the same login)",
+                "type": "string"
+              },
+              "connection": { "type": "string", "x-source": "rest" },
+              "facets": {
+                "title": "the identity facets this account belongs to (empty clears)",
+                "type": "array"
+              }
+            },
+            "required": ["connection", "facets"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Forget the last N minutes of ambient context, locally.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.forget",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "minutes": {
+                "type": "number",
+                "title": "how many minutes back to forget"
+              },
+              "connector": {
+                "type": "string",
+                "title": "the ambient-context connector the control belongs to"
+              },
+              "scope": {
+                "type": "string",
+                "title": "forget this connector alone (the default) or the whole ambient-context family",
+                "enum": ["connector", "ambient-context"]
+              }
+            },
+            "required": ["connector", "minutes"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Register trusted connector code.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.install",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": { "title": "Folder on the CFS host", "type": "string" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Cut the install over to one msgvault home per Gmail connection now",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.msgvaultCutover",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "type": "string", "title": "connector id" }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Delete the legacy shared msgvault archive after every mailbox has",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.msgvaultRetireLegacy",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "title": "connector id", "type": "string" }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Put the legacy shared msgvault archive back in charge after a",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.msgvaultRollback",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "type": "string", "title": "connector id" }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "List what a picker can choose from — conversations, accounts, calendars.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.options",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "limit": { "type": "integer", "default": 200 },
+              "cursor": { "title": "page cursor", "type": "string" },
+              "query": { "title": "filter", "type": "string" },
+              "arg": {
+                "title": "which option set (the picker's arg)",
+                "type": "string"
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "arg"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Pause (or resume) recording — one device, or the family flag.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.pause",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "paused": {
+                "type": "boolean",
+                "default": true,
+                "title": "true to pause, false to resume"
+              },
+              "connector": {
+                "type": "string",
+                "title": "the ambient-context connector the control belongs to",
+                "x-source": "context.connector"
+              },
+              "install_id": {
+                "type": "string",
+                "title": "pause ONE device rather than the ambient-context family"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Pause or resume one device, compare-and-set (per-device-pause D2).",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.pauseDevice",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "install_id": {
+                "title": "the device's install id",
+                "type": "string"
+              },
+              "paused": {
+                "title": "true to pause, false to resume",
+                "type": "boolean"
+              },
+              "if_changed_at": {
+                "title": "the pause stamp last seen",
+                "type": "string"
+              },
+              "connector": {
+                "title": "loom.context.location",
+                "type": "string",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "install_id", "paused"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Opt one connection into\/out of profile identity publication. Lowers",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.publishIdentity",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "type": "string", "title": "connector id" },
+              "connection": { "type": "string", "title": "connection id" },
+              "enabled": {
+                "type": "boolean",
+                "title": "publish (true) or stop publishing (false)"
+              }
+            },
+            "required": ["connector", "connection", "enabled"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Re-run the consent flow for an existing connection. Spawns the same",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.reauthorize",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "title": "connector id", "type": "string" },
+              "connection": { "title": "connection id", "type": "string" }
+            },
+            "required": ["connector", "connection"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Queue a one-shot handle relink for a connector store.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.relink",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "piece": {
+                "type": "string",
+                "title": "narrow the relink to one panel piece (default: every piece that reads this connection)"
+              },
+              "connection": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["connection"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Run a remediation a status row named — an FDA grant walk, a keychain",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.remediate",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "step": { "title": "which remediation", "type": "string" },
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              }
+            },
+            "required": ["connector", "step"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Remove one connection from a multi-account connector — its auth and",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.remove",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "type": "string", "title": "connector id" },
+              "connection": { "type": "string", "title": "connection id" }
+            },
+            "required": ["connector", "connection"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Revoke one device's location channel.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.removeDevice",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "title": "the connector the device writes into (loom.context.location)",
+                "type": "string"
+              },
+              "install_id": {
+                "title": "the install id of the device to revoke (`loom context hosted list` names them)",
+                "type": "string"
+              }
+            },
+            "required": ["connector", "install_id"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Sync this connector now.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.run",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "title": "connector id",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "type": "string",
+                "title": "connection id",
+                "x-source": "context.connection"
+              },
+              "mode": { "type": "string", "title": "run flavor (reindex)" }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "The connector's instantiated surface — its controls, resolved.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.surface",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "title": "connector id",
+                "type": "string",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "title": "connection id",
+                "type": "string",
+                "x-source": "context.connection"
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Take a \"no\" back.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.undismiss-recommendation",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "title": "connector id",
+                "x-source": "context.connector"
+              },
+              "connection": {
+                "type": "string",
+                "title": "connection id",
+                "x-source": "context.connection"
+              },
+              "source": {
+                "default": "page",
+                "title": "surface the no came from",
+                "type": "string",
+                "enum": ["home", "page"]
+              }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Where the owner was at a moment, honestly.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "context.locate",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "title": "`now` (default), an offset like `now-30m`, or ISO-8601",
+                "x-source": "rest",
+                "type": "string",
+                "default": ""
+              },
+              "coordinates": {
+                "title": "true keeps lat\/lng (for a renderer drawing the point; never for a model)",
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start a chat that belongs to the loom in focus and show it.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.chat",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string", "default": "", "x-source": "rest" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Put an event on the loom calendar from a spoken phrase — \"lunch",
+          "scope": "global",
+          "executes": "loom",
+          "command": "create.event",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "An ongoing responsibility from this text, shown in the loom in",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.intention",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Birth a Next Steps DOCUMENT with this title and show it in the loom",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.next-steps",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Make a note page (born in the Inbox, refiled later) and show it.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.note",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Make (or find) a person page by name and show it in the loom.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.person",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "A real page-hosted v2 project from this name, shown in the loom",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.project",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Schedule a Signal reminder from a spoken phrase: \"in 20 minutes",
+          "scope": "global",
+          "executes": "loom",
+          "command": "create.reminder",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Add a next step to the GLOBAL list (Tony's Q4 ruling: global next",
+          "scope": "global",
+          "executes": "loom",
+          "command": "create.step",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Make a wish from this text and show it in the loom in focus.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.wish",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Demo guest",
+          "scope": "global",
+          "executes": "loom",
+          "command": "demo-guest.control",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": ["reset", "status", "stop"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["action"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Re-key the star store by person handle (one-shot).",
+          "scope": "global",
+          "executes": "loom",
+          "command": "entity.backfill-star-handles",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "cross-to-version": { "type": "integer" } },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Star an entity page (`--marked false` unstars).",
+          "scope": "global",
+          "executes": "loom",
+          "command": "entity.star",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "entity_type": {
+                "type": "string",
+                "enum": ["person", "place", "thing", "project"]
+              },
+              "marked": { "type": "boolean" }
+            },
+            "required": ["entity_type", "path"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Re-download Epic's brand directory and rewrite the shipped copy.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "epic-fhir.refresh-endpoints",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "List your facets",
+          "scope": "global",
+          "executes": "loom",
+          "command": "facet.list",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Register your facets",
+          "scope": "global",
+          "executes": "loom",
+          "command": "facet.register",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "replace": {
+                "type": "boolean",
+                "title": "make the set exactly these, dropping any others"
+              },
+              "facets": {
+                "type": "array",
+                "items": { "type": "string" },
+                "title": "the facet ids — the opaque ids your client uses, never display names; Personal is the empty string and is never registered"
+              }
+            },
+            "required": ["facets"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start a connector feedback report and hand back its directory.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "feedback.report",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "type": "string" },
+              "description": {
+                "default": "",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest"
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start pairing Google Messages: mint this Mac's hosted session identity.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "google-messages.pair",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Finish pairing Google Messages, naming the phone this session is on.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "google-messages.pair-complete",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "number": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["number"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Stop holding a Google Messages session on this Mac.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "google-messages.unpair",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start pairing Google Voice: mint this Mac's hosted session identity.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "google-voice.pair",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Finish pairing Google Voice, naming the line this session is on.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "google-voice.pair-complete",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "number": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["number"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Stop holding a Google Voice session on this Mac.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "google-voice.unpair",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Move your home space: hosted, local, default, or a toolshed address.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "home-host.set",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "choice": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["choice"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Show where your home space and profile live, and why.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "home-host.status",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Import the Fabric lobby's participants into People (`\/lobby-import`).",
+          "scope": "global",
+          "executes": "loom",
+          "command": "lobby.import",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Add a reference to the loom in focus and show it.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.add",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "stage": { "type": "boolean", "default": true },
+              "title": { "type": "string", "x-source": "rest" },
+              "focus": { "type": "boolean", "default": false },
+              "ref": { "type": "string", "x-complete": "looms-find" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Change THIS loom the specific way its owner just asked, in words.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.amend",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "answers_request_id": { "type": "string", "maxLength": 200 },
+              "instructions": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["instructions"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Archive the loom in focus.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.archive",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Read this run's historical authoring receipts and known target.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.authoring-context",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Record the space this loom is socialized in.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.bind-share",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "share_space": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["share_space"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Create or extend a durable collection of references in one transaction.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.compose",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "components": { "type": "array", "x-echo": "elide" },
+              "title": { "type": "string", "default": "" }
+            },
+            "required": ["request_id", "components"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Create a loom.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.create",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string", "default": "", "x-source": "rest" },
+              "share_space": { "type": "string" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Create a child and link its authorized parent in one replayable commit.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.create-child",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "components": { "type": "array", "x-echo": "elide" },
+              "title": { "type": "string", "default": "" },
+              "request_id": { "type": "string" },
+              "link": { "type": "object", "default": {} }
+            },
+            "required": ["request_id", "components"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Certify an entity's default loom against its sources, lane by lane.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.default-audit",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "ref": { "type": "string", "x-source": "rest" } },
+            "required": ["ref"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Open an entity's default loom, minting it once if it has none.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.default-ensure",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "ref": { "type": "string", "x-source": "rest" } },
+            "required": ["ref"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Make a shown panel the primary (main) panel.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.focus",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": { "type": "string", "x-target": "component" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Say what THIS loom is about — a person, a page, an event, or nothing",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.ground",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "about": { "type": "string", "maxLength": 400 },
+              "clear": { "type": "boolean" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "read",
+          "summary": "Read the current Loom manifest.",
+          "scope": "loom",
+          "executes": "loom",
+          "description": "context.loom_id names the exact record. Returns its components, selection and version without appending an op or searching the user's content.",
+          "command": "loom.inspect",
+          "approval": "automatic",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "List the people on this social loom.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.members",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Move a panel within the loom's order.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.move",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              },
+              "before": { "type": "string", "x-target": "component" }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Set a panel's policy: live or snapshot.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.policy",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              },
+              "policy": { "type": "string", "enum": ["live", "snapshot"] }
+            },
+            "required": ["component", "policy"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Bring a panel to the front.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.promote",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": { "type": "string", "x-target": "component" }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Rebuild THIS loom the way its owner just asked.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.reimagine",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string", "maxLength": 200 },
+              "answers_request_id": { "type": "string", "maxLength": 200 },
+              "instructions": { "type": "string", "x-source": "rest" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Remove a panel from the loom in focus.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.remove",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Rename the loom in focus.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.rename",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "title": { "type": "string", "x-source": "rest" } },
+            "required": ["title"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Point a panel at another reference — the Edit-URL door.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.replace",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string", "x-source": "rest" },
+              "ref": { "type": "string", "x-complete": "looms-find" },
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              }
+            },
+            "required": ["component", "ref"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Apply explicit composition changes to one Loom, atomically and with undo.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.revise",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "operations": { "type": "array", "x-echo": "elide" }
+            },
+            "required": ["request_id", "operations"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Show a panel (stage it).",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.stage",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Star the loom in focus.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.star",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Give a panel its own title, or clear it (``clear: true``).",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.title",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string", "default": "", "x-source": "rest" },
+              "clear": { "type": "boolean", "default": false },
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Undo a revision from this same actor and conversation if nothing changed.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "loom.undo",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "source_request_id": { "type": "string" }
+            },
+            "required": ["request_id", "source_request_id"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Hide a panel (unstage it). A panel already hidden is satisfied,",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.unstage",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Unstar the loom in focus.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.unstar",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Move a minted composite to the archive — a move, never a delete,",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "meta.archive",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "name": { "type": "string", "x-source": "rest" } },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "Mint a composite from the last commands you ran. Proposes first:",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "meta.define",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "signature": { "type": "string" },
+              "name": { "type": "string", "x-source": "rest" },
+              "confirm": { "type": "boolean", "default": false },
+              "last": { "type": "integer", "default": 2 }
+            },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "The minted composites: id, title, who minted it, step count, and",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "meta.list",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Bring an archived composite back by name. Restoring resets the",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "meta.restore",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "name": { "type": "string", "x-source": "rest" } },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "Star a minted composite — starred composites are exempt from the",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "meta.star",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "off": { "type": "boolean", "default": false },
+              "name": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "Copy a local Markdown file into a collaborative shared note on this loom.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "note.import",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "retry": { "type": "string" },
+              "title": { "type": "string" },
+              "source": {
+                "x-peels": ["--title", "--local", "--retry"],
+                "x-source": "rest",
+                "type": "string",
+                "x-accepts": ["path"]
+              },
+              "local": { "type": "boolean" }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Start a blank collaborative shared note on this loom.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "note.new",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "retry": { "type": "string" },
+              "local": { "type": "boolean" },
+              "title": { "type": "string", "x-source": "rest" }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Undo the last N journaled page ops (`--last N`, default 1), or one",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "op.undo",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group": { "type": "string" },
+              "force": { "type": "boolean" },
+              "op": { "type": "string" },
+              "last": { "type": "integer" }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Reply in a comment thread on a page (a cabinet path, a pg_… id — a",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.comment",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": { "type": "string", "x-source": "rest" },
+              "thread": { "type": "string" },
+              "note": { "type": "string" },
+              "text": { "type": "string" }
+            },
+            "required": ["page", "text"]
+          }
+        },
+        {
+          "summary": "Move a file within the cabinet (`--to <new path>`): copy, verify,",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.move",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string", "x-source": "rest" },
+              "to": { "type": "string" }
+            },
+            "required": ["path", "to"]
+          }
+        },
+        {
+          "summary": "Move a page and everything under it (`--to <page>` or `--to",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.refile",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "to": { "type": "string" },
+              "name": { "type": "string" },
+              "page": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["page", "to"]
+          }
+        },
+        {
+          "summary": "Rename a page (`--to <new path>`) and update the links to it.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.rename",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string", "x-source": "rest" },
+              "to": { "type": "string" }
+            },
+            "required": ["path", "to"]
+          }
+        },
+        {
+          "summary": "Bring a trashed page back, by the trash id page.trash returned.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.restore",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "trash": { "type": "string", "x-source": "rest" } },
+            "required": ["trash"]
+          }
+        },
+        {
+          "summary": "Write one section of a page (a cabinet path, a pg_… id, or a project",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.section-write",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": { "type": "string", "x-source": "rest" },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_section_markdown",
+                  "create_section",
+                  "rename_section",
+                  "delete_section",
+                  "set_notes",
+                  "set_summary"
+                ]
+              },
+              "section": { "type": "string" },
+              "title": { "type": "string" },
+              "after": { "type": "string" },
+              "text": { "type": "string", "x-echo": "elide" }
+            },
+            "required": ["page", "op"]
+          }
+        },
+        {
+          "summary": "Move a page to the trash (a cabinet path, a page:pg_… ref, or a",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.trash",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "page": { "type": "string", "x-source": "rest" } },
+            "required": ["page"]
+          }
+        },
+        {
+          "summary": "Replace a page's source — the whole file — in the File Cabinet.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "page.write",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string", "x-source": "rest" },
+              "content": { "type": "string", "x-echo": "elide" },
+              "reason": { "type": "string" },
+              "version": { "type": "string" }
+            },
+            "required": ["path", "content"]
+          }
+        },
+        {
+          "summary": "Deploy a pattern file and show it on this loom.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "pattern.deploy",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "local": { "type": "boolean" },
+              "source": {
+                "x-accepts": ["path", "pattern-name"],
+                "x-peels": ["--title", "--local"],
+                "x-source": "rest",
+                "type": "string",
+                "x-complete": "pattern-sources"
+              }
+            },
+            "required": ["source"]
+          }
+        },
+        {
+          "summary": "Build a pattern for this loom and show it when it's ready.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "pattern.run",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "local": { "type": "boolean" },
+              "residency": {
+                "type": "string",
+                "default": "local",
+                "enum": ["local"]
+              },
+              "prompt": {
+                "type": "string",
+                "x-peels": ["--local"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["prompt"]
+          }
+        },
+        {
+          "summary": "Introduce people the owner cares about (use ``people.introduce``).",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.add",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "schemaVersion": {
+                "title": "the wire contract this request speaks",
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string",
+                "title": "your idempotency key for this request",
+                "pattern": "^[A-Za-z0-9._-]{1,64}$"
+              },
+              "people": {
+                "type": "array",
+                "x-echo": "elide",
+                "items": {
+                  "properties": {
+                    "aka": {
+                      "items": { "type": "string" },
+                      "type": "array",
+                      "title": "other names they go by"
+                    },
+                    "services": {
+                      "type": "array",
+                      "title": "the services they talk on: {service, primary, username}",
+                      "x-services": {
+                        "aliases": { "sms": "phone", "text": "phone" },
+                        "route": "\/people\/services",
+                        "values": [
+                          {
+                            "kind": "way",
+                            "username": false,
+                            "value": "email"
+                          },
+                          {
+                            "kind": "way",
+                            "username": false,
+                            "value": "phone"
+                          },
+                          {
+                            "username": false,
+                            "value": "gmail",
+                            "way": "email",
+                            "kind": "provider"
+                          },
+                          {
+                            "username": false,
+                            "value": "apple_mail",
+                            "kind": "provider",
+                            "way": "email"
+                          },
+                          {
+                            "username": false,
+                            "value": "imessage",
+                            "kind": "provider",
+                            "way": "phone"
+                          },
+                          {
+                            "username": false,
+                            "value": "google_messages",
+                            "kind": "provider",
+                            "way": "phone"
+                          },
+                          {
+                            "username": false,
+                            "value": "google_voice",
+                            "way": "phone",
+                            "kind": "provider"
+                          },
+                          {
+                            "kind": "app",
+                            "username": false,
+                            "value": "whatsapp"
+                          },
+                          {
+                            "value": "signal",
+                            "username": true,
+                            "kind": "app"
+                          },
+                          {
+                            "kind": "app",
+                            "username": true,
+                            "value": "telegram"
+                          },
+                          {
+                            "kind": "app",
+                            "username": true,
+                            "value": "discord"
+                          },
+                          { "kind": "app", "username": true, "value": "github" }
+                        ]
+                      }
+                    },
+                    "selected": {
+                      "items": { "type": "string", "x-accepts": ["person-id"] },
+                      "type": "array",
+                      "title": "the people the user picked on screen, as person.find's ids. One is that person; several are joined as one on the user's word. With any, no name matching runs"
+                    },
+                    "contacts": {
+                      "items": { "type": "string" },
+                      "type": "array",
+                      "title": "untyped ways to reach them: a phone becomes E.164, an email is lower-cased, anything else is dropped with a note"
+                    },
+                    "relationship": {
+                      "type": "string",
+                      "title": "how they relate to the user, in the user's words"
+                    },
+                    "vip": {
+                      "type": "boolean",
+                      "title": "star them in the default facet and append them to the VIP order"
+                    },
+                    "appellations": {
+                      "items": { "type": "string" },
+                      "type": "array",
+                      "title": "what the user calls them; the first is the one shown"
+                    },
+                    "name": {
+                      "type": "string",
+                      "title": "their name — the only key a person must have"
+                    }
+                  },
+                  "required": ["name"]
+                }
+              }
+            },
+            "required": ["schemaVersion", "requestId"]
+          }
+        },
+        {
+          "summary": "Finish a people rebuild that stopped partway through.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.finish-rebuild",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Answer a suggested group on the review pane — the pane's gesture as",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-answer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "choice": {
+                "type": "string",
+                "enum": ["make", "not-a-group", "leave-out", "reopen"]
+              },
+              "member": { "type": "string" },
+              "note": { "type": "string" },
+              "suggestion": {
+                "type": "string",
+                "x-accepts": ["group-suggestion-id"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["suggestion"]
+          }
+        },
+        {
+          "summary": "Create a group — a named collection of people, the owner's own.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-create",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "name": {
+                "type": "string",
+                "x-echo": "elide",
+                "x-source": "rest"
+              },
+              "inheritable": { "type": "boolean" }
+            },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "The owner's groups — Starred first, then every group by name — each",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-list",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Move a group's home facet, or set whether a sub-facet inherits it.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-move",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"]
+              },
+              "inheritable": { "type": "boolean" }
+            },
+            "required": ["group"]
+          }
+        },
+        {
+          "summary": "Order a group's members — the whole list, every time.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-order",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handles": {
+                "type": "array",
+                "items": { "type": "string" },
+                "x-accepts": ["person-handle"]
+              },
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"]
+              }
+            },
+            "required": ["group", "handles"]
+          }
+        },
+        {
+          "summary": "Make a suggested group (a chat roster on the people-review queue)",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-promote",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "string",
+                "x-accepts": ["group-suggestion-id"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["suggestion"]
+          }
+        },
+        {
+          "summary": "Rename a group — C8's later define on the same id, so the id and",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-rename",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "x-source": "rest" },
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"]
+              }
+            },
+            "required": ["group", "name"]
+          }
+        },
+        {
+          "summary": "Retire a group. Its memberships go with it; a later group of the same",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-retire",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["group"]
+          }
+        },
+        {
+          "summary": "A group's roster in the owner's order — ranked members first, then",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.group-show",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["group"]
+          }
+        },
+        {
+          "summary": "Introduce people the owner cares about.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.introduce",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "schemaVersion": {
+                "type": "string",
+                "title": "the wire contract this request speaks"
+              },
+              "requestId": {
+                "type": "string",
+                "title": "your idempotency key for this request",
+                "pattern": "^[A-Za-z0-9._-]{1,64}$"
+              },
+              "people": {
+                "type": "array",
+                "items": {
+                  "properties": {
+                    "aka": {
+                      "title": "other names they go by",
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "services": {
+                      "title": "the services they talk on: {service, primary, username}",
+                      "type": "array",
+                      "x-services": {
+                        "route": "\/people\/services",
+                        "aliases": { "sms": "phone", "text": "phone" },
+                        "values": [
+                          {
+                            "value": "email",
+                            "username": false,
+                            "kind": "way"
+                          },
+                          {
+                            "value": "phone",
+                            "username": false,
+                            "kind": "way"
+                          },
+                          {
+                            "username": false,
+                            "value": "gmail",
+                            "kind": "provider",
+                            "way": "email"
+                          },
+                          {
+                            "username": false,
+                            "value": "apple_mail",
+                            "kind": "provider",
+                            "way": "email"
+                          },
+                          {
+                            "username": false,
+                            "value": "imessage",
+                            "kind": "provider",
+                            "way": "phone"
+                          },
+                          {
+                            "username": false,
+                            "value": "google_messages",
+                            "kind": "provider",
+                            "way": "phone"
+                          },
+                          {
+                            "username": false,
+                            "value": "google_voice",
+                            "kind": "provider",
+                            "way": "phone"
+                          },
+                          {
+                            "value": "whatsapp",
+                            "username": false,
+                            "kind": "app"
+                          },
+                          {
+                            "value": "signal",
+                            "username": true,
+                            "kind": "app"
+                          },
+                          {
+                            "value": "telegram",
+                            "username": true,
+                            "kind": "app"
+                          },
+                          {
+                            "value": "discord",
+                            "username": true,
+                            "kind": "app"
+                          },
+                          { "value": "github", "username": true, "kind": "app" }
+                        ]
+                      }
+                    },
+                    "selected": {
+                      "title": "the people the user picked on screen, as person.find's ids. One is that person; several are joined as one on the user's word. With any, no name matching runs",
+                      "type": "array",
+                      "items": { "type": "string", "x-accepts": ["person-id"] }
+                    },
+                    "contacts": {
+                      "title": "untyped ways to reach them: a phone becomes E.164, an email is lower-cased, anything else is dropped with a note",
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "relationship": {
+                      "type": "string",
+                      "title": "how they relate to the user, in the user's words"
+                    },
+                    "vip": {
+                      "type": "boolean",
+                      "title": "star them in the default facet and append them to the VIP order"
+                    },
+                    "appellations": {
+                      "items": { "type": "string" },
+                      "title": "what the user calls them; the first is the one shown",
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string",
+                      "title": "their name — the only key a person must have"
+                    }
+                  },
+                  "required": ["name"]
+                },
+                "x-echo": "elide"
+              }
+            },
+            "required": ["schemaVersion", "requestId"]
+          }
+        },
+        {
+          "summary": "Propose people to introduce",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.propose",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "default": 10,
+                "title": "at most how many to propose (a ceiling: fewer come back when fewer are worth proposing); 1-50, refused outside that, default 10"
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Put back the person decisions the last start-over cleared.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.restore-previous",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "revision": {
+                "type": "string",
+                "title": "the revision the preview answered (confirm only)",
+                "x-echo": "elide"
+              },
+              "mode": {
+                "type": "string",
+                "default": "preview",
+                "enum": ["preview", "confirm"]
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Put Loom's questions about people on the stage — the whole deck, or",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.review",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "person-handle",
+                  "person-id",
+                  "email",
+                  "page-path",
+                  "name"
+                ],
+                "x-source": "rest"
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Clear every decision you made about people, keeping what your connectors said.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.start-over",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "revision": {
+                "type": "string",
+                "title": "the revision the preview answered (confirm only)",
+                "x-echo": "elide"
+              },
+              "mode": {
+                "type": "string",
+                "default": "preview",
+                "enum": ["preview", "confirm"]
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Bring an old local VIP list onto the star store, silently and",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.vip-import",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": { "type": "string" },
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path"
+                ]
+              },
+              "exceptions": {
+                "type": "array",
+                "items": { "type": "string" },
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path"
+                ]
+              },
+              "import_id": { "type": "string" }
+            },
+            "required": ["import_id", "entries"]
+          }
+        },
+        {
+          "summary": "Order the VIPs — the whole list, every time.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "people.vip-order",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "if_version": { "type": "string" },
+              "handles": {
+                "type": "array",
+                "items": { "type": "string" },
+                "x-accepts": ["person-handle"]
+              }
+            },
+            "required": ["handles"]
+          }
+        },
+        {
+          "summary": "Use an account in this facet again",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.account-in-facet",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the person's entry handle in the facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              },
+              "record": {
+                "type": "object",
+                "title": "one of the person's records, as {sourceSystem, accountId, personId}",
+                "x-echo": "elide"
+              }
+            },
+            "required": ["handle", "record"]
+          }
+        },
+        {
+          "summary": "Say an account is not used in this facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.account-not-in-facet",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the person's entry handle in the facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              },
+              "record": {
+                "type": "object",
+                "title": "one of the person's records, as {sourceSystem, accountId, personId}",
+                "x-echo": "elide"
+              }
+            },
+            "required": ["handle", "record"]
+          }
+        },
+        {
+          "summary": "Add someone to another facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.add-to-facet",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the entry handle: this person, in this facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              },
+              "facet": { "type": "string", "x-accepts": ["facet"] }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Change what a facet shows about someone",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.edit",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "object",
+                "title": "what to change in this section: {\"set\": {field: value}} and\/or {\"add\": {field: [items]}}",
+                "x-echo": "elide"
+              },
+              "entry": {
+                "type": "object",
+                "title": "what to change in this section: {\"set\": {field: value}} and\/or {\"add\": {field: [items]}}",
+                "x-echo": "elide"
+              },
+              "persona": {
+                "type": "object",
+                "title": "what to change in this section: {\"set\": {field: value}} and\/or {\"add\": {field: [items]}}",
+                "x-echo": "elide"
+              },
+              "handle": {
+                "title": "the entry handle: this person, in this facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Find someone by name",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.find",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "offset": { "type": "integer", "title": "skip this many" },
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "scope": {
+                "type": "string",
+                "title": "facet (the default): one facet; all: every facet, the user's only",
+                "enum": ["facet", "all"]
+              },
+              "starred": {
+                "type": "boolean",
+                "title": "only the starred (or the unstarred)"
+              },
+              "limit": {
+                "type": "integer",
+                "title": "at most this many (100 by default)"
+              },
+              "name": {
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["name"]
+              },
+              "introduced": {
+                "type": "boolean",
+                "title": "only the introduced (or the imported)"
+              }
+            },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "List the people in a facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.list",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "introduced": {
+                "type": "boolean",
+                "title": "only the introduced (or the imported)"
+              },
+              "starred": {
+                "type": "boolean",
+                "title": "only the starred (or the unstarred)"
+              },
+              "offset": { "type": "integer", "title": "skip this many" },
+              "scope": {
+                "type": "string",
+                "title": "facet (the default): one facet; all: every facet, the user's only",
+                "enum": ["facet", "all"]
+              },
+              "limit": {
+                "type": "integer",
+                "title": "at most this many (100 by default)"
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Check how to reach someone",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.reach",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "title": "what the action is",
+                "enum": ["send", "share", "invite"]
+              },
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "service": {
+                "type": "string",
+                "title": "the way to reach them, when the user named one"
+              },
+              "person": {
+                "title": "an entry handle, or the name as the user said it",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle", "name"]
+              }
+            },
+            "required": ["person", "purpose"]
+          }
+        },
+        {
+          "summary": "Remove someone from a facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.remove",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the entry handle: this person, in this facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              },
+              "confirm": {
+                "type": "string",
+                "title": "the confirmation's bind",
+                "x-echo": "elide"
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Bring someone back into a facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.restore",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the entry handle: this person, in this facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Show someone in one facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.show",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the person-entry's handle",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Star someone in this facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.star",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the person's entry handle in the facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Unstar someone in this facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.unstar",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the person's entry handle in the facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Use one of my accounts with them in this facet",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.use-my-account",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "title": "the person's entry handle in the facet",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              },
+              "service": {
+                "type": "string",
+                "title": "the service the account is on (gmail, whatsapp, ...); needed only when the account is on several, or to say which choice a clear takes back"
+              },
+              "account": {
+                "type": "string",
+                "title": "one of your own connected accounts: a connection or account id from your connections; leave it out (or null) to clear",
+                "x-echo": "elide"
+              }
+            },
+            "required": ["handle"]
+          }
+        },
+        {
+          "summary": "Confirm one item on a person's record — the accept handle the",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.accept",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "value": { "type": "string" },
+              "qualifier": { "type": "string" },
+              "note": { "type": "string" },
+              "field": { "type": "string" },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person", "field", "value"]
+          }
+        },
+        {
+          "summary": "Answer one People Review pairwise card — the deck's gesture as a",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.answer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "choice": {
+                "type": "string",
+                "enum": ["same", "separate", "later", "reopen"]
+              },
+              "defer-recompute": { "type": "boolean" },
+              "note": { "type": "string" },
+              "card": {
+                "type": "string",
+                "x-accepts": ["decision-id"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["card"]
+          }
+        },
+        {
+          "summary": "Answer one People Review SET-RESOLUTION card in one gesture (U2).",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.answer-set",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "states": { "type": "object" },
+              "defer-recompute": { "type": "boolean" },
+              "note": { "type": "string" },
+              "card": {
+                "type": "string",
+                "x-accepts": ["card-id"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["card", "states"]
+          }
+        },
+        {
+          "summary": "Answer one of the four questions about a person the owner added",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.answer-vip-question",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "revision": { "type": "string" },
+              "choice": { "type": "string", "x-echo": "elide" },
+              "answer": {
+                "type": "string",
+                "enum": [
+                  "pick",
+                  "none",
+                  "yes",
+                  "no",
+                  "one",
+                  "neither",
+                  "same",
+                  "shared",
+                  "theirs",
+                  "unknown"
+                ]
+              },
+              "question": {
+                "type": "string",
+                "title": "the question's id, as the page showed it"
+              }
+            },
+            "required": ["question", "answer", "revision"]
+          }
+        },
+        {
+          "summary": "Fix a VIP row that found no one by choosing their record",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.choose-vip-record",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "service": { "type": "string" },
+              "record": { "type": "string", "x-echo": "elide" },
+              "person": {
+                "x-source": "rest",
+                "type": "string",
+                "x-echo": "elide",
+                "x-accepts": ["person-handle"]
+              }
+            },
+            "required": ["person", "service", "record"]
+          }
+        },
+        {
+          "summary": "Confirm that a record is this person.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.confirm",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "covers": {
+                "type": "array",
+                "title": "the addresses on this person the owner is confirming, as values or as {type, value, qualifier} rows (all of them when absent)"
+              },
+              "covers-facts": {
+                "type": "array",
+                "title": "the facts on this person the owner is confirming, as values or as {field, value} rows (all of them when absent)"
+              },
+              "note": { "type": "string" },
+              "digest": { "type": "string" },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Confirm the heuristic non-person classification guesses in bulk",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.confirm-kinds",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "default": "preview",
+                "enum": ["preview", "confirm"]
+              },
+              "people": {
+                "type": "array",
+                "items": { "type": "string" },
+                "x-accepts": ["person-id"]
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Change what you said about someone you added, or remove them.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.edit-added",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "x-echo": "elide",
+                "x-source": "rest",
+                "type": "string",
+                "x-accepts": ["person-handle"]
+              },
+              "remove": { "type": "boolean" },
+              "undo": { "type": "string", "x-echo": "elide" },
+              "aka": {
+                "type": "array",
+                "x-echo": "elide",
+                "items": { "type": "string" }
+              },
+              "services": {
+                "type": "array",
+                "x-echo": "elide",
+                "x-services": {
+                  "route": "\/people\/services",
+                  "values": [
+                    { "kind": "way", "value": "email", "username": false },
+                    { "kind": "way", "value": "phone", "username": false },
+                    {
+                      "username": false,
+                      "value": "gmail",
+                      "way": "email",
+                      "kind": "provider"
+                    },
+                    {
+                      "username": false,
+                      "value": "apple_mail",
+                      "way": "email",
+                      "kind": "provider"
+                    },
+                    {
+                      "username": false,
+                      "value": "imessage",
+                      "way": "phone",
+                      "kind": "provider"
+                    },
+                    {
+                      "username": false,
+                      "value": "google_messages",
+                      "way": "phone",
+                      "kind": "provider"
+                    },
+                    {
+                      "username": false,
+                      "value": "google_voice",
+                      "kind": "provider",
+                      "way": "phone"
+                    },
+                    { "kind": "app", "value": "whatsapp", "username": false },
+                    { "kind": "app", "value": "signal", "username": true },
+                    { "kind": "app", "value": "telegram", "username": true },
+                    { "kind": "app", "value": "discord", "username": true },
+                    { "kind": "app", "value": "github", "username": true }
+                  ],
+                  "aliases": { "sms": "phone", "text": "phone" }
+                }
+              },
+              "contacts": {
+                "type": "array",
+                "x-echo": "elide",
+                "items": { "type": "string" }
+              },
+              "appellations": {
+                "type": "array",
+                "x-echo": "elide",
+                "items": { "type": "string" }
+              },
+              "relationship": { "type": "string", "x-echo": "elide" },
+              "main": {
+                "type": "string",
+                "x-echo": "elide",
+                "x-services": {
+                  "route": "\/people\/services",
+                  "aliases": { "sms": "phone", "text": "phone" },
+                  "values": [
+                    { "value": "email", "username": false, "kind": "way" },
+                    { "value": "phone", "username": false, "kind": "way" },
+                    {
+                      "username": false,
+                      "value": "gmail",
+                      "kind": "provider",
+                      "way": "email"
+                    },
+                    {
+                      "username": false,
+                      "value": "apple_mail",
+                      "kind": "provider",
+                      "way": "email"
+                    },
+                    {
+                      "username": false,
+                      "value": "imessage",
+                      "kind": "provider",
+                      "way": "phone"
+                    },
+                    {
+                      "username": false,
+                      "value": "google_messages",
+                      "kind": "provider",
+                      "way": "phone"
+                    },
+                    {
+                      "username": false,
+                      "value": "google_voice",
+                      "kind": "provider",
+                      "way": "phone"
+                    },
+                    { "value": "whatsapp", "username": false, "kind": "app" },
+                    { "value": "signal", "username": true, "kind": "app" },
+                    { "value": "telegram", "username": true, "kind": "app" },
+                    { "value": "discord", "username": true, "kind": "app" },
+                    { "value": "github", "username": true, "kind": "app" }
+                  ]
+                }
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Find a person by NAME (person.resolve is the identifier verb;",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.find",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string",
+                "x-accepts": ["name"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Check what has been searched for someone",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.finding-progress",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "title": "the handle of someone you introduced",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle"]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Add a person to a group.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.group-add",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"],
+                "x-echo": "elide"
+              },
+              "person": {
+                "x-source": "rest",
+                "type": "string",
+                "x-echo": "elide",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path"
+                ]
+              }
+            },
+            "required": ["person", "group"]
+          }
+        },
+        {
+          "summary": "Remove a person from a group — the membership and nothing else. The",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.group-remove",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "group": {
+                "type": "string",
+                "x-accepts": ["group-id", "group-name"],
+                "x-echo": "elide"
+              },
+              "person": {
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path"
+                ]
+              }
+            },
+            "required": ["person", "group"]
+          }
+        },
+        {
+          "summary": "Say what a subject IS: a person, or a list, a service, a group, an org.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.kind",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string" },
+              "note": { "type": "string" },
+              "card": { "type": "string", "x-accepts": ["card-id"] },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "This is right: hide one likely mistake while its evidence is what the",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.likely-mistake-dismiss",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "fingerprint": {
+                "type": "string",
+                "title": "the evidence fingerprint of the entry as the page showed it"
+              },
+              "flag": {
+                "type": "string",
+                "x-accepts": ["likely-mistake-id"],
+                "x-source": "rest"
+              },
+              "note": { "type": "string" }
+            },
+            "required": ["flag", "fingerprint"]
+          }
+        },
+        {
+          "summary": "Show again: undo the latest `person.likely-mistake-dismiss` on one",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.likely-mistake-restore",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "flag": {
+                "type": "string",
+                "x-accepts": ["likely-mistake-id"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["flag"]
+          }
+        },
+        {
+          "summary": "Merge two people records (`--person A --with B`) — one symmetric",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.merge",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": { "type": "string", "x-accepts": ["person-id"] },
+              "with": { "type": "string", "x-accepts": ["person-id"] },
+              "note": { "type": "string" },
+              "confirm": { "type": "boolean" },
+              "supersede-keep-separate": {
+                "oneOf": [
+                  { "items": { "type": "string" }, "type": "array" },
+                  { "type": "boolean" }
+                ]
+              }
+            },
+            "required": ["person", "with"]
+          }
+        },
+        {
+          "summary": "Merge two people records you can only NAME, not identify by id.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.merge-by-name",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "supersede-keep-separate": {
+                "oneOf": [
+                  { "items": { "type": "string" }, "type": "array" },
+                  { "type": "boolean" }
+                ]
+              },
+              "with": { "type": "string", "x-accepts": ["name"] },
+              "confirm": { "type": "boolean" },
+              "person": { "type": "string", "x-accepts": ["name"] }
+            },
+            "required": ["person", "with"]
+          }
+        },
+        {
+          "summary": "Set a person's name: choose one their connections carry, or write one.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.name",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "choice": { "type": "string" },
+              "name": { "type": "string" },
+              "note": { "type": "string" },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Take a record off a person you introduced",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.narrow-join",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string",
+                "x-accepts": ["person-id"],
+                "x-echo": "elide"
+              },
+              "keep-apart": { "type": "boolean", "default": true },
+              "expect-leaving": {
+                "title": "on a confirm: the leaving the preview showed; a different set now is refused stale",
+                "items": { "type": "object" },
+                "type": "array",
+                "x-echo": "elide"
+              },
+              "join": {
+                "type": "string",
+                "title": "the join to narrow, as person.words vends it",
+                "x-accepts": ["decision-id"]
+              },
+              "record": {
+                "type": "object",
+                "title": "the record to take off, as {sourceSystem, accountId, personId}",
+                "x-echo": "elide"
+              },
+              "confirm": { "type": "boolean" }
+            },
+            "required": ["person", "record", "join"]
+          }
+        },
+        {
+          "summary": "Say a number is theirs",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.number-is-theirs",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "type": "string",
+                "title": "a phone number or an email address",
+                "x-echo": "elide"
+              },
+              "validity": {
+                "type": "string",
+                "default": "current",
+                "enum": ["current", "former"]
+              },
+              "person": {
+                "title": "any of the person's entry handles",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["person", "number"]
+          }
+        },
+        {
+          "summary": "Say a number is not theirs",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.number-not-theirs",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "type": "string",
+                "title": "a phone number or an email address",
+                "x-echo": "elide"
+              },
+              "person": {
+                "title": "any of the person's entry handles",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["person", "number"]
+          }
+        },
+        {
+          "summary": "Rebuild the People roster from its sources",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.rebuild",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Say a record is them",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.record-is-them",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "type": "object",
+                "title": "the record, as {sourceSystem, accountId, personId}",
+                "x-echo": "elide"
+              },
+              "person": {
+                "title": "any of the person's entry handles",
+                "x-source": "rest",
+                "type": "string",
+                "x-echo": "elide",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["person", "record"]
+          }
+        },
+        {
+          "summary": "Say a record is not them",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.record-not-them",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "record": {
+                "type": "object",
+                "title": "the record, as {sourceSystem, accountId, personId}",
+                "x-echo": "elide"
+              },
+              "person": {
+                "title": "any of the person's entry handles",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": ["person", "record"]
+          }
+        },
+        {
+          "summary": "Records behind someone",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.records",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "title": "whose records",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Sever one item from a person's record — the reject handle, at",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.reject",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "value": { "type": "string" },
+              "qualifier": { "type": "string" },
+              "note": { "type": "string" },
+              "field": { "type": "string" },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person", "field", "value"]
+          }
+        },
+        {
+          "summary": "Who an identifier belongs to: an email, phone, handle, person:<id>,",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.resolve",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "shape": {
+                "type": "string",
+                "default": "resolve",
+                "enum": ["resolve", "summary"]
+              },
+              "person": {
+                "x-source": "rest",
+                "type": "string",
+                "x-echo": "elide",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Turn canonical page-person resolution off on this instance, or back",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.resolve-mode",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "default": "status",
+                "enum": ["status", "canonical", "legacy"]
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Put back a setup name you withdrew — the way back from",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.restore-declaration",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "x-source": "rest" },
+              "note": { "type": "string" }
+            },
+            "required": ["id"]
+          }
+        },
+        {
+          "summary": "Set aside one reconciliation question the owner cannot answer, durably.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.review-defer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "issue": {
+                "type": "object",
+                "title": "the question you could not answer, as the page identified it"
+              },
+              "note": { "type": "string" },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person", "issue"]
+          }
+        },
+        {
+          "summary": "Reopen a reconciliation question that was set aside with",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.review-revisit",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "issue": {
+                "type": "string",
+                "x-accepts": ["review-issue-id"],
+                "x-source": "rest"
+              },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["issue"]
+          }
+        },
+        {
+          "summary": "Take back one of your words about a person, by id — a \"same",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.revoke",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "x-accepts": ["decision-id", "edit-id"],
+                "x-source": "rest"
+              },
+              "note": { "type": "string" }
+            },
+            "required": ["id"]
+          }
+        },
+        {
+          "summary": "Record that two people are not the same person.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.separate",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "supersede-same": { "type": "boolean" },
+              "note": { "type": "string", "x-echo": "elide" },
+              "with": {
+                "type": "string",
+                "x-accepts": ["person-id"],
+                "x-echo": "elide"
+              },
+              "person": {
+                "type": "string",
+                "x-accepts": ["person-id"],
+                "x-echo": "elide"
+              }
+            },
+            "required": ["person", "with"]
+          }
+        },
+        {
+          "summary": "Set a person's attention tier (`--tier inner` is what \"VIP\" means",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.set-tier",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "note": { "type": "string" },
+              "tier": {
+                "type": "string",
+                "enum": ["inner", "active", "long-tail", "clear"]
+              },
+              "person": { "type": "string", "x-accepts": ["person-id"] }
+            },
+            "required": ["person", "tier"]
+          }
+        },
+        {
+          "summary": "Answer one person card in one press (PC-2).",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.settle",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "review": { "type": "object" },
+              "person": {
+                "type": "string",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              },
+              "operation": {
+                "title": "your id for this one Save, so a retry cannot write it twice",
+                "type": "string"
+              },
+              "members": {
+                "type": "object",
+                "title": "the records in the set and how you answered each"
+              },
+              "note": { "type": "string" },
+              "facts": {
+                "type": "array",
+                "title": "the fact rows and how you answered each"
+              },
+              "channels": {
+                "type": "array",
+                "title": "the address rows and how you answered each"
+              },
+              "digest": { "type": "string" },
+              "questions": { "type": "object" },
+              "name": {
+                "type": "object",
+                "title": "the name to choose or write"
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Mark a person VIP — the star, in the one place VIP lives.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.star",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "person": {
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Take back a person-level confirmation by its id.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.unconfirm",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "x-accepts": ["confirmation-id"],
+                "x-source": "rest"
+              },
+              "note": { "type": "string" }
+            },
+            "required": ["id"]
+          }
+        },
+        {
+          "summary": "Take back a People Review answer by decision id — the deck's undo",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.undo",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "x-accepts": ["decision-id", "undo-token"],
+                "x-source": "rest"
+              },
+              "defer-recompute": { "type": "boolean" },
+              "note": { "type": "string" }
+            },
+            "required": ["id"]
+          }
+        },
+        {
+          "summary": "Put back a record you took off a person",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.undo-narrow-join",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "confirm": { "type": "boolean" },
+              "id": {
+                "type": "string",
+                "title": "the narrowing's word: the first of its decision_ids",
+                "x-accepts": ["decision-id"]
+              }
+            },
+            "required": ["id"]
+          }
+        },
+        {
+          "summary": "Take back the answer to a question about a person the owner added,",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.undo-vip-answer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "string",
+                "title": "the answered question's id",
+                "x-source": "rest"
+              }
+            },
+            "required": ["question"]
+          }
+        },
+        {
+          "summary": "Undo a VIP row choice",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.undo-vip-choice",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "choice": {
+                "type": "string",
+                "title": "the choice's id, as its receipt gave it",
+                "x-source": "rest"
+              }
+            },
+            "required": ["choice"]
+          }
+        },
+        {
+          "summary": "Un-VIP a person — remove their star, and nothing else.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.unstar",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "person": {
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Retire a name you gave at setup. The weaver stops looking for them.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.withdraw-declaration",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "x-source": "rest" },
+              "note": { "type": "string" }
+            },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "List your words about someone",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person.words",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "title": "the person whose words to list",
+                "x-source": "rest",
+                "type": "string",
+                "x-echo": "elide",
+                "x-accepts": [
+                  "email",
+                  "phone",
+                  "handle",
+                  "person-id",
+                  "person-ref",
+                  "page-path",
+                  "group-id"
+                ]
+              }
+            },
+            "required": ["person"]
+          }
+        },
+        {
+          "summary": "Read verified scoped-work ownership for native lists and loom materials.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "presentation.facts",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "refs": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["refs"]
+          }
+        },
+        {
+          "summary": "Publish the native facet store's versioned projection for work presentation.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "presentation.publish",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "catalog": { "type": "object" },
+              "expected_revision": { "type": "integer" },
+              "memberships": { "type": "object" }
+            },
+            "required": ["catalog", "expected_revision"]
+          }
+        },
+        {
+          "summary": "Answer a question",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "question.answer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "revision": { "type": "string" },
+              "id": {
+                "type": "string",
+                "title": "the question's id, as it was shown"
+              },
+              "choice": { "type": "array", "x-echo": "elide" },
+              "answer": {
+                "oneOf": [{ "type": "string" }, { "type": "object" }],
+                "x-echo": "elide"
+              },
+              "remember": { "type": "boolean" }
+            },
+            "required": ["id", "revision", "answer"]
+          }
+        },
+        {
+          "summary": "List the open questions",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "question.list",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "starred": { "type": "boolean" },
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "subject": {
+                "title": "an entry handle: only the questions about them",
+                "x-echo": "elide",
+                "type": "string",
+                "x-accepts": ["person-handle", "person-entry-handle"]
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Undo a change by its token",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "revert",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "title": "the undo token a change returned",
+                "x-echo": "elide"
+              }
+            },
+            "required": ["token"]
+          }
+        },
+        {
+          "summary": "Switch cf-harness's sandbox here: docker, runsc (native) or auto.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "sandbox.set",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "choice": {
+                "type": "string",
+                "x-source": "rest",
+                "enum": ["docker", "runsc", "auto"]
+              }
+            },
+            "required": ["choice"]
+          }
+        },
+        {
+          "summary": "Show which sandbox cf-harness uses here, and whether native is set up.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "sandbox.status",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Ask Loom Search — the quick switcher's (⌘O) engine — for these",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "search.run",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "summary": "Cancel a LIVE session (`\/session.cancel chat-3`, or the conv-… id",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "session.cancel",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "session": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["session"]
+          }
+        },
+        {
+          "summary": "Close a session's durable conversation: the record is marked",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "session.close",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "session": { "type": "string", "x-source": "rest" }
+            },
+            "required": ["session"]
+          }
+        },
+        {
+          "summary": "The live sessions, projected small (chat id, conversation id,",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "session.list",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Rename a session's durable conversation (`--to <title>`); the",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "session.rename",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "session": { "type": "string", "x-source": "rest" },
+              "to": { "type": "string" }
+            },
+            "required": ["session", "to"]
+          }
+        },
+        {
+          "summary": "Append one message to a chat-N or conv-… session. A stable",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "session.say",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "refresh_harness": { "type": "boolean" },
+              "role": {
+                "type": "string",
+                "enum": ["user", "assistant", "system", "command"]
+              },
+              "client_message_id": { "type": "string" },
+              "text": {
+                "type": "string",
+                "x-echo": "elide",
+                "x-source": "rest"
+              },
+              "wake_id": { "type": "string" },
+              "session": { "type": "string" },
+              "kind": { "type": "string" }
+            },
+            "required": ["session", "role", "text"]
+          }
+        },
+        {
+          "summary": "Start an agent session.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "session.start",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string", "x-source": "rest" },
+              "preamble": { "type": "string" },
+              "lane": {
+                "type": "string",
+                "enum": ["cf-harness", "claude", "codex"]
+              }
+            },
+            "required": ["message"]
+          }
+        },
+        {
+          "summary": "Say whether a loom offered to you would reach this service.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "share.health",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "local": { "type": "boolean", "default": false } },
+            "required": []
+          }
+        },
+        {
+          "summary": "Create a READ or WRITE invitation link to this social loom.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.invite",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "ttl_seconds": { "type": "integer", "default": 86400 },
+              "access": {
+                "type": "string",
+                "default": "WRITE",
+                "enum": ["READ", "WRITE"]
+              },
+              "shell_origin": { "type": "string", "default": "" },
+              "max_uses": { "type": "integer", "default": 1 }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Offer this loom to a person through their Fabric profile inbox.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.offer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "person": { "type": "string" },
+              "operation_id": { "type": "string" },
+              "access": { "type": "string", "enum": ["OWNER", "WRITE"] }
+            },
+            "required": ["person", "operation_id"]
+          }
+        },
+        {
+          "summary": "Push named pages or people into this loom's space (a developer's door).",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.push",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "republish": { "type": "boolean", "default": false },
+              "components": {
+                "type": "string",
+                "x-accepts": ["component-id", "title", "@pane", "@pane:N"],
+                "x-source": "rest"
+              }
+            },
+            "required": ["components"]
+          }
+        },
+        {
+          "summary": "Remove one person's access to this social loom, or revoke one invitation.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.revoke",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "did": { "type": "string" },
+              "invite": { "type": "string" }
+            },
+            "required": []
+          }
+        },
+        {
+          "summary": "Socialize this loom, so people can be invited to it.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.socialize",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "title": { "type": "string" } },
+            "required": []
+          }
+        },
+        {
+          "summary": "List this instance's private loom spaces, including archived looms.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "share.spaces",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Show how this social loom stands, from the watcher's cache.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.status",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Trace every offer you made of this loom, per person.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.trace",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "check": { "type": "boolean", "default": false } },
+            "required": []
+          }
+        },
+        {
+          "summary": "Show again a panel you hid on this social loom.",
+          "effect": "mutation",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "share.unhide",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "panel": { "type": "string" } },
+            "required": ["panel"]
+          }
+        },
+        {
+          "summary": "Say something to loom over Signal from the Weaver: the text is",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "signal.weaver-message",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string", "x-source": "rest" } },
+            "required": ["text"]
+          }
+        },
+        {
+          "summary": "Acknowledge a delivered cue, without relevance feedback or resolving its work.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "suggestion.delivery-ack",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "install_id": { "type": "string" },
+              "lease_id": { "type": "string" },
+              "lens": { "type": "object" }
+            },
+            "required": ["install_id", "lease_id"]
+          }
+        },
+        {
+          "summary": "Register a new install without replaying historical returns; existing cursors never advance here.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "suggestion.delivery-baseline",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "install_id": { "type": "string" } },
+            "required": ["install_id"]
+          }
+        },
+        {
+          "summary": "Lease one bounded batch of foreground return cues for this install.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "suggestion.delivery-claim",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "install_id": { "type": "string" },
+              "lens": { "type": "object" }
+            },
+            "required": ["install_id"]
+          }
+        },
+        {
+          "summary": "Durably accept a revision-bound response; opening is not completing work.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "suggestion.disposition",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "expected_revision": { "type": "string" },
+              "lens": { "type": "object" },
+              "suggestion_id": { "type": "string" },
+              "operation_id": { "type": "string" },
+              "action": {
+                "type": "string",
+                "enum": ["opened", "dismissed", "not-useful"]
+              }
+            },
+            "required": [
+              "suggestion_id",
+              "expected_revision",
+              "operation_id",
+              "action"
+            ]
+          }
+        },
+        {
+          "summary": "Prepare the relevant loom and reveal intent without waiting on its construction.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "suggestion.open",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "navigation_token": { "type": "string" },
+              "destination": { "type": "string", "enum": ["work", "origin"] },
+              "lens": { "type": "object" },
+              "expected_revision": { "type": "string" },
+              "operation_id": { "type": "string" },
+              "suggestion_id": { "type": "string" }
+            },
+            "required": [
+              "suggestion_id",
+              "expected_revision",
+              "operation_id",
+              "navigation_token"
+            ]
+          }
+        },
+        {
+          "summary": "Answer a wish that needs a human (`--wish W-… <the answer>`): the",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.answer",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string", "x-source": "rest" },
+              "wish": { "type": "string" }
+            },
+            "required": ["wish", "text"]
+          }
+        },
+        {
+          "summary": "Bind the human's explicit facet answer to their still-unscoped wish submission.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.choose_facet",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet_ids": { "type": "array", "items": { "type": "string" } },
+              "reply_ref": { "type": "string" },
+              "submission_ref": { "type": "string" }
+            },
+            "required": ["submission_ref", "reply_ref", "facet_ids"]
+          }
+        },
+        {
+          "summary": "Refresh delivery into the admitted home; this never restarts the wish worker.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.delivery_retry",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "wish_id": { "type": "string" } },
+            "required": ["wish_id"]
+          }
+        },
+        {
+          "summary": "Dismiss a wish by its id: it leaves the working set (and, for an",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.dismiss",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "wish": { "type": "string", "x-source": "rest" } },
+            "required": ["wish"]
+          }
+        },
+        {
+          "summary": "Mark a wish done, by its id (`\/wish.done W-2093`) — the human",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.done",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "wish": { "type": "string", "x-source": "rest" } },
+            "required": ["wish"]
+          }
+        },
+        {
+          "summary": "Read the user's existing Weaver facets before asking for a wish's missing facet.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.facets",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "summary": "Put a wish back on the queue by its id — a human-requested retry.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.requeue",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "wish": { "type": "string", "x-source": "rest" } },
+            "required": ["wish"]
+          }
+        },
+        {
+          "summary": "Undo one automatic addition or explicitly restore it; replay the original envelope unchanged.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.result_action",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string", "enum": ["undo", "restore"] },
+              "publication_revision": { "type": "integer" },
+              "request_id": { "type": "string" },
+              "wish_id": { "type": "string" },
+              "ref": { "type": "string" }
+            },
+            "required": [
+              "wish_id",
+              "action",
+              "ref",
+              "request_id",
+              "publication_revision"
+            ]
+          }
+        },
+        {
+          "summary": "Start delegated work from this run's recorded human submission; reuse the request key on retry.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.submit",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "submission_ref": { "type": "string" },
+              "request_key": { "type": "string" },
+              "source_page": { "type": "string" },
+              "skill_id": { "type": "string" },
+              "parent_wish_id": { "type": "string" },
+              "text": { "type": "string" }
+            },
+            "required": ["submission_ref", "request_key", "text"]
+          }
+        }
+      ]
+    }
+  },
+  "sessionId": "dbf4424d-afb3-4c66-a515-f41b4fd93be6",
+  "actionId": "94274d2c-4327-44bc-9769-af3b35505755"
+}
