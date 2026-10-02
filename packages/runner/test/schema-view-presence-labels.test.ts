@@ -289,7 +289,7 @@ describe("schema-view presence labels", () => {
       /** Lists `argument`'s keys into `listed`, and returns how many. */
       const listInto =
         (listed: (string | symbol)[]) => (argument: object | undefined) => {
-          listed.push(...Reflect.ownKeys(argument ?? {}));
+          for (const key of Reflect.ownKeys(argument ?? {})) listed.push(key);
           return listed.length;
         };
 
