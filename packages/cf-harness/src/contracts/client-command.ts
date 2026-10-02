@@ -425,14 +425,33 @@ export interface HarnessCommandAttribution {
   originLoomId?: string;
 }
 
-/** Why the console settled a request without the Weaver's answer. */
-export type HarnessCommandInterruption = "canceled" | "timeout" | "restart";
+/**
+ * Why the console settled a request without the Weaver's answer.
+ * `delivery_failed` is a request that was delivered when the delivery of a
+ * later request in the same batch failed, so the console stopped waiting for
+ * it: the Weaver may have executed it, and its effect is unknown.
+ */
+export type HarnessCommandInterruption =
+  | "canceled"
+  | "timeout"
+  | "restart"
+  | "delivery_failed";
+
+/** Every interruption reason, in the order the type names them. */
+const HARNESS_COMMAND_INTERRUPTIONS: readonly HarnessCommandInterruption[] = [
+  "canceled",
+  "timeout",
+  "restart",
+  "delivery_failed",
+];
 
 /**
  * How a typed request settled. `executed` carries the command's outcome or
  * the catalog; `declined` is the person's refusal; `failed_to_deliver` says
  * the command never produced an answer, and whether it may still have landed;
- * `interrupted` is the console's own settlement of a request nobody answered.
+ * `interrupted` is the console's own settlement of a request nobody answered;
+ * it carries no attribution, and a `delivery_failed` one leaves the effect
+ * unknown.
  */
 export type HarnessCommandSettlement =
   | {
@@ -1100,9 +1119,13 @@ export const readHarnessCommandSettlement = (
     case "interrupted": {
       const reason = own(record, "reason");
       return hasExactlyKeys(record, ["status", "reason"]) &&
-          (reason === "canceled" || reason === "timeout" ||
-            reason === "restart")
-        ? { status: "interrupted", reason }
+          HARNESS_COMMAND_INTERRUPTIONS.includes(
+            reason as HarnessCommandInterruption,
+          )
+        ? {
+          status: "interrupted",
+          reason: reason as HarnessCommandInterruption,
+        }
         : undefined;
     }
     default:

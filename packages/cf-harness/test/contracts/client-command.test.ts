@@ -83,6 +83,7 @@ const RESOLVED_EVENT_FIXTURES = [
   "resolved-event-executed",
   "resolved-event-catalog",
   "resolved-event-interrupted",
+  "resolved-event-interrupted-delivery-failed",
 ];
 
 describe("client command contract", () => {
@@ -373,6 +374,29 @@ describe("client command contract", () => {
           settlement: { status: "interrupted", reason: "restart" },
         }),
       ).toBeUndefined();
+    });
+
+    it("keeps a delivered action whose batch failed to deliver as the console's own interruption", () => {
+      const interrupted = {
+        status: "interrupted",
+        reason: "delivery_failed",
+      } as const;
+      expect(readHarnessCommandSettlement(interrupted)).toEqual(interrupted);
+      expect(legacyOutcomeOfHarnessCommandSettlement(interrupted)).toBe(
+        "failed",
+      );
+      expect(
+        readHarnessCommandResolveBody({
+          sessionId: "session-1",
+          actionId: "action-3",
+          settlement: interrupted,
+        }),
+      ).toBeUndefined();
+      const attribution = (fixture("resolve-declined").settlement as {
+        attribution: unknown;
+      }).attribution;
+      expect(readHarnessCommandSettlement({ ...interrupted, attribution }))
+        .toBeUndefined();
     });
 
     it("refuses a lost answer that names nobody who sent it", () => {
