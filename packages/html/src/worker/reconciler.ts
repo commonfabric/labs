@@ -1163,17 +1163,18 @@ export class WorkerReconciler {
    * per element of the list `list` names, of the given length, and `settling`
    * holds while it runs, so that the reads it starts, each reporting its first
    * result to `changed` as it starts, are decided together once it returns.
-   * `reads()` returns each element, as `list.key(index)` names it, with what
-   * its read consumed.
+   * `reads()` returns each element as `list.key(index)` names it, whose labels
+   * a decision reads through the list's links as they stand then, with what
+   * the element's read consumed.
    *
-   * Each element is read at the slot holding it in the document `list`
-   * resolves to. A read of `list.key(index)` would cross the list's links
-   * under their stored schemas, and one that declares its elements references
-   * ends that read at the element's own link; read at its slot, the element is
-   * read as `cf-render` reads its cell, following the element's links to the
-   * document they land on. The links up to that document are the list read's
-   * to decide. A list that does not resolve has no element reads, and the
-   * list read refuses it.
+   * A read addressed through the list's links crosses them under their stored
+   * schemas, and one that declares the list's elements references ends the
+   * read at an element's own link. So each element is read at the slot
+   * holding it in the document `list` resolves to, where it is read as
+   * `cf-render` reads its cell, following the element's links to the document
+   * they land on; the links up to that slot are the list read's to decide. A
+   * list that does not resolve has no element reads, and the list read
+   * refuses it.
    */
   #nestedRenderElements(
     schema: JSONSchema,
