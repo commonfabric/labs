@@ -270,11 +270,15 @@ describe("CFCellLink", () => {
     /**
      * A link whose target the test moves with `publish()`, a promise settled
      * when something first subscribes to it, and a count of the subscriptions
-     * taken on it and released. Each resolution waits for `resolution`.
+     * taken on it and released. Each resolution waits for `resolution`, and
+     * lands on `chainEnd` where the link's target is itself a link.
      */
     function retargetableLink(
       initialTarget: CellHandle,
-      { resolution = Promise.resolve() }: { resolution?: Promise<void> } = {},
+      { resolution = Promise.resolve(), chainEnd }: {
+        resolution?: Promise<void>;
+        chainEnd?: CellHandle;
+      } = {},
     ) {
       const link = createMockCellHandle({}, {
         id: "of:fid1:row-holder" as CellRef["id"],
@@ -286,7 +290,7 @@ describe("CFCellLink", () => {
       const subscribed = deferred<void>();
       const counts = { subscribed: 0, unsubscribed: 0 };
       (link as unknown as { resolveAsCell(): Promise<CellHandle> })
-        .resolveAsCell = () => resolution.then(() => currentTarget);
+        .resolveAsCell = () => resolution.then(() => chainEnd ?? currentTarget);
       (link as unknown as {
         asSchema(): {
           sync(): Promise<CellHandle>;
@@ -310,6 +314,18 @@ describe("CFCellLink", () => {
         for (const callback of [...callbacks]) callback(value);
       };
       return { link, counts, publish, subscribed: subscribed.promise };
+    }
+
+    /** Resolves with the next target `element` installs. */
+    function nextInstall(element: any): Promise<CellHandle | undefined> {
+      const installed = deferred<CellHandle | undefined>();
+      const install = element._setResolvedCell;
+      element._setResolvedCell = (cell: CellHandle | undefined) => {
+        element._setResolvedCell = install;
+        install.call(element, cell);
+        installed.resolve(cell);
+      };
+      return installed.promise;
     }
 
     /** Disconnects `element`, giving it the slice of `document` that touches. */
@@ -348,12 +364,19 @@ describe("CFCellLink", () => {
       element.cell = link;
       await element._resolveCell();
 
-      const seen = navigations(() => {
-        element._handleClick({ stopPropagation() {} });
-        publish(roomCell("of:fid1:second"));
-        element._handleClick({ stopPropagation() {} });
-      });
-      expect(seen).toEqual(["of:fid1:first", "of:fid1:second"]);
+      const before = navigations(() =>
+        element._handleClick({ stopPropagation() {} })
+      );
+      const installed = nextInstall(element);
+      publish(roomCell("of:fid1:second"));
+      await installed;
+      const after = navigations(() =>
+        element._handleClick({ stopPropagation() {} })
+      );
+      expect([...before, ...after]).toEqual([
+        "of:fid1:first",
+        "of:fid1:second",
+      ]);
     });
 
     it("navigates to a target published while its first resolution finishes", async () => {
@@ -363,15 +386,80 @@ describe("CFCellLink", () => {
       const element = new CFCellLink() as any;
       markConnected(element);
       element.cell = link;
-      const resolving = element._resolveCell();
+      void element._resolveCell();
       await subscribed;
+      const installed = nextInstall(element);
       publish(roomCell("of:fid1:second"));
-      await resolving;
+      await installed;
 
       const seen = navigations(() =>
         element._handleClick({ stopPropagation() {} })
       );
       expect(seen).toEqual(["of:fid1:second"]);
+    });
+
+    it("navigates to the end of a chain whose first link leads to another link", async () => {
+      const { link } = retargetableLink(roomCell("of:fid1:hop"), {
+        chainEnd: roomCell("of:fid1:room"),
+      });
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = link;
+      await element._resolveCell();
+
+      const seen = navigations(() =>
+        element._handleClick({ stopPropagation() {} })
+      );
+      expect(seen).toEqual(["of:fid1:room"]);
+    });
+
+    it("navigates to the current cell's target when the cell it replaced retargets", async () => {
+      const replaced = retargetableLink(roomCell("of:fid1:old-first"));
+      const resolution = deferred<void>();
+      const current = retargetableLink(roomCell("of:fid1:current"), {
+        resolution: resolution.promise,
+      });
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = replaced.link;
+      await element._resolveCell();
+
+      element.cell = current.link;
+      void element._resolveCell();
+      const installed = nextInstall(element);
+      replaced.publish(roomCell("of:fid1:old-second"));
+      resolution.resolve();
+      await installed;
+
+      const seen = navigations(() =>
+        element._handleClick({ stopPropagation() {} })
+      );
+      expect(seen).toEqual(["of:fid1:current"]);
+    });
+
+    it("releases the replaced link's subscription when the next cell fails to resolve", async () => {
+      const replaced = retargetableLink(roomCell("of:fid1:first"));
+      const failing = createMockCellHandle({}, {
+        id: "of:fid1:failing" as CellRef["id"],
+        space: "did:key:test-space" as CellRef["space"],
+      }) as CellHandle;
+      (failing as unknown as { resolveAsCell(): Promise<CellHandle> })
+        .resolveAsCell = () => Promise.reject(new Error("boom"));
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = replaced.link;
+      await element._resolveCell();
+      expect(replaced.counts).toEqual({ subscribed: 1, unsubscribed: 0 });
+
+      element.cell = failing;
+      const logError = console.error;
+      console.error = () => {};
+      try {
+        await element._resolveCell();
+      } finally {
+        console.error = logError;
+      }
+      expect(replaced.counts).toEqual({ subscribed: 1, unsubscribed: 1 });
     });
 
     it("takes no subscription when it disconnects while resolving", async () => {
@@ -442,8 +530,8 @@ describe("CFCellLink disposal handling", () => {
   // AbortError. The guard must read the runtime the resolve ran on (the cell's
   // own runtime, or the client the linked cell was built from), since the
   // ambient `this.runtime` is cleared to undefined on logout. Exercised against
-  // a minimal `this` so no Lit reactive lifecycle (and no re-resolve on the
-  // runtime property change) runs.
+  // an element that is never connected, so no Lit reactive lifecycle (and no
+  // re-resolve on the runtime property change) runs.
   function captureConsoleError(): { calls: unknown[][]; restore(): void } {
     const calls: unknown[][] = [];
     const original = console.error;
@@ -451,23 +539,24 @@ describe("CFCellLink disposal handling", () => {
     return { calls, restore: () => (console.error = original) };
   }
 
-  function resolveCellOn(fakeThis: Record<string, unknown>): Promise<void> {
-    return (CFCellLink.prototype as unknown as {
-      _resolveCell(this: unknown): Promise<void>;
-    })._resolveCell.call(fakeThis);
+  /** Starts resolving on an unconnected element holding `fields`. */
+  function resolveCellOn(fields: Record<string, unknown>): {
+    element: Record<string, unknown>;
+    resolving: Promise<void>;
+  } {
+    const element = Object.assign(new CFCellLink(), fields) as unknown as
+      & Record<string, unknown>
+      & { _resolveCell(): Promise<void> };
+    return { element, resolving: element._resolveCell() };
   }
 
-  function baseThis(): Record<string, unknown> {
+  function baseFields(): Record<string, unknown> {
     return {
-      _resolveCellGeneration: 0,
       cell: undefined,
       link: undefined,
       // The ambient @consume runtime, cleared to undefined on logout.
       runtime: undefined,
       space: "did:key:test-space",
-      _cellKey: () => "key",
-      _prepareSubscriptionTarget: () => {},
-      _setResolvedCell: () => {},
     };
   }
 
@@ -485,13 +574,13 @@ describe("CFCellLink disposal handling", () => {
   }
 
   it("suppresses the resolve-cell log when the cell's runtime is disposed", async () => {
-    const fakeThis = {
-      ...baseThis(),
+    const fields = {
+      ...baseFields(),
       cell: cellThat(true, new DOMException("aborted", "AbortError")),
     };
     const spy = captureConsoleError();
     try {
-      await resolveCellOn(fakeThis);
+      await resolveCellOn(fields).resolving;
     } finally {
       spy.restore();
     }
@@ -499,13 +588,13 @@ describe("CFCellLink disposal handling", () => {
   });
 
   it("logs a genuine resolve-cell failure while the runtime is alive", async () => {
-    const fakeThis = {
-      ...baseThis(),
+    const fields = {
+      ...baseFields(),
       cell: cellThat(false, new Error("boom")),
     };
     const spy = captureConsoleError();
     try {
-      await resolveCellOn(fakeThis);
+      await resolveCellOn(fields).resolving;
     } finally {
       spy.restore();
     }
@@ -531,15 +620,15 @@ describe("CFCellLink disposal handling", () => {
           Promise.reject(new DOMException("aborted", "AbortError")),
       }),
     };
-    const fakeThis: Record<string, unknown> = {
-      ...baseThis(),
+    const fields: Record<string, unknown> = {
+      ...baseFields(),
       link: "/of:abc123",
       runtime,
     };
     const spy = captureConsoleError();
     try {
-      const resolving = resolveCellOn(fakeThis);
-      fakeThis.runtime = undefined;
+      const { element, resolving } = resolveCellOn(fields);
+      element.runtime = undefined;
       await resolving;
     } finally {
       spy.restore();

@@ -67,20 +67,6 @@ function retargetableLink(initialTarget: CellHandle) {
   };
 }
 
-/** The piece id a click on `element`'s pill navigates to. */
-function clickedPieceId(element: CFCellLink): string | undefined {
-  let pieceId: string | undefined;
-  const listener = (event: Event) =>
-    pieceId = (event as CustomEvent).detail.pieceId;
-  globalThis.addEventListener("cf-navigate", listener);
-  try {
-    (element.shadowRoot!.querySelector("cf-chip") as HTMLElement).click();
-  } finally {
-    globalThis.removeEventListener("cf-navigate", listener);
-  }
-  return pieceId;
-}
-
 Deno.test("cf-cell-link releases a link's subscription when detached and follows the link again when reattached", async () => {
   const view = retargetableLink(roomCell("of:fid1:first"));
   const element = document.createElement("cf-cell-link") as CFCellLink;
@@ -111,14 +97,16 @@ Deno.test("cf-cell-link releases a link's subscription when detached and follows
     container.append(element);
     expect(view.counts.resolved).toBe(2);
     await secondSubscribe;
-    view.publish(roomCell("of:fid1:second"));
-    await element.updateComplete;
     expect(view.counts).toEqual({
       resolved: 2,
       subscribed: 2,
       unsubscribed: 1,
     });
-    expect(clickedPieceId(element)).toBe("of:fid1:second");
+
+    // A retarget reaches the element only through the subscription taken on
+    // reattaching, and resolves the link again before anything is awaited.
+    view.publish(roomCell("of:fid1:second"));
+    expect(view.counts.resolved).toBe(3);
   } finally {
     container.remove();
   }

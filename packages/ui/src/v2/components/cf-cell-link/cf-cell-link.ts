@@ -27,6 +27,19 @@ import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 
 /**
+ * Returns the cell a pill shows, given its link's current `target` and the
+ * cell `resolved` at the end of the link's chain. A link watch reports the
+ * link's first hop, which is itself a link wherever links chain;
+ * `resolveAsCell()` follows the chain to its end.
+ */
+function chainEnd(
+  target: CellHandle | undefined,
+  resolved: CellHandle,
+): CellHandle | undefined {
+  return target === undefined ? undefined : resolved;
+}
+
+/**
  * CFCellLink - Renders a link or cell as a clickable, draggable pill
  *
  * Every cell link is a drag source by default. Set `static` to suppress
@@ -111,12 +124,10 @@ export class CFCellLink extends BaseElement {
    * navigates to where the link points now.
    */
   #linkTarget = new LinkTargetWatch({
-    onRetarget: (target) => {
-      // A resolution still finishing would install the target it started
-      // with over this one.
-      this._resolveCellGeneration++;
-      this._setResolvedCell(target);
-    },
+    // Resolving again reads the element's current input, so a watch left on
+    // a cell it has since replaced cannot install that cell's target, and a
+    // resolution still in flight is dropped for the newer one.
+    onRetarget: () => void this._resolveCell(),
   });
 
   //
@@ -215,7 +226,7 @@ export class CFCellLink extends BaseElement {
         if (generation !== this._resolveCellGeneration) return;
         const target = await this.#linkTarget.watch(cell, resolvedCell);
         if (generation !== this._resolveCellGeneration) return;
-        this._setResolvedCell(target);
+        this._setResolvedCell(chainEnd(target, resolvedCell));
       } catch (e) {
         if (generation !== this._resolveCellGeneration) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -223,6 +234,7 @@ export class CFCellLink extends BaseElement {
         // not the ambient `this.runtime` (cleared to undefined on logout).
         if (cell.runtime().signal.aborted) return;
         console.error("Failed to resolve cell:", e);
+        this.#linkTarget.cancel();
         this._prepareSubscriptionTarget(undefined);
         this._setResolvedCell(undefined);
       }
@@ -244,7 +256,7 @@ export class CFCellLink extends BaseElement {
         if (generation !== this._resolveCellGeneration) return;
         const target = await this.#linkTarget.watch(linkedCell, resolvedCell);
         if (generation !== this._resolveCellGeneration) return;
-        this._setResolvedCell(target);
+        this._setResolvedCell(chainEnd(target, resolvedCell));
       } catch (e) {
         if (generation !== this._resolveCellGeneration) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -252,6 +264,7 @@ export class CFCellLink extends BaseElement {
         // cell was built from, not the ambient `this.runtime` (cleared on logout).
         if (runtime.signal.aborted) return;
         console.error("Failed to resolve link:", e);
+        this.#linkTarget.cancel();
         this._prepareSubscriptionTarget(undefined);
         this._setResolvedCell(undefined);
       }
