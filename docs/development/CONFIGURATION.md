@@ -121,13 +121,13 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 
 ### Gmail push ingest
 
-On only when both are set; see
+On only when a service account is set; see
 [`gmail-push-ingest.md`](../features/gmail-push-ingest.md).
 
 | Var | Default | Notes |
 |---|---|---|
-| `INGEST_GMAIL_PUSH_AUDIENCE` | _(unset)_ | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
-| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts those tokens may be signed for. |
+| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts a push token may be signed for. |
+| `INGEST_GMAIL_PUSH_AUDIENCE` | the ingest registry space's DID | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
 
 ---
 

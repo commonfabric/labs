@@ -58,7 +58,8 @@ OIDC token that:
 
 - verifies against Google's published keys, with algorithm `RS256`;
 - was issued by `https://accounts.google.com`;
-- names this deployment's audience, `INGEST_GMAIL_PUSH_AUDIENCE`;
+- names this deployment's audience, which is the service space's DID unless
+  `INGEST_GMAIL_PUSH_AUDIENCE` sets another;
 - is signed for one of `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS`, with
   `email_verified` true;
 - has not expired.
@@ -220,12 +221,13 @@ For each project:
 2. Create a service account for the push subscription to sign as.
 3. Create a push subscription on the topic, with the endpoint
    `https://<toolshed>/api/spaces/<service space>/ingest-push/gmail`, OIDC
-   authentication as that service account, and an audience.
-4. Add the service account to `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS`. Every
-   subscription uses the one audience set in `INGEST_GMAIL_PUSH_AUDIENCE`.
+   authentication as that service account, and the service space's DID as
+   the audience.
+4. Add the service account to `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS`.
 
-The endpoint URL is the natural audience, and is what Pub/Sub uses when a
-subscription names none.
+The audience has to be set on the subscription. One that names none gets the
+endpoint URL as its audience, which toolshed refuses unless
+`INGEST_GMAIL_PUSH_AUDIENCE` is set to that URL.
 
 ## What the syncer owns
 
@@ -245,13 +247,20 @@ token is responsible for:
 
 ## Configuration
 
-Gmail push ingest is on when both of these are set, and off otherwise. Off, the
-push endpoint and both control-plane verbs answer 404.
+Gmail push ingest is on when a service account is set, and off otherwise. Off,
+the push endpoint and both control-plane verbs answer 404.
 
 | Var | Notes |
 | --- | --- |
-| `INGEST_GMAIL_PUSH_AUDIENCE` | The audience the push subscriptions put on their tokens. |
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | Comma-separated service accounts the push subscriptions sign as. |
+| `INGEST_GMAIL_PUSH_AUDIENCE` | The audience the push subscriptions put on their tokens. Unset, it is the service space's DID. |
+
+The default audience is the service space's DID because that DID is already
+in the push URL, it differs between deployments, so a token minted for one is
+refused by another, and it depends on no hostname, which matters where a
+deployment is reached under more than one. A DID is a public identifier, and
+an audience is not a secret: what a push token proves rests on Google's
+signature and the service account.
 
 The binding verbs also need `INGEST_SELF_SERVE_ENABLED`, which mounts the
 control plane they sit on. `INGEST_SERVICE_SPACE`, described in

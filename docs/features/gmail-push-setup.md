@@ -13,7 +13,7 @@ The commands use these placeholders:
 | `<topic>` | The Pub/Sub topic Gmail publishes to. |
 | `<subscription>` | The subscription on that topic. |
 | `<account>` | The service account's email, `<name>@<project>.iam.gserviceaccount.com`. |
-| `<audience>` | The audience on push tokens. By convention, the push endpoint's URL. |
+| `<audience>` | The audience on push tokens: `<service space>`, unless the deployment sets `INGEST_GMAIL_PUSH_AUDIENCE` to something else. |
 | `<toolshed>` | The toolshed deployment's origin. |
 | `<client id>`, `<client secret>` | The OAuth client's two values, from its downloaded JSON. |
 | `<space>` | The DID of the user's space that the channel writes into. |
@@ -117,8 +117,8 @@ tailscale funnel --bg \
 
 The public DNS record for a machine's first Funnel takes several minutes to
 appear, and until it does Pub/Sub cannot deliver. `tailscale funnel reset`
-takes it down. The subscription's audience need not be the public URL: it is
-whatever `INGEST_GMAIL_PUSH_AUDIENCE` holds.
+takes it down. The subscription's audience is not the public URL: it is
+`<audience>`, as for any deployment.
 
 ### A deployment on a private network
 
@@ -205,17 +205,17 @@ curl -s -H "Authorization: Bearer <access token>" \
 
 ## Toolshed settings
 
-Three environment variables on the deployment, described in
+Two environment variables on the deployment, described in
 [`CONFIGURATION.md`](../development/CONFIGURATION.md):
 
 | Variable | Value |
 | --- | --- |
-| `INGEST_GMAIL_PUSH_AUDIENCE` | `<audience>` |
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | `<account>` |
 | `INGEST_SELF_SERVE_ENABLED` | `true`, which mounts the control plane that binding sits on |
 
-The audience is compared as a string. It does not have to resolve, and for a
-deployment behind a relay it need not be a URL the relay can reach.
+The audience needs no setting: it defaults to `<service space>`. A deployment
+that wants another sets `INGEST_GMAIL_PUSH_AUDIENCE`. The audience is compared
+as a string and does not have to resolve.
 
 For a hosted deployment these are set where that deployment's environment is
 managed, which is outside this repository. A request to

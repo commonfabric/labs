@@ -278,10 +278,11 @@ export const EnvSchema = z.object({
   // Gmail push ingest: POST /api/spaces/:space/ingest-push/gmail, which Cloud
   // Pub/Sub calls with each Gmail `users.watch` notification, and the
   // gmail-bind and gmail-unbind verbs of the ingest-channel control plane. On
-  // only when both are set. The audience is the one the push subscriptions
-  // are configured to put on their OIDC tokens; the service accounts,
-  // comma-separated, are the ones those tokens may be signed for. See
-  // docs/features/gmail-push-ingest.md.
+  // only when a service account is set. The service accounts,
+  // comma-separated, are the ones a push token may be signed for. The
+  // audience is the one the push subscriptions are configured to put on
+  // their OIDC tokens; unset, it is the DID of the space the ingest registry
+  // is kept in. See docs/features/gmail-push-ingest.md.
   INGEST_GMAIL_PUSH_AUDIENCE: z.string().default(""),
   INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS: z.string().default(""),
 
