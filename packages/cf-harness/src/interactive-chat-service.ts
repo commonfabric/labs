@@ -1762,7 +1762,11 @@ export class HarnessInteractiveChatService {
    * its resolved event behind the delivery, but does not wait for the write:
    * the event queue is held by the delivery, and a client that awaits its
    * answer from inside the delivery would otherwise wait on itself. The call
-   * still awaits that write, so a failed one fails the call.
+   * still awaits that write, so a failed one fails the call, except when a
+   * request's own delivery fails: the call then fails with that error and the
+   * write lands behind it. Only that answer is exempt; a delivery handler that
+   * awaits any other request writing an event (another action's answer, a
+   * cancel, a close) still waits on itself.
    */
   async #requestClientActions(
     record: HarnessInteractiveChatSessionRecord,

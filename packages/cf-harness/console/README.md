@@ -846,7 +846,10 @@ not as `unknown_action`), and 400 for a bad body. The tool returns the outcomes
 to the model in input order. An answer may arrive while its request is still
 being delivered, as when a client answers from the handler that receives the
 event: it is kept, its resolved event follows the request in the log, and its
-200 does not wait for that event to be written.
+200 does not wait for that event to be written. If that write then fails, the
+call fails and a restart records the request `interrupted`. Only that answer is
+exempt: a handler that awaits any other request that writes an event (another
+action's answer, a cancel) from inside a delivery waits on itself.
 
 The wait has an idle clock of five minutes, reset whenever any action of the
 call settles; on expiry every unsettled action fails with `result: "timeout"`,
