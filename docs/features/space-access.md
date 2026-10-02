@@ -127,9 +127,9 @@ replica has not asked for.
 
 Across the worker boundary, a retry of a space asked for while another retry of
 that space is still in flight shares it rather than asking again, whoever asks:
-a host calling `RuntimeClient.retrySpaceAccess()`, or one of the two callers
-built in. The renderer's "Access unavailable" placeholder carries a Retry
-button, which asks for the space whose refusal it stands in for. A refusal
+a host calling `RuntimeClient.retrySpaceAccess(space)`, or one of the two
+callers built in. The renderer's "Access unavailable" placeholder carries a
+Retry button, which asks for the space whose refusal it stands in for. A refusal
 removes the handlers of the content it stands in for, and leaves this one. The
 shell asks on the person's behalf when they may have been granted access since:
 on navigating into a space the runtime reported refused (`spaceaccesslost`), and
