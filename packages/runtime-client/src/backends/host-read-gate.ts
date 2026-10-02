@@ -18,7 +18,6 @@
  */
 
 import {
-  canRenderLabelUnderPolicy,
   cellLabelRefusal,
   cellLabelSources,
   type DisplayFitSources,
@@ -309,11 +308,10 @@ export class HostReadGate {
    * The fields the record `cell` holds, each as the address of the field
    * within it, or the refusal that stands in place of the list. The list is
    * read under {@link FIELDS_SCHEMA}, which reads nothing a field holds, and
-   * is decided on what that read consumed and on the label of the record's
-   * own node, not on the labels of the fields inside it, as a read of the
-   * record's value is. A record that holds one field the viewer may not see
-   * so lists every field, and each field's own read is decided as any read
-   * is. The names come from the record, not its schema, which a host may
+   * is decided as any read is, on the record's own node and on what the read
+   * consumed, which includes no field's label. A record that holds one field
+   * the viewer may not see so lists every field, and each field's own read
+   * is decided as any read is. The names come from the record, not its schema, which a host may
    * hold only as a reference it cannot resolve. An address carries no label
    * view: the field's own read decides whether its label may be seen.
    */
@@ -325,21 +323,12 @@ export class HostReadGate {
       names = fieldNamesOf(listed.get());
     } else {
       const read = readProjected(listed, fieldNamesOf);
-      const refusal = this.#consumedRefusal(read.consumed, policy) ??
-        cellLabelRefusal(
-          listed,
-          cellLabelSources(listed)?.map((source) => ({
-            ...source,
-            view: source.view === undefined ? undefined : {
-              version: 1 as const,
-              entries: source.view.entries.filter((entry) =>
-                entry.path.length === 0
-              ),
-            },
-          })),
-          policy,
-          this.#sources,
-        );
+      const refusal = readRefusal(
+        listed,
+        [read.consumed],
+        policy,
+        this.#sources,
+      );
       if (refusal !== undefined) return this.#refuse(refusal, policy);
       names = read.value;
     }
@@ -351,34 +340,6 @@ export class HostReadGate {
       fields[name] = address;
     }
     return decided({ fields });
-  }
-
-  /**
-   * The refusal of `consumed`, the labels a read consumed, or `undefined`
-   * when the policy admits them. A read that consumed no labeled value is
-   * admitted.
-   */
-  #consumedRefusal(
-    consumed: SinkConsumedLabel,
-    policy: RenderPolicy,
-  ): RenderLabelSummary | undefined {
-    if (consumed.confidentiality.length === 0) return undefined;
-    const spaces = [...consumed.modulePolicySpaces.values()].flatMap((set) => [
-      ...set,
-    ]);
-    return canRenderLabelUnderPolicy(
-        consumed.confidentiality,
-        consumed.integrity,
-        () => spaces,
-        policy,
-        this.#sources,
-      )
-      ? undefined
-      : {
-        labelSource: "consumed",
-        confidentiality: consumed.confidentiality,
-        integrity: consumed.integrity,
-      };
   }
 
   /** A refusal of a read, reported as a refused render is. */
