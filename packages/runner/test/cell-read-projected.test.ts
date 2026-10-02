@@ -75,6 +75,63 @@ async function holder() {
 }
 
 describe("cell-read-projected", () => {
+  describe("hostValueOf()", () => {
+    it("hands each link the view `displayView` gives the cell it reaches", async () => {
+      await using docs = await holder();
+      // A labeled record, whose read carries the label view of the cell its
+      // field reaches onto the link it mints for that field.
+      const labeled = docs.runtime.getCell(space, "labeled-record");
+      const tx = docs.runtime.edit();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(
+        tx,
+        { ...labeled.getAsNormalizedFullLink(), path: [] },
+        {
+          value: {
+            entry: docs.runtime.getCell(space, "secret").getAsLink({
+              includeSchema: true,
+              keepAsCell: KeepAsCell.All,
+            }),
+          },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { confidentiality: [SECRET_ATOM] },
+              }],
+            },
+          },
+        } as never,
+      );
+      expect((await tx.commit()).error).toBeUndefined();
+      await docs.runtime.idle();
+      const shown = { version: 1 as const, entries: [] };
+      const seen: unknown[] = [];
+
+      const value = hostValueOf(
+        labeled.asSchema({
+          type: "object",
+          properties: { entry: { asCell: ["cell"] } },
+        }).get(),
+        (cell, view) => {
+          seen.push([cell.getAsNormalizedFullLink().id, view]);
+          return shown;
+        },
+      );
+
+      expect(seen).toEqual([[
+        docs.runtime.getCell(space, "secret").getAsNormalizedFullLink().id,
+        expect.objectContaining({ version: 1 }),
+      ]]);
+      expect(JSON.stringify(value)).toContain(
+        '"cfcLabelView":{"version":1,"entries":[]}',
+      );
+    });
+  });
+
   describe("readProjected()", () => {
     it("returns what the projection made of the value", async () => {
       await using docs = await holder();

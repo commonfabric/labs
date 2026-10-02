@@ -8,7 +8,7 @@ import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import type { CellHandle } from "@/cell-handle.ts";
+import { type CellHandle, CellReadRefusedError } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
 import { buildProcessor } from "./backends/build-processor.ts";
@@ -194,6 +194,66 @@ describe("RuntimeClient operation collaboration", () => {
           operationSessionId
       ),
     ).toBe(true);
+  });
+
+  it("answers a refused query, operation, or update as a refusal, never as a field", async () => {
+    const refusal = { refusedBy: "display-ceiling" } as const;
+    const cellRef: CellRef = {
+      space: "did:key:z6Mk-operation-client" as CellRef["space"],
+      id: "of:operation-client",
+      path: ["content"],
+      scope: "space",
+    };
+    const handlers = new Map<string, (data: unknown) => void>();
+    const requests: Array<{ type: RequestType; subscriptionId?: string }> = [];
+    const conn = {
+      signal: new AbortController().signal,
+      on: (event: string, handler: (data: unknown) => void) => {
+        handlers.set(event, handler);
+      },
+      request: (request: { type: RequestType; subscriptionId?: string }) => {
+        requests.push(request);
+        return Promise.resolve(
+          request.type === RequestType.OperationSubscribe
+            ? { value: true }
+            : { refused: refusal },
+        );
+      },
+    } as unknown as never;
+    const client = new (RuntimeClient as unknown as {
+      new (conn: never, options: unknown): RuntimeClient;
+    })(conn, {});
+    const cell = { ref: () => cellRef } as CellHandle<unknown>;
+
+    await expect(client.queryOperationField(cell)).rejects.toThrow(
+      CellReadRefusedError,
+    );
+    await expect(
+      client.applyOperation(cell, {
+        codec: "codemirror-changeset@1",
+        submissionId: "submission-1",
+        base: null,
+        payload: { updates: [] },
+      }),
+    ).rejects.toThrow(CellReadRefusedError);
+
+    const delivered: unknown[] = [];
+    const refused: unknown[] = [];
+    const unsubscribe = await client.subscribeOperationField(
+      cell,
+      (field) => delivered.push(field),
+      { onRefused: (heard) => refused.push(heard) },
+    );
+    const subscription = requests.at(-1)!.subscriptionId!;
+    handlers.get("operationupdate")!({
+      type: NotificationType.OperationUpdate,
+      subscriptionId: subscription,
+      refused: refusal,
+    });
+    unsubscribe();
+
+    expect(delivered).toEqual([]);
+    expect(refused).toEqual([refusal]);
   });
 
   it("compensates when the worker loses a subscribe response", async () => {
