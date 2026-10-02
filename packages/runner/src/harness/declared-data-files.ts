@@ -19,10 +19,10 @@ import { compilerStack } from "./deferred-compiler-stack.ts";
  * The names come from the resolved closure, and each is read back through the
  * resolver that produced it, so a program assembled from the file system, from
  * a web address, or from anywhere else reaches its data the way it reaches its
- * source.
+ * source. Reading is all this asks of the resolver.
  *
  * Parsing is the compiler stack's work, so the caller must have awaited
- * `ensureCompilerStack()` — `Engine.resolve` has, by the time it gets here.
+ * `ensureCompilerStack()`.
  *
  * A declared name the resolver cannot produce is an error. The program cannot
  * be assembled as its source describes it, and saying so here names both the
@@ -31,7 +31,7 @@ import { compilerStack } from "./deferred-compiler-stack.ts";
  */
 export async function attachDeclaredDataFiles(
   program: RuntimeProgram,
-  resolver: ProgramResolver,
+  resolver: Pick<ProgramResolver, "resolveSource" | "resolveDataFile">,
 ): Promise<RuntimeProgram> {
   const { collectDataFileNames, TARGET } = compilerStack();
   // A data file is not code and is never parsed as code. One already attached

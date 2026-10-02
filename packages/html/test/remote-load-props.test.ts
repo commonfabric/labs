@@ -5,7 +5,7 @@ import { REMOTE_LOAD_PROPS } from "../src/worker/reconciler.ts";
 // The reconciler decides a remote load by a hand-kept table of the props that
 // load one (`REMOTE_LOAD_PROPS`). A component that loads what a prop names, or
 // renders markup or a nested view that can, and is missing from it would let a
-// value carrying a material-risk caveat load a URL as it renders (SC-55). So
+// value carrying a material-risk caveat load a URL as it renders (SC-56). So
 // every component whose source shows a way to load is held to the table, or to
 // a reason here that it loads nothing a value chooses.
 

@@ -597,7 +597,7 @@ export class WorkerReconciler {
         }
         // The root's data may be admitted for display yet carry a caveat a
         // URL fetch does not admit; its subtree then sets no prop that would
-        // fetch one (SC-55).
+        // fetch one (SC-56).
         const remoteLoadsBlocked = rootPolicy.remoteLoadsBlocked === true ||
           this.#mayCarryRemoteRefusedCaveat(vnode, [rootConsumed]) &&
             this.#readRefusal(
@@ -1200,7 +1200,7 @@ export class WorkerReconciler {
    * The policy a URL fetch is decided under: `policy` without the caveat
    * kinds a fetch does not admit ({@link REMOTE_LOAD_REFUSED_CAVEAT_KINDS}). That is
    * the display ceiling as it stood before the prompt-caveat family was
-   * admitted (SC-54, SC-55).
+   * admitted (SC-54, SC-56).
    */
   #remoteLoadPolicyOf(policy: RenderPolicy): RenderPolicy {
     const known = this.#remoteLoadPolicies.get(policy);
@@ -4711,7 +4711,7 @@ export class WorkerReconciler {
         this.#shouldBlockTextFromCell(resolvedChild, cell, policy);
       // Admitted for display, the cell may still carry a caveat a URL fetch
       // does not admit; what it renders then sets no prop that would fetch
-      // one (SC-55).
+      // one (SC-56).
       const remoteLoadsBlocked = !blockedByPolicy &&
         (policy.remoteLoadsBlocked === true ||
           this.#mayCarryRemoteRefusedCaveat(cell, [consumed]) &&

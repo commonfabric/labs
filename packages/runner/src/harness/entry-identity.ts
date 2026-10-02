@@ -1,11 +1,16 @@
 import type { Source } from "@commonfabric/js-compiler";
 import { resolveImportSpecifier } from "@commonfabric/js-compiler/specifier";
+
 import { computeModuleIdentities } from "../sandbox/module-record-compiler.ts";
-import { resolveModuleImports } from "./module-identity.ts";
+import { attachDeclaredDataFiles } from "./declared-data-files.ts";
 import {
   compilerStack,
   ensureCompilerStack,
 } from "./deferred-compiler-stack.ts";
+import {
+  type ModuleImportEdges,
+  resolveModuleImports,
+} from "./module-identity.ts";
 
 // A fixed, arbitrary program id. `computeModuleIdentities` strips this prefix
 // before hashing (see `stripIdentityPrefix`), so its exact value never reaches
@@ -101,9 +106,10 @@ export function computeEntryIdentity(
   // files), so `identities` is guaranteed to contain `entryKey` below. Every
   // source root is an entry of its own, so each root's closure has to be as
   // complete as the main entry's.
-  assertClosureComplete(main, entryKey, prefixedCode);
+  const edges = resolveModuleImports({ main: entryKey, files: prefixedCode });
+  assertClosureComplete(main, entryKey, edges);
   for (const root of rootPaths) {
-    assertClosureComplete(root, prefixName(root), prefixedCode);
+    assertClosureComplete(root, prefixName(root), edges);
   }
 
   const identities = computeModuleIdentities(
@@ -138,17 +144,28 @@ export interface EntryIdentityOptions {
   dataFiles?: readonly string[];
 }
 
-// Walk the entry's reachable import closure and fail loudly on any dangling
-// internal import. Scoping the check to the reachable closure (rather than every
-// file) is what makes passing a superset — e.g. every file under the patterns
-// root — safe: an unrelated file's broken relative import does not concern this
-// entry's identity.
+/** What {@link resolveEntryIdentity} assembles beyond the entry, and how. */
+export interface ResolveEntryIdentityOptions extends EntryIdentityOptions {
+  /**
+   * Reads a data file by the rooted name the program stores it under. Omitted,
+   * data files are read through `readFile`, which is right wherever source and
+   * data are read the same way. A reader that decodes source text differently
+   * — consuming a leading byte order mark, say — supplies this, so that each
+   * data file is hashed byte for byte as the program stores it.
+   */
+  readDataFile?: (name: string) => Promise<string>;
+}
+
+/**
+ * Helper for `computeEntryIdentity()`, which checks a root's reachable closure
+ * against the shared import graph. Throws for dangling internal or fabric
+ * imports; unreachable files do not affect this root's validation.
+ */
 function assertClosureComplete(
   main: string,
   entryKey: string,
-  prefixed: readonly Source[],
+  edges: ReadonlyMap<string, ModuleImportEdges>,
 ): void {
-  const edges = resolveModuleImports({ main: "", files: [...prefixed] });
   const seen = new Set<string>([entryKey]);
   const queue: string[] = [entryKey];
   while (queue.length > 0) {
@@ -195,29 +212,37 @@ function unprefix(name: string): string {
 }
 
 /**
- * Read the entry's full internal import closure via `readFile`, then compute its
- * light identity (see {@link computeEntryIdentity}). `readFile(name)` receives a
- * root-relative module path (leading `/`, e.g. `/system/default-app.tsx`) and
- * returns its authored source; it must throw if the file does not exist.
+ * Assemble the program that `main` names from single-file reads, as resolving
+ * it for a compile does, then compute its light identity (see
+ * {@link computeEntryIdentity}). `readFile(name)` receives a root-relative
+ * module path (leading `/`, e.g. `/system/default-app.tsx`) and returns its
+ * authored source; it must throw if the file does not exist.
  *
- * Only relative (`./`, `../`) imports are followed. Fabric authored sources use
- * explicit file extensions, so each relative specifier resolves to an exact
- * path — no suffix guessing, no directory enumeration. Bare and `cf:` specifiers
- * are left to {@link computeEntryIdentity}'s guard.
+ * The program is the internal import closure of the entry and of each source
+ * root, together with each data file that `options` names or that a
+ * `dataFile()` call in that closure reads. Only relative (`./`, `../`) imports
+ * are followed. Fabric authored sources use explicit file extensions, so each
+ * relative specifier resolves to an exact path — no suffix guessing, no
+ * directory enumeration. Bare and `cf:` specifiers are left to
+ * {@link computeEntryIdentity}'s guard.
  *
- * Uses `readFile` alone, so it behaves identically in dev and in a compiled
- * binary's embedded file system (which supports single-file reads but not
- * necessarily directory listing).
+ * This answers for the program a set of files describes. A program already in
+ * hand compiles with the data files it names and no others, so its identity is
+ * {@link computeEntryIdentity}'s to compute.
+ *
+ * Reads files one at a time and never lists a directory, so it behaves
+ * identically in dev and in a compiled binary's embedded file system.
  */
 export async function resolveEntryIdentity(
   main: string,
   readFile: (name: string) => Promise<string>,
-  options: EntryIdentityOptions = {},
+  options: ResolveEntryIdentityOptions = {},
 ): Promise<string> {
   const rooted = (name: string) => name.startsWith("/") ? name : `/${name}`;
   const entry = rooted(main);
   const sourceRoots = (options.sourceRoots ?? []).map(rooted);
   const dataFiles = [...new Set((options.dataFiles ?? []).map(rooted))];
+  const readDataFile = options.readDataFile ?? readFile;
   // Every root is an entry of its own, so the import walk seeds from each.
   // A data file is read and never parsed: import-like text inside one is
   // data, and following it would read files the program never named.
@@ -225,10 +250,20 @@ export async function resolveEntryIdentity(
   const collected = new Set(files.map((file) => file.name));
   for (const dataPath of dataFiles) {
     if (!collected.has(dataPath)) {
-      files.push({ name: dataPath, contents: await readFile(dataPath) });
+      files.push({ name: dataPath, contents: await readDataFile(dataPath) });
     }
   }
-  return computeEntryIdentity(entry, files, { sourceRoots, dataFiles });
+  const program = await attachDeclaredDataFiles(
+    { main: entry, files, dataFiles },
+    {
+      resolveSource: sourceReader(readFile),
+      resolveDataFile: sourceReader(readDataFile),
+    },
+  );
+  return computeEntryIdentity(entry, program.files, {
+    sourceRoots,
+    dataFiles: program.dataFiles,
+  });
 }
 
 async function collectEntryClosure(
@@ -256,4 +291,14 @@ async function collectEntryClosure(
     }
   }
   return [...byName.values()];
+}
+
+/**
+ * Helper for {@link resolveEntryIdentity}, which turns a reader of a file's text
+ * into one answering with the file as a named `Source`.
+ */
+function sourceReader(
+  read: (name: string) => Promise<string>,
+): (name: string) => Promise<Source> {
+  return async (name) => ({ name, contents: await read(name) });
 }

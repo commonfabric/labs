@@ -118,7 +118,7 @@ import {
   type SettlingTracker,
   summarizeNonSettlingWindow,
 } from "./execution.ts";
-import { keyAtRatchet } from "./fan-out.ts";
+import { dirtyFanOutKey, keyAtRatchet } from "./fan-out.ts";
 import { SchedulerGates } from "./gates.ts";
 import {
   buildSchedulerGraphSnapshot,
@@ -1216,13 +1216,33 @@ export class Scheduler {
    * itself (e.g. a list coordinator's owed element setup after every awaited
    * result document confirmed absent). Set `retry` when resuming an unfinished
    * computation after a wait: its wait supplies the delay, so debounce and
-   * throttle must not strand a one-shot pull. No-op for an unsubscribed action.
+   * throttle must not strand a one-shot pull. On a fanned-out node, `instances`
+   * names the demanders whose instances must run again: only those are
+   * dirtied, and the others stay current. Without it, every instance is
+   * dirtied. No-op for an unsubscribed action.
    */
   invalidateAction(
     action: Action,
-    options?: Pick<MarkInvalidOptions, "retry">,
+    options?: Pick<MarkInvalidOptions, "retry"> & {
+      readonly instances?: readonly ScopeKeyIdentity[];
+    },
   ): void {
-    this.#markAndScheduleInvalidAction(action, undefined, options);
+    const { instances, ...markOptions } = options ?? {};
+    const fanOut = instances === undefined
+      ? undefined
+      : this.#nodes.get(action)?.fanOut;
+    if (instances === undefined || fanOut === undefined) {
+      this.#markAndScheduleInvalidAction(action, undefined, markOptions);
+      return;
+    }
+    for (const identity of instances) {
+      const key = keyAtRatchet(fanOut, identity);
+      if (key !== undefined) dirtyFanOutKey(fanOut, key);
+    }
+    this.#markAndScheduleInvalidAction(action, undefined, {
+      ...markOptions,
+      fanOutInstances: "keep",
+    });
   }
 
   /**
@@ -3523,7 +3543,7 @@ export class Scheduler {
   #markAndScheduleInvalidAction(
     action: Action,
     cause?: IMemorySpaceAddress,
-    options?: Pick<MarkInvalidOptions, "retry">,
+    options?: Pick<MarkInvalidOptions, "retry" | "fanOutInstances">,
   ): void {
     this.#markActionInvalid(action, cause, options);
 

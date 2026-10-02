@@ -684,7 +684,9 @@ holds the measurements and the conditions for revisiting.
   §5.3.4 for the query-pipeline context.
 - **Current default and planned end state.** On by default; an explicit
   `false` restores the strict pseudo-intersection (`combineSchema`) at link
-  crossings as a rollback override. The rollback is plain ambient
+  crossings as a rollback override, and a read addressed at a link slot then
+  projects by the link's stored schema rather than resolving it against the
+  reader's. The rollback is plain ambient
   last-construction-wins state: each Runtime construction sets it from its
   resolved option, and dispose deliberately does NOT reset it — a server
   runs one serving runtime per space and disposes idle ones while the rest

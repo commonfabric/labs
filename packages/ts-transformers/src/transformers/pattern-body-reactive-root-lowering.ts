@@ -15,14 +15,12 @@ import { unwrapExpression } from "../utils/expression.ts";
 import {
   cloneKeyExpression,
   getCommonFabricKeyName,
-  isCommonFabricKeyExpression,
 } from "../utils/reactive-keys.ts";
 import {
   collectDestructureBindings,
-  createKeyCall,
+  createPathRead,
   type DefaultDestructureBinding,
   type DestructureBinding,
-  type PathSegment,
 } from "./destructuring-lowering.ts";
 import {
   createReactiveWrapperForExpression,
@@ -128,14 +126,6 @@ function calleeMethodName(call: ts.CallExpression): string | undefined {
     return callee.argumentExpression.text;
   }
   return undefined;
-}
-
-function isSelfPathSegment(
-  segment: PathSegment,
-  context: TransformationContext,
-): boolean {
-  return typeof segment !== "string" &&
-    isCommonFabricKeyExpression(segment, context, "SELF");
 }
 
 /** Carries the source-map range and inferred type to a semantic replacement. */
@@ -398,7 +388,7 @@ function rewriteTrackedOpaquePatternBody(
       return dataFlow;
     }
 
-    const expression = createKeyCall(
+    const expression = createPathRead(
       context.factory.createIdentifier(info.root),
       info.path,
       context.factory,
@@ -710,7 +700,7 @@ function rewriteTrackedOpaquePatternBody(
         } else if (binding.path.length === 0) {
           loweredInitializer = rootIdentifier;
         } else {
-          loweredInitializer = createKeyCall(
+          loweredInitializer = createPathRead(
             rootIdentifier,
             binding.path,
             context.factory,
@@ -846,8 +836,10 @@ function rewriteTrackedOpaquePatternBody(
       // dynamic-wrap heuristic: when the root is a known opaque binding and
       // the access argument resolves to a static path segment (including
       // well-known CF computed keys like UI/NAME/SELF/FS), the canonical
-      // form is `root.key(...)` in-place, regardless of whether the
-      // expression lives inside a JSX slot. Falling into
+      // form is an in-place read, regardless of whether the expression lives
+      // inside a JSX slot: `root.key(...)`, or `root[SELF]` and then
+      // `root[SELF].key(...)` for a path that starts with `SELF` (see
+      // `createPathRead()`). Falling into
       // `maybeWrapDynamicJsxAccess` here would produce an unnecessary
       // lift-applied wrapper around what is already a reactive expression.
       const hasTrackedStaticAccess = !!info?.root && !info.dynamic;
@@ -896,7 +888,7 @@ function rewriteTrackedOpaquePatternBody(
           }
 
           const receiverPath = info.path.slice(0, -1);
-          const rewrittenReceiver = createKeyCall(
+          const rewrittenReceiver = createPathRead(
             context.factory.createIdentifier(info.root),
             receiverPath,
             context.factory,
@@ -927,17 +919,8 @@ function rewriteTrackedOpaquePatternBody(
         }
       }
 
-      const firstPathSegment = info.path[0];
-      if (
-        info.path.length === 1 &&
-        firstPathSegment &&
-        isSelfPathSegment(firstPathSegment, context)
-      ) {
-        return visited;
-      }
-
       if (info.path.length > 0) {
-        const rewritten = createKeyCall(
+        const rewritten = createPathRead(
           context.factory.createIdentifier(info.root),
           info.path,
           context.factory,

@@ -1,4 +1,5 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import type { BrowserHostHandoffReason } from "./browser-host.ts";
 import type { ObservationDenied } from "./observation.ts";
 import type { PromptSlotBinding } from "./prompt-slot.ts";
 import type { HarnessSubagentProfile } from "./subagent.ts";
@@ -33,6 +34,12 @@ export interface HarnessBrowserToolInputSummary {
   /** A bound handle, carried whole: it names an address, not a value. */
   urlHandle?: string;
 
+  /** Why a hand-off gave the page to the owner: one of a fixed few. */
+  reason?: BrowserHostHandoffReason;
+
+  direction?: string;
+  x?: number;
+  y?: number;
   timeoutMs?: number;
   urlBytes?: number;
   urlDigest?: string;

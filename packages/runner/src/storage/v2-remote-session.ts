@@ -272,14 +272,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
   }
 
   async close(): Promise<void> {
-    const socket = this.#socket;
-    this.#socket = null;
-    this.#connection = null;
-    this.#opening = null;
-    this.#compressionNegotiated = false;
-    this.#receiveCompressionEnabled = false;
-    this.#sendCompressionEnabled = false;
-    this.#rejectCompressionRequests(new Error("Memory transport closed"));
+    const socket = this.#detachSocket(new Error("Memory transport closed"));
     if (!this.#disposed) {
       this.#disposed = true;
       this.#onDispose();
@@ -298,6 +291,30 @@ export class WebSocketTransport implements MemoryClient.Transport {
       socket.close();
     }
     await closed;
+  }
+
+  /** @inheritDoc */
+  reset(): void {
+    const socket = this.#detachSocket(new Error("Memory connection reset"));
+    if (
+      socket?.readyState === WebSocket.CONNECTING ||
+      socket?.readyState === WebSocket.OPEN
+    ) {
+      socket.close();
+    }
+  }
+
+  /** Invalidates this connection before its close event or queued frames run. */
+  #detachSocket(error: Error): MemorySocket | null {
+    const socket = this.#socket;
+    this.#socket = null;
+    this.#connection = null;
+    this.#opening = null;
+    this.#compressionNegotiated = false;
+    this.#receiveCompressionEnabled = false;
+    this.#sendCompressionEnabled = false;
+    this.#rejectCompressionRequests(error);
+    return socket;
   }
 
   async #open(): Promise<MemorySocketConnection> {

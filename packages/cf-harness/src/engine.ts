@@ -60,6 +60,7 @@ import {
 } from "./docs-corpus/corpus.ts";
 import type { HarnessResearchRunner } from "./research/runner.ts";
 import type { HarnessToolContext } from "./tools/types.ts";
+import type { HarnessBrowserHost } from "./contracts/browser-host.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import {
   type HarnessResearchHandleValue,
@@ -491,6 +492,14 @@ export interface CreateHarnessEngineOptions
   patternIndexClientFactory?: HarnessPatternIndexClientFactory;
 
   /**
+   * The browser host attached to the run: a live channel to the component
+   * that executes the `browser` tool's operations in a session it shows the
+   * owner. Absent, the tool uses the Browser Access lease in the resolved
+   * config, when there is one.
+   */
+  browserHost?: HarnessBrowserHost;
+
+  /**
    * Injection seam for skills.sh discovery. When absent, a factory is built
    * from `skillsSh` in the resolved config; when both are absent,
    * `search_skills` stays out of the tool surface. Pinned acquisition has its
@@ -685,6 +694,7 @@ export class CfHarnessEngine {
   readonly #fabricSessionFactory?: HarnessFabricSessionFactory;
   readonly #openProbeRuntime?: HarnessToolContext["openProbeRuntime"];
   readonly #patternIndexClientFactory?: HarnessPatternIndexClientFactory;
+  readonly #browserHost?: HarnessBrowserHost;
   readonly #skillsShSearchClientFactory?: HarnessSkillsShSearchClientFactory;
   readonly #skillsShAcquisitionClientFactory?:
     HarnessSkillsShAcquisitionClientFactory;
@@ -885,6 +895,7 @@ export class CfHarnessEngine {
         )
         : undefined);
     this.#openProbeRuntime = options.openProbeRuntime;
+    this.#browserHost = options.browserHost;
     this.#patternIndexClientFactory = patternIndexClientFactory === undefined
       ? undefined
       : cacheHarnessPatternIndexClientFactory(patternIndexClientFactory);
@@ -1348,6 +1359,15 @@ export class CfHarnessEngine {
    */
   async flushPatternIndexLedger(): Promise<void> {
     await this.#patternIndexLedger?.flush();
+  }
+
+  /**
+   * The browser host attached to the run, or `undefined` when none is. A
+   * delegating parent hands it to a browser child, which is the one run that
+   * drives it.
+   */
+  get browserHost(): HarnessBrowserHost | undefined {
+    return this.#browserHost;
   }
 
   /**
@@ -2915,6 +2935,9 @@ export class CfHarnessEngine {
       allowedSkillScripts: this.config.allowedSkillScripts,
       skillScriptExecutionTarget: this.config.skillScriptExecutionTarget,
       browserAccess: this.config.browserAccess,
+      ...(this.#browserHost !== undefined
+        ? { browserHost: this.#browserHost }
+        : {}),
       handleValueOrigins: this.config.handleValueOrigins,
       handleTable: this.handleTable,
       ...(this.#fabricSessionFactory !== undefined

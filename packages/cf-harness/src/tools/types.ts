@@ -21,6 +21,7 @@ import type {
   HarnessSkillScriptExecutionTarget,
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
+import type { HarnessBrowserHost } from "../contracts/browser-host.ts";
 import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import type {
@@ -63,6 +64,14 @@ export interface HarnessToolContext {
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
+
+  /**
+   * The browser host attached to the run, when one is: the `browser` tool
+   * executes every action in its session rather than through the Browser
+   * Access lease, and a value a handle resolves to reaches a page as a handle
+   * value, which the host keeps out of later observations.
+   */
+  browserHost?: HarnessBrowserHost;
 
   /**
    * Origins a value materialized from a handle may be sent to. Absent or
@@ -346,6 +355,14 @@ export interface HarnessToolContext {
   }): Promise<HarnessCfcInvocationContext>;
 }
 
+/** What about a run decides the descriptor a tool offers it. */
+export interface HarnessToolRun {
+  cfcEnforcementMode: CfcEnforcementMode;
+
+  /** Whether a browser host carries out the run's browser actions. */
+  browserHost?: boolean;
+}
+
 export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
   descriptor: HarnessToolDescriptor;
 
@@ -358,7 +375,7 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
    */
   descriptorForRuntime?(
     runtime: SandboxRuntimeDescription,
-    run: { cfcEnforcementMode: CfcEnforcementMode },
+    run: HarnessToolRun,
   ): HarnessToolDescriptor;
 
   /**

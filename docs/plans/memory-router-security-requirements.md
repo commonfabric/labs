@@ -54,15 +54,19 @@ certificate private key, compromise exposes that key too.
 ## Authentication and authorization
 
 1. **Bind each proof to one router.** `connection.auth` must sign the protocol,
-   deployment audience, router identity, router-issued unpredictable challenge,
-   principal, issue time, and expiry. A toolshed must verify the signature and
-   all these fields before accepting a forwarded proof. The link agent must
-   attest the challenge's issuance, router identity, and client-context binding
-   in a form the toolshed can verify. It must also attest that it received the
-   exact signed statement within the challenge's one-minute lifetime, binding
-   that receipt to the statement and context without trusting the worker's
-   claimed timestamp. The toolshed verifies both attestations and records
-   accepted challenges per router and context; later presentation to another
+   deployment identifier, router identity, router-issued unpredictable
+   challenge, principal, issue time, and expiry. The routed invocation names
+   the router in `aud` and the deployment in `args.deployment`; routed
+   `hello.ok` supplies both. A toolshed must verify the signature and all
+   signed fields before accepting a forwarded proof. The link agent must
+   attest challenge issuance, router identity, and client-context binding in a
+   form the toolshed can verify. It must also attest receipt of the exact signed
+   statement within the challenge's one-minute lifetime, binding it to the
+   exact forwarded statement bytes, context, and claimed principal without
+   trusting the worker's claimed timestamp. The toolshed checks that the
+   receipt's claimed principal equals the signed issuer, verifies both
+   attestations, and records accepted challenges and statement digests per
+   router, link epoch, context, and principal. Later presentation to another
    assigned toolshed remains valid until the statement's lease expires. A proof
    for one router must fail through another; failover requires a new challenge
    and signature. The router accepts a challenge signature only once for a
@@ -72,10 +76,11 @@ certificate private key, compromise exposes that key too.
    at most one live backend context for it. Re-presentation for recovery
    atomically replaces the old context; presentation for another client-context
    ID is rejected. A new router-link epoch requires a new client signature. Both
-   peers reject expired, future-dated, or malformed proofs and a client-chosen
-   `exp` beyond the deployment's maximum authorization lease. The forwarding
-   protocol in the multiplexing design must carry this evidence before Mode A is
-   implemented.
+   peers reject expired or malformed proofs, an `iat` beyond the bounded
+   positive clock skew from attested receipt, and a client-chosen `exp` beyond
+   one hour from either the signed `iat` or the attested receipt.
+   The forwarding protocol in the multiplexing design must carry this evidence
+   before Mode A is implemented.
 2. **Authenticate the forwarding channel.** Every router has its own identity
    and key. The toolshed accepts forwarded proofs only over a mutually
    authenticated, encrypted link whose peer identity is on its router allowlist
@@ -97,9 +102,11 @@ certificate private key, compromise exposes that key too.
    The context binds the signed proof, client connection, negotiated protocol
    flags, and any sessions opened under it. A request cannot name another
    context's principal or session. Client close and principal release must have
-   defined effects on contexts and sessions. Router-link loss invalidates its
-   epoch, upstream connections, contexts, and sessions; restoration requires
-   fresh client authentication.
+   defined effects on contexts and sessions. An authenticated context-close
+   control operation revokes a context and its sessions; it is distinct from
+   `connection.release`. Router-link loss invalidates its epoch, upstream
+   connections, contexts, and sessions; restoration requires fresh client
+   authentication.
 5. **Bound the life of delegated authority.** Specify two distinct lifetimes: a
    single-use challenge valid for at most one minute to complete authentication,
    and an authorization lease of at most one hour for the resulting client
@@ -111,8 +118,10 @@ certificate private key, compromise exposes that key too.
    window through its issuing router. The toolshed must expire a context and
    close or revoke its sessions when renewal fails. A router's disconnect
    assertion alone cannot prove client liveness if the router is compromised.
-   `connection.release` must define what happens to existing sessions; if they
-   remain open, release cannot serve as revocation.
+   In routed mode, `connection.release` prevents new session opens as that
+   principal; existing sessions retain their original lease. Release is not
+   revocation. A permanent renewal refusal revokes the context immediately;
+   a transient failure cannot carry it past its existing `exp`.
 6. **Preserve authentication ordering.** `connection.auth`, challenge renewal,
    `connection.release`, session open, and session close need a causal order
    across the per-space receive chains. A request must observe the latest
@@ -233,6 +242,9 @@ certificate private key, compromise exposes that key too.
   toolsheds but cannot establish parallel or differently named contexts on one
   toolshed or survive a router-link epoch change. Recovery atomically replaces
   the old context.
+- After a routed `session.open` returns toolshed authentication metadata, a
+  second key and a lease renewal still sign for the router and deployment from
+  the client's `hello.ok`.
 - A challenge expires within one minute; a client-chosen lease longer than one
   hour is rejected. A statement received after its challenge expired is
   rejected; one received in time may reach another assigned toolshed until its

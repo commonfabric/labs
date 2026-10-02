@@ -442,6 +442,36 @@ export const describeTerminalFailure = (
       : `: ${describeProviderError(providerError)}`);
 };
 
+/**
+ * The readable summary a reasoning item carries, one paragraph per part. The
+ * provider writes it only when the request asked for one
+ * ({@link REASONING_SUMMARY}).
+ */
+const reasoningSummary = (item: Record<string, unknown>): string[] =>
+  (Array.isArray(item.summary) ? item.summary : []).flatMap((part) =>
+    isObjectNotArray(part) && part.type === "summary_text" &&
+      typeof part.text === "string" && part.text.trim() !== ""
+      ? [part.text]
+      : []
+  );
+
+/**
+ * `item` as it is kept for replay. A reasoning item goes back without its
+ * readable summary: the encrypted content is what carries the reasoning to the
+ * model, and the summary is for a person, who has it on the transcript.
+ */
+const replayable = (item: ResponsesInputItem): ResponsesInputItem =>
+  item.type === "reasoning" && "summary" in item
+    ? { ...structuredClone(item), summary: [] }
+    : structuredClone(item);
+
+/**
+ * What a request asks of the model's reasoning beside its effort: a readable
+ * summary, which a person watching the run reads. `auto` lets the provider
+ * choose the summary's length for the model.
+ */
+export const REASONING_SUMMARY = "auto" as const;
+
 export const normalizeTerminalResponse = (
   response: Record<string, unknown>,
   sourceModel: string,
@@ -465,9 +495,13 @@ export const normalizeTerminalResponse = (
   const functionCallItemIds: Record<string, string> = {};
   const orderedOutput: ResponsesInputItem[] = [];
   const searchCalls: ResponsesInputItem[] = [];
+  const reasoning: string[] = [];
   for (const rawItem of output) {
     if (!isObjectNotArray(rawItem)) continue;
     const item = rawItem as Record<string, unknown>;
+    if (item.type === "reasoning") {
+      for (const part of reasoningSummary(item)) reasoning.push(part);
+    }
     if (item.type === "message" && Array.isArray(item.content)) {
       orderedOutput.push(structuredClone(item));
       for (const rawContent of item.content) {
@@ -518,8 +552,8 @@ export const normalizeTerminalResponse = (
       orderedOutput.push(structuredClone(item));
     } else if (isReplayableItem(item)) {
       // Compaction carries the context before it; retain it for pruning too.
-      continuation.push(structuredClone(item));
-      orderedOutput.push(structuredClone(item));
+      continuation.push(replayable(item));
+      orderedOutput.push(replayable(item));
     }
   }
   const content = text.join("");
@@ -530,6 +564,7 @@ export const normalizeTerminalResponse = (
   return {
     role: "assistant",
     content,
+    ...(reasoning.length > 0 ? { reasoning: reasoning.join("\n\n") } : {}),
     ...(hasSearchEvidence
       ? {
         nativeModelToolResults: [{

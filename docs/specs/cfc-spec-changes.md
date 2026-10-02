@@ -926,10 +926,11 @@ this file is the single tracking place:
 - Schema-sanitization / contamination scoping promotion from ch. 14 to
   normative (audit 3.12). Not re-verified.
 - ~~`/value` envelope-prefix wire-format decision (audit Wave 4 #28)~~ —
-  **verified: decided by the spec.** §4.6.4/§4.6.5 normatively require the
-  `/value` envelope prefix for persisted payload labels and value-relative
-  normalization before IFC matching. Remaining work is **implementation
-  conformance** (or documenting equivalence), not a decision.
+  **decided (owner, 2026-09-30): value-relative entries stay, and §4.6.4
+  changes to match (SC-55).** The remaining work is **implementation
+  conformance** with §4.6.5: the runner converts a document path outside
+  `value`, such as `["source"]`, to the payload path of the same name, and
+  matches it against payload labels.
 
 ## Also noted by the sweep (not previously tracked)
 
@@ -1658,7 +1659,7 @@ What the change exposes, for the spec edit and as follow-up work:
   that fetches its `url` makes a request when it renders. Model output that
   read injected text and the owner's data carries both labels; once the
   display admits the caveat, such output can put the owner's data in a URL a
-  render fetches. SC-55 gates those props. (An earlier draft of this entry
+  render fetches. SC-56 gates those props. (An earlier draft of this entry
   said they should take "the public-only ceiling the fetch sinks already
   use"; that ceiling exists only under the opt-in max-enforcement posture, and
   the default fetch sinks have none.)
@@ -1669,9 +1670,33 @@ What the change exposes, for the spec edit and as follow-up work:
   caveat atom, so a clause holding a tier upgrade's alternatives (unscreened
   or ingress-screened) is refused. Nothing stores that shape today.
 
+## From the value-field path fix (2026-09-30)
+
+A document keeps its payload under `value`, and its other top-level members,
+such as `cfc` and `source`, are envelope metadata. The runner persists a label
+map whose entry paths are relative to `value`: an entry at `["error", "code"]`
+labels what §4.6.4 spells `/value/error/code`, and an entry at the empty path
+labels the payload root. No entry can name an envelope member.
+
+**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `open`.
+§4.6.4 requires persisted payload labels under an explicit `/value` prefix and
+allows an equivalent internal layout. The runner's map is such a layout, and it
+spares the common case, a payload label, from spelling `value` (owner decision
+2026-09-30: keep the layout, and change the spec to match). Proposed edit:
+state that a persisted entry's path is relative to `value`, so the empty path
+is the payload root, and drop the `/value` prefix requirement together with the
+migration note that reads a legacy `/` entry as `/value`. A label on an
+envelope member, the envelope root included, would be an entry with an
+optional `root: "document"`, whose path is then relative to the document; an
+entry without `root` labels the payload. A reader of today's label-map
+version reads an entry's `path` and `label` and ignores any other member, so
+it would take a `root` entry for a payload label. The first such entry
+therefore needs a new label-map version, which today's readers refuse. §4.6.5
+is unchanged: an envelope member's path is never matched as a payload path.
+
 ## From the render-time remote-load gate (2026-10-01)
 
-**SC-55 [normative] A render that loads a remote resource is network egress,
+**SC-56 [normative] A render that loads a remote resource is network egress,
 decided under the remote-load policy — §8.10.6, §8.10.5.2.** `open`. Since
 SC-54 the default display ceiling admits the prompt-caveat family, so a view
 whose data carries a material-risk caveat renders for its owner. A prop that

@@ -17,9 +17,10 @@ import {
   SCHEMA_META_MEMBER,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { aclDocId } from "@commonfabric/memory/acl";
-import type {
-  CommitPrecondition,
-  SqliteOperation,
+import {
+  type CommitPrecondition,
+  type SqliteOperation,
+  toDocumentPath,
 } from "@commonfabric/memory/v2";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
@@ -1170,11 +1171,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       if (flowReadExcluded(read.id, read.path)) {
         continue;
       }
+      // A notification names a document-rooted address.
       this.#cfcState.triggerReads.push(deepFreeze({
         space: read.space,
         id: read.id,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeDocumentPath(read.path) as string[],
+        path: canonicalizeDocumentPath(toDocumentPath(read.path)),
       }));
     }
   }
@@ -2448,7 +2450,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
-          path: canonicalizeDocumentPath(address.path),
+          // The reactivity log records the journal's document-rooted paths.
+          path: canonicalizeDocumentPath(toDocumentPath(address.path)),
         }),
     );
 

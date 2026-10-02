@@ -10,7 +10,7 @@ import { fromFileUrl } from "@std/path/from-file-url";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import type { PatchOp } from "@commonfabric/memory/v2";
+import { type PatchOp, toDocumentPath } from "@commonfabric/memory/v2";
 
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -579,7 +579,7 @@ Deno.test("memory v2 transactions preserve the original previousValue across rep
         space,
         scope: "space",
         id: "of:memory-v2-primitive-rewrite",
-        path: ["value", "count"],
+        path: toDocumentPath(["value", "count"]),
       },
       value: 2,
       previousValue: 0,
@@ -644,7 +644,7 @@ Deno.test("memory v2 writeBatch keeps fine-grained patches and original previous
           space,
           scope: "space",
           id: "of:memory-v2-batched-patch",
-          path: ["value", "profile", "name"],
+          path: toDocumentPath(["value", "profile", "name"]),
         },
         value: "Grace",
         previousValue: "Ada",
@@ -655,7 +655,7 @@ Deno.test("memory v2 writeBatch keeps fine-grained patches and original previous
           space,
           scope: "space",
           id: "of:memory-v2-batched-patch",
-          path: ["value", "profile", "title"],
+          path: toDocumentPath(["value", "profile", "title"]),
         },
         value: "Professor",
         previousValue: "Dr",
