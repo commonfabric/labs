@@ -706,3 +706,17 @@ apk add --no-cache ca-certificates
 # Refresh the certificate store
 sudo update-ca-certificates
 ```
+
+## Routed Memory parsers
+
+`memory` pins `ws` to 8.22.0: the private TLS listener relies on this release's
+`maxFragments` option as well as `maxPayload` before a complete WebSocket
+message reaches JavaScript. Per-message deflate is disabled. `@types/ws` 8.18.1
+types this release; `// @ts-types` points at that alias. The runner's existing
+ws selection is independent and remains in its lock.
+
+`fflate` 0.8.3 supplies incremental gzip expansion with an output limit per
+chunk. Routed Memory also validates the exact expanded length, CRC/ISIZE,
+minimal header, single-member rule and space hint. These parser pins must be
+reviewed and their adversarial fixtures rerun when updating them. The
+`@node/https` alias is Deno's Node TLS listener builtin.

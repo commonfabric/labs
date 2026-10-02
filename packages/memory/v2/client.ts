@@ -1,3 +1,4 @@
+import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -122,6 +123,9 @@ export type Transport = {
   /** Enables compression after a successful capability handshake. */
   setMessageCompressionEnabled?(enabled: boolean): void;
 
+  /** Selects bounded version-2 envelopes after routed authentication negotiation. */
+  setRoutedMessagesEnabled?(enabled: boolean): void;
+
   /**
    * Resolves once every server frame this transport held at the call has been
    * handed to the receiver, and at once when it held none or has closed.
@@ -177,6 +181,8 @@ export type SessionOpenAuth = {
 export type SessionOpenAuthContext = {
   challenge: SessionOpenChallenge;
   audience: string;
+  /** Pinned deployment for a routed connection-auth invocation. */
+  deployment?: string;
 };
 
 export type SessionOpenAuthFactory = (
@@ -189,7 +195,7 @@ export type SessionOpenAuthFactory = (
 export type ConnectionAuth = {
   invocation: FabricPlainObject;
   authorization: FabricValue;
-};
+} | { statement: string };
 
 /** Signs a `connection.auth` over the audience and challenge in `context`. */
 export type ConnectionAuthFactory = (
@@ -367,6 +373,7 @@ export class Client {
    * `hello`, since a new connection has authenticated nobody.
    */
   #authenticated = new Map<string, Promise<string>>();
+  #routedSigners = new Map<string, SessionPrincipal>();
 
   /**
    * Per authenticated key, the timer that renews its authentication before
@@ -618,6 +625,7 @@ export class Client {
    */
   async release(did: string): Promise<void> {
     this.#cancelRenewal(did);
+    this.#routedSigners.delete(did);
     if (!this.#authenticated.delete(did)) return;
     await this.request({
       type: "connection.release",
@@ -847,7 +855,9 @@ export class Client {
     principal: SessionPrincipal,
     whileConnected: boolean,
     freshChallenge = false,
+    routedChallenge?: SessionOpenAuthContext["challenge"],
   ): Promise<string | typeof STALE> {
+    this.#routedSigners.set(principal.did, principal);
     const existing = this.#authenticated.get(principal.did);
     if (existing !== undefined) {
       return await existing;
@@ -864,7 +874,7 @@ export class Client {
     // expiry is read by this clock, which may lag the server's: a refusal
     // the server marks retriable is answered once with a challenge asked
     // for outright.
-    const needsChallenge = freshChallenge ||
+    const needsChallenge = routedChallenge !== undefined || freshChallenge ||
       this.#challengeSigners.has(principal.did) ||
       held.challenge.expiresAt <= Math.floor(Date.now() / 1000);
     if (!needsChallenge) {
@@ -874,10 +884,14 @@ export class Client {
       const context = needsChallenge
         ? {
           audience: held.audience,
-          challenge: (await this.request<ConnectionChallengeResult>({
-            type: "connection.challenge",
-            requestId: this.#nextRequestId(),
-          }, { whileConnected })).challenge,
+          ...(held.deployment === undefined
+            ? {}
+            : { deployment: held.deployment }),
+          challenge: routedChallenge ??
+            (await this.request<ConnectionChallengeResult>({
+              type: "connection.challenge",
+              requestId: this.#nextRequestId(),
+            }, { whileConnected })).challenge,
         }
         : held;
       const signed = await principal.authorizeConnection(context);
@@ -971,6 +985,8 @@ export class Client {
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
     this.#authenticated.clear();
+    this.#routedSigners.clear();
+    this.#transport.setRoutedMessagesEnabled?.(false);
     this.#cancelRenewals();
     this.#challengeSigners.clear();
     // Signed opens waiting on the old connection's chain settle on their
@@ -986,6 +1002,7 @@ export class Client {
         protocol: MEMORY_PROTOCOL,
         flags: {
           ...expectedFlags,
+          routedAuthV1: true,
           messageCompressionV1: expectedFlags.messageCompressionV1 &&
             this.#transport.supportsMessageCompression === true,
         },
@@ -1056,11 +1073,6 @@ export class Client {
         // consumers (e.g. the runner's sqlite write-gate relaxation) read
         // these; absent-on-old-server keys parse to false — fail closed.
         this.#serverFlags = helloOk.flags;
-        this.#transport.setMessageCompressionEnabled?.(
-          expectedFlags.messageCompressionV1 &&
-            this.#transport.supportsMessageCompression === true &&
-            helloOk.flags.messageCompressionV1,
-        );
         try {
           this.#sessionOpenAuthContext = requireSessionOpenAuthMetadata(
             helloOk.sessionOpen,
@@ -1071,6 +1083,24 @@ export class Client {
           );
           return;
         }
+        const routed = this.#sessionOpenAuthContext.deployment !== undefined;
+        if (
+          routed !== helloOk.flags.routedAuthV1 ||
+          (routed && !helloOk.flags.connectionAuth)
+        ) {
+          this.#helloPending.reject(
+            permanentProtocolError(
+              "Routed authentication metadata does not match negotiated flags",
+            ),
+          );
+          return;
+        }
+        this.#transport.setRoutedMessagesEnabled?.(routed);
+        this.#transport.setMessageCompressionEnabled?.(
+          expectedFlags.messageCompressionV1 &&
+            this.#transport.supportsMessageCompression === true &&
+            helloOk.flags.messageCompressionV1,
+        );
         this.#helloPending.resolve();
         return;
       }
@@ -1094,6 +1124,35 @@ export class Client {
       return;
     }
 
+    if (isObjectNotArray(message) && message.type === "connection/challenge") {
+      const principal = typeof message.principal === "string"
+        ? this.#routedSigners.get(message.principal)
+        : undefined;
+      if (
+        principal === undefined ||
+        this.#sessionOpenAuthContext?.deployment === undefined
+      ) {
+        this.#rejectPending(
+          permanentProtocolError("Unexpected routed authentication challenge"),
+        );
+        return;
+      }
+      try {
+        const context = requireSessionOpenAuthMetadata({
+          ...this.#sessionOpenAuthContext,
+          challenge: message.challenge,
+        });
+        this.#authenticated.delete(principal.did);
+        this.#cancelRenewal(principal.did);
+        void this.#authenticate(principal, false, true, context.challenge)
+          .catch((error) => this.#rejectPending(error));
+      } catch (error) {
+        this.#rejectPending(
+          error instanceof Error ? error : protocolError(String(error)),
+        );
+      }
+      return;
+    }
     if (isSessionEffect(message)) {
       for (const session of this.#spaces) {
         if (
@@ -3385,6 +3444,7 @@ const requireSessionOpenAuthMetadata = (
   const sessionOpen = value as {
     audience?: unknown;
     challenge?: unknown;
+    deployment?: unknown;
   };
   if (sessionOpen.challenge === undefined) {
     throw protocolError(
@@ -3419,12 +3479,27 @@ const requireSessionOpenAuthMetadata = (
     );
   }
   return {
-    audience: sessionOpen.audience,
+    audience: sessionOpen.deployment === undefined ||
+        isCanonicalEd25519DID(sessionOpen.audience)
+      ? sessionOpen.audience
+      : (() => {
+        throw protocolError("malformed routed audience");
+      })(),
+    ...(sessionOpen.deployment === undefined ? {} : {
+      deployment: requireDeployment(sessionOpen.deployment),
+    }),
     challenge: {
       value: challenge.value,
       expiresAt: challenge.expiresAt,
     },
   };
+};
+
+const requireDeployment = (value: unknown): string => {
+  if (typeof value !== "string" || !/^[\x21-\x7e]{1,256}$/.test(value)) {
+    throw protocolError("memory server sent malformed routed deployment");
+  }
+  return value;
 };
 
 const parseHelloOk = (

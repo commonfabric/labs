@@ -39,6 +39,11 @@
     "./v2/server-execution-default": "./v2/server-execution-default.ts",
     "./v2/standalone": "./v2/standalone.ts",
     "./v2/connection-auth": "./v2/connection-auth.ts",
+    "./v2/routed-wire": "./v2/routed-wire.ts",
+    "./v2/routed-parser": "./v2/routed-parser.ts",
+    "./v2/routed-host": "./v2/routed-host.ts",
+    "./v2/routed-listener": "./v2/routed-listener.ts",
+    "./v2/routed-epochs": "./v2/routed-epochs.ts",
     "./v2/session-open-auth": "./v2/session-open-auth.ts",
     "./v2/storage-path": "./v2/storage-path.ts",
     "./v2/schema-table-links": "./v2/schema-table-links.ts",
@@ -57,6 +62,9 @@
     "@codemirror/state": "npm:@codemirror/state@^6.7.1",
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@denosaurs/plug": "jsr:@denosaurs/plug@^1.1.0",
-    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1"
+    "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
+    "@types/ws": "npm:@types/ws@8.18.1",
+    "fflate": "npm:fflate@0.8.3",
+    "ws": "npm:ws@8.22.0"
   }
 }

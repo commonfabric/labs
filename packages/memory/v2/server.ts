@@ -905,6 +905,8 @@ class Connection {
   #stableExpressionResultIds = false;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
+  #routedOwns: ((space: string) => boolean) | undefined;
+  #routedExpiries = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** Every unexpired challenge issued on this connection, oldest first. */
   #challenges = new Map<string, ConnectionChallengeState>();
@@ -937,9 +939,11 @@ class Connection {
     readonly id: string,
     server: Server,
     sendRaw: Send,
+    routedOwns?: (space: string) => boolean,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
+    this.#routedOwns = routedOwns;
   }
 
   #send(message: ServerMessage): void {
@@ -969,7 +973,8 @@ class Connection {
     // A session this connection no longer holds — closed, or revoked — is
     // sent nothing, whatever the ACL mode; under an active ACL, neither is
     // one another connection has taken over.
-    return !this.hasSession(space, sessionId) ||
+    return !this.allowsRoutedSession(space, sessionId) ||
+      !this.hasSession(space, sessionId) ||
       (this.#server.isAclActive() &&
         !this.#server.isSessionAttached(space, sessionId, this.id));
   }
@@ -1067,6 +1072,56 @@ class Connection {
   /** Ends the authentication of `principal`, if it has one. */
   releasePrincipal(principal: string): void {
     this.#principals.delete(principal);
+  }
+
+  /** Whether this connection is bound to a verified Mode A context. */
+  get routed(): boolean {
+    return this.#routedOwns !== undefined;
+  }
+
+  /** Whether this routed session still has its lease and fenced owner. */
+  allowsRoutedSession(space: string, sessionId: string): boolean {
+    if (this.#routedOwns === undefined) return true;
+    const handle = this.#sessions.get(sessionKey(space, sessionId));
+    return !this.#closed && this.#routedOwns(space) &&
+      handle !== undefined && !this.#leaseExpired(handle);
+  }
+
+  /** Rechecks a routed open after any asynchronous admission work. */
+  allowsRoutedOpen(space: string, principal: string | undefined): boolean {
+    return this.#routedOwns === undefined ||
+      (!this.#closed && this.#routedOwns(space) && principal !== undefined &&
+        this.hasPrincipal(principal));
+  }
+
+  /** Admits a toolshed-verified link proof to this one ticketed connection. */
+  admitRoutedPrincipal(principal: string, expiresAt: number): void {
+    if (
+      this.#routedOwns === undefined || expiresAt <= this.#server.nowSeconds()
+    ) {
+      throw authorizationError("Routed memory proof is expired or unbound");
+    }
+    this.admitPrincipal(
+      principal,
+      principal,
+      { value: "", expiresAt },
+      expiresAt,
+    );
+    const prior = this.#routedExpiries.get(principal);
+    if (prior !== undefined) clearTimeout(prior);
+    this.#routedExpiries.set(
+      principal,
+      setTimeout(() => {
+        this.#routedExpiries.delete(principal);
+        this.releasePrincipal(principal);
+        for (const handle of [...this.#sessions.values()]) {
+          if (handle.principal === principal && this.#leaseExpired(handle)) {
+            this.revokeSession(handle.space, handle.sessionId, "unauthorized");
+            this.#server.detachSession(handle.space, handle.sessionId, this.id);
+          }
+        }
+      }, Math.max(0, (expiresAt - this.#server.nowSeconds()) * 1000)),
+    );
   }
 
   /**
@@ -1348,6 +1403,19 @@ class Connection {
       });
       return false;
     }
+    if (
+      this.#routedOwns !== undefined &&
+      !this.allowsRoutedSession(space, sessionId)
+    ) {
+      this.revokeSession(space, sessionId, "unauthorized");
+      this.#server.detachSession(space, sessionId, this.id);
+      this.#send({
+        type: "response",
+        requestId,
+        error: toError("SessionRevokedError", "Routed memory authority ended"),
+      });
+      return false;
+    }
     if (this.#leaseExpired(handle)) {
       // Renewable: a `connection.auth` for the principal restores the
       // session, so the refusal is marked as one a retry heals.
@@ -1489,6 +1557,17 @@ class Connection {
         });
         return;
       case "connection.auth":
+        if (this.#routedOwns !== undefined) {
+          this.#send({
+            type: "response",
+            requestId: parsed.requestId,
+            error: toError(
+              "AuthorizationError",
+              "Routed proofs require the router link",
+            ),
+          });
+          return;
+        }
         this.#send(await this.#server.authenticateConnection(parsed, this));
         return;
       case "connection.challenge":
@@ -1503,8 +1582,25 @@ class Connection {
         this.#send({ type: "response", requestId: parsed.requestId, ok: {} });
         return;
       case "session.open": {
+        if (
+          this.#routedOwns !== undefined &&
+          (!this.#routedOwns(parsed.space) || parsed.principal === undefined ||
+            parsed.invocation !== undefined ||
+            parsed.authorization !== undefined ||
+            parsed.session.actingAs !== undefined)
+        ) {
+          this.#send({
+            type: "response",
+            requestId: parsed.requestId,
+            error: toError(
+              "AuthorizationError",
+              "Routed memory request denied",
+            ),
+          });
+          return;
+        }
         const response = await this.#server.openSession(parsed, this);
-        if (response.ok?.sessionId) {
+        if (response.ok?.sessionId && !this.routed) {
           this.addSession(
             parsed.space,
             response.ok.sessionId,
@@ -1877,6 +1973,9 @@ class Connection {
       return;
     }
     this.#closed = true;
+    for (const timer of this.#routedExpiries.values()) clearTimeout(timer);
+    this.#routedExpiries.clear();
+    this.#principals.clear();
     this.#server.endPresenceForConnection(this.id);
     for (const { space, sessionId } of this.#sessions.values()) {
       this.#server.detachSession(space, sessionId, this.id);
@@ -2083,6 +2182,10 @@ export class Server {
     readonly options: {
       sessions?: SessionRegistry;
       store?: URL;
+      /** Synchronous authoritative fence, checked in protected engine turns. */
+      ownsSpace?: (space: string) => boolean;
+      /** Existing-space stage: refuse missing ACLs and implicit legacy grants. */
+      requireExplicitAcl?: boolean;
 
       operationCodecs?: OperationCodecRegistry;
 
@@ -2299,6 +2402,7 @@ export class Server {
       ...getMemoryProtocolFlags(),
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
+      routedAuthV1: false,
     };
   }
 
@@ -2501,6 +2605,17 @@ export class Server {
     principal: string | undefined,
     requirement: Capability,
   ): V2Error | null {
+    if (
+      this.options.ownsSpace !== undefined && !this.options.ownsSpace(space)
+    ) {
+      return toError("AuthorizationError", "Routed memory request denied");
+    }
+    if (
+      this.options.requireExplicitAcl === true &&
+      this.#aclState(engine, space).kind !== "valid"
+    ) {
+      return toError("AuthorizationError", "Routed memory request denied");
+    }
     if (this.#aclMode() === "off") return null;
     const capability = this.#capabilityFor(engine, space, principal);
     if (capability !== null && isCapable(capability, requirement)) {
@@ -2553,6 +2668,12 @@ export class Server {
     );
   }
 
+  #assertRoutedAuthority(session: SessionState): void {
+    if (session.routedAuthority?.() === false) {
+      throw authorizationError("Routed memory authority ended");
+    }
+  }
+
   #authorizeCurrentSessionWithEngine(
     engine: Engine.Engine,
     space: string,
@@ -2560,6 +2681,9 @@ export class Server {
     session: SessionState,
     requirement: Capability,
   ): V2Error | null {
+    if (session.routedAuthority?.() === false) {
+      return toError("SessionRevokedError", "Routed memory authority ended");
+    }
     if (this.#sessions.get(space, sessionId) !== session) {
       return toError("SessionError", "Unknown session for space");
     }
@@ -2820,6 +2944,18 @@ export class Server {
     return connection;
   }
 
+  /** Creates one ticketed backend context with independent client authority. */
+  connectRouted(send: Send, owns: (space: string) => boolean): Connection {
+    if (this.#aclMode() !== "enforce" || this.options.ownsSpace === undefined) {
+      throw authorizationError(
+        "Routed memory requires enforced ACLs and ownership fencing",
+      );
+    }
+    const connection = new Connection(crypto.randomUUID(), this, send, owns);
+    this.#connections.set(connection.id, connection);
+    return connection;
+  }
+
   isAclActive(): boolean {
     return this.#aclMode() !== "off";
   }
@@ -2845,7 +2981,15 @@ export class Server {
     sessionId: string,
     ownerConnectionId: string,
   ): void {
-    this.#sessions.detach(space, sessionId, ownerConnectionId);
+    const session = this.#sessions.get(space, sessionId);
+    if (
+      session?.ownerConnectionId === ownerConnectionId &&
+      session.routedAuthority !== undefined
+    ) {
+      // Mode A context loss revokes its sessions and frees retained resource
+      // interests immediately. A fresh proof can reopen with a full restore.
+      this.#sessions.remove(space, sessionId);
+    } else this.#sessions.detach(space, sessionId, ownerConnectionId);
   }
 
   /**
@@ -2867,6 +3011,20 @@ export class Server {
         requestId,
         toError("SessionRevokedError", "Session is not attached"),
       );
+    }
+    if (connection.routed) {
+      const engine = this.#resolvedEngines.get(space);
+      const session = this.#sessions.get(space, sessionId);
+      const deny = engine === undefined || session === null
+        ? toError("SessionRevokedError", "Routed memory authority ended")
+        : this.#authorizeCurrentSessionWithEngine(
+          engine,
+          space,
+          sessionId,
+          session,
+          "READ",
+        );
+      if (deny) return respondTypedError(requestId, deny);
     }
     if (!isPresenceRoom(room)) {
       return respondTypedError(
@@ -2974,6 +3132,9 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     this.#cancelScheduledRefresh();
+    for (const connection of [...this.#connections.values()]) {
+      connection.close();
+    }
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     for (const engine of this.#engines.values()) {
@@ -3968,6 +4129,12 @@ export class Server {
     connection: Connection,
   ): Promise<ResponseMessage<SessionOpenResult>> {
     try {
+      if (
+        this.options.ownsSpace !== undefined &&
+        !this.options.ownsSpace(message.space)
+      ) {
+        throw authorizationError("Routed memory request denied");
+      }
       // An open naming a principal rests on the connection's authentication
       // of it, and uses no challenge.
       const named = message.principal;
@@ -3999,6 +4166,11 @@ export class Server {
         connection.consumeSessionOpenChallenge(authContext.challenge);
       }
       const engine = await this.#openEngine(message.space);
+      if (!connection.allowsRoutedOpen(message.space, named)) {
+        throw authorizationError(
+          "Routed memory authority ended during admission",
+        );
+      }
       // The delegated READ binding (OW31, READ side RULED 2026-08-19):
       // `actingAs: "space-owner"` is admitted only for a DELEGATING-class
       // envelope (the co-hosted process identity under the flag — the
@@ -4070,6 +4242,10 @@ export class Server {
           ),
         );
       }
+      const priorOwner = message.session.sessionId === undefined
+        ? undefined
+        : this.#sessions.get(message.space, message.session.sessionId)
+          ?.ownerConnectionId;
       const opened = this.#sessions.open(
         message.space,
         message.session,
@@ -4078,6 +4254,15 @@ export class Server {
         principal,
         actingPrincipal,
       );
+      if (connection.routed) {
+        if (priorOwner !== connection.id) {
+          this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
+        }
+        connection.addSession(message.space, opened.sessionId, principal);
+        const admitted = this.#sessions.get(message.space, opened.sessionId)!;
+        admitted.routedAuthority = () =>
+          connection.allowsRoutedSession(message.space, opened.sessionId);
+      }
       if (opened.revokedConnectionId !== undefined) {
         this.#connections.get(opened.revokedConnectionId)?.revokeSession(
           message.space,
@@ -4131,9 +4316,11 @@ export class Server {
       // owned by this connection. Off mode preserves the legacy session timing.
       const current = this.#sessions.get(message.space, opened.sessionId);
       if (
-        this.isAclActive() &&
-        (current?.ownerConnectionId !== connection.id ||
-          current.sessionToken !== opened.sessionToken)
+        (connection.routed &&
+          !connection.allowsRoutedSession(message.space, opened.sessionId)) ||
+        (this.isAclActive() &&
+          (current?.ownerConnectionId !== connection.id ||
+            current.sessionToken !== opened.sessionToken))
       ) {
         return respondTypedError<SessionOpenResult>(
           message.requestId,
@@ -4186,11 +4373,7 @@ export class Server {
   async ackSession(
     message: SessionAckRequest,
   ): Promise<ResponseMessage<SessionAckResult>> {
-    const session = this.#sessions.updateSeenSeq(
-      message.space,
-      message.sessionId,
-      message.seenSeq,
-    );
+    const session = this.#sessions.get(message.space, message.sessionId);
     if (session === null) {
       return respondTypedError<SessionAckResult>(
         message.requestId,
@@ -4199,6 +4382,21 @@ export class Server {
     }
     try {
       const engine = await this.#openEngine(message.space);
+      const deny = this.#authorizeCurrentSessionWithEngine(
+        engine,
+        message.space,
+        message.sessionId,
+        session,
+        "READ",
+      );
+      if (deny) {
+        return respondTypedError<SessionAckResult>(message.requestId, deny);
+      }
+      this.#sessions.updateSeenSeq(
+        message.space,
+        message.sessionId,
+        message.seenSeq,
+      );
       return {
         type: "response",
         requestId: message.requestId,
@@ -4228,12 +4426,13 @@ export class Server {
     message: TransactRequest,
     publishVerdict?: PublishTransactVerdict,
   ): Promise<ResponseMessage<Engine.AppliedCommit>> {
+    const originating = this.#sessions.get(message.space, message.sessionId);
     const requestedAt = performance.now();
     return await this.#withSpacePublicationLock(message.space, async () => {
       const lockWaitMs = performance.now() - requestedAt;
       let outcome = "threw";
       try {
-        const decision = await this.#decideTransaction(message);
+        const decision = await this.#decideTransaction(message, originating);
         outcome = decision.response.error?.name ?? "ok";
         let verdictError: { value: unknown } | undefined;
         try {
@@ -4284,13 +4483,17 @@ export class Server {
   async resolveEventAttention(
     message: EventAttentionResolveRequest,
   ): Promise<ResponseMessage<EventAttentionResolveResult>> {
+    const originating = this.#sessions.get(message.space, message.sessionId);
     return await this.#withSpacePublicationLock(message.space, async () => {
       try {
         const session = this.#sessions.get(message.space, message.sessionId);
-        if (session === null) {
+        if (
+          session === null || session !== originating ||
+          originating.routedAuthority?.() === false
+        ) {
           return respondTypedError<EventAttentionResolveResult>(
             message.requestId,
-            toError("SessionError", "Unknown session for space"),
+            toError("SessionError", "Unknown or replaced session for space"),
           );
         }
         const engine = await this.#openEngine(message.space);
@@ -4300,10 +4503,11 @@ export class Server {
             toError("SessionError", "Unknown or replaced session for space"),
           );
         }
-        const deny = this.#authorizeMessageWithEngine(
+        const deny = this.#authorizeCurrentSessionWithEngine(
           engine,
           message.space,
-          session.principal,
+          message.sessionId,
+          session,
           "WRITE",
         );
         if (deny !== null) {
@@ -4585,6 +4789,7 @@ export class Server {
 
   async #decideTransaction(
     message: TransactRequest,
+    originating: SessionState | null,
   ): Promise<TransactDecision> {
     let postCommit: (() => Promise<void>) | undefined;
     const response = await tracer.startActiveSpan(
@@ -4638,7 +4843,10 @@ export class Server {
           commitTelemetry.sqliteOperationCount,
         );
         const session = this.#sessions.get(message.space, message.sessionId);
-        if (session === null) {
+        if (
+          session === null || session !== originating ||
+          originating.routedAuthority?.() === false
+        ) {
           span.end();
           return respondTypedError<Engine.AppliedCommit>(
             message.requestId,
@@ -4698,7 +4906,10 @@ export class Server {
               )
             ? "READ"
             : "OWNER";
-          const deny = this.#authorizeMessageWithEngine(
+          const routedDeny = session.routedAuthority?.() === false
+            ? toError("SessionRevokedError", "Routed memory authority ended")
+            : null;
+          const deny = routedDeny ?? this.#authorizeMessageWithEngine(
             engine,
             message.space,
             session.principal,
@@ -5036,6 +5247,7 @@ export class Server {
     }
 
     try {
+      this.#assertRoutedAuthority(session);
       return {
         type: "response",
         requestId: message.requestId,
@@ -5356,6 +5568,7 @@ export class Server {
         { principal: session!.principal, sessionId: session!.id },
       );
       if (!current()) return false;
+      this.#assertRoutedAuthority(session!);
       const previous = session!.viewSelections.get(handle.viewId);
       if (
         previous !== undefined && selection.generation <= previous.generation
@@ -5397,7 +5610,9 @@ export class Server {
     views: readonly ViewInterest[],
     engine?: Engine.Engine,
   ) {
+    this.#assertRoutedAuthority(session);
     engine ??= await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
     const identity = { principal: session.principal, sessionId: session.id };
     const renderWatches = views.length === 0
       ? [...watches]
@@ -5455,7 +5670,9 @@ export class Server {
     watches: readonly WatchSpec[],
     engine?: Engine.Engine,
   ) {
+    this.#assertRoutedAuthority(session);
     engine ??= await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
     const existing = new Set(session.watches.map((watch) => watch.id));
     const { graphs: demandGraphs } = this.#extendWatchGraphs(
       session,
@@ -5607,6 +5824,7 @@ export class Server {
     }
 
     try {
+      this.#assertRoutedAuthority(session);
       const nextOperationCursors = incremental
         ? new Map(session.operationCursors)
         : new Map<string, OpCursor>();
@@ -5631,6 +5849,7 @@ export class Server {
           views,
           aclEngine,
         );
+      this.#assertRoutedAuthority(session);
       const { serverSeq, graphs, entities } = evaluated;
       const demandGraphs = evaluated.demandGraphs ?? graphs;
       const demandEntities = evaluated.demandEntities ?? entities;
@@ -5691,6 +5910,7 @@ export class Server {
           ),
         );
       }
+      this.#assertRoutedAuthority(session);
       const viewEpochs = new Map<string, string>();
       for (const view of views) {
         const previous = session.views.find((candidate) =>
@@ -5929,6 +6149,7 @@ export class Server {
     try {
       const startedAt = performance.now();
       const engine = aclEngine ?? await this.#openEngine(message.space);
+      this.#assertRoutedAuthority(session);
       // Resume can share watch containers with an older registry object. Only
       // the current registry object may publish into those containers.
       if (this.#sessions.get(message.space, message.sessionId) !== session) {
@@ -6718,6 +6939,7 @@ export class Server {
     if (session === null) {
       return Promise.resolve(null);
     }
+    if (session.routedAuthority?.() === false) return Promise.resolve(null);
     // The catch-up marker is consumed into `session.caughtUpLocalSeq` (and
     // stamped on the frame) DURING evaluation; capture the pre-call values
     // so a throwing evaluation can restore them — the marker is the one
@@ -6798,6 +7020,7 @@ export class Server {
               removes: [],
             };
             const message = await finishCatchUp(sync);
+            this.#assertRoutedAuthority(session);
             if (
               !hasPendingCatchUp &&
               (sync.operationFields?.length ?? 0) === 0 &&
@@ -6904,6 +7127,7 @@ export class Server {
                 : undefined;
 
               const engine = await this.#openEngine(space);
+              this.#assertRoutedAuthority(session);
               const fromSeq = session.lastSyncedSeq;
               const identity = this.#sessionScopeIdentity(session);
               const updates = new Map<string, SessionCacheEntry>();
@@ -7289,6 +7513,7 @@ export class Server {
             return await emptyCatchUp(sync.fromSeq, sync.toSeq);
           }
           const message = await finishCatchUp(sync);
+          this.#assertRoutedAuthority(session);
           // As on the incremental branch: retain the frame's true
           // instance-keyed entries for exact delivery rollback.
           this.#deliveredFrameEntries.set(message, delivered);
@@ -7337,6 +7562,7 @@ export class Server {
     if (operationWatches.length === 0) return;
     const cursors = operationCursors ?? session.operationCursors;
     const engine = await this.#openEngine(space);
+    this.#assertRoutedAuthority(session);
     this.#attachOperationFieldsWithEngine(
       engine,
       session,
@@ -7354,6 +7580,7 @@ export class Server {
     watches: readonly OperationWatchSpec[],
     operationCursors: Map<string, OpCursor>,
   ): void {
+    this.#assertRoutedAuthority(session);
     if (watches.length === 0) return;
     operationActiveWatchCount.record(watches.length);
     const cursors = operationCursors;
@@ -7875,6 +8102,7 @@ export class Server {
       root: GraphQuery["roots"][number];
     }>,
   ): Promise<V2Error | undefined> {
+    this.#assertRoutedAuthority(session);
     // Synchronous fast path first: a read naming NO instance adds no
     // microtask boundary — the request's authorization and evaluation
     // keep sharing one engine turn (the ACL revocation-race invariant).
@@ -7994,6 +8222,7 @@ export class Server {
     space: string,
     session: SessionState,
   ): Promise<boolean> {
+    this.#assertRoutedAuthority(session);
     if (session.leaseHolderReads !== true) return false;
     // Unreachable for an admitted session (admission needs a principal
     // to build the full holder); a principal-less bit is simply inert.

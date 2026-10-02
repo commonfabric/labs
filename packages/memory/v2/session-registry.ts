@@ -96,6 +96,8 @@ export type SessionState = {
 
   expiresAt: number | null;
   ownerConnectionId: string | null;
+  /** Originating routed authority survives detach and is replaced only by admission. */
+  routedAuthority?: () => boolean;
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
@@ -309,6 +311,26 @@ export class SessionRegistry {
     }
     session.seenSeq = Math.max(session.seenSeq, seenSeq);
     return session;
+  }
+
+  /** Clears a routed context's retained interests before a fresh-context restore. */
+  clearRoutedInterests(space: string, sessionId: string): void {
+    const session = this.#sessions.get(sessionKey(space, sessionId));
+    if (session === undefined) return;
+    session.watches = [];
+    session.views = [];
+    session.operationWatches = [];
+    session.watchIndex = new Map();
+    session.graphs = new Map();
+    session.entities = new Map();
+    session.trackedIds = new Set();
+    session.operationTrackedIds = new Set();
+    session.operationCursors = new Map();
+    session.viewEpochs = new Map();
+    session.viewSelections = new Map();
+    session.viewDemandGraphs = new Map();
+    session.viewDemandEntities = new Map();
+    session.forceFullResync = true;
   }
 
   detach(space: string, sessionId: string, ownerConnectionId: string): void {
