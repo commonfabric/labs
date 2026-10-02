@@ -87,6 +87,10 @@ import {
   type HarnessClientActionOutcomeKind,
   isHarnessClientActionOutcomeKind,
 } from "./contracts/client-action.ts";
+import {
+  checkHarnessClientProtocol,
+  type HarnessClientProtocolDeclaration,
+} from "./contracts/client-command.ts";
 
 export type HarnessInteractivePromptLoop = Pick<
   CfHarnessPromptLoop,
@@ -336,6 +340,25 @@ const activeTurnError = (
       : `session ${session.sessionId} already has active turn ${activeTurnId}`,
     retryable: true,
   });
+
+/**
+ * The refusal a host's protocol declaration earns before any session or turn
+ * starts, or undefined when it requires nothing this console lacks.
+ */
+const protocolMismatchError = (
+  requestId: string,
+  declaration: HarnessClientProtocolDeclaration | undefined,
+): HarnessChatErrorResponse | undefined => {
+  if (declaration === undefined) return undefined;
+  const check = checkHarnessClientProtocol(declaration);
+  if (check.ok) return undefined;
+  const { message, ...details } = check.mismatch;
+  return createHarnessChatErrorResponse(requestId, {
+    code: "protocol_mismatch",
+    message,
+    details: { ...details },
+  });
+};
 
 const sessionExistsError = (
   requestId: string,
@@ -1344,6 +1367,8 @@ export class HarnessInteractiveChatService {
     requestId: string,
     params: HarnessChatStartSessionParams,
   ): Promise<HarnessChatResponse<HarnessChatSessionStatus>> {
+    const mismatch = protocolMismatchError(requestId, params.protocol);
+    if (mismatch !== undefined) return mismatch;
     const sessionId = params.sessionId ?? this.#randomUUID();
     if (this.#sessions.has(sessionId)) {
       return sessionExistsError(requestId, sessionId);
@@ -1420,6 +1445,8 @@ export class HarnessInteractiveChatService {
     params: HarnessChatStartTurnParams,
     attached: { browserHost?: HarnessBrowserHost } = {},
   ): Promise<HarnessChatResponse<HarnessChatTurnStatus>> {
+    const mismatch = protocolMismatchError(requestId, params.protocol);
+    if (mismatch !== undefined) return mismatch;
     if (
       params.input.loomId !== undefined &&
       (typeof params.input.loomId !== "string" ||

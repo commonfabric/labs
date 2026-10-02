@@ -1934,3 +1934,40 @@ Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its 
     }
   }
 });
+
+Deno.test("interactive NDJSON transport refuses a protocol mismatch before the session starts", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "start_session",
+        params: {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+          model: "gpt-test",
+          protocol: { protocolVersion: 2, requires: ["client_actions"] },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+  });
+
+  const envelopes = decodeLines(output);
+  assertEquals(envelopes, [
+    JSON.parse(
+      Deno.readTextFileSync(
+        fromFileUrl(
+          new URL(
+            "./fixtures/client-command-wire/protocol-mismatch-stdio.json",
+            import.meta.url,
+          ),
+        ),
+      ),
+    ),
+  ]);
+});

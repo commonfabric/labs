@@ -35,6 +35,10 @@ import {
   REFERENT_HANDLE_TOKEN_PREFIX,
   REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
+import {
+  type HarnessCommandResultProvenance,
+  readHarnessCommandResultProvenance,
+} from "./contracts/client-command.ts";
 import type { HarnessSkillAcquisition } from "./contracts/skill.ts";
 import { isCfcLabelShape } from "./cfc-label-shape.ts";
 
@@ -280,10 +284,12 @@ export const mintAddressHandle = async (
 
 /** Helper for minting, which names a referent by everything but its token. */
 const referentIdentityKey = (
-  referent: Pick<
-    HarnessHandleReferent,
-    "kind" | "source" | "value" | "label" | "labelSource"
-  >,
+  referent:
+    & Pick<
+      HarnessHandleReferent,
+      "kind" | "source" | "value" | "label" | "labelSource"
+    >
+    & { provenance?: HarnessCommandResultProvenance },
 ): string =>
   hashStringOf([
     "referent",
@@ -292,6 +298,11 @@ const referentIdentityKey = (
     referent.value,
     referent.label,
     referent.labelSource,
+    // Only a command result carries provenance, so every other referent keeps
+    // the identity it was minted under.
+    ...(referent.provenance !== undefined
+      ? [{ ...referent.provenance } as Record<string, string | number>]
+      : []),
   ]);
 
 /**
@@ -309,6 +320,9 @@ export const referentDraft = (
         value: referent.value,
         label: referent.label,
         labelSource: referent.labelSource,
+        ...(referent.provenance !== undefined
+          ? { provenance: referent.provenance }
+          : {}),
       };
     case "research":
       return {
@@ -739,7 +753,7 @@ const assertValidReferents = (referents: unknown): void => {
     // only research labels research, and only a child labels a return. A
     // record pairing them otherwise was not minted by this module.
     const labelSources = kind === "document"
-      ? ["row", "query"]
+      ? ["row", "query", "command"]
       : kind === "research"
       ? ["research"]
       : ["child"];
@@ -750,6 +764,22 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
           String(labelSource)
         }\``,
+      );
+    }
+    // A command result says which command produced it, and only a command
+    // result carries provenance.
+    const provenance = Object.hasOwn(referent, "provenance")
+      ? referent.provenance
+      : undefined;
+    if (labelSource === "command") {
+      if (readHarnessCommandResultProvenance(provenance) === undefined) {
+        throw new Error(
+          `invalid handle table: command referent \`${token}\` has malformed provenance`,
+        );
+      }
+    } else if (provenance !== undefined) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` carries provenance without the command label source`,
       );
     }
     if (tokens.has(token)) {

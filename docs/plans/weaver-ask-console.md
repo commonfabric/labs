@@ -89,9 +89,9 @@ single ownership are the constraints.
 
 Extract while implementing the relevant checkpoint, with behavior tests around
 the moved responsibility. Do not make a preliminary repository-wide cleanup. The
-callback coordinator's scope is decided in checkpoint 1: the browser-host
-channel (`console/browser-host.ts`) is a second coordinator on main, and that
-checkpoint settles whether one coordinator serves both.
+callback coordinator serves the chat event log only: typed commands ride it, and
+the browser-host channel (`console/browser-host.ts`) stays a separate per-turn
+coordinator.
 
 ## 1. Prove a typed command round trip
 
@@ -121,10 +121,11 @@ is new code that reuses `LoomCommandClient`'s door, separate from `SkillFire`.
 Loom's registry is an internal descriptor source for that adapter, not another
 interface the harness must understand or call.
 
-Expose supported Weaver command IDs, descriptions, target scopes, and JSON
-schemas through the callback channel, with full descriptions fetched on demand.
-Invoke `{command, args, target?}`; Weaver supplies origin, pinned service, and
-agent attribution. Discovery must describe what the adapter can execute. Start
+Expose supported Weaver command IDs, descriptions, target scopes, where each
+executes (in the Weaver, or forwarded to Loom), whether it reads or mutates, its
+approval, and JSON schemas through the callback channel, with full descriptions
+fetched on demand. Invoke `{command, args, target?, approval}`; Weaver supplies
+origin, pinned service, and attribution. Discovery must describe what the adapter can execute. Start
 with one real query through the full Swift path, deferring action admission to
 checkpoint 3 without refactoring the whole registry.
 
@@ -141,22 +142,25 @@ derive human receipts from it. Avoid widening `CommandManifest.Reply` one output
 field at a time or returning “answered in the pill” as the query's value.
 
 Store result JSON using the existing `document` handle referent. No cell or
-second result store is needed. A document referent today admits only
-`labelSource` `row` or `query`, which the persisted format validates, and
-carries an IFC label. A command result needs a new label source and a stated
-label policy; record that CFC decision before implementation. Return outcome
+second result store is needed. A command result is a document referent with
+label source `command` and a `provenance` record (command, actor, target loom and
+version where present, origin loom); the persisted-table check requires
+provenance exactly on that label source. The label is metadata the result
+carries; what a model may do with a result under it is the read policy's
+decision in checkpoint 2, not the label source's. Return outcome
 metadata and a handle to the model; keep user receipts separate and avoid
 duplicating raw result data in resolved events. Replace the callback's small
 text-summary limit with separately bounded JSON and receipt limits. Reject
 oversized requests before execution; an oversized response must still report
 whether the action happened.
 
-Keep one callback coordinator and one Weaver approval queue. Main already holds
-a second callback coordinator, the browser-host channel
-(`console/browser-host.ts`), with its own pending map, settlement, withdrawal,
-and a per-turn, token-gated stream. Whether typed commands ride the chat event
-log, a per-turn channel like the browser host's, or one coordinator serving both
-is an open decision for this checkpoint. The coordinator commits request state
+Keep one callback coordinator and one Weaver approval queue. Typed commands ride
+the chat event log: a `client_action_requested` event carries an
+`invoke_command` or `list_commands` action over `GET /api/events`, and the
+Weaver answers on `POST /api/client-actions` with a `settlement` in place of the
+final-action `outcome`. The browser-host channel (`console/browser-host.ts`),
+with its own pending map, settlement, withdrawal, and per-turn token-gated
+stream, stays separate. The coordinator commits request state
 before delivering its event and keeps a settlement that arrives during that
 delivery, resolved event included, without a reentrant event-queue deadlock; the
 extraction preserves that. Extend the Weaver's existing per-run, in-memory
@@ -168,6 +172,41 @@ execution-uncertain actions. Durable client restoration is a separate follow-up.
 Pending requests become interrupted after console restart; they are not replayed
 as commands. Do not promise exactly-once mutation across a lost command
 response.
+
+**Attribution.** A read on the Weaver's reviewed read-only list runs
+automatically and is attributed to the agent; a mutation waits for the person's
+approval tap and is attributed to the user, because the tap is the person's own
+act. The invocation names the approval the console asks for (copied from the
+catalog), the Weaver applies the stricter of that and its own list, and the
+settlement names the approval, actor, and executor actor it applied, so neither
+the executor nor Loom infers it. The Weaver sends Loom `actor: "user"` for an
+approved command and `actor: "agent:cf-harness"` for an automatic read, the
+target as `context.loom_id`, and a version precondition as
+`context.expected_version`. The read-only list is a static Weaver-side list,
+since Loom's registry carries no query/action flag.
+
+**Loom's actor rules admit the first query.** `loom.inspect` declares neither
+`actors` nor `origins_refused`, so an `agent:<slug>` actor is admitted; nor do
+`loom.add`, `loom.move`, `page.write`, or `create.note`. The Weaver calls
+`POST /command` directly without the `X-Loom-Agent-Run-Id` header, so its origin
+is never derived as `session`. No CFS change is needed for this checkpoint's
+query, or for the candidate mutations, which run as `user` after approval.
+
+**Contract.** `packages/cf-harness/src/contracts/client-command.ts` and
+`shared/WeaverClientCommand.swift` define the invocation, catalog, settlement
+(`executed`, `declined`, `failed_to_deliver` with `landed: no | unknown`,
+`interrupted`), the outcome (executor, transport status, Loom's summary fields,
+and the complete body up to 256 KiB, omitted with its size above that), the
+protocol check, and the limits: 16 KiB of args, a 2,000-character receipt, and
+no 500-character result cap. `/api/task` and stdio `start_session`/`start_turn`
+take `protocol: {protocolVersion, requires}` and refuse a mismatch with
+`protocol_mismatch` before any session or turn starts. An older console ignores
+the field, so a Weaver that requires a feature beyond `client_actions` reads the
+console's `protocol` from `GET /api/status` before its first task there, and
+treats a console that publishes none, or an accepted task that echoes none, as
+one that cannot serve it. The JSON files under
+`packages/cf-harness/test/fixtures/client-command-wire/` pin the wire for both
+languages; the Weaver holds a byte-identical copy.
 
 **Gate:** a deterministic Swift-to-console fixture executes a Loom query and
 verifies the full JSON referent and command outcome. Extend
@@ -333,8 +372,8 @@ reviewed allowlist to run queries automatically and route actions through
 existing approval controls. Loom's registry carries no query/action or read-only
 flag (it records `reversible`, `locality`, `tier`, `grant`, `actors`, and
 `origins_refused`), so the allowlist is a static reviewed list. 106 verbs refuse
-the `session` origin and an omitted actor defaults to `user`, so the adapter
-must send an agent actor; how is a question for the CFS side. Add missing
+the `session` origin and an omitted actor defaults to `user`; the adapter sends
+the actor its settlement records (checkpoint 1's attribution). Add missing
 structured query/action forms incrementally. Preserve supplied version
 preconditions and Loom's agent/provenance checks; never turn a stale-version
 refusal into a newly authorized write automatically. Exclude commands that open
