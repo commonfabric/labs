@@ -1115,11 +1115,15 @@ being retyped. Loom retrieval uses the parallel `cfh:v:` grammar for admitted
 non-cell document referents, which can be delegated and consumed by the agent
 result writer. It does not expose a general value-handle dereference or release
 API. Token derivation is deterministic: the suffix is computed from the table's
-salt (the run id) and the normalized address, so the same referent yields the
-same token within a run and two spellings of one address (an LLM-friendly link
-and the bare entity URI, say) share one token. A suffix collision re-derives a
-fresh five-character suffix with a counter mixed into the hash, so no token is
-ever a prefix of another.
+salt (the id of the run that created the table) and the normalized address, so
+the same referent yields the same token within a table and two spellings of one
+address (an LLM-friendly link and the bare entity URI, say) share one token. An
+interactive session carries its table from turn to turn: each turn is a fresh
+run with its own run id that starts from the session's table, keeping its salt,
+so a token from an earlier turn resolves in a later one and an address held
+already keeps its token. A suffix collision re-derives a fresh five-character
+suffix with a counter mixed into the hash, so no token is ever a prefix of
+another.
 
 The table supports swapping in both directions:
 
@@ -1926,12 +1930,13 @@ chronological order. Saved unscoped kits are interpreted in one read boundary:
 orientation. Stored transcripts are not rewritten. Saved unscoped kits retain
 their implementation admission contract; new calls use the two purposes above.
 
-Interactive sessions commit the original user goal, selected research, and the
-full model-context CFC record atomically with resumable history. A later root
-task retains that goal alongside its current request and inherits those findings
-as historical context, including after SQLite restart. It receives current
-grants independently; earlier bindings are not automatically transferred to a
-child. By default, a failed turn retains the previous checkpoint. The Loom
+Interactive sessions commit the original user goal, selected research, the full
+model-context CFC record, and the handle table atomically with resumable
+history; the handle table follows whichever checkpoint is committed. A later
+root task retains that goal alongside its current request and inherits those
+findings as historical context, including after SQLite restart. It receives
+current grants independently; earlier bindings are not automatically transferred
+to a child. By default, a failed turn retains the previous checkpoint. The Loom
 interactive host opts into `finalizeOnTurnLimit`: a failed provider call can
 retain the last resumable checkpoint: a validated complete tool batch or
 opening-research handoff with matching research, CFC state, and omission

@@ -483,6 +483,16 @@ export interface CreateHarnessEngineOptions
   inheritedCfcModelContext?: HarnessCfcModelContext;
 
   /**
+   * The handle table a new run starts from: an interactive session's table as
+   * its last checkpoint left it, so a token the model saw in an earlier turn
+   * still resolves in this one. The run keeps the table's salt and its own
+   * run id; startup inputs and well-known grants mint into it, and an address
+   * it already holds keeps its token. Refused beside `runState`, whose
+   * recorded table is the one a resumed run continues.
+   */
+  inheritedHandleTable?: HarnessHandleTable;
+
+  /**
    * Injection seam for the render gate's probe runtime, mirroring
    * `fabricSessionFactory`: a test supplies one to see what the gate opens
    * the probe under. When absent, the gate opens a real isolated runtime.
@@ -839,6 +849,14 @@ export class CfHarnessEngine {
     }
     if (options.runState?.handleTable !== undefined) {
       assertValidHarnessHandleTable(options.runState.handleTable);
+    }
+    if (options.inheritedHandleTable !== undefined) {
+      if (options.runState !== undefined) {
+        throw new Error(
+          "an inherited handle table cannot accompany a resumed run state",
+        );
+      }
+      assertValidHarnessHandleTable(options.inheritedHandleTable);
     }
     this.config = resolveHarnessConfig({
       ...options,
@@ -1242,6 +1260,9 @@ export class CfHarnessEngine {
           : {}),
         ...(options.inheritedCfcModelContext !== undefined
           ? { cfcModelContext: options.inheritedCfcModelContext }
+          : {}),
+        ...(options.inheritedHandleTable !== undefined
+          ? { handleTable: options.inheritedHandleTable }
           : {}),
         skillsRoot: this.config.skillsRootRecord,
         ...(options.acquiredSkills !== undefined

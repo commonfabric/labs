@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
+import { Database } from "@db/sqlite";
 import {
   createHarnessChatEventEnvelope,
   createHarnessChatSessionStatus,
@@ -22,6 +23,10 @@ import type {
 } from "../src/prompt-loop.ts";
 import type { LoomLocalHostBinding } from "../src/contracts/run-manifest.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
+import {
+  createHarnessHandleTable,
+  mintReferentHandle,
+} from "../src/handle-table.ts";
 import {
   type HarnessTranscriptMessage,
   inspectHarnessTranscriptPairing,
@@ -628,6 +633,73 @@ Deno.test("sqlite session store persists session snapshots and events atomically
     );
     assertEquals(store.getSession("session-atomic")?.transcript, []);
     assertEquals(await store.latestSequence(), 1);
+  } finally {
+    store.close();
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("sqlite session store loads a session row without a handle table and persists one added later", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  // A store written before sessions carried a handle table: its
+  // `chat_session` has no column for one.
+  const legacy = new Database(path);
+  legacy.exec(`
+    CREATE TABLE chat_session (
+      session_id  TEXT NOT NULL PRIMARY KEY,
+      status      TEXT NOT NULL,
+      transcript  TEXT NOT NULL,
+      research_context TEXT,
+      assigned_pieces TEXT,
+      transcript_omissions TEXT,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL,
+      closed_at   TEXT
+    );
+  `);
+  const session = createHarnessChatSessionStatus({
+    sessionId: "session-without-table",
+    createdAt: "2026-05-27T00:00:00.000Z",
+    workspace: { hostPath: "/workspace" },
+  });
+  legacy.prepare(`
+    INSERT INTO chat_session
+      (session_id, status, transcript, created_at, updated_at)
+    VALUES (:session_id, :status, '[]', :created_at, :updated_at)
+  `).run({
+    session_id: session.sessionId,
+    status: JSON.stringify(session),
+    created_at: session.createdAt,
+    updated_at: session.updatedAt,
+  });
+  legacy.close();
+  const handleTable = (await mintReferentHandle(
+    createHarnessHandleTable("run-earlier"),
+    {
+      kind: "document",
+      source: "loom_search",
+      value: { title: "held" },
+      label: {},
+      labelSource: "query",
+    },
+  )).table;
+
+  let store = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(path),
+  });
+  try {
+    expect(store.getSession(session.sessionId)).toEqual({
+      session,
+      transcript: [],
+    });
+
+    store.saveSession({ session, transcript: [], handleTable });
+    store.close();
+    store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
+
+    expect(store.getSession(session.sessionId)?.handleTable).toEqual(
+      handleTable,
+    );
   } finally {
     store.close();
     await Deno.remove(path);

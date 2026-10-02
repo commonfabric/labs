@@ -144,7 +144,10 @@ export const defineOwnEntry = (
   });
 };
 
-/** Constructs an empty handle table salted with `salt` (the run id). */
+/**
+ * Constructs an empty handle table salted with `salt`, the id of the run
+ * creating it.
+ */
 export const createHarnessHandleTable = (
   salt: string,
 ): HarnessHandleTable => ({
@@ -366,16 +369,16 @@ export const mintReferentHandle = async (
 
 /**
  * Folds the entries and referents of `incoming` into `current`, answering a
- * table that holds everything either held. Both were minted from one run's
- * table, and a mint only ever fills a field an entry left undefined, so an
+ * table that holds everything either held. Both were minted from one table,
+ * and a mint only ever fills a field an entry left undefined, so an
  * address present in both is merged field by field: each optional field is
  * taken from whichever side defines it, and from `current` where both do. A
  * writer's table carries a copy of every entry it read, so neither side's
  * copy of an entry can simply stand; two writers that each extended the
  * table they read both keep their additions, whichever recorded second.
  *
- * @throws Error when the tables carry different salts, since their tokens
- * were then derived from different runs and cannot share a table; or when
+ * @throws Error when the tables carry different salts, since they then grew
+ * from different tables and their tokens cannot share one; or when
  * two writers minting from one base drew different tokens for one address,
  * or one token for two different addresses or referents, none of which
  * either writer could see of the other.

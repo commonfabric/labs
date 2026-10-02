@@ -305,7 +305,8 @@ and dispatch. Bare Fabric IDs are not converted. A delegation explicitly seeds
 the child table with only the parent handles named in its goal or context; child
 references are resolved at the child boundary and re-minted into the parent
 table, while any unheld token-shaped text is scrubbed. Raw artifacts retain
-canonical references, and the table is persisted across batch resume.
+canonical references, and the table is persisted across batch resume and
+committed with an interactive session's checkpoint for the next turn's run.
 
 Resume preserves recorded transcript/run configuration and rejects unsupported
 new inputs such as image or skill changes. The local Loom host additionally
