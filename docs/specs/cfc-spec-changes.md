@@ -1658,12 +1658,65 @@ What the change exposes, for the spec edit and as follow-up work:
   that fetches its `url` makes a request when it renders. Model output that
   read injected text and the owner's data carries both labels; once the
   display admits the caveat, such output can put the owner's data in a URL a
-  render fetches. Those props need gating as network sinks, at the
-  public-only ceiling the fetch sinks already use, rather than admission as
-  display.
+  render fetches. SC-55 gates those props. (An earlier draft of this entry
+  said they should take "the public-only ceiling the fetch sinks already
+  use"; that ceiling exists only under the opt-in max-enforcement posture, and
+  the default fetch sinks have none.)
 - **Rendered output read back into a model is a model sink.** cf-harness's
   `browser` tool returns a page's snapshot and text into an agent's context
   with no label check; a page in the shell can now show it unscreened text.
 - **A clause of alternatives fails closed.** The allow-list admits a single
   caveat atom, so a clause holding a tier upgrade's alternatives (unscreened
   or ingress-screened) is refused. Nothing stores that shape today.
+
+## From the render-time fetch gate (2026-10-01)
+
+**SC-55 [normative] A render that fetches a URL is network egress, decided
+under the fetch ceiling — §8.10.6, §8.10.5.2.** `open`. Since SC-54 the
+default display ceiling admits the prompt-caveat family, so a view whose data
+carries a material-risk caveat renders for its owner. A prop that makes the
+browser fetch a URL when it is set (an `img` `src` or `srcset`, a `style` that
+can name a URL, `innerHTML`/`srcdoc`, a `link` or `base` `href`, markdown or
+SVG content, a link preview's `url`, an avatar, a nested render's `cell`) is
+not display: setting it sends what the URL carries to the URL's host, with no
+click. Before SC-54 such a value was hidden at the display, so it never
+fetched. The reconciler now decides those props under the **fetch ceiling**:
+the display ceiling with the material-risk caveat kinds taken out of its caveat
+allowance, which is the ceiling as it stood before SC-54 (it admitted only
+prompt influence). It derives that ceiling from the policy it holds, so no
+host or wire field changes. A prop's own read is fitted under it, and so is the
+view: a cell child or root whose data the fetch ceiling refuses renders with
+`remoteLoadsBlocked`, under which no prop that would fetch is set anywhere in
+its subtree, whatever that prop's own label, since the data chose it. The block
+is inherited (render boundaries keep it), and a change in it re-renders the
+subtree rather than reusing what the old decision set. A style element's text
+is CSS, which can fetch, so it is decided under the fetch ceiling and blocked
+outright in a blocked view. A refused prop is not set, or is removed, and is
+reported as the `render-remote-load` denial. Implemented in
+`packages/html/src/worker/reconciler.ts` (`REMOTE_LOAD_PROPS`,
+`#fetchPolicyOf`); tested in
+`packages/html/test/worker-reconciler-remote-loads.test.ts`.
+
+Proposed edit: §8.10.6 says the display ceiling governs what a display shows,
+not what a render fetches; §8.10.5.2 names a render-time fetch as a network
+sink class whose default is the display ceiling without the material-risk
+kinds. The spec owner should say whether the default should instead be
+public-only, which would also stop an owner's own confidential image URLs from
+loading (email clients' default for remote images).
+
+Not covered, as residuals:
+
+- **Fixed hosts.** Map tiles load from a fixed host for the viewport a pattern
+  chooses, and `/api/ai/img` sends a prompt to a fixed provider. Neither names
+  a URL from the data.
+- **A click.** `<a href>`, forms and popups need a user action.
+- **A label change on a document a link only passes through.** A cell child
+  that follows a link subscribes to its target, so a relabel of the linking
+  document is not observed until the target changes. This holds for the
+  display gate too, and predates SC-54.
+- **Markdown and SVG content under the caveat are refused whole.** Rendering
+  them with images as alt text would show their text; that needs the
+  component to learn the decision, which no channel carries today.
+- **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
+  given. The gate keys on labels, not URLs, so it does not let a labelled value
+  through; an unlabelled one is outside this entry.
