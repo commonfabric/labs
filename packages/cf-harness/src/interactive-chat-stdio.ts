@@ -563,7 +563,9 @@ const isValidRequestParams = (
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "reason");
     case "resolve_client_action":
-      return isNonEmptyString(params.sessionId) &&
+      // An answer settles a final action or a typed request, never both.
+      return !Object.hasOwn(params, "settlement") &&
+        isNonEmptyString(params.sessionId) &&
         isNonEmptyString(params.actionId) &&
         isHarnessClientActionOutcomeKind(params.outcome) &&
         (params.result === undefined ||

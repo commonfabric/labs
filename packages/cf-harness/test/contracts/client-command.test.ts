@@ -369,6 +369,46 @@ describe("client command contract", () => {
       ).toBeUndefined();
     });
 
+    it("refuses completed operations the body does not list in that order", () => {
+      const partial = (fixture("resolve-executed-partial")
+        .settlement as { outcome: Record<string, unknown> }).outcome;
+      const completed = partial.completed as string[];
+      expect(readHarnessCommandOutcome(partial)).toBeDefined();
+      expect(
+        readHarnessCommandOutcome({
+          ...partial,
+          completed: [...completed, "op-not-in-body"],
+        }),
+      ).toBeUndefined();
+      const body = partial.body as Record<string, unknown>;
+      const twoOps = {
+        ...partial,
+        bodyBytes: (partial.bodyBytes as number) + 7,
+        body: { ...body, completed: [...completed, "op-2"] },
+      };
+      expect(readHarnessCommandOutcome(twoOps)).toBeDefined();
+      expect(
+        readHarnessCommandOutcome({
+          ...twoOps,
+          completed: ["op-2", ...completed],
+        }),
+      ).toBeUndefined();
+      const { completed: _completed, ...without } = partial;
+      expect(readHarnessCommandOutcome(without)).toBeUndefined();
+    });
+
+    it("refuses a value JSON would not carry faithfully", () => {
+      for (const at of [new Date(0), { toJSON: () => "now" }, -0]) {
+        expect(
+          readHarnessCommandInvocation({
+            command: "loom.inspect",
+            args: { at },
+            approval: "automatic",
+          }),
+        ).toBeUndefined();
+      }
+    });
+
     it("refuses a summary that contradicts the body it was lifted from", () => {
       const conflict = (fixture("resolve-executed-version-conflict")
         .settlement as { outcome: Record<string, unknown> }).outcome;

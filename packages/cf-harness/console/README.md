@@ -864,11 +864,23 @@ to opt in, off by default.
 A host declares what it needs with `protocol` on `POST /api/task`:
 `{ "protocolVersion": 1, "requires": ["client_actions"] }`. The console checks
 it before reading anything else and before any session or turn starts. Another
-version, or a required feature it does not serve, answers 409 with
-`{ "error", "code": "protocol_mismatch", "protocol", "requestedVersion",
-"missing" }`,
+version, or a required feature it does not serve, answers 409 with a body such
+as
+
+```json
+{
+  "error": "this console does not serve typed_commands",
+  "code": "protocol_mismatch",
+  "protocol": { "protocolVersion": 1, "features": ["client_actions"] },
+  "requestedVersion": 1,
+  "missing": ["typed_commands"]
+}
+```
+
 where `protocol` is what the console does serve; a malformed declaration
-answers 400. An accepted task's answer, and `GET /api/status`, carry
+answers 400. `requires` names what the console must be able to serve, and turns
+nothing on: a session still opts in to `weaver_action` with
+`clientActions: true`. An accepted task's answer, and `GET /api/status`, carry
 `protocol: { "protocolVersion": 1, "features": [...] }`. A task without a
 declaration requires nothing and is served as before. The stdio `start_session`
 and `start_turn` take the same `protocol` param and refuse with error code

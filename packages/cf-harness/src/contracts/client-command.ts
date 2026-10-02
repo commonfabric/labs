@@ -25,12 +25,9 @@
  */
 
 import type { JSONObject, JSONValue } from "@commonfabric/api";
+import { isPureJson } from "@commonfabric/pure-json";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import {
-  HANDLE_TOKEN_ALPHABET,
-  MIN_HANDLE_TOKEN_SUFFIX_LENGTH,
-  REFERENT_HANDLE_TOKEN_PREFIX,
-} from "./handle-table.ts";
+import { REFERENT_TOKEN_PATTERN } from "./handle-table.ts";
 
 /**
  * Version of the client protocol a host declares on `POST /api/task` and on
@@ -585,25 +582,24 @@ const textEncoder = new TextEncoder();
 export const harnessCommandJsonBytes = (value: unknown): number =>
   textEncoder.encode(JSON.stringify(value)).length;
 
-/** Whether a value is JSON data: no undefined, functions, or non-finite numbers. */
-const isJsonValue = (value: unknown, depth = 0): value is JSONValue => {
-  if (depth > 64) return false;
-  if (
-    value === null || typeof value === "string" || typeof value === "boolean"
-  ) {
-    return true;
-  }
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) {
-    return value.every((entry) => isJsonValue(entry, depth + 1));
-  }
-  if (isObjectNotArray(value)) {
-    return Object.values(value as Record<string, unknown>).every((entry) =>
-      isJsonValue(entry, depth + 1)
-    );
-  }
-  return false;
+/** Deepest nesting a JSON value read here may have. */
+const JSON_MAX_DEPTH = 64;
+
+/**
+ * Whether a value nests no deeper than {@link JSON_MAX_DEPTH}. It runs before
+ * `isPureJson`, whose recursive walk has no bound of its own.
+ */
+const isWithinJsonDepth = (value: unknown, depth = 0): boolean => {
+  if (value === null || typeof value !== "object") return true;
+  if (depth >= JSON_MAX_DEPTH) return false;
+  return (Array.isArray(value) ? value : Object.values(value)).every((entry) =>
+    isWithinJsonDepth(entry, depth + 1)
+  );
 };
+
+/** Whether a value is JSON data that ordinary JSON carries unchanged. */
+const isJsonValue = (value: unknown): value is JSONValue =>
+  isWithinJsonDepth(value) && isPureJson(value);
 
 const isJsonObject = (value: unknown): value is JSONObject =>
   isObjectNotArray(value) && isJsonValue(value);
@@ -619,9 +615,7 @@ const isCommandId = (value: unknown): value is string =>
   HARNESS_COMMAND_ID_PATTERN.test(value);
 
 /** One whole referent-handle token. */
-const REFERENT_TOKEN = new RegExp(
-  `^${REFERENT_HANDLE_TOKEN_PREFIX}[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}$`,
-);
+const REFERENT_TOKEN = new RegExp(`^${REFERENT_TOKEN_PATTERN.source}$`);
 
 /** A loom identifier as the service mints it. */
 const LOOM_ID = /^loom-[a-f0-9]{16}$/;
@@ -958,6 +952,19 @@ export const readHarnessCommandOutcome = (
       const answered = own(body as Record<string, unknown>, bodyKey);
       return answered !== undefined && answered !== field(summaryKey);
     })
+  ) {
+    return undefined;
+  }
+  // `completed` is a bounded summary of the body's list, so it may stop short
+  // of it but never names an operation the body does not, or out of order.
+  const answeredCompleted = body === undefined
+    ? undefined
+    : own(body as Record<string, unknown>, "completed");
+  if (
+    Array.isArray(answeredCompleted) && answeredCompleted.length > 0 &&
+    (!Array.isArray(completed) || completed.length === 0 ||
+      completed.length > answeredCompleted.length ||
+      completed.some((entry, index) => entry !== answeredCompleted[index]))
   ) {
     return undefined;
   }

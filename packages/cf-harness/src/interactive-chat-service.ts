@@ -1811,7 +1811,7 @@ export class HarnessInteractiveChatService {
     // This console serves `client_actions` only, so a typed settlement is
     // refused like any other body without a final-action outcome.
     if (
-      !("outcome" in params) ||
+      !("outcome" in params) || "settlement" in params ||
       typeof params.sessionId !== "string" ||
       typeof params.actionId !== "string" ||
       !isHarnessClientActionOutcomeKind(params.outcome) ||
