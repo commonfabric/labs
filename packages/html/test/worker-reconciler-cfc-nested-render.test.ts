@@ -1298,12 +1298,13 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     );
 
     await t.step(
-      "withholds `cf-picker`'s binding while its list cannot be read, and decides it again once it can",
+      "withholds a binding while a read deciding it cannot complete, for `cf-render` and `cf-picker` alike, and decides it again once it can",
       async () => {
-        // Each list sits in a space the view loses access to and regains.
-        // While the list cannot be read what it holds is unknown, not empty,
-        // so a list of public pieces loses its binding until the list can be
-        // read again, and a list holding a sealed piece is never bound.
+        // Each list, and each piece a `cf-render` is bound to, sits in a space
+        // the view loses access to and regains. A read that cannot complete is
+        // not an empty read: a binding to a public piece, or to a list of one,
+        // is withheld until the read completes again, and one to a sealed
+        // piece is never made.
 
         const listSpace =
           (await Identity.fromPassphrase("nested render list space")).did();
@@ -1326,43 +1327,64 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           for (const observer of [...observers]) observer();
           await t.settle();
         };
-        const pieces = [
-          [
-            "public",
-            await write("unread-public-piece", {
-              [NAME]: "Shelf",
-              [UI]: vnode("div", ["Shelf heading"]),
-            }),
-          ],
-          [
-            "sealed",
-            await labeled("unread-sealed-piece", {
-              [NAME]: "Sealed shelf",
-              [UI]: vnode("div", [SEALED]),
-            }, sealedAtom),
-          ],
-        ] as const;
+        const pieces: [string, unknown, [string[], CfcAtom[]][]][] = [
+          ["public", {
+            [NAME]: "Shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          }, []],
+          ["sealed", {
+            [NAME]: "Sealed shelf",
+            [UI]: vnode("div", [SEALED]),
+          }, [[[], [sealedAtom]]]],
+        ];
         const outcomes: Record<string, unknown> = {};
-        for (const [held, piece] of pieces) {
+        for (const [held, value, labels] of pieces) {
+          const piece = await write(`unread-${held}-piece`, value, labels);
+          const pins = await write(
+            `unread-${held}-pins`,
+            {
+              element: {
+                cell: link(
+                  await write(
+                    `unread-${held}-pinned-piece`,
+                    value,
+                    labels,
+                    listSpace,
+                  ),
+                ),
+              },
+            },
+            [],
+            listSpace,
+          );
+          const pages: [string, Cell<unknown>, string][] = [[
+            "cfRender",
+            await tileView(
+              `unread-${held}-render-view`,
+              pins.key("element").key("cell").asSchema(true),
+            ),
+            "cell",
+          ]];
           const lists = await pickerLists(
             `unread-${held}`,
             [link(piece)],
             listSpace,
           );
           for (const [way, list] of Object.entries(lists)) {
-            const mounted = await mount(
-              createCellRef(
-                await pickerView(`unread-${held}-${way}-view`, list),
-              ),
-              visitor,
-              access,
-            );
+            pages.push([
+              way,
+              await pickerView(`unread-${held}-${way}-view`, list),
+              "items",
+            ]);
+          }
+          for (const [way, page, propName] of pages) {
+            const mounted = await mount(createCellRef(page), visitor, access);
             try {
               const seen: { bound: number; removed: number }[] = [];
               const look = () =>
                 seen.push({
-                  bound: mounted.bindings("items").length,
-                  removed: mounted.removed("items"),
+                  bound: mounted.bindings(propName).length,
+                  removed: mounted.removed(propName),
                 });
               look();
               await setRevoked(true);
@@ -1386,9 +1408,11 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           { bound: 0, removed: 0 },
         ];
         expect(outcomes).toEqual({
+          "public, cfRender": publicSeen,
           "public, any": publicSeen,
           "public, typed": publicSeen,
           "public, linked": publicSeen,
+          "sealed, cfRender": sealedSeen,
           "sealed, any": sealedSeen,
           "sealed, typed": sealedSeen,
           "sealed, linked": sealedSeen,
