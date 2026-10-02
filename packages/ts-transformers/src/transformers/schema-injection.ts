@@ -2885,6 +2885,11 @@ function reportUnknownPatternResult(
  * index, written `[i...]` for a rest element, whose own element is the one
  * walked; a union member's path is the union's. A top-level `unknown` is
  * handled by the error path above, so this only sees nested occurrences.
+ *
+ * It stops at a type reference. A named type is a declaration, and `unknown`
+ * in a declaration is the form for a reference to another piece
+ * (`docs/common/concepts/types-and-schemas/unknown.md`), so what a name
+ * declares is not reported.
  */
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
   const paths: string[] = [];
@@ -2941,7 +2946,9 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
  * no node for. It descends an object type with no name, which a print writes
  * out as structure; an instance of a class expression with no name, which is
  * what leaves a type with no print; an array's element; a tuple's elements;
- * and each member of a union, along the paths the node walk gives them.
+ * and each member of a union, along the paths the node walk gives them. It
+ * stops at a named type, as the node walk stops at a reference, since what a
+ * name declares is not reported.
  */
 function collectUnknownResultTypePaths(
   type: ts.Type,

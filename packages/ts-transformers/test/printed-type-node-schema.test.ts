@@ -757,6 +757,44 @@ export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
     }
   });
 
+  describe("a pattern result holding a named type that declares `unknown`", () => {
+    // `unknown` in a declaration is the form for a reference to another piece
+    // (`docs/common/concepts/types-and-schemas/unknown.md`), so a result that
+    // passes on a named type declaring one is not reported, whether the
+    // result is printed or read from a placeholder for a type with no print.
+
+    for (
+      const [kind, declaration] of [
+        ["an alias", "type Ref = { piece: unknown };"],
+        ["an interface", "interface Ref { piece: unknown }"],
+      ] as const
+    ) {
+      for (
+        const [reading, before] of [
+          ["printed", ""],
+          ["read from a placeholder for a type with no print", "a: make(), "],
+        ] as const
+      ) {
+        it(`reports nothing for the \`unknown\` ${kind} declares, in a result ${reading}`, async () => {
+          const diagnostics: TransformationDiagnostic[] = [];
+          await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+${declaration}
+function make() { return new (class { v = 1 })(); }
+export default pattern<{ ref: Ref }>(({ ref }) => ({ ${before}ref, refs: [ref] }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          });
+
+          expect(diagnostics).toEqual([]);
+        });
+      }
+    }
+  });
+
   describe("a printed result type that holds CFC labels", () => {
     const policy = {
       type: "https://commonfabric.org/cfc/atom/Policy",
