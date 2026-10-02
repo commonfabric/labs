@@ -1446,19 +1446,18 @@ export interface IStorageTransaction {
   ): void;
 
   /**
-   * Abandon the mergeable fast path for the arrays covered by `address`. A
-   * caller that rewrites an array in a way a recorded mergeable op cannot
-   * represent — an in-place reshape such as sort/reverse/splice after a push, or
-   * a whole-value overwrite — calls this so the commit emits the whole-array
-   * diff (the correct local value) instead of a tail-relative op whose recorded
-   * tail no longer identifies the appended elements.
+   * Abandon the mergeable fast path for the values covered by `address`, for
+   * the rest of the transaction. A caller that writes a value whole — a
+   * whole-value overwrite, or an in-place reshape such as sort/reverse/splice
+   * — calls this so the commit emits the whole-value diff (the correct local
+   * value) instead of an op. The write says what the value is, and an op
+   * resolves against whatever the store holds.
    *
-   * This covers every recorded op AT or BENEATH `address`, since a write to an
-   * enclosing object rewrites the arrays inside it too, and nothing above it, so
-   * a write beneath an array (an element edit) leaves that array's op alone. A
-   * path carrying no op yet is left untouched — not because a reshape before an
-   * op is harmless, but because that case is caught at commit instead, when the
-   * op's recorded tail is checked against the value it claims to describe.
+   * This covers every op AT or BENEATH `address`, since a write to an
+   * enclosing object rewrites the arrays inside it too, and nothing above it,
+   * so a write beneath an array (an element edit) leaves that array's op
+   * alone. An op recorded ahead of the write is dropped, and one that would
+   * be recorded after it is refused.
    */
   poisonMergeableOp?(address: IMemorySpaceAddress): void;
 
