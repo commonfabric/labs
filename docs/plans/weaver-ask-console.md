@@ -389,12 +389,12 @@ integration.
 flow without changing its communication architecture each time?
 
 `packages/cf-harness/scripts/run-measurement-batch.ts` is a single-turn HTTP
-client that starts a fresh session per task and has no host seam; the host seams
-on main are the browser-host channel and #8328's client-action callbacks. Extend
-it and its existing cell-spec/preflight machinery with multi-turn scenarios,
-driven by a scripted host stub on the browser-host channel first and the real
-Weaver adapter after. Reuse SSE parsing, run artifacts, policy/model snapshots,
-and `measure-runs.ts` cost/latency reporting. Add fixture-state and
+client that starts a fresh session per task and has no host seam. The host seams
+are the browser-host channel and the client-action callbacks this plan builds
+on. Extend it and its existing cell-spec/preflight machinery with multi-turn
+scenarios, driven by a scripted host stub on the browser-host channel first and
+the real Weaver adapter after. Reuse SSE parsing, run artifacts, policy/model
+snapshots, and `measure-runs.ts` cost/latency reporting. Add fixture-state and
 visible-outcome assertions; tool success and a final paragraph do not prove the
 requested change happened. Keep deterministic protocol faults separate from
 model task scores.
