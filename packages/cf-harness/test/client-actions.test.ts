@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
+import { FakeTime } from "@std/testing/time";
 import { toFileUrl } from "@std/path";
 
 import {
@@ -245,6 +246,19 @@ const harness = (
   const callsDone = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const loopOptions: Record<string, unknown>[] = [];
+  const waiters: {
+    matches: (event: HarnessChatEventEnvelope["event"]) => boolean;
+    resolve: () => void;
+  }[] = [];
+  /** Resolves once an event matching `matches` has been delivered. */
+  const delivered = (
+    matches: (event: HarnessChatEventEnvelope["event"]) => boolean,
+  ): Promise<void> => {
+    if (events.some((e) => matches(e.event))) return Promise.resolve();
+    const waiter = Promise.withResolvers<void>();
+    waiters.push({ matches, resolve: waiter.resolve });
+    return waiter.promise;
+  };
   let ids = 0;
   const createPromptLoop: HarnessInteractivePromptLoopFactory = (opts) => {
     loopOptions.push(opts as unknown as Record<string, unknown>);
@@ -286,6 +300,9 @@ const harness = (
     randomUUID: () => `id-${++ids}`,
     onEvent: async (event) => {
       events.push(event);
+      for (const waiter of waiters) {
+        if (waiter.matches(event.event)) waiter.resolve();
+      }
       await options.deliver?.(event.event);
     },
     onEventDeliveryError: () => {},
@@ -335,17 +352,21 @@ const harness = (
     toolErrors,
     release,
     callsDone: callsDone.promise,
+    delivered,
     loopOptions,
     events,
   };
 };
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** Matches the `client_action_requested` event for one action id. */
+const request =
+  (actionId: string) => (event: HarnessChatEventEnvelope["event"]) =>
+    event.kind === "client_action_requested" && event.actionId === actionId;
 
 Deno.test("weaver_action emits a request per action in order and returns outcomes in input order", async () => {
   const h = harness({ calls: [{ actions: [open, command, url] }] });
   await h.start();
-  await settle();
+  await h.delivered(request("id-3"));
   const requested = h.kinds("client_action_requested");
   assertEquals(requested.map((e) => e.action), [open, command, url]);
   assertEquals(requested.map((e) => e.actionId), ["id-1", "id-2", "id-3"]);
@@ -368,7 +389,7 @@ Deno.test("weaver_action emits a request per action in order and returns outcome
     });
     assertEquals(response.ok, true);
   }
-  await settle();
+  await h.callsDone;
   assertEquals(h.toolResults, [{
     outputId: "out-1",
     status: "ok",
@@ -391,7 +412,7 @@ Deno.test("weaver_action emits a request per action in order and returns outcome
 Deno.test("resolve_client_action names unknown, repeated, and malformed answers", async () => {
   const h = harness();
   await h.start();
-  await settle();
+  await h.delivered(request("id-1"));
   const unknown = await h.request("resolve_client_action", {
     sessionId: "s",
     actionId: "nope",
@@ -439,20 +460,22 @@ Deno.test("resolve_client_action names unknown, repeated, and malformed answers"
 });
 
 Deno.test("an idle call fails every unsettled action as timeout, and each settlement resets the clock", async () => {
+  using time = new FakeTime();
   const h = harness({ idleMs: 60, calls: [{ actions: [open, command] }] });
   await h.start();
-  await settle();
-  // Settle one just before the first deadline; the second must get a fresh
-  // full window rather than the remainder of the first.
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await h.delivered(request("id-2"));
+  // Settle one before the first deadline; the second must get a fresh full
+  // window from there rather than the remainder of the first.
+  await time.tickAsync(40);
   await h.request("resolve_client_action", {
     sessionId: "s",
     actionId: "id-1",
     outcome: "done",
   });
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await time.tickAsync(40);
   assertEquals(h.toolResults.length, 0);
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await time.tickAsync(20);
+  await h.callsDone;
   assertEquals(h.toolResults, [{
     outputId: "out-1",
     status: "ok",
@@ -480,9 +503,14 @@ Deno.test("an idle call fails every unsettled action as timeout, and each settle
 Deno.test("canceling the turn declines every pending action as canceled, with a resolved event each", async () => {
   const h = harness({ calls: [{ actions: [open, command] }] });
   await h.start();
-  await settle();
+  await h.delivered(request("id-2"));
+  // A cancel that lands while requests are being written is applied after
+  // them, behind the turn's own cancel event. No event marks the call's
+  // switch from writing to waiting, so one macrotask drain lets the call's
+  // own continuation (all microtasks) finish before the cancel.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await h.request("cancel_turn", { sessionId: "s", turnId: "t" });
-  await settle();
+  await h.callsDone;
   assertEquals(h.toolResults, [{
     outputId: "out-1",
     status: "ok",
@@ -508,9 +536,9 @@ Deno.test("canceling the turn declines every pending action as canceled, with a 
 Deno.test("closing the session settles pending actions the same way", async () => {
   const h = harness();
   await h.start();
-  await settle();
+  await h.delivered(request("id-1"));
   await h.request("close_session", { sessionId: "s" });
-  await settle();
+  await h.callsDone;
   assertEquals(h.kinds("client_action_resolved").map((e) => e.result), [
     "canceled",
   ]);
@@ -525,7 +553,7 @@ Deno.test("invalid input emits nothing and a session that did not opt in has no 
     }],
   });
   await h.start();
-  await settle();
+  await h.callsDone;
   assertEquals(h.kinds("client_action_requested"), []);
   assertEquals(
     h.toolResults.map((r) => (r as { status: string }).status),
@@ -536,7 +564,7 @@ Deno.test("invalid input emits nothing and a session that did not opt in has no 
 
   const off = harness();
   await off.start(false);
-  await settle();
+  await off.callsDone;
   assertEquals(
     "requestClientActions" in off.loopOptions[0],
     false,
@@ -561,7 +589,7 @@ Deno.test("a turn can opt its session in, and the tool joins that turn's allowli
     input: { text: "go" },
     clientActions: true,
   });
-  await settle();
+  await h.callsDone;
   assertEquals(
     (h.loopOptions[0].allowedToolIds as string[]).includes("weaver_action"),
     true,
@@ -767,7 +795,7 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
 Deno.test("a call made after the turn was canceled declines at once and shows the person nothing", async () => {
   const h = harness({ calls: [] });
   await h.start();
-  await settle();
+  await h.callsDone;
   const requestClientActions = h.loopOptions[0]
     .requestClientActions as HarnessClientActionRequester;
   assertEquals(await requestClientActions([open], AbortSignal.abort()), [
@@ -796,7 +824,7 @@ Deno.test("a request that cannot be delivered settles the ones already written a
     },
   });
   await h.start();
-  await settle();
+  await h.callsDone;
   assertEquals(requestedIds(h), ["id-1", "id-2"]);
   assertEquals(resolvedIds(h), [
     ["id-1", "not delivered"],
@@ -822,6 +850,7 @@ Deno.test("a request that cannot be delivered settles the ones already written a
 });
 
 Deno.test("an idle timeout whose resolved event cannot be written fails the call", async () => {
+  using time = new FakeTime();
   const h = harness({
     idleMs: 10,
     deliver: (e) => {
@@ -829,7 +858,9 @@ Deno.test("an idle timeout whose resolved event cannot be written fails the call
     },
   });
   await h.start();
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await h.delivered(request("id-1"));
+  await time.tickAsync(10);
+  await h.callsDone;
   expect(h.toolErrors.length).toBe(1);
   expect(h.toolResults.length).toBe(0);
   h.release.resolve();
@@ -846,8 +877,7 @@ Deno.test("a cancel while requests are being written stops writing and settles o
     },
   });
   await h.start();
-  await settle();
-  await settle();
+  await h.callsDone;
   assertEquals(requestedIds(h), ["id-1"]);
   assertEquals(resolvedIds(h), [["id-1", "canceled"]]);
   assertEquals(h.toolResults, [{
