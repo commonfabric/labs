@@ -285,7 +285,7 @@ describe("coordinator", () => {
       await h.finish();
     });
 
-    it("takes the Weaver's real catalog, dropping and naming only the entries the contract refuses", async () => {
+    it("takes the Weaver's real catalog whole", async () => {
       const posted = JSON.parse(
         Deno.readTextFileSync(
           fromFileUrl(
@@ -312,24 +312,20 @@ describe("coordinator", () => {
         droppedEntries?: number;
         droppedCommands?: string[];
       };
-      expect(settlement.catalog.entries).toHaveLength(230);
-      expect(settlement.droppedEntries).toBe(11);
-      expect(settlement.droppedCommands).toEqual([
-        "connector.connectDevice",
-        "connector.deviceStatus",
-        "connector.msgvaultCutover",
-        "connector.msgvaultRetireLegacy",
-        "connector.msgvaultRollback",
-      ]);
+      // Every id the Weaver sends, mixed-case and underscored ones
+      // included, is one the contract admits, so nothing is dropped.
+      expect(settlement.catalog.entries).toHaveLength(241);
+      expect(settlement.droppedEntries).toBeUndefined();
+      expect(settlement.droppedCommands).toBeUndefined();
       const [event] = h.resolved() as {
         settlement: unknown;
         result?: string;
       }[];
       expect(event.settlement).toEqual({
         status: "executed",
-        catalogEntries: 230,
+        catalogEntries: 241,
       });
-      expect(event.result).toContain("11");
+      expect(event.result).toBeUndefined();
       await h.finish();
     });
 
