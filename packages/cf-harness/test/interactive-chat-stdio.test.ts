@@ -34,7 +34,6 @@ import {
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessClientActionRequester } from "../src/client-actions/coordinator.ts";
-import { harnessClientProtocolEcho } from "../src/contracts/client-command.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
 import {
   HARNESS_SUPPORTED_CLIENT_FEATURES,
@@ -2256,5 +2255,10 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
   ]);
   assertEquals(harnessClientProtocolEcho().features, [
     ...HARNESS_SUPPORTED_CLIENT_FEATURES,
+  ]);
+  // This console serves typed commands, and its echo says so.
+  assertEquals(harnessClientProtocolEcho().features, [
+    "client_actions",
+    "typed_commands",
   ]);
 });
