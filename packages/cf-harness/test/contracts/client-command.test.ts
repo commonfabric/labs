@@ -74,6 +74,7 @@ const RESOLVE_FIXTURES = [
   "resolve-executed-body-omitted",
   "resolve-executed-weaver-local",
   "resolve-executed-catalog",
+  "resolve-executed-catalog-mixed-ids",
   "resolve-declined",
   "resolve-failed-to-deliver",
   "resolve-failed-to-deliver-unsent",
@@ -208,6 +209,36 @@ describe("client command contract", () => {
       ).toBeUndefined();
       expect(readHarnessCommandInvocation({ ...query, command: "/inspect" }))
         .toBeUndefined();
+    });
+
+    it("reads the service's frozen command ids, camel case and underscores included", () => {
+      for (
+        const command of [
+          "connector.connectDevice",
+          "connector.msgvaultRetireLegacy",
+          "wish.choose_facet",
+          "wish.delivery_retry",
+        ]
+      ) {
+        expect(readHarnessCommandInvocation({ ...query, command })?.command)
+          .toBe(command);
+      }
+    });
+
+    it("refuses a command id with a space, an empty segment, or a leading dot", () => {
+      for (
+        const command of [
+          "loom inspect",
+          ".loom.inspect",
+          "loom..inspect",
+          "loom.",
+          "_loom.inspect",
+          `a${"b".repeat(128)}`,
+        ]
+      ) {
+        expect(readHarnessCommandInvocation({ ...query, command }))
+          .toBeUndefined();
+      }
     });
 
     it("keeps the typed kinds out of the final-action reader", () => {
@@ -467,7 +498,7 @@ describe("client command contract", () => {
       "catalog request": [readHarnessCommandCatalogRequest, [
         null,
         { detail: [], extra: true },
-        { detail: ["Loom.Inspect"] },
+        { detail: ["loom inspect"] },
         { detail: Array(17).fill("loom.inspect") },
       ]],
       "catalog": [readHarnessCommandCatalog, [

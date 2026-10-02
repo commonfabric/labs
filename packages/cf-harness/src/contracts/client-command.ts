@@ -181,11 +181,14 @@ export const checkHarnessClientProtocol = (
 export const HARNESS_COMMAND_ID_MAX_LENGTH = 128;
 
 /**
- * A command id as the Weaver's catalog names it: dot-separated lowercase
- * words, digits and inner hyphens (`loom.inspect`, `page.write`).
+ * A command id as the Weaver's catalog names it: dot-separated segments of
+ * ASCII letters of either case, digits, `_` and `-`, the first starting with
+ * a letter and none empty (`loom.inspect`, `connector.connectDevice`,
+ * `wish.choose_facet`). The service's ids are frozen identifiers, so the
+ * pattern admits every spelling its registry uses.
  */
 export const HARNESS_COMMAND_ID_PATTERN =
-  /^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*$/;
+  /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*$/;
 
 /**
  * Largest invocation `args`, as UTF-8 bytes of their JSON text. A larger
