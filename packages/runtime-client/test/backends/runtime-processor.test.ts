@@ -6579,6 +6579,43 @@ describe("runtime-processor", () => {
           "handled",
         ]);
       });
+
+      it("shares a retry still in flight with a request for the same space, and asks again once it settles", async () => {
+        const calls: string[] = [];
+        const gates: PromiseWithResolvers<void>[] = [];
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              const gate = Promise.withResolvers<void>();
+              gates.push(gate);
+              return gate.promise;
+            },
+          },
+        });
+        const retry = (space: MemorySpace) =>
+          processor.handleRequest({
+            type: RequestType.RetrySpaceAccess,
+            space,
+          });
+        const first = retry("did:key:z6Mk-ipc-shared");
+        const second = retry("did:key:z6Mk-ipc-shared");
+        const other = retry("did:key:z6Mk-ipc-other");
+        expect(calls).toEqual([
+          "did:key:z6Mk-ipc-shared",
+          "did:key:z6Mk-ipc-other",
+        ]);
+        for (const gate of gates) gate.resolve();
+        await Promise.all([first, second, other]);
+        const again = retry("did:key:z6Mk-ipc-shared");
+        gates.at(-1)?.resolve();
+        await again;
+        expect(calls).toEqual([
+          "did:key:z6Mk-ipc-shared",
+          "did:key:z6Mk-ipc-other",
+          "did:key:z6Mk-ipc-shared",
+        ]);
+      });
     });
 
     describe("setMemoryMessageCompression()", () => {

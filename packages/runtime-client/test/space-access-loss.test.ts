@@ -98,6 +98,25 @@ describe("space access loss notification", () => {
     }
   });
 
+  it("hands a render boundary's retry of a space to the retry it was given, and offers none without one", async () => {
+    const identity = await Identity.fromPassphrase("render access retry");
+    const storage = StorageManager.emulate({ as: identity });
+    try {
+      const retried: MemorySpace[] = [];
+      const provider = renderSpaceAccessProviderFor(
+        { storageManager: storage },
+        (space) => retried.push(space),
+      );
+      provider.retry?.(identity.did());
+      expect(retried).toEqual([identity.did()]);
+      expect(
+        renderSpaceAccessProviderFor({ storageManager: storage }).retry,
+      ).toBeUndefined();
+    } finally {
+      await storage.close();
+    }
+  });
+
   it("supports render providers with only loss notifications or no lifecycle hooks", async () => {
     const identity = await Identity.fromPassphrase(
       "legacy render access provider",

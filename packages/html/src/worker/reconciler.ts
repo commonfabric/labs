@@ -416,6 +416,12 @@ export class WorkerReconciler {
   readonly #modulePolicySource?: WorkerReconcilerOptions["modulePolicySource"];
   readonly #spaceAccess?: WorkerReconcilerOptions["spaceAccess"];
 
+  /**
+   * The handlers of the retry controls access placeholders offer, which a
+   * refusal does not withhold the way it withholds every other handler.
+   */
+  readonly #accessRetryHandlers = new WeakSet<(event: unknown) => void>();
+
   constructor(options: WorkerReconcilerOptions) {
     this.#onOps = options.onOps;
     this.#onError = options.onError;
@@ -566,16 +572,16 @@ export class WorkerReconciler {
           rootPolicy,
           rootWatch,
         );
-        const accessLost = this.#cellAccessError(vnode) !== undefined;
-        if (accessLost || refusal !== undefined) {
-          if (!accessLost && refusal !== undefined) {
+        const refusedSpace = this.#refusedSpaceOf(vnode);
+        if (refusedSpace !== undefined || refusal !== undefined) {
+          if (refusedSpace === undefined && refusal !== undefined) {
             this.#reportRenderDenial(() => refusal, rootPolicy);
           }
           this.#reconcileIntoWrapper(
             ctx,
             wrapperState,
-            accessLost
-              ? this.#accessPlaceholderVNode()
+            refusedSpace !== undefined
+              ? this.#accessPlaceholderVNode(refusedSpace)
               : this.#blockedPlaceholderVNode(),
             rootPolicy,
           );
@@ -1409,12 +1415,19 @@ export class WorkerReconciler {
     }
   }
 
-  /** Guards both the containing view and any linked event target at dispatch. */
+  /**
+   * Guards both the containing view and any linked event target at dispatch,
+   * except for an access placeholder's retry control, whose whole purpose is
+   * to be used while access is refused.
+   */
   #registerHandler(
     ctx: ReconcileContext,
     handler: (event: unknown) => void,
     target?: Cell<unknown>,
   ): number {
+    if (this.#accessRetryHandlers.has(handler)) {
+      return ctx.registerHandler(handler);
+    }
     return ctx.registerHandler((event) => {
       if (
         (ctx.space !== undefined && this.#spaceAccess?.error(ctx.space)) ||
@@ -1427,12 +1440,20 @@ export class WorkerReconciler {
   }
 
   #cellAccessError(cell: Cell<unknown>): Error | undefined {
+    const space = this.#refusedSpaceOf(cell);
+    return space === undefined ? undefined : this.#spaceAccess?.error(space);
+  }
+
+  /**
+   * The space of `cell`, or of the cell it links to, whose session the access
+   * provider reports refused, or `undefined` when neither is.
+   */
+  #refusedSpaceOf(cell: Cell<unknown>): string | undefined {
     if (this.#spaceAccess === undefined) return undefined;
     for (const candidate of [cell, this.#resolveCellForBinding(cell)]) {
       const space = this.#spaceOfCell(candidate);
-      if (space !== undefined) {
-        const error = this.#spaceAccess.error(space);
-        if (error !== undefined) return error;
+      if (space !== undefined && this.#spaceAccess.error(space) !== undefined) {
+        return space;
       }
     }
     return undefined;
@@ -1474,12 +1495,33 @@ export class WorkerReconciler {
     };
   }
 
-  #accessPlaceholderVNode(): WorkerVNode {
+  /**
+   * What stands in for content of `space` while its session is refused: a
+   * status saying so, and, when the access provider can retry, a control that
+   * asks once more. An admission re-renders the content through the provider's
+   * `subscribe()`.
+   */
+  #accessPlaceholderVNode(space: string): WorkerVNode {
+    const children: WorkerRenderNode[] = ["Access unavailable"];
+    if (this.#spaceAccess?.retry !== undefined) {
+      const retry = () => this.#spaceAccess?.retry?.(space);
+      this.#accessRetryHandlers.add(retry);
+      children.push(" ", {
+        type: "vnode",
+        name: "button",
+        props: {
+          type: "button",
+          "data-space-access-retry": "true",
+          onClick: retry,
+        },
+        children: ["Retry"],
+      });
+    }
     return {
       type: "vnode",
       name: "span",
       props: { "data-space-access-lost": "true", role: "status" },
-      children: ["Access unavailable"],
+      children,
     };
   }
 
@@ -3875,19 +3917,25 @@ export class WorkerReconciler {
     };
   }
 
+  /** Renders what stands in for content of `space` while it is refused. */
+  #createAccessPlaceholder(
+    ctx: ReconcileContext,
+    policy: RenderPolicy,
+    space: string,
+  ): NodeState {
+    return this.#renderNode(
+      ctx,
+      this.#accessPlaceholderVNode(space),
+      new Set(),
+      policy,
+    )!;
+  }
+
   #createBlockedPlaceholder(
     ctx: ReconcileContext,
     policy: RenderPolicy,
-    reason: "policy" | "integrity" | "access" = "policy",
+    reason: "policy" | "integrity" = "policy",
   ): NodeState {
-    if (reason === "access") {
-      return this.#renderNode(
-        ctx,
-        this.#accessPlaceholderVNode(),
-        new Set(),
-        policy,
-      )!;
-    }
     const nodeId = ctx.nextNodeId();
     const textId = ctx.nextNodeId();
     const integrityBlocked = reason === "integrity";
@@ -4719,8 +4767,9 @@ export class WorkerReconciler {
       );
       childState.currentValue = resolvedChild;
       const refusal = this.#readRefusal(cell, [consumed], policy, watch);
-      const accessLost = this.#cellAccessError(cell) !== undefined;
-      const blockedByPolicy = accessLost || refusal !== undefined;
+      const refusedSpace = this.#refusedSpaceOf(cell);
+      const blockedByPolicy = refusedSpace !== undefined ||
+        refusal !== undefined;
       const blockedByIntegrity = !blockedByPolicy &&
         this.#shouldBlockTextFromCell(resolvedChild, cell, policy);
       // Admitted for display, the cell may still carry a caveat a URL fetch
@@ -4761,7 +4810,7 @@ export class WorkerReconciler {
       }
 
       if (blockedByPolicy) {
-        if (!accessLost && refusal !== undefined) {
+        if (refusedSpace === undefined && refusal !== undefined) {
           this.#reportRenderDenial(() => refusal, policy);
         }
         if (!isInitialRender) {
@@ -4778,11 +4827,9 @@ export class WorkerReconciler {
         childState.isText = false;
         childState.hasPieceBoundary = false;
 
-        const blockedState = this.#createBlockedPlaceholder(
-          ctx,
-          policy,
-          accessLost ? "access" : "policy",
-        );
+        const blockedState = refusedSpace !== undefined
+          ? this.#createAccessPlaceholder(ctx, policy, refusedSpace)
+          : this.#createBlockedPlaceholder(ctx, policy);
         childState.nodeId = blockedState.nodeId;
         childState.elementState = blockedState;
         childState.isText = false;

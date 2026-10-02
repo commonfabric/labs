@@ -379,6 +379,14 @@ export interface SpaceAccessProvider {
 
   /** Observes loss and recovery; the current snapshot is read through `error()`. */
   subscribe(space: string, onChange: () => void): Cancel;
+
+  /**
+   * Asks once more for the named space, which refused this session, without
+   * waiting for the answer. An admission reaches the renderer through
+   * `subscribe()`, and a refusal changes nothing. Optional: without it, what
+   * stands in for refused content offers no way to ask again.
+   */
+  retry?(space: string): void;
 }
 
 /** Options for a worker-side renderer and its host authority boundaries. */

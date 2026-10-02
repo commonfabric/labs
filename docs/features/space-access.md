@@ -125,6 +125,19 @@ left alone, except that loads a failed repeat left recorded are repeated. The
 session also opens again when something reads a document of that space that the
 replica has not asked for.
 
+Across the worker boundary, a retry of a space asked for while another retry of
+that space is still in flight shares it rather than asking again. Two callers
+ask. The renderer's "Access unavailable" placeholder carries a Retry button,
+which asks for the space whose refusal it stands in for, and which a refusal
+does not withhold the way it withholds every other handler in the view. The
+shell asks on the person's behalf when they may have been granted access since:
+on navigating into a space the runtime reported refused (`spaceaccesslost`), and
+on the page's `focus` or `visibilitychange` to visible, for every space the
+runtime has reported refused, since a view can show content of a space other
+than its own. Both are event-driven, with no timer behind them. An admission
+re-renders the refused content; a refusal leaves the placeholder, and its
+button, as they were.
+
 ## Changing the level
 
 `spaceAccess(target)` only reads. A handler changes a principal's entry with

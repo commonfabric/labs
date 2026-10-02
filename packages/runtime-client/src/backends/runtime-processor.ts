@@ -771,9 +771,14 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
-/** Connects render boundaries to authoritative access verdict changes. */
+/**
+ * Connects render boundaries to authoritative access verdict changes. Given
+ * `retry`, the provider hands it each request a render boundary makes to ask
+ * for a refused space once more.
+ */
 export function renderSpaceAccessProviderFor(
   runtime: Pick<Runtime, "storageManager">,
+  retry?: (space: MemorySpace) => void,
 ): SpaceAccessProvider {
   const storage = runtime.storageManager;
   return {
@@ -785,6 +790,8 @@ export function renderSpaceAccessProviderFor(
       return storage.subscribeSpaceAccessChange?.(changed) ??
         storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
     },
+    ...(retry !== undefined &&
+      { retry: (space: string) => retry(space as MemorySpace) }),
   };
 }
 
@@ -1027,6 +1034,9 @@ export class RuntimeProcessor {
    */
   #renderModulePolicySource?: CfcModulePolicySource;
   #cancelSpaceAccessLoss?: Cancel;
+
+  /** The retry of each refused space still in flight, by space. */
+  #spaceAccessRetries = new Map<MemorySpace, Promise<void>>();
 
   private constructor(
     runtime: Runtime,
@@ -3216,11 +3226,29 @@ export class RuntimeProcessor {
     };
   }
 
-  /** Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. */
-  async handleRetrySpaceAccess(
-    request: RetrySpaceAccessRequest,
-  ): Promise<void> {
-    await this.#runtime.retrySpaceAccess(request.space);
+  /**
+   * Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. A
+   * request for a space whose retry is still in flight shares that retry
+   * rather than asking again.
+   */
+  handleRetrySpaceAccess(request: RetrySpaceAccessRequest): Promise<void> {
+    return this.#retrySpaceAccess(request.space);
+  }
+
+  /**
+   * Helper for `handleRetrySpaceAccess()` and the render boundaries' retry
+   * controls, which retries `space` unless a retry of it is already in flight,
+   * and returns the retry that is.
+   */
+  #retrySpaceAccess(space: MemorySpace): Promise<void> {
+    let retry = this.#spaceAccessRetries.get(space);
+    if (retry === undefined) {
+      retry = this.#runtime.retrySpaceAccess(space).finally(() => {
+        this.#spaceAccessRetries.delete(space);
+      });
+      this.#spaceAccessRetries.set(space, retry);
+    }
+    return retry;
   }
 
   async handleCreateSpace(
@@ -3768,7 +3796,13 @@ export class RuntimeProcessor {
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
-      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
+      spaceAccess: renderSpaceAccessProviderFor(this.#runtime, (space) => {
+        // A render boundary has nowhere to report a failure, and the person
+        // can ask again.
+        this.#retrySpaceAccess(space).catch((error) => {
+          console.warn(`Retrying access to space ${space} failed:`, error);
+        });
+      }),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's

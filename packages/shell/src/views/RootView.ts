@@ -39,6 +39,7 @@ import {
 import { COMMIT_SHA, ENVIRONMENT, EXPERIMENTAL } from "../lib/env.ts";
 import { runtimeHostFlags } from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
+import { RefusedSpaceRetry } from "../lib/refused-space-retry.ts";
 import { shouldRecreateRuntime } from "../lib/runtime-lifecycle.ts";
 import {
   getThemePreference,
@@ -151,6 +152,9 @@ export class XRootView extends BaseView implements ShellApp {
   >();
   #eventAttentionRefreshOwners = new Map<DID, symbol>();
 
+  /** The current runtime's refused spaces, retried on returning to them. */
+  #refusedSpaceRetry: RefusedSpaceRetry | undefined;
+
   /**
    * Generation counter which invalidates callbacks from replaced workers. A
    * coded compiler-load error can arrive through either a request reply or an
@@ -236,6 +240,8 @@ export class XRootView extends BaseView implements ShellApp {
           );
           previous.dispose().catch(console.error);
         }
+        this.#refusedSpaceRetry?.dispose();
+        this.#refusedSpaceRetry = undefined;
         this._eventAttention = [];
         this.#eventAttentionMutationVersions.clear();
         this.#eventAttentionRefreshOwners.clear();
@@ -309,6 +315,7 @@ export class XRootView extends BaseView implements ShellApp {
           "eventneedsattention",
           this._handleEventNeedsAttention,
         );
+        this.#refusedSpaceRetry = new RefusedSpaceRetry(this.runtime);
         if (this.space !== undefined) {
           void this.#refreshEventAttention(this.space, generation);
         }
@@ -365,6 +372,8 @@ export class XRootView extends BaseView implements ShellApp {
       this.#onThemeChanged,
     );
     globalThis.addEventListener("beforeunload", this.#onBeforeUnload);
+    globalThis.addEventListener("focus", this.#onReturn);
+    document.addEventListener("visibilitychange", this.#onReturn);
   }
 
   override disconnectedCallback(): void {
@@ -375,6 +384,8 @@ export class XRootView extends BaseView implements ShellApp {
       this.#onThemeChanged,
     );
     globalThis.removeEventListener("beforeunload", this.#onBeforeUnload);
+    globalThis.removeEventListener("focus", this.#onReturn);
+    document.removeEventListener("visibilitychange", this.#onReturn);
     super.disconnectedCallback();
   }
 
@@ -392,6 +403,16 @@ export class XRootView extends BaseView implements ShellApp {
     if (this.runtime?.hasPendingWrites()) {
       event.preventDefault();
     }
+  };
+
+  /**
+   * Handler for the page's `focus` and `visibilitychange`, which asks again
+   * for every space the runtime refused once the person is back to see it.
+   * A grant made meanwhile sends nothing to a refused session.
+   */
+  #onReturn = (): void => {
+    if (document.visibilityState === "hidden") return;
+    this.#refusedSpaceRetry?.retryAll();
   };
 
   /**
@@ -528,6 +549,7 @@ export class XRootView extends BaseView implements ShellApp {
     if (space !== undefined) {
       void this.#refreshEventAttention(space, this.#runtimeGeneration);
     }
+    this.#refusedSpaceRetry?.retry(space);
   }
 
   readonly _handleEventNeedsAttention = (

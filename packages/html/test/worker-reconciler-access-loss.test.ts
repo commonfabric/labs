@@ -9,6 +9,38 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 
+/**
+ * The handler of the one retry control `ops` renders, after checking that the
+ * control is a button marked as one and sits beside the refusal's status text.
+ */
+function retryHandlerOf(ops: readonly VDomOp[]): number {
+  const buttons = ops.filter((op) =>
+    op.op === "create-element" && op.tagName === "button"
+  );
+  expect(buttons).toHaveLength(1);
+  const [button] = buttons;
+  if (button.op !== "create-element") throw new Error("Missing retry control");
+  const nodeId = button.nodeId;
+  expect(ops).toContainEqual({
+    op: "set-prop",
+    nodeId,
+    key: "data-space-access-retry",
+    value: "true",
+  });
+  expect(
+    ops.some((op) =>
+      op.op === "create-text" && op.text === "Access unavailable"
+    ),
+  ).toBe(true);
+  const events = ops.filter((op) =>
+    op.op === "set-event" && op.nodeId === nodeId && op.eventType === "click"
+  );
+  expect(events).toHaveLength(1);
+  const [event] = events;
+  if (event.op !== "set-event") throw new Error("Missing retry handler");
+  return event.handlerId;
+}
+
 describe("worker reconciler access loss", () => {
   for (const propsKind of ["static", "cell", "updated static"]) {
     it(`withholds a foreign event after access loss with ${propsKind} properties`, async () => {
@@ -149,6 +181,142 @@ describe("worker reconciler access loss", () => {
           op.op === "create-text" && op.text === "Access unavailable"
         ),
       ).toBe(true);
+    } finally {
+      reconciler.unmount();
+      await runtime.dispose();
+    }
+  });
+
+  it("offers a retry control on a refused root, which asks for the root's space while it is refused", async () => {
+    const owner = await Identity.fromPassphrase("render retry refused root");
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: owner }),
+    });
+    const retried: string[] = [];
+    const ops: VDomOp[] = [];
+    const reconciler = new WorkerReconciler({
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
+      spaceAccess: {
+        error: () => new Error("Access revoked"),
+        subscribe: () => () => {},
+        retry: (space) => retried.push(space),
+      },
+    });
+    try {
+      const root = runtime.getCell(owner.did(), "refused root", undefined);
+      await runtime.editWithRetry((tx) =>
+        root.withTx(tx).set({
+          $UI: {
+            type: "vnode",
+            name: "main",
+            props: {},
+            children: ["Refused content"],
+          },
+        })
+      );
+      reconciler.mount(root.asSchema(rendererVDOMSchema));
+      await runtime.idle();
+      reconciler.flush();
+      const handlerId = retryHandlerOf(ops);
+      expect(retried).toEqual([]);
+      expect(reconciler.dispatchEvent(handlerId, { type: "click" })).toBe(
+        true,
+      );
+      expect(retried).toEqual([owner.did()]);
+    } finally {
+      reconciler.unmount();
+      await runtime.dispose();
+    }
+  });
+
+  it("offers a retry control on a refused foreign panel, which asks for the panel's space", async () => {
+    const owner = await Identity.fromPassphrase("render retry panel root");
+    const foreign = await Identity.fromPassphrase("render retry panel foreign");
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: owner }),
+    });
+    const retried: string[] = [];
+    const ops: VDomOp[] = [];
+    const reconciler = new WorkerReconciler({
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
+      spaceAccess: {
+        error: (space) =>
+          space === foreign.did() ? new Error("Access revoked") : undefined,
+        subscribe: () => () => {},
+        retry: (space) => retried.push(space),
+      },
+    });
+    try {
+      const panel = runtime.getCell(foreign.did(), "retry panel", undefined);
+      const root = runtime.getCell(owner.did(), "retry root", undefined);
+      await runtime.editWithRetry((tx) =>
+        panel.withTx(tx).set({
+          $UI: {
+            type: "vnode",
+            name: "article",
+            props: {},
+            children: ["Private panel"],
+          },
+        })
+      );
+      await runtime.editWithRetry((tx) =>
+        root.withTx(tx).set({
+          $UI: { type: "vnode", name: "main", props: {}, children: [panel] },
+        })
+      );
+      reconciler.mount(root.asSchema(rendererVDOMSchema));
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await runtime.idle();
+      reconciler.flush();
+      reconciler.dispatchEvent(retryHandlerOf(ops), { type: "click" });
+      expect(retried).toEqual([foreign.did()]);
+    } finally {
+      reconciler.unmount();
+      await runtime.dispose();
+    }
+  });
+
+  it("offers no retry control when the access provider cannot retry", async () => {
+    const owner = await Identity.fromPassphrase("render retry unsupported");
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: owner }),
+    });
+    const ops: VDomOp[] = [];
+    const reconciler = new WorkerReconciler({
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
+      spaceAccess: {
+        error: () => new Error("Access revoked"),
+        subscribe: () => () => {},
+      },
+    });
+    try {
+      const root = runtime.getCell(owner.did(), "unretried root", undefined);
+      await runtime.editWithRetry((tx) =>
+        root.withTx(tx).set({
+          $UI: { type: "vnode", name: "main", props: {}, children: ["x"] },
+        })
+      );
+      reconciler.mount(root.asSchema(rendererVDOMSchema));
+      await runtime.idle();
+      reconciler.flush();
+      expect(
+        ops.some((op) =>
+          op.op === "create-text" && op.text === "Access unavailable"
+        ),
+      ).toBe(true);
+      expect(
+        ops.some((op) => op.op === "create-element" && op.tagName === "button"),
+      ).toBe(false);
     } finally {
       reconciler.unmount();
       await runtime.dispose();
