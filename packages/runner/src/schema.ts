@@ -11,6 +11,7 @@ import {
   type FabricValue,
   hashStringOf,
   isDeepFrozen,
+  isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   shallowMutableClone,
 } from "@commonfabric/data-model";
@@ -1137,6 +1138,16 @@ export interface ValidateAndTransformOptions {
    * stored CFC metadata probe — does not run again per property.
    */
   viewChild?: boolean;
+
+  /**
+   * Set by a reader that uses only whether the result is truthy, such as a
+   * builtin branching on a condition. A record or an array is then read at its
+   * root alone, and the read returns `true` where the schema it validates
+   * against is an opaque handle or accepts the container's type, and
+   * `undefined` where it refuses it. Every other value reads as it does
+   * without the option.
+   */
+  truthinessOnly?: boolean;
 }
 
 export function validateAndTransform(
@@ -1451,6 +1462,32 @@ export function validateAndTransform(
       path: doc.address.path,
       schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
     };
+    // The schema an eager read validates the value against where the value
+    // selects no handle branch of its own.
+    const eagerSchema = (): JSONSchema =>
+      entrySelectorSchema(
+        resolvedSchema,
+        link.schema!,
+        resolvedValueLink.schema,
+      );
+    // A record or an array read for its truthiness alone is truthy whatever it
+    // holds, so only the eager read's checks at its root decide, and nothing
+    // below the root is read: an opaque handle stands for any value, and any
+    // other schema has to accept the container's type. The branch a value
+    // selects for itself is chosen by what lies below the root, so it plays no
+    // part here. Any other value is the whole of what it is, and reads on as
+    // it would anyway.
+    if (options?.truthinessOnly === true && isKeyableObjectOrArray(value)) {
+      tx.readValueOrThrow(resolvedValueLink, { nonRecursive: true });
+      const schema = eagerSchema();
+      const rootHandle = ContextualFlowControl.getAsCellValues(
+        resolveSchema(schema),
+      ).at(0);
+      return ContextualFlowControl.getAsCellKind(rootHandle) === "opaque" ||
+          schemaAcceptsType(schema, Array.isArray(value) ? "array" : "object")
+        ? true
+        : undefined;
+    }
     if (tx.isLazyMaterialize()) {
       // Crossing the last link is a hop the eager traverser combines schemas
       // across (`linkHopSelector`), because a link's own schema describes the
@@ -1557,11 +1594,7 @@ export function validateAndTransform(
       }
       selector.schema = viewSchema;
     } else if (valueSelectedSchema === undefined) {
-      selector.schema = entrySelectorSchema(
-        resolvedSchema,
-        link.schema!,
-        resolvedValueLink.schema,
-      );
+      selector.schema = eagerSchema();
     }
   }
 
@@ -1649,6 +1682,20 @@ export function validateAndTransform(
   // we need some other way to indicate success to our caller. For now, I'm
   // still just returning undefined in the error case.
   return val;
+}
+
+/**
+ * Returns whether the value at `sourceRef`, read through `tx`, is truthy, as
+ * `validateAndTransform()` reads it with `truthinessOnly` set.
+ */
+export function readsTruthyAtRoot(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  sourceRef: NormalizedFullLink | CellViewRef,
+): boolean {
+  return Boolean(
+    validateAndTransform(runtime, tx, sourceRef, [], { truthinessOnly: true }),
+  );
 }
 
 /**
