@@ -138,6 +138,37 @@ describe("type-arguments", () => {
       ).toEqual({ ...boxOfNumber, default: { value: 0 } });
     });
 
+    it("reads literal defaults from type-only argument bindings", async () => {
+      for (
+        const [argument, value, expected] of [
+          ["string", '"configured"', { type: "string", default: "configured" }],
+          ["number", "3", { type: "number", default: 3 }],
+          ["boolean", "true", { type: "boolean", default: true }],
+        ]
+      ) {
+        const { type, checker } = await getTypeFromCode(
+          PRELUDE + `
+          interface Input<T, D extends T> { c: T | Default<T, D> }
+          type Root = Input<${argument}, ${value}>;
+        `,
+          "Root",
+        );
+        const root = asObjectSchema(
+          new SchemaGenerator().generateSchema(type, checker),
+        );
+        expect(root.properties?.c).toEqual(expected);
+      }
+    });
+
+    it("rejects multiple defaults in a bound generic union", async () => {
+      await expect(schemaOfC(`
+        interface Input<T> { c: T | Default<0> | Default<1> }
+        type Root = Input<number>;
+      `)).rejects.toThrow(
+        "Union types may contain at most one Default<> member",
+      );
+    });
+
     it("throws for an object default the argument does not cover, as the property written in place does", async () => {
       const message = "Default object union member is not assignable";
       await expect(
@@ -260,6 +291,114 @@ describe("type-arguments", () => {
         ready: { type: "boolean" },
       });
       expect(root.required).toEqual(["text", "ready"]);
+    });
+
+    it("reads a bound never key as an empty projection", async () => {
+      const root = await schemaOfRoot(`
+        interface Fields { text?: string; count?: number; }
+        type State<K extends keyof Fields = never> = Required<Pick<Fields, K>> & { ready: boolean };
+        type Root = State;
+      `);
+      expect(root.properties).toEqual({ ready: { type: "boolean" } });
+      expect(root.required).toEqual(["ready"]);
+    });
+
+    it("reads a labelled literal's operator members from their concrete instantiation", async () => {
+      const root = await schemaOfRoot(`
+        type Cfc<T, M> = T & { readonly __ct_cfc__?: M };
+        type Confidential<T, L> = Cfc<T, { confidentiality: L }>;
+        type Input<T> = Confidential<{
+          indexed: T["name" & keyof T];
+          mapped: { [K in keyof T]: T[K] };
+          conditional: T extends { name: infer U } ? U : never;
+        }, readonly ["a"]>;
+        type Root = Input<{ name: number }>;
+      `);
+      expect(root).toEqual({
+        type: "object",
+        properties: {
+          indexed: { type: "number" },
+          mapped: {
+            type: "object",
+            properties: { name: { type: "number" } },
+            required: ["name"],
+          },
+          conditional: { type: "number" },
+        },
+        required: ["indexed", "mapped", "conditional"],
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    it("reads operator members through a structural library view's bound operand", async () => {
+      const root = await schemaOfRoot(`
+        type Input<T> = Readonly<{
+          indexed: T["name" & keyof T];
+          mapped: { [K in keyof T]: T[K] };
+        }>;
+        type Root = Input<{ name: number }>;
+      `);
+      expect(root.properties).toEqual({
+        indexed: { type: "number" },
+        mapped: {
+          type: "object",
+          properties: { name: { type: "number" } },
+          required: ["name"],
+        },
+      });
+      expect(root.required).toEqual(["indexed", "mapped"]);
+    });
+
+    it("reads an unbound parameter from its own constraint", async () => {
+      const root = await schemaOfRoot(`
+        type Root<T extends { tag: string }> = T;
+      `);
+      expect(root).toEqual({
+        type: "object",
+        properties: { tag: { type: "string" } },
+        required: ["tag"],
+      });
+    });
+
+    it("reports a deferred conditional reading when another argument is bound", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `
+        type Conditional<T, U> = U extends string ? { text: T } : { value: T };
+        type Root<U> = Conditional<number, U>;
+      `,
+        "Root",
+      );
+      const diagnostics: string[] = [];
+      const root = new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.type) },
+      );
+      expect(root).toEqual({});
+      expect(diagnostics).toEqual(["schema-type:unread"]);
+    });
+
+    it("reads a shared base once across a type-only inheritance diamond", async () => {
+      const { type, checker } = await getTypeFromCode(
+        PRELUDE + `
+        interface Shared { tag: string }
+        interface Base<T> extends Shared { c: T | Default<0> }
+        interface Left<T> extends Base<T> {}
+        interface Right<T> extends Base<T> {}
+        interface Both<T> extends Left<T>, Right<T> {}
+        type Root = Both<number>;
+      `,
+        "Root",
+      );
+      const root = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      expect(root.properties).toEqual({
+        tag: { type: "string" },
+        c: { type: "number", default: 0 },
+      });
+      expect(root.required?.toSorted()).toEqual(["c", "tag"]);
     });
 
     it("reads an omitted key and a picked partial key under their alias bindings", async () => {

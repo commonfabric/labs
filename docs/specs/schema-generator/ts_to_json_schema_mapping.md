@@ -288,8 +288,8 @@ by any repo test.
 | `unknown` | `{ type: "unknown" }` — non-standard (`api/index.ts`); `unknown[]` → `items: { type: "unknown" }` | `primitive-formatter.ts`; `array-formatter.ts` | array-special-types |
 | TS `object` keyword | `{ type: "object", additionalProperties: true }` | `object-formatter.ts` | probe only |
 | Type parameter bound at the reading (§4.1) | its argument, retaining authored argument syntax and its declaration scope | `schema-generator.ts`; `type-parameter-bindings.ts` | `test/typescript/type-arguments.test.ts`; generic writer tests |
-| Unbound type parameter | constraint if any, else default, else `{}` | `schema-generator.ts` | untested at generator level; the pipeline substitutes `unknown` nodes before generation (ts-transformers spec §10.5), so `{}` is the *local* behavior |
-| Conditional type | `{}` | `schema-generator.ts` | untested |
+| Unbound type parameter | constraint if any, else default, else `{}` | `schema-generator.ts` | constraint reading: `test/typescript/type-arguments.test.ts`; the pipeline substitutes `unknown` nodes before generation (ts-transformers spec §10.5), so `{}` is the *local* behavior |
+| Conditional type | `{}`; a deferred reading under bindings is reported as unread | `schema-generator.ts` | `test/typescript/type-arguments.test.ts` |
 | `T[]` / `Array<T>` / `ReadonlyArray<T>` / aliases | `{ type: "array", items: <T> }`; node-first element detection, then Reference/typeArguments, then numeric index | `type-utils.ts`; `array-formatter.ts` | fixtures |
 | Tuple (`[string, number]`) | `{ type: "array", items: <merged element union> }` — e.g. `items: { type: ["number","string"] }`. **No `prefixItems`, no length bounds**; positional structure is lost (numeric-index fallback, `type-utils.ts`; grep confirms `prefixItems` appears only in a comment) | `type-utils.ts` | `test/tuple-emission.test.ts` |
 | Dictionary with both string and number index | treated as object map, not array | `type-utils.ts` | untested directly |
