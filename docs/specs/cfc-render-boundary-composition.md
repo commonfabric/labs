@@ -35,12 +35,20 @@ the same fit (`canRenderLabelUnderPolicy`). The fit is a set of functions in
 decision consults (the exchange-rule resolver, and the membership and
 module-policy providers a decision watches), so that every display sink in
 the worker decides by the same code. Each read that a value reaches the
-page through is decided on the labels of the cell the read starts from and on
-the labels the read consumed, and the ceiling has to admit each. The cell's
-labels are its own, which include a label its handle carries, and, when its
-path resolves through links to another place, the label there, which gathers
-every link the resolution followed (spec §8.2.7). A label that cannot be read
-is refused. The consumed labels are those of
+page through is decided on the labels at the node of the cell the read starts
+from and on the labels the read consumed, and the ceiling has to admit each.
+The node's labels are the cell's own at its path, which fold in what its
+ancestors' labels cover and include a label its handle carries, and, when its
+path resolves through links to another place, the label at that place, which
+gathers every link the resolution followed (spec §8.2.7). What lies below the
+node is decided as the read consumed it, so a read that stops short of a
+labeled field is not refused for that field, and one that reaches it is. A
+cell labeled only below its node has no label at the node to fit, which is
+not a cell with no label: only one with none anywhere is fitted by its
+schema's information-flow atoms. A label that cannot be read is refused. A
+decision made on a cell without a read of it, as a render boundary's protected
+value is, still covers every label inside the cell. The consumed labels are
+those of
 every document the read passed through, including one behind a link crossed
 part way along the path and one a link inside the value leads to, and those of
 each slot holding a link the read followed, which a dereference retains
