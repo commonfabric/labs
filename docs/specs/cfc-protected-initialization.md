@@ -189,14 +189,18 @@ sub-pattern's argument. A pattern's result can name a cell the pattern did not
 create the same way: its argument, passed through to a result field, or a cell
 the code setting the pattern up closed over, as when a handler defines a
 pattern that returns one of the handler's own bindings and sets it up. Setup
-records each such redirect as a capture of the slot holding it, on the terms of
-"References into a sub-pattern argument", and a captured binding's staging is
-the same act. A later setup that stages a redirect to another cell into a slot
-that holds one is a modification and is refused. Whether a trusted setup may
-re-point a slot when a pattern version names another cell for the same binding
-is not settled.
+records each such redirect as a binding of the slot holding it. A binding is
+matched as a capture is, by the cell its link names and by whether it is a
+write redirect. It differs in one respect: a setup stages its bindings again on
+every run, and a pattern version may name another cell for one, so preparation
+accepts a binding wherever the slot ends holding a link to the cell this setup
+staged, whatever the slot held before. A write in the setting-up transaction
+that leaves the slot naming another cell, at the slot or at an ancestor, is no
+binding and needs the slot's writer. A list builtin's capture is never
+re-pointed this way. Whether a trusted setup may re-point a capture when a
+pattern version names another cell for it is not settled.
 
-A capture covers the slot alone. The cell its redirect names belongs to
+A binding covers the slot alone. The cell its redirect names belongs to
 whoever handed the piece the binding, and setup writes none of it, so a write
 to that cell, through the slot or directly, needs the cell's own writer and
 owner binding in the setting-up transaction as in any other. Only a result
