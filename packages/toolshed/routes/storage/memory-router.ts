@@ -82,6 +82,10 @@ function load(path: string): RouterConfig {
 export class MemoryRouterPolicy {
   readonly config: RouterConfig;
   #source: string | undefined;
+  /** The directory file's identity, size and times when last read. */
+  #stamp: string | undefined;
+  /** Changes whenever ownership or availability changes. */
+  #generation = 0;
   #available = true;
   #owners = new Map<string, number>();
 
@@ -91,9 +95,31 @@ export class MemoryRouterPolicy {
     this.#refresh();
   }
 
+  /**
+   * Rereads the directory only when it may have changed. Ownership is checked
+   * on every protected engine turn, so reading the whole file each time costs
+   * the event loop O(spaces) per message. File timestamps advance in coarse
+   * ticks, so two same-size writes within one tick share a stamp: the stamp
+   * alone is trusted only once the file has been unchanged for a second, and
+   * until then the bytes are compared.
+   */
   #refresh(): void {
+    const info = Deno.statSync(this.config.directory);
+    const stamp = [
+      info.dev,
+      info.ino,
+      info.size,
+      info.mtime?.getTime(),
+      info.ctime?.getTime(),
+    ].join(":");
+    const settled = info.ctime !== null &&
+      Date.now() - info.ctime.getTime() > 1000;
+    if (stamp === this.#stamp && settled) return;
     const source = Deno.readTextFileSync(this.config.directory);
-    if (source === this.#source) return;
+    if (source === this.#source) {
+      this.#stamp = stamp;
+      return;
+    }
     const directory = routedObject(
       parseRoutedJson(source),
     );
@@ -128,6 +154,8 @@ export class MemoryRouterPolicy {
     }
     this.#owners = owners;
     this.#source = source;
+    this.#stamp = stamp;
+    this.#generation++;
     if (!this.#available) {
       console.error(
         JSON.stringify({
@@ -146,13 +174,20 @@ export class MemoryRouterPolicy {
 
   /** Synchronously fences an engine turn against the current owning epoch. */
   ownership(space: string): number | undefined {
+    this.#current();
+    return this.#owners.get(space);
+  }
+
+  /** Refreshes ownership; an unreadable or invalid snapshot owns nothing. */
+  #current(): void {
     try {
       this.#refresh();
-      return this.#owners.get(space);
     } catch {
       this.#owners.clear();
       this.#source = undefined;
+      this.#stamp = undefined;
       if (this.#available) {
+        this.#generation++;
         console.error(
           JSON.stringify({
             event: "memory-directory-unavailable",
@@ -161,7 +196,6 @@ export class MemoryRouterPolicy {
         );
       }
       this.#available = false;
-      return undefined;
     }
   }
 
@@ -185,7 +219,15 @@ export class MemoryRouterPolicy {
         certificate: Deno.readTextFileSync(c.certificate),
         key: Deno.readTextFileSync(c.key),
       });
-      const fence = setInterval(() => host.fenceOwnership(), 500);
+      // Contexts record the epoch they were admitted under, so they can only
+      // fall out of date when the directory changes or becomes unavailable.
+      let fenced = this.#generation;
+      const fence = setInterval(() => {
+        this.#current();
+        if (this.#generation === fenced) return;
+        fenced = this.#generation;
+        host.fenceOwnership();
+      }, 500);
       return {
         close: async () => {
           clearInterval(fence);
