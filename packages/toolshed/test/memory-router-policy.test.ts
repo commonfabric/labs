@@ -42,6 +42,14 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     Deno.writeTextFileSync(directory, JSON.stringify(moved));
     Deno.utimeSync(directory, stamp, stamp);
     assertEquals(policy.ownership(space.did()), 2);
+    // Another same-size rewrite in that tick, with no lookup until the file
+    // has settled: a stamp recorded before settling could hide it.
+    moved.spaces[space.did()].epoch = 3;
+    Deno.writeTextFileSync(directory, JSON.stringify(moved));
+    Deno.utimeSync(directory, stamp, stamp);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assertEquals(policy.ownership(space.did()), 3);
+    assertEquals(policy.ownership(space.did()), 3);
     for (
       const hostname of [
         "0.0.0.0",
