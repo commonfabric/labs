@@ -64,10 +64,7 @@ import {
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
-  type CellGetResponse,
   type CellRef,
-  type CellValueAnswer,
-  type CellValueResponse,
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
@@ -93,6 +90,7 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
+import { HostReadGate } from "@/backends/host-read-gate.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
 import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
@@ -165,11 +163,12 @@ const createRuntime = (
  * The value answer `response` holds, failing the case when the read was
  * refused: no read here is made under a display ceiling.
  */
-function admitted(
-  response: CellGetResponse | CellValueResponse,
-): Extract<CellGetResponse, CellValueAnswer> {
+/** What `response` answers, for a test that expects it admitted. */
+function admitted<T extends object>(
+  response: T,
+): T extends { refused: unknown } ? never : T {
   if ("refused" in response) throw new Error("The read was refused.");
-  return response;
+  return response as T extends { refused: unknown } ? never : T;
 }
 
 // A valid `fid1:` piece id from a readable seed (handlers parse pieceId via
@@ -988,13 +987,17 @@ describe("runtime-processor", () => {
         },
       });
 
-      const result = await processor.handlePieceGetSource({
-        type: RequestType.PieceGetSource,
-        space,
-        pieceId: fid("sourced-piece"),
-      });
+      const result = admitted(
+        await processor.handlePieceGetSource({
+          type: RequestType.PieceGetSource,
+          space,
+          pieceId: fid("sourced-piece"),
+        }),
+      );
 
-      expect(synced).toEqual(["cell"]);
+      // Once to decide on the piece's labels, which a document not yet loaded
+      // does not show, and once by the reader, as its first step.
+      expect(synced).toEqual(["cell", "cell"]);
       // The handler addresses the cell by the entity id `entityIdFrom` builds
       // from the routing form of the request's pieceId. That is a FabricHash, and
       // its string form is the tagged hash — the `of:` scheme is added later, by
@@ -1101,24 +1104,28 @@ describe("runtime-processor", () => {
       }) as typeof changeSource;
 
       try {
-        const first = await processor.handlePieceUpdateSource({
-          type: RequestType.PieceUpdateSource,
-          space,
-          pieceId,
-          action,
-        });
+        const first = admitted(
+          await processor.handlePieceUpdateSource({
+            type: RequestType.PieceUpdateSource,
+            space,
+            pieceId,
+            action,
+          }),
+        );
         expect(first.compatibilityWarning).toBe("result schema narrowed");
         expect(first.confirmationToken).toBeDefined();
         expect(processor.accessForTestingOnly.pieceSourceConfirmations.size)
           .toBe(1);
 
-        const second = await processor.handlePieceUpdateSource({
-          type: RequestType.PieceUpdateSource,
-          space,
-          pieceId,
-          action,
-          confirmationToken: first.confirmationToken,
-        });
+        const second = admitted(
+          await processor.handlePieceUpdateSource({
+            type: RequestType.PieceUpdateSource,
+            space,
+            pieceId,
+            action,
+            confirmationToken: first.confirmationToken,
+          }),
+        );
         expect(receivedConfirmation).toBe(prepared);
         expect(second.compatibilityWarning).toBeUndefined();
         expect(processor.accessForTestingOnly.pieceSourceConfirmations.size)
@@ -1193,7 +1200,6 @@ describe("runtime-processor", () => {
       );
       await cell.sync();
       const sync = cell.sync.bind(cell);
-      cell.sync = () => Promise.reject(new Error("refresh unavailable"));
       const getCellFromEntityId = runtime.getCellFromEntityId.bind(runtime);
       runtime.getCellFromEntityId = (() => cell) as typeof getCellFromEntityId;
       const processor = buildProcessor({
@@ -1202,15 +1208,21 @@ describe("runtime-processor", () => {
         runtime,
       });
       const changeSource = PieceController.prototype.changeSource;
-      PieceController.prototype.changeSource =
-        (() => Promise.resolve({ status: "applied" })) as typeof changeSource;
+      // The piece syncs, and is decided on, before the change; the refresh
+      // after the applied change is what fails.
+      PieceController.prototype.changeSource = (() => {
+        cell.sync = () => Promise.reject(new Error("refresh unavailable"));
+        return Promise.resolve({ status: "applied" });
+      }) as typeof changeSource;
       try {
-        const result = await processor.handlePieceUpdateSource({
-          type: RequestType.PieceUpdateSource,
-          space,
-          pieceId: fid("sourced-piece"),
-          action: { kind: "detach" },
-        });
+        const result = admitted(
+          await processor.handlePieceUpdateSource({
+            type: RequestType.PieceUpdateSource,
+            space,
+            pieceId: fid("sourced-piece"),
+            action: { kind: "detach" },
+          }),
+        );
 
         expect(result.source.history).toEqual([]);
         expect(result.executionWarning).toContain(
@@ -7063,15 +7075,17 @@ describe("runtime-processor", () => {
       );
       const input = new FabricBytes(new Uint8Array([4, 5, 6]));
 
-      const result = await processor.handleSqliteQuery({
-        type: RequestType.SqliteQuery,
-        cell: ref,
-        sql: "SELECT payload FROM blobs WHERE payload = ?",
-        params: {
-          kind: "positional",
-          values: [input],
-        },
-      });
+      const result = admitted(
+        await processor.handleSqliteQuery({
+          type: RequestType.SqliteQuery,
+          cell: ref,
+          sql: "SELECT payload FROM blobs WHERE payload = ?",
+          params: {
+            kind: "positional",
+            values: [input],
+          },
+        }),
+      );
 
       const output = result.rows[0]!.payload;
       expect(output).toBeInstanceOf(FabricBytes);
@@ -7166,11 +7180,13 @@ describe("runtime-processor", () => {
         () => Promise.resolve({ rows: [row] }),
       );
 
-      const result = await processor.handleSqliteQuery({
-        type: RequestType.SqliteQuery,
-        cell: ref,
-        sql: 'SELECT 1 AS "constructor", 2 AS "__proto__"',
-      });
+      const result = admitted(
+        await processor.handleSqliteQuery({
+          type: RequestType.SqliteQuery,
+          cell: ref,
+          sql: 'SELECT 1 AS "constructor", 2 AS "__proto__"',
+        }),
+      );
 
       expect(Object.hasOwn(result.rows[0]!, "constructor")).toBe(true);
       expect(Object.hasOwn(result.rows[0]!, "__proto__")).toBe(true);
@@ -7844,7 +7860,9 @@ describe("runtime-processor", () => {
       it("posts a render error to the client that mounted, and no other", () => {
         const mounting = testClient(1);
         const other = testClient(2);
-        mountErrorSink(mounting.client)(new Error("render blew up"));
+        mountErrorSink(mounting.client, new HostReadGate(undefined, {}))(
+          new Error("render blew up"),
+        );
         expect(mounting.posted).toHaveLength(1);
         expect(mounting.posted[0].type).toBe(NotificationType.ErrorReport);
         expect(mounting.posted[0].message).toBe("render blew up");
@@ -7853,7 +7871,7 @@ describe("runtime-processor", () => {
 
       it("carries a compiler-stack failure's code, so the shell can act on it", () => {
         const mounting = testClient(1);
-        mountErrorSink(mounting.client)(
+        mountErrorSink(mounting.client, new HostReadGate(undefined, {}))(
           new CompilerStackLoadError(new TypeError("chunk fetch failed")),
         );
         expect(mounting.posted[0].code).toBe(

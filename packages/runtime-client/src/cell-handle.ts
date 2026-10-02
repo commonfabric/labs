@@ -921,6 +921,9 @@ export class CellHandle<T = unknown> {
         }),
       })
     );
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return response.rows.map((row) =>
       Object.fromEntries(
         Object.entries(row).map(([key, value]) => [

@@ -18,6 +18,7 @@ import type { EditorView } from "@codemirror/view";
 import {
   type ApplyOpResolution,
   type CellHandle,
+  CellReadRefusedError,
   CODEMIRROR_CHANGESET_CODEC,
   type JSONValue,
   type OpCursor,
@@ -351,8 +352,15 @@ export class CodeMirrorCollaborationController {
     const unsubscribe = await this.#runtime.subscribeOperationField(
       this.#cell,
       (next) => this.#receive(next),
-      snapshot.cursor ?? undefined,
-      this.#operationSessionId,
+      {
+        ...(snapshot.cursor === null ? {} : { after: snapshot.cursor }),
+        ...(this.#operationSessionId === undefined
+          ? {}
+          : { operationSessionId: this.#operationSessionId }),
+        // A field the worker stops showing ends the session, as a failure
+        // does: no edit is sent over a field the host can no longer see.
+        onRefused: (refusal) => this.#fail(new CellReadRefusedError(refusal)),
+      },
     );
     if (this.#disposed) {
       unsubscribe();

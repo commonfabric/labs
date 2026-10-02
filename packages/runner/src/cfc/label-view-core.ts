@@ -177,6 +177,21 @@ export const redactCaveatSourcesForDisplay = (
   }),
 });
 
+/**
+ * A label view joined at its root: one entry, at the cell itself, whose label
+ * joins every entry's. For display of a cell whose read the viewer is
+ * refused. An entry's path names a field of the document, and the name of a
+ * field is part of what the document holds, so such a view says what labels
+ * the cell carries without saying where in it they sit.
+ */
+export const redactEntryPathsForDisplay = (
+  view: CfcLabelView,
+): CfcLabelView => {
+  let label: IFCLabel = {};
+  for (const entry of view.entries) label = mergeLabel(label, entry.label);
+  return { version: 1, entries: [{ path: [], label }] };
+};
+
 const sortEntries = (entries: CfcLabelViewEntry[]): CfcLabelViewEntry[] => {
   if (entries.length < 2) return entries;
   // Encoding belongs to the entry, so each path is encoded once per sort.

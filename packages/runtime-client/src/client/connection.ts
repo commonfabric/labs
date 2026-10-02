@@ -10,7 +10,7 @@ import {
   CommandResponse,
   Commands,
   ConsoleMessage,
-  ErrorNotification,
+  ErrorReport,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
@@ -131,7 +131,7 @@ export type SubscriptionDiagnostics = {
 export type RuntimeConnectionEvents = {
   console: [ConsoleMessage];
   navigaterequest: [NavigateRequestNotification];
-  error: [ErrorNotification];
+  error: [ErrorReport];
   spaceaccesslost: [SpaceAccessLostNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];

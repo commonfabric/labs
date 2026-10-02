@@ -2,6 +2,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { getTopFrame } from "../builder/pattern.ts";
 import { type Frame } from "../builder/types.ts";
+import { collectConsumedLabel } from "../cfc/prepare.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
@@ -269,6 +270,10 @@ export function handleSchedulerError(
 
   const errorWithContext = error as ErrorWithContext;
   errorWithContext.action = action as ErrorWithContext["action"];
+  const tx = (error as Error & { frame?: Frame }).frame?.tx;
+  if (tx !== undefined) {
+    errorWithContext.consumed = () => collectConsumedLabel(tx);
+  }
   if (pieceId) errorWithContext.pieceId = pieceId;
   if (spellId) errorWithContext.spellId = spellId;
   if (patternId) errorWithContext.patternId = patternId;

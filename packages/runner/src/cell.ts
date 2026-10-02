@@ -5159,6 +5159,13 @@ type CellLinkOptions = {
    */
   includeCfcLabelView?: boolean;
 
+  /**
+   * Under `includeCfcLabelView`, the view a link to `cell` carries in place
+   * of `view`, the display form of the view the cell holds. A reader who may
+   * not see the cell is given less of its label than one who may.
+   */
+  displayView?: (cell: Cell<unknown>, view: CfcLabelView) => CfcLabelView;
+
   /** Which `asCell` entries survive in a carried schema; see `KeepAsCell`. */
   keepAsCell?: KeepAsCell;
 };
@@ -5174,9 +5181,10 @@ function linkToCell(cell: Cell<any>, options: CellLinkOptions): SigilLink {
   if (options.includeCfcLabelView) {
     const cfcLabelView = getCarriedCfcLabelView(cell);
     if (cfcLabelView) {
+      const display = redactCaveatSourcesForDisplay(cfcLabelView);
       link = withLinkCfcLabelView(
         link,
-        redactCaveatSourcesForDisplay(cfcLabelView),
+        options.displayView?.(cell, display) ?? display,
       );
     }
   }
@@ -5213,13 +5221,19 @@ export function convertCellsToLinks(
  * are where a view crosses. What a host is sent is
  * decided on the read this walk makes, which is why `readProjected()` and
  * `sinkProjected()` take it as their projection where a host is the reader.
+ * `displayView`, when given, decides the view each link carries, as
+ * `CellLinkOptions.displayView` says.
  */
-export function hostValueOf(value: unknown): FabricValue {
+export function hostValueOf(
+  value: unknown,
+  displayView?: CellLinkOptions["displayView"],
+): FabricValue {
   return convertCellsToLinks(value as CellLinkInput, {
     includeSchema: true,
     keepAsCell: KeepAsCell.All,
     doNotConvertCellResults: true,
     includeCfcLabelView: true,
+    ...(displayView === undefined ? {} : { displayView }),
   });
 }
 

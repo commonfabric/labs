@@ -1683,13 +1683,18 @@ export type PresenceWireEvent =
   | { kind: "failure"; error: { name: string; message: string } };
 
 /** A response carrying one operation-backed field snapshot. */
-export type OperationFieldResponse = {
-  /**
-   * The field as it stands: its codec and cursor, the materialized value,
-   * and the integrated operations the request asked to see.
-   */
-  field: OperationFieldSnapshot;
-};
+export type OperationFieldResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * The field as it stands: its codec and cursor, the materialized
+       * value, and the integrated operations the request asked to see.
+       */
+      field: OperationFieldSnapshot;
+    }
+    | CellRefusedAnswer
+  );
 
 /** A response naming the operation codecs available for a cell. */
 export type OperationCapabilitiesResponse = {
@@ -1704,14 +1709,19 @@ export type OperationCapabilitiesResponse = {
 };
 
 /** A response carrying the authoritative resolution of an operation. */
-export type OperationApplyResponse = {
-  /**
-   * Where the submission landed: the cursor span it moved the field
-   * through, the operations as integrated, and whether the submission was
-   * a duplicate of one already there.
-   */
-  resolution: ApplyOpResolution;
-};
+export type OperationApplyResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * Where the submission landed: the cursor span it moved the field
+       * through, the operations as integrated, and whether the submission
+       * was a duplicate of one already there.
+       */
+      resolution: ApplyOpResolution;
+    }
+    | CellRefusedAnswer
+  );
 
 /** SQLite bind values as the main-thread connection carries them. */
 export type SqliteParams =
@@ -2154,9 +2164,11 @@ export type ActionRunTraceResponse = {
 };
 
 /** The recorded triggers, in the order they fired. */
-export type TriggerTraceResponse = {
+export type TriggerTraceResponse = HostReadDecided & {
   /**
-   * The recorded triggers, in the order they fired.
+   * The recorded triggers, in the order they fired. Where the display
+   * ceiling refuses the document a trigger changed, its entry names the
+   * document alone: no path, and no preview of the values.
    */
   trace: readonly TriggerTraceEntry[];
 };
@@ -2173,9 +2185,11 @@ export type WriteStackTraceResponse = {
 };
 
 /** What the scheduler's non-idempotency diagnosis found. */
-export type DetectNonIdempotentResponse = {
+export type DetectNonIdempotentResponse = HostReadDecided & {
   /**
-   * What the diagnosis found.
+   * What the diagnosis found. Where the display ceiling refuses a document
+   * a run read or wrote, the run names the document alone, in place of its
+   * paths and values.
    */
   result: SchedulerDiagnosisResult;
 };
@@ -2956,12 +2970,17 @@ export type PieceSourceView = {
 };
 
 /** A piece's current source, with its whole revision history. */
-export type PieceSourceResponse = {
-  /**
-   * The piece's source and history.
-   */
-  source: PieceSourceView;
-};
+export type PieceSourceResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * The piece's source and history.
+       */
+      source: PieceSourceView;
+    }
+    | CellRefusedAnswer
+  );
 
 /**
  * One historical revision's source: the pattern and files as they stood then,
@@ -2983,12 +3002,17 @@ export type PieceSourceRevisionSourceView = {
 };
 
 /** One named revision of a piece's source, without the history around it. */
-export type PieceSourceRevisionResponse = {
-  /**
-   * That revision's source.
-   */
-  source: PieceSourceRevisionSourceView;
-};
+export type PieceSourceRevisionResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * That revision's source.
+       */
+      source: PieceSourceRevisionSourceView;
+    }
+    | CellRefusedAnswer
+  );
 
 /**
  * A change to which source a piece follows. `repoint` moves the piece to an
@@ -3031,7 +3055,13 @@ export type PieceUpdateSourceRequest = BaseRequest & PieceAddress & {
  * token back is what turns the refusal into an update; an `executionWarning`
  * reports an update that landed but whose pattern then misbehaved.
  */
-export type PieceUpdateSourceResponse = PieceSourceResponse & {
+/** What a source update did, and the source it left the piece with. */
+export type PieceUpdateSourceResult = {
+  /**
+   * The piece's source and history after the update.
+   */
+  source: PieceSourceView;
+
   /**
    * Why the update was not applied, where it was refused as
    * incompatible. Comes with a `confirmationToken`.
@@ -3049,6 +3079,15 @@ export type PieceUpdateSourceResponse = PieceSourceResponse & {
    */
   executionWarning?: string;
 };
+
+/**
+ * A source update's answer, or the refusal that stands in its place: a
+ * piece whose source the display ceiling keeps from the host is not updated
+ * through it.
+ */
+export type PieceUpdateSourceResponse =
+  & HostReadDecided
+  & (PieceUpdateSourceResult | CellRefusedAnswer);
 
 /** One access level in a space ACL. */
 export type SpaceAclCapability = "READ" | "WRITE" | "OWNER";
@@ -3488,15 +3527,20 @@ export type CellGetResponse =
   );
 
 /** Rows returned by {@link RequestType.SqliteQuery}. */
-export type SqliteQueryResponse = {
-  /**
-   * The result set, one entry per row, each keyed by the column names the
-   * statement selected. Empty when the statement returned no rows.
-   */
-  rows: readonly {
-    readonly [key: string]: FabricValue;
-  }[];
-};
+export type SqliteQueryResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * The result set, one entry per row, each keyed by the column names the
+       * statement selected. Empty when the statement returned no rows.
+       */
+      rows: readonly {
+        readonly [key: string]: FabricValue;
+      }[];
+    }
+    | CellRefusedAnswer
+  );
 
 /** A reference to one cell, for a request whose answer is which cell. */
 export type CellResponse = {
@@ -3510,9 +3554,11 @@ export type CellResponse = {
  * A cell's display label. `undefined` means the cell carries none, which is
  * distinct from the request having failed.
  */
-export type CfcLabelViewResponse = {
+export type CfcLabelViewResponse = HostReadDecided & {
   /**
-   * The cell's display label, `undefined` where it carries none.
+   * The cell's display label, `undefined` where it carries none. Where the
+   * display ceiling refuses the cell, its entries are joined at the root,
+   * since the paths they sit at name the document's fields.
    */
   cfcLabel: CfcLabelView | undefined;
 };
@@ -3586,12 +3632,17 @@ export type SlugReferenceResponse =
   };
 
 /** A piece's slug, `undefined` where the piece has none. */
-export type SlugResponse = {
-  /**
-   * The piece's slug, `undefined` where it has none.
-   */
-  slug: string | undefined;
-};
+export type SlugResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * The piece's slug, `undefined` where it has none.
+       */
+      slug: string | undefined;
+    }
+    | CellRefusedAnswer
+  );
 
 /** One space, by DID. */
 export type SpaceResponse = {
@@ -3693,7 +3744,7 @@ export type CellUpdateNotification =
  * `metadata` names the piece, pattern, and space it came from where those are
  * known.
  */
-export type ConsoleNotification = {
+export type ConsoleNotification = HostReadDecided & {
   type: NotificationType.ConsoleMessage;
 
   /**
@@ -3759,7 +3810,12 @@ export type SpaceAccessLostNotification = {
  * raised between requests. Every field but `message` is context that the
  * raising site may or may not have had.
  */
-export type ErrorNotification = {
+/**
+ * A runtime error as a host handles it, wherever it came from: the worker's
+ * report, which the host-read gate made ({@link ErrorNotification}), or one
+ * the connection raises itself for a failed request.
+ */
+export type ErrorReport = {
   type: NotificationType.ErrorReport;
 
   /**
@@ -3798,8 +3854,15 @@ export type ErrorNotification = {
   stackTrace?: string;
 };
 
+/**
+ * A runtime error the worker reports. Its message and stack are what the
+ * failing code was given to say, and are withheld where the display ceiling
+ * refuses what that code had read.
+ */
+export type ErrorNotification = HostReadDecided & ErrorReport;
+
 /** One telemetry marker. Sent only while telemetry is enabled. */
-export type TelemetryNotification = {
+export type TelemetryNotification = HostReadDecided & {
   type: NotificationType.Telemetry;
 
   /**
@@ -3959,18 +4022,24 @@ export type VDomBatchNotification = {
 };
 
 /** A new operation-backed snapshot for one active subscription. */
-export type OperationUpdateNotification = {
-  type: NotificationType.OperationUpdate;
+export type OperationUpdateNotification =
+  & HostReadDecided
+  & {
+    type: NotificationType.OperationUpdate;
 
-  /**
-   * The subscription this is for, as
-   * {@link OperationSubscribeRequest.subscriptionId} named it.
-   */
-  subscriptionId: string;
-
-  /** The field as it now stands, in the shape a query returns it. */
-  field: OperationFieldSnapshot;
-};
+    /**
+     * The subscription this is for, as
+     * {@link OperationSubscribeRequest.subscriptionId} named it.
+     */
+    subscriptionId: string;
+  }
+  & (
+    | {
+      /** The field as it now stands, in the shape a query returns it. */
+      field: OperationFieldSnapshot;
+    }
+    | CellRefusedAnswer
+  );
 
 /** Reports one presence room event for a membership. */
 export type PresenceUpdateNotification = {

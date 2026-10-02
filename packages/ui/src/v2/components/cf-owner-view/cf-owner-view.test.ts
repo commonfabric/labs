@@ -4,6 +4,7 @@ import {
   CellHandle,
   type CellRef,
   type CellUpdateNotification,
+  type CfcLabelViewResponse,
   EventEmitter,
   type InitializationData,
   type IPCClientMessage,
@@ -530,8 +531,9 @@ describe("CFOwnerView", () => {
         if (request.type === RequestType.CellSubscribe) {
           if (request.includeCfcLabel) this.#labelled.push(request.cell);
         }
+        // What the worker's host-read gate answers; a test stands in for it.
         const data = request.type === RequestType.CellGetCfcLabel
-          ? { cfcLabel: this.#label }
+          ? { cfcLabel: this.#label } as CfcLabelViewResponse
           : undefined;
         queueMicrotask(() => {
           this.emit("message", { msgId: message.msgId, data });

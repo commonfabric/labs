@@ -10,6 +10,7 @@ export { WorkerReconciler } from "./reconciler.ts";
 export {
   admitsEverything,
   canRenderCellUnderPolicy,
+  canRenderLabelUnderPolicy,
   cellLabelRefusal,
   cellLabelSources,
   type DisplayFitSources,
@@ -19,6 +20,7 @@ export {
   rootRenderPolicyFor,
 } from "./display-fit.ts";
 export { generateChildKeys, generateKey } from "./keying.ts";
+export { CFC_POLICY_PLACEHOLDER_TEXT } from "../render-utils.ts";
 export type {
   BindingCellRef,
   ChildNodeState,

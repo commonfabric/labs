@@ -8,7 +8,7 @@ import {
   navigate,
 } from "@commonfabric/navigation";
 import {
-  type ErrorNotification,
+  type ErrorReport,
   type EventAttentionNotice,
   type RuntimeClient,
   RuntimeErrorCode,
@@ -136,7 +136,7 @@ export class XRootView extends BaseView implements ShellApp {
   private accessor _spaceResolutionError: LoadError | undefined = undefined;
 
   @state()
-  private accessor _runtimeLoadErrors: readonly ErrorNotification[] = [];
+  private accessor _runtimeLoadErrors: readonly ErrorReport[] = [];
 
   @state()
   private accessor _eventAttention: readonly EventAttentionNotice[] = [];
@@ -166,7 +166,7 @@ export class XRootView extends BaseView implements ShellApp {
   };
 
   readonly _handleRuntimeError = (
-    event: ErrorNotification,
+    event: ErrorReport,
     generation = this.#runtimeGeneration,
   ): void => {
     console.error("[RuntimeClient Error]", event);
@@ -176,7 +176,7 @@ export class XRootView extends BaseView implements ShellApp {
 
     if (event.code !== RuntimeErrorCode.CompilerStackLoadFailed) {
       if (!event.space || event.space !== this.space) return;
-      const sameContext = (candidate: ErrorNotification) =>
+      const sameContext = (candidate: ErrorReport) =>
         candidate.space === event.space &&
         candidate.pieceId === event.pieceId &&
         candidate.patternId === event.patternId;

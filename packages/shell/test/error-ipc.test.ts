@@ -1,7 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
-  ErrorNotification,
+  // The worker's reports are built by its host-read gate, which these tests
+  // stand in for, so each simulated one is typed as one the gate made.
+  type ErrorNotification,
+  type ErrorReport,
   EventEmitter,
   NotificationType,
   RuntimeConnection,
@@ -41,7 +44,7 @@ describe("Error IPC propagation", () => {
     const transport = new MockTransport();
     const connection = new RuntimeConnection(transport);
 
-    let receivedError: ErrorNotification | null = null;
+    let receivedError: ErrorReport | null = null;
     connection.on("error", (err) => {
       receivedError = err;
     });
@@ -59,7 +62,7 @@ describe("Error IPC propagation", () => {
       space: "did:key:z6Mktest",
       patternId: "pattern-456",
       stackTrace: sourceMapppedStack,
-    });
+    } as ErrorNotification);
 
     expect(receivedError).not.toBeNull();
     expect(receivedError!.message).toBe("something broke");
@@ -74,7 +77,7 @@ describe("Error IPC propagation", () => {
     const transport = new MockTransport();
     const connection = new RuntimeConnection(transport);
 
-    let receivedError: ErrorNotification | null = null;
+    let receivedError: ErrorReport | null = null;
     connection.on("error", (err) => {
       receivedError = err;
     });
@@ -90,7 +93,7 @@ describe("Error IPC propagation", () => {
       type: NotificationType.ErrorReport,
       message: "user code error",
       stackTrace: goodStack,
-    });
+    } as ErrorNotification);
 
     expect(receivedError).not.toBeNull();
     const stack = receivedError!.stackTrace!;
@@ -109,7 +112,7 @@ describe("Error IPC propagation", () => {
     const transport = new MockTransport();
     const connection = new RuntimeConnection(transport);
 
-    let receivedError: ErrorNotification | null = null;
+    let receivedError: ErrorReport | null = null;
     connection.on("error", (err) => {
       receivedError = err;
     });
@@ -117,7 +120,7 @@ describe("Error IPC propagation", () => {
     transport.simulateMessage({
       type: NotificationType.ErrorReport,
       message: "error without stack",
-    });
+    } as ErrorNotification);
 
     expect(receivedError).not.toBeNull();
     expect(receivedError!.message).toBe("error without stack");
@@ -128,7 +131,7 @@ describe("Error IPC propagation", () => {
     const transport = new MockTransport();
     const connection = new RuntimeConnection(transport);
 
-    let receivedError: ErrorNotification | null = null;
+    let receivedError: ErrorReport | null = null;
     connection.on("error", (err) => {
       receivedError = err;
     });
@@ -141,7 +144,7 @@ describe("Error IPC propagation", () => {
       type: NotificationType.ErrorReport,
       message: "something broke",
       stackTrace: rawStack,
-    });
+    } as ErrorNotification);
 
     expect(receivedError).not.toBeNull();
 

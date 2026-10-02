@@ -2,12 +2,7 @@ import {
   CompilerStackLoadError,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
-import {
-  type ErrorNotification,
-  NotificationType,
-  RuntimeErrorCode,
-} from "@/protocol/mod.ts";
-import { postToClient } from "./post-to-client.ts";
+import { type ErrorReport, RuntimeErrorCode } from "@/protocol/mod.ts";
 
 /** The code a runtime error crosses to the client with, if it has one. */
 export function runtimeErrorCode(error: unknown): RuntimeErrorCode | undefined {
@@ -19,30 +14,23 @@ export function runtimeErrorCode(error: unknown): RuntimeErrorCode | undefined {
 }
 
 /**
- * The report an asynchronous renderer error crosses as. Built rather than
- * posted, so that a caller holding one client of several sends it to that
- * client instead of to the worker's own global.
+ * What a host is told of `error`: its message, code, stack, and whatever
+ * pattern context it carries. The host-read gate decides what of it crosses
+ * (`HostReadGate.error()`).
  */
-export function runtimeErrorPost(error: Error): ErrorNotification {
+export function runtimeErrorReport(
+  error: ContextualRuntimeError,
+): Omit<ErrorReport, "type"> {
   const code = runtimeErrorCode(error);
-  const context = error as ContextualRuntimeError;
   return {
-    type: NotificationType.ErrorReport,
     message: error.message,
     ...(code ? { code } : {}),
-    stackTrace: error.stack,
-    ...(context.pieceId === undefined ? {} : { pieceId: context.pieceId }),
-    ...(context.space === undefined ? {} : { space: context.space }),
-    ...(context.patternId === undefined
-      ? {}
-      : { patternId: context.patternId }),
-    ...(context.spellId === undefined ? {} : { spellId: context.spellId }),
+    ...(error.stack === undefined ? {} : { stackTrace: error.stack }),
+    ...(error.pieceId === undefined ? {} : { pieceId: error.pieceId }),
+    ...(error.space === undefined ? {} : { space: error.space }),
+    ...(error.patternId === undefined ? {} : { patternId: error.patternId }),
+    ...(error.spellId === undefined ? {} : { spellId: error.spellId }),
   };
-}
-
-/** Post an asynchronous renderer error to the shell. */
-export function postRuntimeError(error: Error): void {
-  postToClient(runtimeErrorPost(error));
 }
 
 type ContextualRuntimeError = Error & {
@@ -51,20 +39,3 @@ type ContextualRuntimeError = Error & {
   patternId?: string;
   spellId?: string;
 };
-
-/** Post a runner error together with its pattern context. */
-export function postContextualRuntimeError(
-  error: ContextualRuntimeError,
-): void {
-  const code = runtimeErrorCode(error);
-  postToClient({
-    type: NotificationType.ErrorReport,
-    message: error.message,
-    ...(code ? { code } : {}),
-    pieceId: error.pieceId,
-    space: error.space,
-    patternId: error.patternId,
-    spellId: error.spellId,
-    stackTrace: error.stack,
-  });
-}

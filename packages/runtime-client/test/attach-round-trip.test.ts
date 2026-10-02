@@ -5,13 +5,13 @@ import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 
 import {
-  type ErrorNotification,
-  NotificationType,
+  type ErrorReport,
   RequestType,
   type RuntimeSecurityContext,
 } from "@/protocol/mod.ts";
 import type { RuntimeProcessor } from "@/backends/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
+import { transportFailureReport } from "@/backends/host-read-gate.ts";
 import type { WorkerClient } from "@/backends/worker-client.ts";
 import { MessagePortRuntimeTransport } from "@/client/transports/message-port/transport-message-port.ts";
 import type { MessagePortLike } from "@/shared/message-port-like.ts";
@@ -251,8 +251,8 @@ describe("attach-round-trip", () => {
       clientOptions(identity),
     );
     try {
-      const firstErrors: ErrorNotification[] = [];
-      const secondErrors: ErrorNotification[] = [];
+      const firstErrors: ErrorReport[] = [];
+      const secondErrors: ErrorReport[] = [];
       first.on("error", (error) => firstErrors.push(error));
       let arrived: (() => void) | undefined;
       second.on("error", (error) => {
@@ -266,10 +266,7 @@ describe("attach-round-trip", () => {
       expect(secondClient.id).toBe(2);
 
       const reported = new Promise<void>((resolve) => (arrived = resolve));
-      secondClient.post({
-        type: NotificationType.ErrorReport,
-        message: "for the second document only",
-      });
+      secondClient.post(transportFailureReport("for the second document only"));
       await reported;
 
       expect(secondErrors.map(({ message }) => message)).toEqual([

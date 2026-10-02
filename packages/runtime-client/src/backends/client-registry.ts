@@ -15,6 +15,7 @@
  * test builds from a `MessageChannel` are the same thing here.
  */
 
+import { transportFailureReport } from "./host-read-gate.ts";
 import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -29,7 +30,6 @@ import {
   isAttachPortNotification,
   isIPCClientMessage,
   isIPCClientNotification,
-  NotificationType,
   RequestType,
 } from "@/protocol/mod.ts";
 import { RuntimeProcessor } from "@/backends/mod.ts";
@@ -205,12 +205,11 @@ export class RuntimeClients {
       // reach here, and if something does there is no `msgId` to answer under
       // -- so this reports rather than replies, and the request it belonged to
       // is left to time out.
-      client.post({
-        type: NotificationType.ErrorReport,
-        message: `Undecodable message from the client: ${
-          describeFailure(error)
-        }`,
-      });
+      client.post(
+        transportFailureReport(
+          `Undecodable message from the client: ${describeFailure(error)}`,
+        ),
+      );
       return;
     }
 
@@ -424,12 +423,11 @@ export class RuntimeClients {
         ? message.msgId
         : undefined;
       if (msgId === undefined) {
-        client.post({
-          type: NotificationType.ErrorReport,
-          message: `Malformed message from the client: ${
-            describeFailure(error)
-          }`,
-        });
+        client.post(
+          transportFailureReport(
+            `Malformed message from the client: ${describeFailure(error)}`,
+          ),
+        );
         return;
       }
 
@@ -470,19 +468,20 @@ export class RuntimeClients {
    */
   #handleAttachPort(client: WorkerClient, event: MessageEvent): void {
     if (client.id !== this.#owner.id) {
-      client.post({
-        type: NotificationType.ErrorReport,
-        message:
+      client.post(
+        transportFailureReport(
           "Only the client that owns the worker may hand it a client port.",
-      });
+        ),
+      );
       return;
     }
     const port = event.ports?.[0];
     if (!port) {
-      client.post({
-        type: NotificationType.ErrorReport,
-        message: "An attach-port message arrived with no port to attach.",
-      });
+      client.post(
+        transportFailureReport(
+          "An attach-port message arrived with no port to attach.",
+        ),
+      );
       return;
     }
     this.attach(port);

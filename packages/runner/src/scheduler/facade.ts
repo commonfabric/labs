@@ -5,6 +5,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { getTopFrame } from "../builder/pattern.ts";
+import { collectConsumedLabel } from "../cfc/prepare.ts";
 import type { Cancel } from "../cancel.ts";
 import { waveRunContextOf, waveSettlementOf } from "../executor/wave.ts";
 import { ConsoleEvent } from "../harness/console.ts";
@@ -578,7 +579,15 @@ export class Scheduler {
       // called within the runtime.
       const { method, args } = e as ConsoleEvent;
       const metadata = getPieceMetadataFromFrame();
-      const result = this.#consoleHandler({ metadata, method, args });
+      const tx = getTopFrame()?.tx;
+      const result = this.#consoleHandler({
+        metadata,
+        method,
+        args,
+        ...(tx === undefined
+          ? {}
+          : { consumed: () => collectConsumedLabel(tx) }),
+      });
       const output = Array.isArray(result) ? { method, args: result } : result;
       const target = output.target ?? console;
       target[output.method].apply(target, output.args);
@@ -2989,9 +2998,10 @@ export class Scheduler {
       effects: this.#nodes.effects,
       pending: this.#pending,
       getActionId: (target) => this.#getActionId(target),
-      recordCellUpdate: (change) =>
+      recordCellUpdate: (space, change) =>
         this.runtime.telemetry.submit({
           type: "cell.update",
+          space,
           change,
         }),
       recordTriggerTrace: (entry) =>

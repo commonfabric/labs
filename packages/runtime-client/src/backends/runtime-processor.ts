@@ -18,6 +18,7 @@ import {
   normalizeRenderDeclassificationPolicy,
   type RenderConfidentialityCeiling,
   type RenderDeclassificationPolicy,
+  rootRenderPolicyFor,
   type SpaceAccessProvider,
   WorkerReconciler,
 } from "@commonfabric/html/worker";
@@ -95,13 +96,11 @@ import {
   SpaceHostValidationError,
 } from "@commonfabric/runner";
 import {
-  cfcLabelViewForResolvedCell,
   type CfcModulePolicySource,
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
-  redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
   stripSigilCfcLabelViews,
@@ -143,17 +142,12 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
-import { HostReadGate } from "./host-read-gate.ts";
+import { type DocumentAt, HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
-import {
-  postContextualRuntimeError,
-  runtimeErrorPost,
-} from "./runtime-error.ts";
+import { runtimeErrorReport } from "./runtime-error.ts";
 import {
   assertFabricLoggerFlags,
-  createCellRef,
-  createPieceRef,
   getCell,
   mapCellRefsToSigilLinks,
 } from "./utils.ts";
@@ -250,6 +244,7 @@ import {
   type PieceSyncedRequest,
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
+  type PieceUpdateSourceResult,
   type PresenceJoinRequest,
   type PresenceJoinResponse,
   type PresenceLeaveRequest,
@@ -779,9 +774,10 @@ export function renderSpaceAccessProviderFor(
  */
 export function mountErrorSink(
   client: WorkerClient,
+  gate: HostReadGate,
 ): (error: Error) => void {
   return (error) => {
-    client.post(runtimeErrorPost(error));
+    client.post(gate.error(runtimeErrorReport(error)));
   };
 }
 
@@ -1009,10 +1005,16 @@ export class RuntimeProcessor {
   #renderModulePolicySource?: CfcModulePolicySource;
 
   /**
-   * What builds every answer to a host's read of a cell. It is built with no
-   * ceiling, so it returns every read as read.
+   * What builds every answer to a host's read of a cell, deciding it under
+   * the ceiling every mount's root renders with, with the resolver and the
+   * providers every mount is given. Rebuilt whenever the render policy is
+   * configured; with no ceiling it returns every read as read, as a root
+   * with none renders everything.
    */
   #hostReadGate = new HostReadGate(undefined, {});
+
+  /** The session's workspace, which the exchange rules resolve against. */
+  readonly #workspace: DID;
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -1026,6 +1028,7 @@ export class RuntimeProcessor {
   ) {
     this.#runtime = runtime;
     this.#cc = cc;
+    this.#workspace = initSpace;
     this.#spaces.set(initSpace, cc);
     this.#identity = identity;
     this.#telemetry = telemetry;
@@ -1133,7 +1136,10 @@ export class RuntimeProcessor {
         return outerThis.#renderConfidentialityCeiling;
       },
       set renderConfidentialityCeiling(value) {
-        outerThis.#renderConfidentialityCeiling = value;
+        outerThis.#configureRenderPolicy({
+          renderDeclassificationPolicy: outerThis.#renderDeclassificationPolicy,
+          renderConfidentialityCeiling: value,
+        });
       },
       get renderDeclassificationPolicy() {
         return outerThis.#renderDeclassificationPolicy;
@@ -1842,11 +1848,15 @@ export class RuntimeProcessor {
       request.operationSessionId,
       client,
     );
-    const field = await capability.queryOperationField({
-      ...address,
-      ...(request.after === undefined ? {} : { after: request.after }),
-    });
-    return { field: field };
+    return await this.#hostReadGate.fromCell(
+      getCell(this.#runtime, request.cell),
+      async () => ({
+        field: await capability.queryOperationField({
+          ...address,
+          ...(request.after === undefined ? {} : { after: request.after }),
+        }),
+      }),
+    );
   }
 
   async handleOperationApply(
@@ -1858,18 +1868,24 @@ export class RuntimeProcessor {
       request.operationSessionId,
       client,
     );
-    const resolution = await capability.applyOperation({
-      op: "apply-op",
-      ...address,
-      codec: request.codec,
-      submissionId: request.submissionId,
-      base: request.base,
-      ...(request.baselineHash === undefined
-        ? {}
-        : { baselineHash: request.baselineHash }),
-      payload: request.payload,
-    });
-    return { resolution: resolution };
+    // An operation on a field the host may not see is not applied: what it
+    // was made from was not shown, and its resolution would show the field.
+    return await this.#hostReadGate.fromCell(
+      getCell(this.#runtime, request.cell),
+      async () => ({
+        resolution: await capability.applyOperation({
+          op: "apply-op",
+          ...address,
+          codec: request.codec,
+          submissionId: request.submissionId,
+          base: request.base,
+          ...(request.baselineHash === undefined
+            ? {}
+            : { baselineHash: request.baselineHash }),
+          payload: request.payload,
+        }),
+      }),
+    );
   }
 
   async handleOperationSubscribe(
@@ -1910,11 +1926,13 @@ export class RuntimeProcessor {
             subscription
         ) return;
         queueMicrotask(() =>
-          client.post({
-            type: NotificationType.OperationUpdate,
-            subscriptionId: request.subscriptionId,
-            field: field,
-          })
+          client.post(
+            this.#hostReadGate.operationUpdate(
+              getCell(this.#runtime, request.cell),
+              request.subscriptionId,
+              field,
+            ),
+          )
         );
       });
     } catch (error) {
@@ -2111,7 +2129,7 @@ export class RuntimeProcessor {
   handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
     const cell = getCell(this.#runtime, request.cell);
     const resolved = cell.resolveAsCell();
-    const ref = createCellRef(resolved);
+    const ref = this.#hostReadGate.ref(resolved);
     if (
       ref.schema && typeof ref.schema === "object" &&
       !Array.isArray(ref.schema)
@@ -2196,7 +2214,7 @@ export class RuntimeProcessor {
     };
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
-    return { cell: createCellRef(shared) };
+    return { cell: this.#hostReadGate.ref(shared) };
   }
 
   /**
@@ -2284,8 +2302,8 @@ export class RuntimeProcessor {
         signal: commit.signal,
       });
       return {
-        receipt: createCellRef(sealed.receipt),
-        box: createCellRef(sealed.box),
+        receipt: this.#hostReadGate.ref(sealed.receipt),
+        box: this.#hostReadGate.ref(sealed.box),
         instance: sealed.instance,
       };
     } finally {
@@ -2342,17 +2360,11 @@ export class RuntimeProcessor {
     // That covers a document the store has not loaded as well as a cell with
     // no label. Keeping the cell current is the caller's job. A caller that
     // needs the label as it changes subscribes with `includeCfcLabel`, and
-    // each update then carries the label as read for that update. We redact
-    // `Caveat.source` from the label for display.
+    // each update then carries the label as read for that update. The gate
+    // redacts `Caveat.source` from the label for display, and joins its
+    // entries at the root where the display ceiling refuses the cell.
     const totalStart = performance.now();
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
-      kickCrossSpaceTargets: false,
-    });
-    const response = {
-      cfcLabel: cfcLabel === undefined
-        ? undefined
-        : redactCaveatSourcesForDisplay(cfcLabel),
-    };
+    const response = this.#hostReadGate.label(cell);
     cfcLabelLogger.time(totalStart, "total");
     return response;
   }
@@ -2361,6 +2373,19 @@ export class RuntimeProcessor {
     request: SqliteQueryRequest,
   ): Promise<SqliteQueryResponse> {
     const cell = getCell(this.#runtime, request.cell);
+    // Decided on the database handle's labels: the rows are reached through
+    // it, and not through a read the gate can measure.
+    return await this.#hostReadGate.fromCell(
+      cell,
+      () => this.#querySqlite(cell, request),
+    );
+  }
+
+  /** Helper for {@link handleSqliteQuery}, once the read is admitted. */
+  async #querySqlite(
+    cell: Cell<unknown>,
+    request: SqliteQueryRequest,
+  ): Promise<{ rows: { [key: string]: FabricValue }[] }> {
     const db = await this.#pullSqliteDbRef(cell);
     // A direct IPC query has no runner result cell on which to persist the
     // label derived from result-column provenance. Refuse that database shape
@@ -2491,14 +2516,14 @@ export class RuntimeProcessor {
     );
 
     return {
-      cell: createCellRef(cell, request.schema),
+      cell: this.#hostReadGate.ref(cell, request.schema),
     };
   }
 
   handleGetHomeSpaceCell(_request: GetHomeSpaceCellRequest): CellResponse {
     const homeSpaceCell = this.#runtime.getHomeSpaceCell();
     return {
-      cell: createCellRef(homeSpaceCell),
+      cell: this.#hostReadGate.ref(homeSpaceCell),
     };
   }
 
@@ -2519,7 +2544,7 @@ export class RuntimeProcessor {
     // nothing else heals the root — so no fast path belongs in front of the
     // controller.
     const homePattern = await this.#ensureHomePattern();
-    return { cell: createCellRef(homePattern) };
+    return { cell: this.#hostReadGate.ref(homePattern) };
   }
 
   /**
@@ -2698,7 +2723,7 @@ export class RuntimeProcessor {
       start: request.run ?? true,
     }, request.cause);
     return {
-      piece: createPieceRef(piece.getCell()),
+      piece: this.#hostReadGate.pieceRef(piece.getCell()),
     };
   }
 
@@ -2716,11 +2741,11 @@ export class RuntimeProcessor {
         reconcile: true,
         start: false,
       });
-      if (stored) return { piece: createPieceRef(stored) };
+      if (stored) return { piece: this.#hostReadGate.pieceRef(stored) };
     }
     const piece = await cc.ensureDefaultPattern();
     return {
-      piece: createPieceRef(piece.getCell()),
+      piece: this.#hostReadGate.pieceRef(piece.getCell()),
     };
   }
 
@@ -2730,7 +2755,7 @@ export class RuntimeProcessor {
     const cc = this.#getSpaceCtx(request.space);
     const piece = await cc.recreateDefaultPattern();
     return {
-      piece: createPieceRef(piece.getCell()),
+      piece: this.#hostReadGate.pieceRef(piece.getCell()),
     };
   }
 
@@ -2806,9 +2831,9 @@ export class RuntimeProcessor {
       if (viewScoped && (!hasPattern || targetLink.path.length > 0)) {
         const pieceCell = target.asSchema(viewPieceSchema);
         await pieceCell.pull();
-        return { piece: createPieceRef(pieceCell) };
+        return { piece: this.#hostReadGate.pieceRef(pieceCell) };
       }
-      if (!hasPattern) return { piece: createPieceRef(target) };
+      if (!hasPattern) return { piece: this.#hostReadGate.pieceRef(target) };
       if (targetLink.path.length > 0) {
         // The schema a cell inside a piece is read under: what the links
         // along its path carry, as `getPieceCell()` resolves a piece cell
@@ -2819,10 +2844,14 @@ export class RuntimeProcessor {
         const inside = landing.key(...targetLink.path);
         const linked = inside.asSchemaFromLinks();
         if (linked.getAsNormalizedFullLink().schema !== undefined) {
-          return { piece: createPieceRef(linked) };
+          return { piece: this.#hostReadGate.pieceRef(linked) };
         }
         if (targetLink.schema !== undefined) {
-          return { piece: createPieceRef(inside.asSchema(targetLink.schema)) };
+          return {
+            piece: this.#hostReadGate.pieceRef(
+              inside.asSchema(targetLink.schema),
+            ),
+          };
         }
         const resultSchema = landing.getMetaRaw("schema") as
           | JSONSchema
@@ -2830,10 +2859,10 @@ export class RuntimeProcessor {
         const cell = resultSchema === undefined ? inside : inside.asSchema(
           ContextualFlowControl.schemaAtPath(resultSchema, targetLink.path),
         );
-        return { piece: createPieceRef(cell) };
+        return { piece: this.#hostReadGate.pieceRef(cell) };
       }
       const cell = await cc.getPieceCell(landing, request.runIt ?? false);
-      return { piece: createPieceRef(cell) };
+      return { piece: this.#hostReadGate.pieceRef(cell) };
     }
 
     const cell = await cc.getPieceCell(
@@ -2844,7 +2873,7 @@ export class RuntimeProcessor {
     );
 
     return {
-      piece: createPieceRef(cell),
+      piece: this.#hostReadGate.pieceRef(cell),
     };
   }
 
@@ -2860,9 +2889,9 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
+    // Synced first, so that the labels it is decided on are the document's.
     await cell.sync();
-    const slug = cell.getMetaRaw("slug");
-    return { slug: typeof slug === "string" ? slug : undefined };
+    return this.#hostReadGate.slug(cell);
   }
 
   /**
@@ -2898,7 +2927,7 @@ export class RuntimeProcessor {
           space,
           request.slug,
         );
-        return { piece: createPieceRef(piece), pathAfter: [] };
+        return { piece: this.#hostReadGate.pieceRef(piece), pathAfter: [] };
       }
       const { piece, pathAfter } = await resolveSlugReference(
         this.#runtime,
@@ -2906,7 +2935,7 @@ export class RuntimeProcessor {
         request.slug,
         [request.member],
       );
-      return { piece: createPieceRef(piece), pathAfter };
+      return { piece: this.#hostReadGate.pieceRef(piece), pathAfter };
     } catch (error) {
       // A reference reaching nothing is what the caller asked about, so it
       // comes back as an answer. Everything else — a transport fault, a
@@ -2956,7 +2985,7 @@ export class RuntimeProcessor {
     const pieces = this.#getSpaceCtx(request.space);
     const piecesCell = await pieces.getPieceRegistry();
     return {
-      cell: createCellRef(piecesCell),
+      cell: this.#hostReadGate.ref(piecesCell),
     };
   }
 
@@ -2978,8 +3007,12 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
-    const state = await readPieceSourceState(this.#runtime, cell);
-    return { source: { ...state, space: state.space as DID } };
+    // Synced first, so that the labels it is decided on are the document's.
+    await cell.sync();
+    return await this.#hostReadGate.fromMetadata(cell, async () => {
+      const state = await readPieceSourceState(this.#runtime, cell);
+      return { source: { ...state, space: state.space as DID } };
+    });
   }
 
   async handlePieceGetSourceRevision(
@@ -2994,13 +3027,14 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
-    return {
+    await cell.sync();
+    return await this.#hostReadGate.fromMetadata(cell, async () => ({
       source: await readPieceSourceRevision(
         this.#runtime,
         cell,
         request.revisionId,
       ),
-    };
+    }));
   }
 
   /** Clone a source piece into another space. */
@@ -3019,7 +3053,7 @@ export class RuntimeProcessor {
       this.#getSpaceCtx(request.destinationSpace),
       { copyData: request.copyData === true },
     );
-    return { piece: createPieceRef(clone.getCell()) };
+    return { piece: this.#hostReadGate.pieceRef(clone.getCell()) };
   }
 
   async handlePieceUpdateSource(
@@ -3066,6 +3100,31 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
+    // A piece whose source the display ceiling keeps from the host is not
+    // changed through it: decided on the piece's metadata, once synced, before
+    // anything is changed.
+    await cell.sync();
+    return await this.#hostReadGate.fromMetadata(
+      cell,
+      () =>
+        this.#changePieceSource(
+          pieces,
+          cell,
+          request,
+          confirmationKey,
+          confirmedChange,
+        ),
+    );
+  }
+
+  /** Helper for {@link handlePieceUpdateSource}, once the read is admitted. */
+  async #changePieceSource(
+    pieces: PiecesController,
+    cell: Cell<unknown>,
+    request: PieceUpdateSourceRequest,
+    confirmationKey: string,
+    confirmedChange: PreparedPieceSourceChange | undefined,
+  ): Promise<PieceUpdateSourceResult> {
     const controller = new PieceController(pieces, cell);
     const result = await controller.changeSource(request.action, {
       confirmedChange,
@@ -3269,11 +3328,17 @@ export class RuntimeProcessor {
   #onTelemetry = (event: Event) => {
     if (!this.#telemetryEnabled) return;
     const marker = (event as RuntimeTelemetryEvent).marker;
-    postToClient({
-      type: NotificationType.Telemetry,
-      marker,
-    });
+    postToClient(this.#hostReadGate.telemetry(marker, this.#documentAt));
   };
+
+  /** The root of the document a diagnostic names, which it is decided on. */
+  #documentAt: DocumentAt = (space, id, scope) =>
+    this.#runtime.getCellFromLink({
+      space: space as DID,
+      id: id as `${string}:${string}`,
+      path: [],
+      ...(scope === undefined ? {} : { scope }),
+    });
 
   getPatternSources(
     _request: GetPatternSourcesRequest,
@@ -3374,7 +3439,7 @@ export class RuntimeProcessor {
     const result = await this.#runtime.scheduler.runDiagnosis(
       request.durationMs,
     );
-    return { result };
+    return this.#hostReadGate.diagnosis(result, this.#documentAt);
   }
 
   getPatternCoverage(_: GetPatternCoverageRequest): PatternCoverageResponse {
@@ -3420,9 +3485,10 @@ export class RuntimeProcessor {
   getTriggerTrace(
     _request: GetTriggerTraceRequest,
   ): TriggerTraceResponse {
-    return {
-      trace: this.#runtime.scheduler.getTriggerTrace(),
-    };
+    return this.#hostReadGate.triggerTrace(
+      this.#runtime.scheduler.getTriggerTrace(),
+      this.#documentAt,
+    );
   }
 
   setTriggerTraceEnabled(
@@ -3695,6 +3761,57 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Takes the render policy from `data`: the declassification policy and the
+   * ceiling, each normalized, and the membership provider, module-policy
+   * source and resolver derived from them. Every mount's reconciler is built
+   * from these, and so is the host-read gate, which is why it is rebuilt
+   * here: a host's read is decided under the same root policy, by the same
+   * fit, as a render of the same cell, so the two never disagree about what
+   * the host may see.
+   */
+  #configureRenderPolicy(
+    data: Pick<
+      InitializationData,
+      "renderDeclassificationPolicy" | "renderConfidentialityCeiling"
+    >,
+  ): void {
+    // InitializationData crosses postMessage with no runtime validation, so a
+    // typo'd host config or version-skewed peer must fail CLOSED, not open:
+    // any present-but-unknown value becomes "deny"; absent stays "allow".
+    this.#renderDeclassificationPolicy = normalizeRenderDeclassificationPolicy(
+      data.renderDeclassificationPolicy,
+    );
+    this.#renderConfidentialityCeiling = normalizeRenderConfidentialityCeiling(
+      data.renderConfidentialityCeiling,
+    );
+    this.#renderMembershipProvider = renderMembershipProviderFor(
+      this.#runtime,
+      this.#identity,
+      this.#renderConfidentialityCeiling,
+    );
+    this.#renderModulePolicySource = renderModulePolicySourceFor(
+      this.#runtime,
+      this.#renderConfidentialityCeiling,
+    );
+    this.#renderConfidentialityResolver = renderConfidentialityResolverFor(
+      this.#runtime,
+      this.#identity,
+      this.#renderConfidentialityCeiling,
+      this.#workspace,
+      this.#renderMembershipProvider,
+      this.#renderModulePolicySource,
+    );
+    this.#hostReadGate = new HostReadGate(
+      rootRenderPolicyFor(this.#renderConfidentialityCeiling),
+      {
+        resolveConfidentiality: this.#renderConfidentialityResolver,
+        membership: this.#renderMembershipProvider,
+        modulePolicies: this.#renderModulePolicySource,
+      },
+    );
+  }
+
+  /**
    * Handle a request to start VDOM rendering for a cell.
    * Creates a WorkerReconciler, subscribes to the cell, and sends VDomBatch notifications.
    */
@@ -3740,7 +3857,7 @@ export class RuntimeProcessor {
         });
         return batchId;
       },
-      onError: mountErrorSink(client),
+      onError: mountErrorSink(client, this.#hostReadGate),
     });
 
     let active = true;
@@ -3764,7 +3881,7 @@ export class RuntimeProcessor {
     return this.#runtime.viewReplication.mount(
       rawCell,
       key,
-      mountErrorSink(client),
+      mountErrorSink(client, this.#hostReadGate),
     ).then((cancel) => {
       if (!active) cancel?.();
       else cancelView = cancel;
@@ -3907,6 +4024,21 @@ export class RuntimeProcessor {
 
     let homePieces: PiecesController | undefined = undefined;
     let processor: RuntimeProcessor | undefined = undefined;
+    // What decides a console call or an error report the runtime raises
+    // before the processor, and its gate, exist: the configured ceiling, with
+    // none of the resolver and providers that admit a space's members, so
+    // that it refuses what the processor's gate might admit and admits
+    // nothing it would refuse.
+    const earlyGate = new HostReadGate(
+      rootRenderPolicyFor(
+        normalizeRenderConfidentialityCeiling(
+          data.renderConfidentialityCeiling,
+        ),
+      ),
+      {},
+    );
+    const gate = () =>
+      processor === undefined ? earlyGate : processor.#hostReadGate;
     // Everything below goes through the browserWorker preset: host-decided
     // data via the params mapper, plus this worker's declared deltas (the
     // postMessage bridges for console/navigate/piece/errors).
@@ -3916,13 +4048,17 @@ export class RuntimeProcessor {
         storageManager,
         telemetry,
       ),
-      consoleHandler: ({ metadata, method, args }) => {
-        postToClient({
-          type: NotificationType.ConsoleMessage,
-          metadata,
-          method,
-          args: args.map((arg) => toConsoleDebugValue(arg)),
-        });
+      consoleHandler: ({ metadata, method, args, consumed }) => {
+        // The arguments reach the host as the gate decides, on what the
+        // action that logged had read. The worker's own console, in the
+        // runtime's own context, is handed them as they are.
+        postToClient(
+          gate().console(
+            { metadata, method },
+            args.map((arg) => toConsoleDebugValue(arg)),
+            consumed,
+          ),
+        );
         return args;
       },
 
@@ -3955,7 +4091,12 @@ export class RuntimeProcessor {
         });
       },
 
-      errorHandlers: [postContextualRuntimeError],
+      errorHandlers: [
+        (error) =>
+          postToClient(
+            gate().error(runtimeErrorReport(error), error.consumed),
+          ),
+      ],
     }));
 
     assertServerExecutionPostureAgreement(data.experimental, runtime);
@@ -3996,38 +4137,16 @@ export class RuntimeProcessor {
       void health.then((healthy) => {
         if (healthy || built.#isDisposed) return;
         for (const client of clients()) {
-          client.post({
-            type: NotificationType.ErrorReport,
-            code: RuntimeErrorCode.HostUnreachable,
-            message: unreachableHostMessage(data),
-          });
+          client.post(
+            gate().error({
+              code: RuntimeErrorCode.HostUnreachable,
+              message: unreachableHostMessage(data),
+            }),
+          );
         }
       });
     }
-    // InitializationData crosses postMessage with no runtime validation, so a
-    // typo'd host config or version-skewed peer must fail CLOSED, not open:
-    // any present-but-unknown value becomes "deny"; absent stays "allow".
-    processor.#renderDeclassificationPolicy =
-      normalizeRenderDeclassificationPolicy(data.renderDeclassificationPolicy);
-    processor.#renderConfidentialityCeiling =
-      normalizeRenderConfidentialityCeiling(data.renderConfidentialityCeiling);
-    processor.#renderMembershipProvider = renderMembershipProviderFor(
-      runtime,
-      identity,
-      processor.#renderConfidentialityCeiling,
-    );
-    processor.#renderModulePolicySource = renderModulePolicySourceFor(
-      runtime,
-      processor.#renderConfidentialityCeiling,
-    );
-    processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
-      runtime,
-      identity,
-      processor.#renderConfidentialityCeiling,
-      space,
-      processor.#renderMembershipProvider,
-      processor.#renderModulePolicySource,
-    );
+    processor.#configureRenderPolicy(data);
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
       undefined,

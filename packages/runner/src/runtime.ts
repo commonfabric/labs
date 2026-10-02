@@ -58,6 +58,7 @@ import {
   internCellLinkSchema,
   isCell,
   schemaCellScope,
+  type SinkConsumedLabel,
 } from "./cell.ts";
 import {
   buildCfcPolicySnapshot,
@@ -274,6 +275,14 @@ export type ErrorWithContext = Error & {
   space: MemorySpace;
   patternId: string;
   spellId: string | undefined;
+
+  /**
+   * The labels of everything the action had read when it threw: what its
+   * message can quote, and so what a reader of it is to be decided on. Called
+   * during the handler, and it throws when the labels cannot be read. Absent
+   * for an error raised outside an action's transaction.
+   */
+  consumed?: () => SinkConsumedLabel;
 };
 
 export type ErrorHandler = (error: ErrorWithContext) => void;

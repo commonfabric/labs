@@ -15,8 +15,6 @@ import {
 } from "@commonfabric/runner";
 import {
   type CfcCellLinkRefPayload,
-  cfcLabelViewForCell,
-  redactCaveatSourcesForDisplay,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import {
@@ -28,7 +26,7 @@ import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import type { LoggerFlagsBreakdown } from "@commonfabric/utils/logger";
 
 import { isCellRef } from "@/protocol/mod.ts";
-import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
+import { CellRef, type LoggerFlagsData } from "@/protocol/types.ts";
 
 /**
  * Converts a value arriving over the connection into the form the worker
@@ -190,6 +188,13 @@ export function cellRefToSigilLink(cell: CellRef): SigilLink {
   });
 }
 
+/**
+ * The address of `cell` as a ref: its id, space, scope, path, and schema
+ * (`schema`, when given, in place of its own). It carries no label view: a
+ * ref bound for a host is made by `HostReadGate.ref()`, which gives it the
+ * view the display ceiling decides, so a ref minted anywhere else crosses
+ * with none rather than with a view nothing decided.
+ */
 export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
   const link = parseLink(
     cell.getAsLink({
@@ -214,21 +219,7 @@ export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
   if (schema !== undefined) {
     cellRef.schema = schema as JSONSchema;
   }
-  const cfcLabelView = cfcLabelViewForCell(cell);
-  if (cfcLabelView !== undefined) {
-    // A view attached to a ref is a copy for the main thread to display, so
-    // we redact `Caveat.source` from it before it crosses. `getCell()` and
-    // `cellRefToSigilLink()` both drop a view from an inbound ref, so the
-    // redacted copy does not come back through either as label state.
-    cellRef.cfcLabelView = redactCaveatSourcesForDisplay(cfcLabelView);
-  }
   return cellRef;
-}
-
-export function createPieceRef(cell: Cell<unknown>): PieceRef {
-  return {
-    cell: createCellRef(cell),
-  };
 }
 
 export function getCell(runtime: Runtime, ref: CellRef): Cell<unknown> {

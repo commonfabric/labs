@@ -5,6 +5,7 @@
 import type { CfcRefusalDetail } from "./cfc/refusal-detail.ts";
 import type { ReadAttemptCounts } from "./read-stats.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 
 import { IMemoryChange } from "./storage/interface.ts";
 
@@ -287,6 +288,9 @@ export type RuntimeTelemetryMarker = {
   workSetSize: number;
 } | {
   type: "cell.update";
+
+  /** The space whose document changed. */
+  space: MemorySpace;
   change: IMemoryChange;
   error?: string;
 } | {

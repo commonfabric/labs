@@ -155,8 +155,7 @@ describe("RuntimeClient operation collaboration", () => {
     const unsubscribe = await client.subscribeOperationField(
       cell,
       (field) => delivered.push(field),
-      undefined,
-      operationSessionId,
+      { operationSessionId, onRefused: () => {} },
     );
     const subscribe = requests.at(-1) as {
       type: RequestType;
@@ -225,7 +224,7 @@ describe("RuntimeClient operation collaboration", () => {
     } as unknown as CellHandle<unknown>;
 
     await expect(
-      client.subscribeOperationField(cell, () => {}),
+      client.subscribeOperationField(cell, () => {}, { onRefused: () => {} }),
     ).rejects.toThrow("subscribe response lost");
     expect(requests.map(({ type }) => type)).toEqual([
       RequestType.OperationSubscribe,
@@ -263,7 +262,9 @@ describe("RuntimeClient operation collaboration", () => {
       ref: () => ({ id: "of:x", path: [] }),
     } as unknown as CellHandle<unknown>;
 
-    await expect(client.subscribeOperationField(cell, () => {})).rejects
+    await expect(
+      client.subscribeOperationField(cell, () => {}, { onRefused: () => {} }),
+    ).rejects
       .toThrow("not installed");
     await expect(client.releaseOperationField(
       cell,
@@ -273,7 +274,9 @@ describe("RuntimeClient operation collaboration", () => {
 
     subscribeAccepted = true;
     releaseAccepted = true;
-    const unsubscribe = await client.subscribeOperationField(cell, () => {});
+    const unsubscribe = await client.subscribeOperationField(cell, () => {}, {
+      onRefused: () => {},
+    });
     unsubscribe();
     unsubscribe();
     await Promise.resolve();
@@ -342,6 +345,7 @@ describe("RuntimeClient operation collaboration", () => {
     const queried = await processor.handleOperationQuery(
       { type: RequestType.OperationQuery, cell } as never,
     );
+    if ("refused" in queried) throw new Error("The query was refused.");
     expect(
       (queried.field.materialized as FabricBytes).slice(),
     ).toEqual(new Uint8Array([1, 2, 3]));
@@ -355,6 +359,7 @@ describe("RuntimeClient operation collaboration", () => {
         payload: bytes,
       } as never,
     );
+    if ("refused" in applied) throw new Error("The operation was refused.");
     expect((receivedPayload as FabricBytes).slice()).toEqual(
       new Uint8Array([1, 2, 3]),
     );
@@ -809,6 +814,7 @@ describe("RuntimeClient operation collaboration", () => {
       const field = await processor.handleOperationQuery({
         cell: alias.getAsNormalizedFullLink() as unknown as CellRef,
       } as never);
+      if ("refused" in field) throw new Error("The query was refused.");
 
       expect(field.field.id).toBe(targetId);
       expect(field.field.materialized).toBe("value");

@@ -79,10 +79,7 @@ export const REQUEST_DISPOSITIONS = {
   },
   [RequestType.CellUnsubscribe]: write,
   [RequestType.CellResolveAsCell]: reference,
-  [RequestType.CellGetCfcLabel]: {
-    kind: "ungated",
-    why: "a cell's display label, whatever the ceiling",
-  },
+  [RequestType.CellGetCfcLabel]: DECIDED,
   [RequestType.SnapshotSharePrepare]: {
     kind: "trusted-operation",
     why: "the snapshot the owner is asked to confirm sharing",
@@ -107,18 +104,12 @@ export const REQUEST_DISPOSITIONS = {
     kind: "no-cell-value",
     why: "the codecs a cell's operation field offers",
   },
-  [RequestType.OperationQuery]: {
-    kind: "ungated",
-    why: "a collaborative field's operations and materialized value",
-  },
-  [RequestType.OperationApply]: {
-    kind: "ungated",
-    why: "a collaborative field's resolution after the host's operation",
-  },
+  [RequestType.OperationQuery]: DECIDED,
+  [RequestType.OperationApply]: DECIDED,
   [RequestType.OperationRelease]: write,
   [RequestType.OperationSubscribe]: {
-    kind: "ungated",
-    why: "a collaborative field's operations and materialized value",
+    kind: "no-cell-value",
+    why: "whether a subscription opened; its operations arrive as updates",
   },
   [RequestType.OperationUnsubscribe]: write,
   [RequestType.OperationSessionClose]: write,
@@ -128,10 +119,7 @@ export const REQUEST_DISPOSITIONS = {
   },
   [RequestType.PresencePublish]: write,
   [RequestType.PresenceLeave]: write,
-  [RequestType.SqliteQuery]: {
-    kind: "ungated",
-    why: "the rows a query of a database cell returns",
-  },
+  [RequestType.SqliteQuery]: DECIDED,
   [RequestType.SqliteExec]: write,
   [RequestType.GetCell]: reference,
   [RequestType.GetHomeSpaceCell]: reference,
@@ -170,20 +158,14 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.SetSettleStatsEnabled]: setting,
   [RequestType.GetActionRunTrace]: setting,
   [RequestType.SetActionRunTraceEnabled]: setting,
-  [RequestType.GetTriggerTrace]: {
-    kind: "ungated",
-    why: "a preview of a cell's value before and after each trigger",
-  },
+  [RequestType.GetTriggerTrace]: DECIDED,
   [RequestType.SetTriggerTraceEnabled]: setting,
   [RequestType.GetWriteStackTrace]: {
     kind: "no-cell-value",
     why: "where writes came from, by address and stack",
   },
   [RequestType.SetWriteStackTraceMatchers]: setting,
-  [RequestType.DetectNonIdempotent]: {
-    kind: "ungated",
-    why: "the reads and writes of the runs it compares",
-  },
+  [RequestType.DetectNonIdempotent]: DECIDED,
   [RequestType.GetPatternSources]: {
     kind: "no-cell-value",
     why: "the source of the patterns the runtime runs",
@@ -194,29 +176,17 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.RecreateSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
   [RequestType.PieceGet]: reference,
-  [RequestType.PieceGetSlug]: {
-    kind: "ungated",
-    why: "a piece's slug, a metadata field",
-  },
+  [RequestType.PieceGetSlug]: DECIDED,
   [RequestType.SlugResolve]: reference,
   [RequestType.PieceRemove]: write,
   [RequestType.PieceStart]: write,
   [RequestType.PieceStop]: write,
   [RequestType.PieceGetAll]: reference,
   [RequestType.PieceSynced]: lifecycle,
-  [RequestType.PieceGetSource]: {
-    kind: "ungated",
-    why: "a piece's source state, from its metadata fields",
-  },
-  [RequestType.PieceGetSourceRevision]: {
-    kind: "ungated",
-    why: "a retained source revision of a piece",
-  },
+  [RequestType.PieceGetSource]: DECIDED,
+  [RequestType.PieceGetSourceRevision]: DECIDED,
   [RequestType.PieceClone]: reference,
-  [RequestType.PieceUpdateSource]: {
-    kind: "ungated",
-    why: "a piece's source state after a change, from its metadata fields",
-  },
+  [RequestType.PieceUpdateSource]: DECIDED,
   [RequestType.SpaceGetAcl]: {
     kind: "ungated",
     why: "a space's access list",
@@ -236,26 +206,14 @@ export const REQUEST_DISPOSITIONS = {
 /** Every notification's disposition. */
 export const NOTIFICATION_DISPOSITIONS = {
   [NotificationType.CellUpdate]: DECIDED,
-  [NotificationType.ConsoleMessage]: {
-    kind: "ungated",
-    why: "the arguments a pattern passes to `console`",
-  },
+  [NotificationType.ConsoleMessage]: DECIDED,
   [NotificationType.NavigateRequest]: reference,
-  [NotificationType.ErrorReport]: {
-    kind: "ungated",
-    why: "a runtime error's message, which can quote a value",
-  },
+  [NotificationType.ErrorReport]: DECIDED,
   [NotificationType.SpaceAccessLost]: lifecycle,
-  [NotificationType.Telemetry]: {
-    kind: "ungated",
-    why: "telemetry markers, including a cell update's values",
-  },
+  [NotificationType.Telemetry]: DECIDED,
   [NotificationType.VDomBatch]: { kind: "rendered" },
   [NotificationType.PendingWritesChanged]: lifecycle,
-  [NotificationType.OperationUpdate]: {
-    kind: "ungated",
-    why: "a collaborative field's operations and materialized value",
-  },
+  [NotificationType.OperationUpdate]: DECIDED,
   [NotificationType.PresenceUpdate]: {
     kind: "no-cell-value",
     why: "the records a presence room's members publish",

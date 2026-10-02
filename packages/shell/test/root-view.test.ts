@@ -6,7 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
-  type ErrorNotification,
+  type ErrorReport,
   type EventAttentionNotice,
   NotificationType,
   RuntimeErrorCode,
@@ -136,7 +136,7 @@ describe("XRootView", () => {
         run: (args: unknown) => runs.push(args),
       } as never;
       const failedGeneration = view.accessForTestingOnly.runtimeGeneration;
-      const event: ErrorNotification = {
+      const event: ErrorReport = {
         type: NotificationType.ErrorReport,
         message: "Failed to load the compiler stack",
         code: RuntimeErrorCode.CompilerStackLoadFailed,
@@ -168,7 +168,7 @@ describe("XRootView", () => {
     console.error = (...args: unknown[]) => errors.push(args);
     const { RuntimeInternals } = await import("@commonfabric/lib-shell");
     const originalCreate = RuntimeInternals.create;
-    let capturedOnError: ((event: ErrorNotification) => void) | undefined;
+    let capturedOnError: ((event: ErrorReport) => void) | undefined;
     let capturedWorkerUrl: URL | undefined;
     const offCalls: unknown[] = [];
     const fakeRuntime = {
@@ -201,7 +201,7 @@ describe("XRootView", () => {
       expect(capturedOnError).toBeDefined();
       expect(capturedWorkerUrl?.pathname).toBe("/scripts/worker-runtime.js");
 
-      const event: ErrorNotification = {
+      const event: ErrorReport = {
         type: NotificationType.ErrorReport,
         message: "ordinary runtime error",
       };
@@ -287,10 +287,10 @@ describe("XRootView", () => {
       const { XRootView } = await import("../src/views/RootView.ts");
       const root = new XRootView();
       const internals = root as unknown as {
-        _runtimeLoadErrors: readonly ErrorNotification[];
+        _runtimeLoadErrors: readonly ErrorReport[];
         willUpdate(changed: Map<string, unknown>): void;
       };
-      const error: ErrorNotification = {
+      const error: ErrorReport = {
         type: NotificationType.ErrorReport,
         message: "the piece failed to load",
       };

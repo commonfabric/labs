@@ -1,7 +1,8 @@
 import { debugStr } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 
-import { type IPCRemotePost, NotificationType } from "@/protocol/mod.ts";
+import { type IPCRemotePost } from "@/protocol/mod.ts";
+import { transportFailureReport } from "./host-read-gate.ts";
 import { describeFailure } from "@/shared/utils.ts";
 
 /**
@@ -86,5 +87,5 @@ function undeliverableMessageFrom(
 
   return typeof msgId === "number"
     ? { msgId, error: reason }
-    : { type: NotificationType.ErrorReport, message: reason };
+    : transportFailureReport(reason);
 }

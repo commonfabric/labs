@@ -101,7 +101,7 @@ export function processStorageNotification(
   let changeIndex = 0;
   for (const change of notification.changes) {
     changeIndex++;
-    state.recordCellUpdate(change);
+    state.recordCellUpdate(space, change);
 
     if (!hasRegisteredTriggers(state.triggerIndex)) {
       continue;
@@ -519,7 +519,10 @@ export interface StorageNotificationState {
   readonly effects: ReadonlySet<Action>;
   readonly pending: ReadonlySet<Action>;
   readonly getActionId: (action: Action) => string;
-  readonly recordCellUpdate: (change: IMemoryChange) => void;
+  readonly recordCellUpdate: (
+    space: MemorySpace,
+    change: IMemoryChange,
+  ) => void;
   readonly recordTriggerTrace: (entry: TriggerTraceEntry) => void;
   readonly scheduleWithDebounce: (action: Action) => void;
   readonly markInvalid: (

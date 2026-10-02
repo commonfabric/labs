@@ -40,12 +40,14 @@ export {
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
   cfcLabelViewFromMetadata,
+  cfcLabelViewOriginSpaces,
   cfcLabelViewSourceForCell,
   cloneCfcLabelView,
   getCarriedCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
   redactCaveatSourcesForDisplay,
+  redactEntryPathsForDisplay,
 } from "./label-view.ts";
 export { cfcLabelViewFromSchema } from "./schema-label-view.ts";
 export type {
