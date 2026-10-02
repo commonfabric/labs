@@ -62,8 +62,10 @@ each slot holding a link the read followed, which a dereference retains
 - A `$` binding is made only while the ceiling admits the worker's read of
   the bound cell, under the cell's schema; a nested render root is decided on
   the reads its component makes instead, as the nested-render paragraphs
-  below describe. The worker keeps reading the bound cell and removes the binding
-  when a write leaves that read consuming a label the ceiling refuses. The
+  below describe. The worker keeps reading the bound cell and removes the
+  binding when a write leaves that read consuming a label the ceiling
+  refuses, or while the read cannot complete, as when a space it reads is out
+  of reach: a read that cannot complete is never taken for an empty one. The
   binding hands the host a live
   handle, and the worker answers the host's reads through it without the
   ceiling: a read that follows a link the worker's read did not, and the
@@ -114,7 +116,9 @@ slot holding it in the document the list's links land on, so a schema stored on
 a link to the list, which can declare its elements references, does not end the
 read at an element's own link. One refused element withholds the whole binding,
 which hands the component one handle to the whole list; the reconciler has no
-binding that hands over part of a list. A label the list's schema declares for
+binding that hands over part of a list. A list that cannot be read, or does not
+resolve, withholds the binding as any read that cannot complete does, rather
+than counting as a list of no elements. A label the list's schema declares for
 its elements is fitted on the read of the list, and so decides wherever that
 read consumes no stored label, even for an element whose own document carries
 one.
@@ -127,8 +131,8 @@ The exceptions hold for `cf-render` and for each item of a `cf-picker`:
   resolving the reference reads that document's label, a conservative
   over-approximation (CFC §8.2.5). A label the slot's schema declares decides
   only where the read consumed no stored label. A `cf-render` whose binding is
-  withheld shows nothing, and a `cf-picker` whose binding is withheld shows no
-  items, where opening a refused piece shows the placeholder.
+  withheld shows nothing, as does a `cf-picker` whose binding is withheld,
+  where opening a refused piece shows the placeholder.
 - A nested render applies the root ceiling, and none of the declassification
   or text-integrity requirement of a boundary around the component. A
   boundary that only declassifies admits more than the root, so there the
