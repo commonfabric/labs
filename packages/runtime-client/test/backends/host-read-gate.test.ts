@@ -43,6 +43,7 @@ const SEALED_NAME = "name-behind-the-seal";
 const SEALED_RENAME = "second-name-behind-the-seal";
 const SEALED_INTERNAL = "internal-state-behind-the-seal";
 const HOME_NAME = "name-for-members-of-the-owner-space";
+const CREDENTIAL = "credential-even-the-owner-is-not-shown";
 
 type Labels = readonly [path: string[], confidentiality: readonly CfcAtom[]][];
 
@@ -131,11 +132,21 @@ async function shelf() {
     { [NAME]: HOME_NAME },
     [[[], [cfcAtom.space(space)]]],
   );
+  // The owner's piece holding a credential in a field of its own document,
+  // which the default ceiling shows no one.
+  const credentialPiece = await write("credential-piece", {
+    [NAME]: "Importer",
+    auth: { token: CREDENTIAL },
+  }, [
+    [[], [ownerOnly]],
+    [["auth", "token"], [cfcAtom.resource("CredentialSecret")]],
+  ]);
   await runtime.idle();
 
   return {
     runtime,
     write,
+    credentialPiece,
     sealedEntry,
     piece,
     nestedPiece,
@@ -246,6 +257,54 @@ describe("HostReadGate", () => {
       );
 
       expect(answer).toEqual({ value: { [NAME]: "Shared piece" } });
+    });
+
+    // A read is decided on the labels of its cell's own node, which cover
+    // its ancestors, and on everything it consumed below that node, so a
+    // narrow read is not refused for a field it stops short of.
+    it("returns the owner the `[NAME]` of their piece holding a credential in a field of its own document", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const read = gate.read(docs.credentialPiece.asSchema(nameSchema));
+      const { updates, cancel } = subscribe(
+        gate,
+        docs.credentialPiece.asSchema(nameSchema),
+      );
+      cancel();
+
+      expect(read).toEqual({ value: { [NAME]: "Importer" } });
+      expect(updates).toEqual([
+        expect.objectContaining({ value: { [NAME]: "Importer" } }),
+      ]);
+    });
+
+    it("refuses the owner a read of the same piece that reaches the credential", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const toToken = {
+        type: "object",
+        properties: {
+          auth: { type: "object", properties: { token: { type: "string" } } },
+        },
+      } as const;
+
+      for (const schema of [true, toToken] as const) {
+        const answer = gate.read(docs.credentialPiece.asSchema(schema));
+        expect(holds(answer, CREDENTIAL)).toBe(false);
+        expect("refused" in answer).toBe(true);
+      }
+    });
+
+    it("returns a visitor the `[NAME]` of a piece one of whose fields only its owner may see, and refuses the field", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, visitor);
+
+      expect(gate.read(docs.notedPiece.asSchema(nameSchema))).toEqual({
+        value: { [NAME]: "Noted piece" },
+      });
+      const note = gate.read(docs.notedPiece.asSchema(true));
+      expect(holds(note, OWNER_ONLY_NOTE)).toBe(false);
+      expect("refused" in note).toBe(true);
     });
 
     it("returns a visitor the whole of a piece anyone may see", async () => {

@@ -120,11 +120,15 @@ export function admitsEverything(policy: RenderPolicy): boolean {
 /**
  * The label that keeps `policy` from admitting what `reads` of `cell` show,
  * or undefined when the policy admits it. The policy has to admit both the
- * cell's labels, as {@link cellLabelRefusal} fits them, and the labels the
- * reads consumed, which reach every document a read passed through,
- * including one behind a link crossed part way along the path. A read that
- * reports no consumed labels counts as consuming the marker no policy admits,
- * and reads that consumed none are fitted by the cell's schema.
+ * labels the reads consumed, which reach every document a read passed
+ * through, including one behind a link crossed part way along the path, and
+ * the labels at `cell`'s own node, as {@link cellLabelRefusal} fits them,
+ * which include those its ancestors' labels cover (see {@link atNode}). What
+ * lies below `cell` is fitted as the reads consumed it, so a read that stops
+ * short of a labeled field is not refused for that field, and one that
+ * reaches it is. A read that reports no consumed labels counts as consuming
+ * the marker no policy admits, and reads that consumed none are fitted by the
+ * cell's schema.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -154,8 +158,32 @@ export function readRefusal(
       watch,
     );
   return admitted
-    ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
+    ? cellLabelRefusal(
+      cell,
+      cellLabelSources(cell)?.map(atNode),
+      policy,
+      sources,
+      watch,
+    )
     : { labelSource: "consumed", confidentiality, integrity };
+}
+
+/**
+ * `source`, with its view narrowed to the entries at the node it was read
+ * at. A cell's label view holds an entry for each labeled path at or below
+ * the cell, and folds what its ancestors' labels cover into the entries at
+ * the node itself, so these are the labels of the node and of every
+ * ancestor, and none of what lies below it.
+ */
+function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
+  if (source.view === undefined) return source;
+  const entries = source.view.entries.filter((entry) =>
+    entry.path.length === 0
+  );
+  return {
+    ...source,
+    view: entries.length === 0 ? undefined : { ...source.view, entries },
+  };
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */
