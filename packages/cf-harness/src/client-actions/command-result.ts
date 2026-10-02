@@ -30,8 +30,7 @@ export type HarnessCommandModelOutcome = Omit<HarnessCommandOutcome, "body">;
  * A typed settlement as the model reads it. An executed command carries its
  * outcome's metadata and the token its body is held under; a catalog comes
  * back whole when it fits {@link HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES},
- * and with the schemas and descriptions of the entries past that point left
- * out when it does not.
+ * and otherwise bounded by {@link boundHarnessCommandCatalog}.
  */
 export type HarnessCommandModelSettlement =
   | {
@@ -61,8 +60,9 @@ export type HarnessCommandModelCatalogEntry =
 
 /**
  * Largest catalog the model reads whole, as UTF-8 bytes of its JSON text.
- * The contract bounds each entry; this bounds what one answer adds to the
- * model's context.
+ * The contract bounds each entry and the number of entries; this bounds the
+ * schemas and descriptions one answer adds to the model's context beyond the
+ * commands its request named.
  */
 export const HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES = 32 * 1024;
 
@@ -76,23 +76,35 @@ export type HarnessCommandResultHolder = (
 ) => Promise<string>;
 
 /**
- * Bounds a catalog for the model. Entries keep their order; once the running
- * size passes the limit, the remaining entries keep their summary and lose
- * their schema and description, which a later request naming them in
- * `detail` brings back.
+ * Bounds a catalog for the model. Entries keep their order. The commands the
+ * request named in `detail` are kept whole, since a request naming them is
+ * how the model brings back what a bounded catalog left out; the rest are
+ * kept whole in order until the running size passes the limit, and every
+ * one after that keeps its summary and loses its schema and description.
+ * The limit bounds the entries kept whole; the summaries of the compacted
+ * rest add at most what the contract's catalog limit allows.
  */
 export const boundHarnessCommandCatalog = (
   catalog: HarnessCommandCatalog,
+  detail: readonly string[] = [],
 ): { entries: HarnessCommandModelCatalogEntry[]; compacted?: number } => {
   if (
     harnessCommandJsonBytes(catalog) <= HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES
   ) {
     return { entries: catalog.entries };
   }
-  const entries: HarnessCommandModelCatalogEntry[] = [];
+  const named = new Set(detail);
   let size = 0;
+  for (const entry of catalog.entries) {
+    if (named.has(entry.command)) size += harnessCommandJsonBytes(entry);
+  }
+  const entries: HarnessCommandModelCatalogEntry[] = [];
   let compacted = 0;
   for (const entry of catalog.entries) {
+    if (named.has(entry.command)) {
+      entries.push(entry);
+      continue;
+    }
     const whole = harnessCommandJsonBytes(entry);
     if (
       compacted === 0 && size + whole <= HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES
@@ -106,7 +118,7 @@ export const boundHarnessCommandCatalog = (
     entries.push(summary);
     compacted += 1;
   }
-  return { entries, compacted };
+  return { entries, ...(compacted > 0 ? { compacted } : {}) };
 };
 
 /**
@@ -155,16 +167,18 @@ export interface HarnessCommandSettlementProjection {
 /**
  * Projects a typed settlement onto the resolved event and the model's view.
  * The receipt goes to the event, for the person; the model reads the
- * outcome's metadata and the handle, never the receipt or the body.
+ * outcome's metadata and the handle, never the receipt or the body. `detail`
+ * is the catalog request's, whose commands the model's catalog keeps whole.
  */
 export const projectHarnessCommandSettlement = (
   settlement: HarnessCommandSettlement,
   handle: string | undefined,
+  detail?: readonly string[],
 ): HarnessCommandSettlementProjection => {
   const outcome = legacyOutcomeOfHarnessCommandSettlement(settlement);
   if (settlement.status === "executed") {
     if ("catalog" in settlement) {
-      const bounded = boundHarnessCommandCatalog(settlement.catalog);
+      const bounded = boundHarnessCommandCatalog(settlement.catalog, detail);
       return {
         outcome,
         record: {

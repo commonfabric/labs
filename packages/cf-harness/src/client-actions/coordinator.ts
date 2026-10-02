@@ -16,6 +16,7 @@
  * command's result body is kept by.
  */
 
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
@@ -29,6 +30,7 @@ import {
   type HarnessCommandHostSettlement,
   type HarnessCommandResolveBody,
   type HarnessCommandSettlement,
+  type HarnessCommandSettlementRecord,
   type HarnessTypedClientAction,
   readHarnessCommandResolveBody,
   readHarnessTypedClientAction,
@@ -186,6 +188,18 @@ type ActionSettlement =
 interface PendingClientAction {
   action: HarnessMidTurnClientAction;
   holdCommandResult?: HarnessCommandResultHolder;
+
+  /**
+   * Set while a host's answer is having its result held. The answer arrived
+   * first, so a timeout or cancel that comes due meanwhile waits for it
+   * rather than overtaking it, and a second answer waits to be compared.
+   * Never rejects.
+   */
+  answering?: Promise<void>;
+
+  /** The console settlement that came due while an answer was being held. */
+  overdue?: ConsoleSettlementCause;
+
   settle(
     settlement: ActionSettlement,
     byHost: boolean,
@@ -268,13 +282,15 @@ export class HarnessClientActionCoordinator {
 
   /**
    * Every actionId this process has settled, so a repeat answer is told apart
-   * from an id never minted. `resendable` marks a typed action the host
-   * itself settled: a client that lost the console's acknowledgment resends
-   * the same answer after reconnecting, and that resend is accepted without
-   * effect. Grows by one entry per settlement for the session's life; harden
-   * with a bounded window if sessions ever run for days.
+   * from an id never minted. `answer` is the fingerprint of the settlement a
+   * host itself gave a typed action: a client that lost the console's
+   * acknowledgment resends the same answer after reconnecting, and a resend
+   * matching it is accepted without effect, while a different one is told
+   * the action is settled. Grows by one entry per settlement for the
+   * session's life; harden with a bounded window if sessions ever run for
+   * days.
    */
-  readonly #settled = new Map<string, { resendable: boolean }>();
+  readonly #settled = new Map<string, { answer?: string }>();
 
   constructor(hooks: HarnessClientActionCoordinatorHooks) {
     this.#hooks = hooks;
@@ -316,11 +332,33 @@ export class HarnessClientActionCoordinator {
     if (mismatch !== undefined) {
       return { status: "mismatched", message: mismatch };
     }
-    const handle = await this.#holdResult(pending, settlement);
-    // The action may have settled while its result was being held: the idle
-    // timeout or a cancel took it, or a resend of this answer got there first.
-    const still = this.#pending.get(actionId);
-    if (still !== pending) return this.#settledVerdict(answer);
+    if (pending.answering !== undefined) {
+      // Another answer is being held: this one is a resend or a conflict,
+      // which the action's state once that one is done decides.
+      await pending.answering;
+      return await this.resolve(answer);
+    }
+    const holding = this.#holdResult(pending, settlement);
+    pending.answering = holding.then(() => undefined, () => undefined);
+    let handle: string | undefined;
+    try {
+      handle = await holding;
+    } catch (error) {
+      // Nothing was settled: the action stays open for a resend, unless a
+      // timeout or cancel came due while the result was being held.
+      pending.answering = undefined;
+      const overdue = pending.overdue;
+      if (overdue !== undefined && this.#pending.get(actionId) === pending) {
+        await pending.settle(consoleSettlement(pending.action, overdue), false);
+      }
+      throw error;
+    }
+    pending.answering = undefined;
+    // A failed delivery settles every written action at once, and does not
+    // wait for an answer being held.
+    if (this.#pending.get(actionId) !== pending) {
+      return this.#settledVerdict(answer);
+    }
     await pending.settle({ form: "settlement", settlement }, true, handle);
     return { status: "accepted" };
   }
@@ -360,7 +398,8 @@ export class HarnessClientActionCoordinator {
   ): HarnessClientActionVerdict {
     const settled = this.#settled.get(answer.params.actionId);
     if (settled === undefined) return { status: "unknown" };
-    return settled.resendable && answer.form === "settlement"
+    return settled.answer !== undefined && answer.form === "settlement" &&
+        settled.answer === settlementFingerprint(answer.params.settlement)
       ? { status: "accepted" }
       : { status: "already_settled" };
   }
@@ -370,8 +409,10 @@ export class HarnessClientActionCoordinator {
    * Everything waits for the person: the only other ways out are the idle
    * timeout (reset by each settlement, so a person working through a queue is
    * never cut off mid-way) and the turn's abort signal, which covers both a
-   * turn cancel and a session close. Each settlement, whatever its cause,
-   * emits one `client_action_resolved`.
+   * turn cancel and a session close. A host's answer that arrived before
+   * either is kept: while its result is still being held, the timeout or
+   * cancel waits for it, and settles the action only if holding fails. Each
+   * settlement, whatever its cause, emits one `client_action_resolved`.
    *
    * The client may answer a request while that request's own event is still
    * being delivered. That settlement records its outcome at once and queues
@@ -415,12 +456,14 @@ export class HarnessClientActionCoordinator {
     const finished = new Promise<void>((resolve) => finish = resolve);
 
     const settleOpen = (cause: ConsoleSettlementCause) =>
-      entries.map((entry) =>
-        this.#pending.get(entry.actionId)?.settle(
-          consoleSettlement(entry.action, cause),
-          false,
-        )
-      );
+      entries.map((entry) => {
+        const pending = this.#pending.get(entry.actionId);
+        if (pending?.answering !== undefined) {
+          pending.overdue ??= cause;
+          return undefined;
+        }
+        return pending?.settle(consoleSettlement(entry.action, cause), false);
+      });
     const armTimer = () => {
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -436,9 +479,11 @@ export class HarnessClientActionCoordinator {
       // Synchronous, so a second answer for the same id meets a settled
       // action even while this one's event is still being written.
       this.#pending.delete(entry.actionId);
-      this.#settled.set(entry.actionId, {
-        resendable: byHost && settlement.form === "settlement",
-      });
+      const settled: { answer?: string } = byHost &&
+          settlement.form === "settlement"
+        ? { answer: settlementFingerprint(settlement.settlement) }
+        : {};
+      this.#settled.set(entry.actionId, settled);
       outcomes.set(
         entry.actionId,
         modelOutcome(entry.action, settlement, handle),
@@ -446,16 +491,22 @@ export class HarnessClientActionCoordinator {
       remaining -= 1;
       if (remaining > 0) armTimer();
       else if (timer !== undefined) clearTimeout(timer);
+      let committed = false;
       const emitted = requested.has(entry.actionId)
         ? this.#hooks.emit(
           turnId,
           resolvedEvent(turnId, entry.actionId, settlement, handle),
+          { onCommitted: () => committed = true },
         )
         : Promise.resolve();
       // A failed write is not swallowed: it fails the tool call through
-      // `emits`, and the no-op handler only keeps a rejection that lands
-      // before the call awaits `emits` from surfacing as unhandled.
-      emitted.catch(() => undefined);
+      // `emits`, and the handler only keeps a rejection that lands before the
+      // call awaits `emits` from surfacing as unhandled. A settlement whose
+      // event never reached the log is no longer one a resend is told was
+      // taken: a restart records the action interrupted.
+      emitted.catch(() => {
+        if (!committed) delete settled.answer;
+      });
       emits.push(emitted);
       if (remaining === 0) finish();
       return entry.actionId === delivering ? Promise.resolve() : emitted;
@@ -555,14 +606,17 @@ export class HarnessClientActionCoordinator {
         });
       } else if (event.kind === "client_action_resolved") {
         open.delete(event.actionId);
-        this.#settled.set(event.actionId, {
-          resendable: event.settlement !== undefined &&
-            event.settlement.status !== "interrupted",
-        });
+        this.#settled.set(
+          event.actionId,
+          event.settlement !== undefined &&
+            event.settlement.status !== "interrupted"
+            ? { answer: recordFingerprint(event.settlement) }
+            : {},
+        );
       }
     }
     for (const [actionId, { turnId, action }] of open) {
-      this.#settled.set(actionId, { resendable: false });
+      this.#settled.set(actionId, {});
       const settlement: ActionSettlement = isTypedAction(action)
         ? {
           form: "settlement",
@@ -576,6 +630,24 @@ export class HarnessClientActionCoordinator {
     }
   }
 }
+
+/**
+ * Identifies a settlement by what its resolved event records of it, with the
+ * handle left out, so an answer is compared the same way before and after a
+ * restart and whatever order its keys were sent in. The record omits a
+ * command's body, so two answers differing only in a body of the same size
+ * compare equal; a resend carries the same body in any case.
+ */
+const recordFingerprint = (record: HarnessCommandSettlementRecord): string => {
+  const { handle: _handle, ...rest } = record as Record<string, unknown>;
+  return hashStringOf(rest as FabricValue);
+};
+
+/** {@link recordFingerprint} of the record a host's settlement writes. */
+const settlementFingerprint = (settlement: HarnessCommandSettlement): string =>
+  recordFingerprint(
+    projectHarnessCommandSettlement(settlement, undefined).record,
+  );
 
 /** The resolved event one settlement writes. */
 const resolvedEvent = (
@@ -622,7 +694,10 @@ const modelOutcome = (
   }
   return {
     action: action as HarnessTypedClientAction,
-    settlement: projectHarnessCommandSettlement(settlement.settlement, handle)
-      .model,
+    settlement: projectHarnessCommandSettlement(
+      settlement.settlement,
+      handle,
+      action.kind === "list_commands" ? action.request.detail : undefined,
+    ).model,
   };
 };

@@ -71,6 +71,8 @@ const harness = (
     /** Runs inside the service's event delivery, which waits for it. */
     deliver?: (event: Event) => void | Promise<void>;
     sessionStore?: HarnessChatSessionStore;
+    /** Runs before each mint, which waits for it. */
+    beforeMint?: () => Promise<void>;
   } = {},
 ) => {
   const events: HarnessChatEventEnvelope[] = [];
@@ -99,6 +101,7 @@ const harness = (
             requestClientActions?: HarnessClientActionRequester;
           }).requestClientActions,
           mintReferentHandle: async (draft: HarnessDocumentReferentDraft) => {
+            await options.beforeMint?.();
             const minted = await mintReferentHandle(table, {
               kind: "document",
               ...draft,
@@ -440,6 +443,82 @@ describe("coordinator", () => {
       await h.finish();
     });
 
+    it("refuses a different settlement for an action the host already settled", async () => {
+      const h = harness();
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      expect((await h.answer(settle("resolve-executed-success", "id-1"))).ok)
+        .toBe(true);
+      await h.callsDone;
+      // A second answer that disagrees with the first is not a resend: the
+      // host is told the action was settled, not that this answer was taken.
+      const changed = await h.answer(settle("resolve-declined", "id-1"));
+      expect(changed.ok === false && changed.error.code).toBe(
+        "action_resolved",
+      );
+      const success = settle("resolve-executed-success", "id-1");
+      const reordered = {
+        ...success,
+        settlement: Object.fromEntries(
+          Object.entries(success.settlement).reverse(),
+        ),
+      };
+      expect((await h.answer(reordered)).ok).toBe(true);
+      expect(h.resolved()).toHaveLength(1);
+      await h.finish();
+    });
+
+    it("does not take a resend as settled when the first answer's resolved event was never written", async () => {
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      const store = await openSqliteHarnessChatSessionStore({
+        url: toFileUrl(path),
+      });
+      let failNext = true;
+      const failing = (
+        event: HarnessChatEventEnvelope,
+      ) => {
+        if (failNext && event.event.kind === "client_action_resolved") {
+          failNext = false;
+          throw new Error("store down");
+        }
+      };
+      const writes = new Set(["appendEvent", "saveSessionAndAppendEvent"]);
+      const flaky = new Proxy(store, {
+        get(target, key) {
+          const value = Reflect.get(target, key);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (writes.has(key as string)) {
+              failing(args.at(-1) as HarnessChatEventEnvelope);
+            }
+            return value.apply(target, args);
+          };
+        },
+      });
+      try {
+        const h = harness({ sessionStore: flaky });
+        await h.start();
+        await h.delivered(requestFor("id-1"));
+        const body = settle("resolve-executed-success", "id-1");
+        await expect(h.answer(body)).rejects.toThrow("store down");
+        // Nothing records the settlement, so a resend is not told it was
+        // taken; the action is settled in this process and stays so.
+        const resend = await h.answer(body);
+        expect(resend.ok === false && resend.error.code).toBe(
+          "action_resolved",
+        );
+        expect(
+          (await store.listEvents({ sessionId: "s" })).filter((e) =>
+            e.event.kind === "client_action_resolved"
+          ),
+        ).toEqual([]);
+        await h.finish();
+      } finally {
+        await store.close?.();
+        await Deno.remove(path).catch(() => undefined);
+      }
+    });
+
     it("names an unknown action id", async () => {
       const h = harness();
       await h.start();
@@ -522,6 +601,61 @@ describe("coordinator", () => {
       expect(order.lastIndexOf("client_action_resolved")).toBeLessThan(
         order.indexOf("turn_canceled"),
       );
+      await h.finish();
+    });
+
+    it("keeps a host's answer that arrived before the idle timeout, even while its body is still being held", async () => {
+      using time = new FakeTime();
+      const minting = Promise.withResolvers<void>();
+      const held = Promise.withResolvers<void>();
+      const h = harness({
+        idleMs: 10,
+        beforeMint: () => {
+          minting.resolve();
+          return held.promise;
+        },
+      });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      const answered = h.answer(settle("resolve-executed-success", "id-1"));
+      await minting.promise;
+      // The clock runs out while the answer's body is being held.
+      await time.tickAsync(10);
+      held.resolve();
+      expect((await answered).ok).toBe(true);
+      await h.callsDone;
+      const settlement = outcomesOf(h)[0].settlement as Record<string, unknown>;
+      expect(settlement.status).toBe("executed");
+      expect(settlement.handle).toMatch(/^cfh:v:/);
+      expect(h.resolved()).toHaveLength(1);
+      await h.finish();
+    });
+
+    it("leaves an action open when its body cannot be held, so a resend or the idle timeout settles it", async () => {
+      using time = new FakeTime();
+      let failures = 1;
+      const h = harness({
+        idleMs: 10,
+        calls: [{ actions: [query, mutation] }],
+        beforeMint: () =>
+          failures-- > 0
+            ? Promise.reject(new Error("handle table unavailable"))
+            : Promise.resolve(),
+      });
+      await h.start();
+      await h.delivered(requestFor("id-2"));
+      const body = settle("resolve-executed-success", "id-1");
+      await expect(h.answer(body)).rejects.toThrow("handle table unavailable");
+      expect(h.resolved()).toEqual([]);
+      expect((await h.answer(body)).ok).toBe(true);
+      expect(h.resolved()).toHaveLength(1);
+      // The other action, never answered, still times out.
+      await time.tickAsync(10);
+      await h.callsDone;
+      expect(outcomesOf(h)[1].settlement).toEqual({
+        status: "interrupted",
+        reason: "timeout",
+      });
       await h.finish();
     });
 
@@ -615,6 +749,13 @@ describe("coordinator", () => {
           settle("resolve-executed-success", "id-1"),
         );
         expect(resend.ok).toBe(true);
+        const changed = await restored.resolveClientAction(
+          "r3",
+          settle("resolve-executed-version-conflict", "id-1"),
+        );
+        expect(changed.ok === false && changed.error.code).toBe(
+          "action_resolved",
+        );
         const late = await restored.resolveClientAction(
           "r2",
           settle("resolve-declined", "id-2"),

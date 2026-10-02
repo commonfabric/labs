@@ -867,9 +867,11 @@ for an id the session never issued, 409
 `{ "error": { "code": "action_resolved" } }` for one already settled, and 400
 for a bad body. A typed settlement the host already gave for the same action is
 answered 200 again without effect, so a client that lost the acknowledgment
-resends its answer after reconnecting rather than running the command again. An
-action the console settled itself (a timeout, a cancel, or a restart) is
-`action_resolved` to every later answer.
+resends its answer after reconnecting rather than running the command again; a
+different settlement for that action is `action_resolved`, compared on what the
+resolved event records, so the order of its keys does not matter. An action the
+console settled itself (a timeout, a cancel, or a restart) is `action_resolved`
+to every later answer.
 
 The tool returns the outcomes to the model in input order. For an executed
 command the model gets the outcome's metadata — which executor answered and its
@@ -882,8 +884,10 @@ receipt is the resolved event's `result`, for the person, and the event's
 `settlement` record carries the same metadata and handle. A body over 256 KiB
 arrives omitted, with its size, and is held nowhere; its outcome still says
 whether the command happened. A catalog is returned to the model, with the
-schemas and descriptions of entries past 32 KiB left out. A version conflict is
-an executed command whose outcome is `ok: false`, not a failure of the channel.
+schemas and descriptions of entries past 32 KiB left out, except for the
+commands the request named in `detail`, which are kept whole. A version conflict
+is an executed command whose outcome is `ok: false`, not a failure of the
+channel.
 
 An answer may arrive while its request is still being delivered, as when a
 client answers from the handler that receives the event: it is kept, its
@@ -897,11 +901,13 @@ The wait has an idle clock of five minutes, reset whenever any action of the
 call settles; on expiry every unsettled action is settled as timed out (`failed`
 with `result: "timeout"`, or for a typed action
 `{ "status": "interrupted", "reason": "timeout" }`), and one not yet requested
-is never requested. Canceling the turn or closing the session settles every
-unsettled action as canceled (`declined` with `result: "canceled"`, or
-`interrupted` with reason `canceled`). A request a restart left open is never
-replayed: startup settles it `failed` with `result: "interrupted"`, and a typed
-one with `{ "status": "interrupted", "reason": "restart" }`. The stdio request
+is never requested. An answer that arrived before the clock ran out or the turn
+was canceled is kept even while its result is still being stored. Canceling the
+turn or closing the session settles every unsettled action as canceled
+(`declined` with `result: "canceled"`, or `interrupted` with reason `canceled`).
+A request a restart left open is never replayed: startup settles it `failed`
+with `result: "interrupted"`, and a typed one with
+`{ "status": "interrupted", "reason": "restart" }`. The stdio request
 `resolve_client_action` (same params, same error codes) reads its params with
 the same reader and calls the same service method, and `start_session` and
 `start_turn` take `clientActions: true` to opt in, off by default.
