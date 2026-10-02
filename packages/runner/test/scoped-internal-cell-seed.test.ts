@@ -10,6 +10,8 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { applyCfcPolicyToExistingValue } from "../src/cfc/policy-application.ts";
+import { setCfcImplementationIdentity } from "../src/cfc/trust-authority.ts";
 import { Runtime } from "../src/runtime.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import { stampSpeculationRunContext } from "../src/speculation/overlay-destination.ts";
@@ -270,6 +272,80 @@ describe("scoped-internal-cell-seed", () => {
     );
     expect(draft.getMetaRaw("result")).toBeDefined();
   });
+
+  for (const explicitPublic of [false, true]) {
+    it(`${explicitPublic ? "refuses to widen an explicitly public" : "preserves the owning piece's confidentiality on a"} cold session default`, async () => {
+      const first = openRuntime(owner);
+      const compiled = await first.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
+            import { Confidential, pattern, Writable } from "commonfabric";
+            export default pattern<Record<string, never>>(() => ({
+              tab: Writable.perSession.of<${
+            explicitPublic ? "Confidential<string, readonly []>" : "string"
+          }>("overview"),
+            }));`,
+        }],
+      }, { space });
+      const original = first.getCell(space, "private owner with session state");
+      await first.runSynced(original, compiled, {});
+      await first.idle();
+      const ownerLabel = {
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: owner.did(),
+      };
+      const protect = first.edit();
+      setCfcImplementationIdentity(protect, {
+        kind: "builtin",
+        builtinId: "scoped-seed-owner-policy",
+      });
+      applyCfcPolicyToExistingValue(
+        original.withTx(protect).asSchema({
+          ifc: { confidentiality: [ownerLabel] },
+        }),
+      );
+      expect((await protect.commit()).error).toBeUndefined();
+      await first.storageManager.synced();
+
+      const second = openRuntime(owner);
+      const piece = second.getCell(space, "private owner with session state");
+      await piece.sync();
+      if (explicitPublic) {
+        await expect(second.runner.start(piece)).rejects.toThrow(
+          "writer-fit confidentiality misfit",
+        );
+      } else {
+        expect(await second.runner.start(piece)).toBe(true);
+        await second.idle();
+      }
+      const tab = piece.key("tab").resolveAsCell();
+      expect(tab.getRawUntyped()).toBe(explicitPublic ? undefined : "overview");
+      const inspect = second.edit();
+      try {
+        const metadata = readStoredCfcMetadata(
+          inspect,
+          tab.getAsNormalizedFullLink(),
+        );
+        if (explicitPublic) {
+          expect(metadata).toBeUndefined();
+        } else {
+          expect(metadata?.labelMap.entries).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              path: [],
+              origin: "declared",
+              label: expect.objectContaining({
+                confidentiality: expect.arrayContaining([ownerLabel]),
+              }),
+            }),
+          ]));
+        }
+      } finally {
+        inspect.abort("cold session label assertions complete");
+      }
+    });
+  }
 
   it("initializes defaults in the run when dependency loading rejects", async () => {
     await load("user", owner);

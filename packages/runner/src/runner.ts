@@ -8378,6 +8378,9 @@ export class Runner {
             derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
               undefined
           ) return;
+          // The graph has not enrolled its stores yet. This seed carries the
+          // same ownership claim as setup through the ordinary writer-fit gate.
+          recordRuntimeOwnedStore(tx, owner, derivedLink);
           setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
           const value = fabricFromConvertibleJsValue(schemaDefault);
           derived.setRawUntyped(value);
