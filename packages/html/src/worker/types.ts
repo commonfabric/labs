@@ -372,21 +372,39 @@ export function normalizeRenderConfidentialityCeiling(
   };
 }
 
+/** Where the retries of one refused space stand. */
+export interface SpaceAccessRetryState {
+  /** Whether a retry of the space is in flight. */
+  readonly retrying: boolean;
+
+  /** How many retries of the space have settled, whatever their verdict. */
+  readonly settled: number;
+}
+
 /** Authoritative session access for rendered cells and their followed targets. */
 export interface SpaceAccessProvider {
   /** Current authoritative access loss, if any, for the named space. */
   error(space: string): Error | undefined;
 
-  /** Observes loss and recovery; the current snapshot is read through `error()`. */
+  /**
+   * Observes loss and recovery, and, while the space is refused, the start
+   * and settling of each of its retries. The current snapshot is read through
+   * `error()` and `retryState()`.
+   */
   subscribe(space: string, onChange: () => void): Cancel;
 
   /**
    * Asks once more for the named space, which refused this session, without
-   * waiting for the answer. An admission reaches the renderer through
-   * `subscribe()`, and a refusal changes nothing. Optional: without it, what
-   * stands in for refused content offers no way to ask again.
+   * waiting for the answer, unless a retry of it is already in flight. An
+   * admission reaches the renderer through `subscribe()`, and a refusal
+   * changes nothing but `retryState()`. Optional, along with `retryState()`:
+   * without them, what stands in for refused content offers no way to ask
+   * again.
    */
   retry?(space: string): void;
+
+  /** Where the retries of the named space stand. Present with `retry()`. */
+  retryState?(space: string): SpaceAccessRetryState;
 }
 
 /** Options for a worker-side renderer and its host authority boundaries. */

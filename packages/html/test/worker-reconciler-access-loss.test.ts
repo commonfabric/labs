@@ -41,6 +41,58 @@ function retryHandlerOf(ops: readonly VDomOp[]): number {
   return event.handlerId;
 }
 
+/**
+ * What the access placeholder `ops` last rendered shows: the settled count on
+ * its status, and whether its retry control is disabled and what it reads.
+ * Reads the ops as a host applying them in order would, so a re-rendered
+ * placeholder reports its newest props.
+ */
+function placeholderState(ops: readonly VDomOp[]): {
+  retries: unknown;
+  disabled: unknown;
+  label: unknown;
+} {
+  const placeholders = new Set<number>();
+  const buttons = new Set<number>();
+  const props = new Map<number, Map<string, unknown>>();
+  const texts = new Map<number, string>();
+  const parents = new Map<number, number>();
+  const removed = new Set<number>();
+  for (const op of ops) {
+    if (op.op === "set-prop") {
+      const nodeProps = props.get(op.nodeId) ?? new Map<string, unknown>();
+      props.set(op.nodeId, nodeProps);
+      nodeProps.set(op.key, op.value);
+      if (op.key === "data-space-access-lost") placeholders.add(op.nodeId);
+      if (op.key === "data-space-access-retry") buttons.add(op.nodeId);
+    } else if (op.op === "create-text") {
+      texts.set(op.nodeId, op.text);
+    } else if (op.op === "update-text") {
+      texts.set(op.nodeId, op.text);
+    } else if (op.op === "insert-child") {
+      parents.set(op.childId, op.parentId);
+    } else if (op.op === "remove-node") {
+      removed.add(op.nodeId);
+    }
+  }
+  const live = (nodeId: number) => !removed.has(nodeId);
+  const placeholder = [...placeholders].filter(live).at(-1);
+  const button = [...buttons].filter(live).filter((nodeId) =>
+    parents.get(nodeId) === placeholder
+  ).at(-1);
+  if (placeholder === undefined || button === undefined) {
+    throw new Error("No access placeholder with a retry control rendered");
+  }
+  const label = [...texts.entries()].filter(([nodeId]) =>
+    parents.get(nodeId) === button
+  ).map(([, text]) => text).at(-1);
+  return {
+    retries: props.get(placeholder)?.get("data-space-access-retries"),
+    disabled: props.get(button)?.get("disabled"),
+    label,
+  };
+}
+
 describe("worker reconciler access loss", () => {
   for (const propsKind of ["static", "cell", "updated static"]) {
     it(`withholds a foreign event after access loss with ${propsKind} properties`, async () => {
@@ -203,6 +255,7 @@ describe("worker reconciler access loss", () => {
         error: () => new Error("Access revoked"),
         subscribe: () => () => {},
         retry: (space) => retried.push(space),
+        retryState: () => ({ retrying: false, settled: 0 }),
       },
     });
     try {
@@ -250,6 +303,7 @@ describe("worker reconciler access loss", () => {
           space === foreign.did() ? new Error("Access revoked") : undefined,
         subscribe: () => () => {},
         retry: (space) => retried.push(space),
+        retryState: () => ({ retrying: false, settled: 0 }),
       },
     });
     try {
@@ -282,6 +336,89 @@ describe("worker reconciler access loss", () => {
       await runtime.dispose();
     }
   });
+
+  for (const where of ["root", "foreign panel"]) {
+    it(`disables a refused ${where}'s retry control while its retry is in flight, and re-enables it once the retry settles refused`, async () => {
+      const owner = await Identity.fromPassphrase(`retry state ${where} root`);
+      const foreign = await Identity.fromPassphrase(
+        `retry state ${where} foreign`,
+      );
+      const refused = where === "root" ? owner.did() : foreign.did();
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: StorageManager.emulate({ as: owner }),
+      });
+      let state = { retrying: false, settled: 0 };
+      const observers = new Set<() => void>();
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => {
+          for (const op of batch) ops.push(op);
+        },
+        spaceAccess: {
+          error: (space) =>
+            space === refused ? new Error("Access revoked") : undefined,
+          subscribe: (space, observer) => {
+            if (space !== refused) return () => {};
+            observers.add(observer);
+            return () => {
+              observers.delete(observer);
+            };
+          },
+          retry: () => {
+            state = { ...state, retrying: true };
+            for (const observer of [...observers]) observer();
+          },
+          retryState: () => state,
+        },
+      });
+      try {
+        const panel = runtime.getCell(foreign.did(), "state panel", undefined);
+        const root = runtime.getCell(owner.did(), "state root", undefined);
+        await runtime.editWithRetry((tx) =>
+          panel.withTx(tx).set({
+            $UI: { type: "vnode", name: "article", props: {}, children: ["p"] },
+          })
+        );
+        await runtime.editWithRetry((tx) =>
+          root.withTx(tx).set({
+            $UI: { type: "vnode", name: "main", props: {}, children: [panel] },
+          })
+        );
+        reconciler.mount(root.asSchema(rendererVDOMSchema));
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        await runtime.idle();
+        reconciler.flush();
+        expect(placeholderState(ops)).toEqual({
+          retries: "0",
+          disabled: false,
+          label: "Retry",
+        });
+
+        reconciler.dispatchEvent(retryHandlerOf(ops), { type: "click" });
+        reconciler.flush();
+        expect(placeholderState(ops)).toEqual({
+          retries: "0",
+          disabled: true,
+          label: "Retrying…",
+        });
+
+        state = { retrying: false, settled: 1 };
+        for (const observer of [...observers]) observer();
+        await runtime.idle();
+        reconciler.flush();
+        expect(placeholderState(ops)).toEqual({
+          retries: "1",
+          disabled: false,
+          label: "Retry",
+        });
+      } finally {
+        reconciler.unmount();
+        await runtime.dispose();
+      }
+    });
+  }
 
   it("offers no retry control when the access provider cannot retry", async () => {
     const owner = await Identity.fromPassphrase("render retry unsupported");

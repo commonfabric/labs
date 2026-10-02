@@ -7,6 +7,7 @@
  * page regaining focus.
  */
 
+import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
@@ -75,32 +76,52 @@ async function filePiece(identityPath: string, space: DID): Promise<string> {
 }
 
 /**
- * Waits until the page shows the piece, which it does only while the space
- * admits the member: the marker is there and no placeholder stands in for it.
+ * Waits until the page shows the refusal in the piece's place, the placeholder
+ * with its Retry button and no marker, and returns how many retries of the
+ * space the placeholder says have settled.
  */
-async function waitForPiece(page: Page): Promise<void> {
-  await waitForCondition(
-    page,
-    (probe) =>
-      probe.collect("#refused-space-marker").some((el) =>
-        probe.deepText(el).trim() === "refused space piece"
-      ) && probe.collect("[data-space-access-lost]").length === 0,
-  );
+async function waitForRefusal(page: Page): Promise<number> {
+  const refusal = await waitForCondition(page, (probe) => {
+    if (probe.collect("#refused-space-marker").length > 0) return false;
+    const placeholder = probe.collect("[data-space-access-lost]").find((el) =>
+      probe.deepText(el).includes("Access unavailable") &&
+      el.querySelector("[data-space-access-retry]") !== null
+    );
+    return placeholder === undefined ? false : {
+      retries: Number(placeholder.getAttribute("data-space-access-retries")),
+    };
+  });
+  if (refusal === undefined) throw new Error("No refusal was shown");
+  return refusal.retries;
 }
 
 /**
- * Waits until the page shows the refusal in the piece's place: the placeholder
- * with its Retry button, and no marker.
+ * Waits until the page shows the piece, or shows the placeholder counting more
+ * than `retries` settled retries with its Retry button enabled again, and
+ * returns which: `piece` or `refused`. Either way a retry asked for after the
+ * page counted `retries` has settled, so the answer is that retry's verdict.
  */
-async function waitForRefusal(page: Page): Promise<void> {
-  await waitForCondition(
-    page,
-    (probe) =>
-      probe.collect("[data-space-access-lost]").some((el) =>
-        probe.deepText(el).includes("Access unavailable") &&
-        el.querySelector("[data-space-access-retry]") !== null
-      ) && probe.collect("#refused-space-marker").length === 0,
-  );
+async function waitForRetryOutcome(
+  page: Page,
+  retries: number,
+): Promise<string | undefined> {
+  return await waitForCondition(page, (probe, before) => {
+    const placeholders = probe.collect("[data-space-access-lost]");
+    if (
+      placeholders.length === 0 &&
+      probe.collect("#refused-space-marker").some((el) =>
+        probe.deepText(el).trim() === "refused space piece"
+      )
+    ) {
+      return "piece";
+    }
+    const settledRefused = placeholders.some((el) => {
+      const button = el.querySelector("[data-space-access-retry]");
+      return Number(el.getAttribute("data-space-access-retries")) > before &&
+        button instanceof HTMLButtonElement && !button.disabled;
+    });
+    return settledRefused ? "refused" : false;
+  }, { args: [retries] });
 }
 
 describe("shell space access retry", () => {
@@ -109,11 +130,13 @@ describe("shell space access retry", () => {
 
   /**
    * Shows the owner's piece to a member in the shell, removes the member from
-   * the space and waits for the refusal, then grants the member the space
-   * again, and hands the page and the space to `recover`.
+   * the space and waits for the refusal, grants the member the space again,
+   * and hands `recover` the page and the space to bring the piece back with.
+   * Then waits for the retry that brings about to settle, and requires that
+   * it left the piece rather than the refusal.
    */
   async function refuseThenRegrant(
-    recover: (page: Page) => Promise<void>,
+    recover: (page: Page, space: DID) => Promise<void>,
   ): Promise<void> {
     await using ownerFile = await writeTempIdentity({
       implementation: "noble",
@@ -137,14 +160,14 @@ describe("shell space access retry", () => {
         view: { spaceDid: space, pieceId },
         identity: member,
       });
-      await waitForPiece(page);
+      expect(await waitForRetryOutcome(page, 0)).toBe("piece");
 
       await acl.remove(member.did());
-      await waitForRefusal(page);
+      const retries = await waitForRefusal(page);
 
       await acl.set(member.did(), "WRITE");
-      await recover(page);
-      await waitForPiece(page);
+      await recover(page, space);
+      expect(await waitForRetryOutcome(page, retries)).toBe("piece");
     } finally {
       await controller.dispose();
     }
@@ -157,10 +180,27 @@ describe("shell space access retry", () => {
   });
 
   it("shows the piece again once the page regains focus", async () => {
-    await refuseThenRegrant(async (page) => {
-      await page.evaluate(() => {
-        globalThis.dispatchEvent(new Event("focus"));
-      });
+    await refuseThenRegrant(async (page, space) => {
+      // The shell asks the runtime from inside the `focus` handler, so the
+      // retries it asked for are the calls made while the event is
+      // dispatched.
+      const asked = await page.evaluate((space) => {
+        const rt = globalThis.commonfabric?.rt;
+        if (rt === undefined) throw new Error("No runtime client exposed");
+        const asked: string[] = [];
+        const retrySpaceAccess = rt.retrySpaceAccess;
+        rt.retrySpaceAccess = (retried) => {
+          asked.push(retried);
+          return retrySpaceAccess.call(rt, retried);
+        };
+        try {
+          globalThis.dispatchEvent(new Event("focus"));
+        } finally {
+          Reflect.deleteProperty(rt, "retrySpaceAccess");
+        }
+        return asked.filter((retried) => retried === space);
+      }, { args: [space] });
+      expect(asked).toEqual([space]);
     });
   });
 });

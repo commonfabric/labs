@@ -87,7 +87,9 @@ all the same; any other failure rejects it. A space the runtime has not opened
 is left alone. A call made while a retry of the same space is in flight shares
 that retry rather than asking again, and so does the Retry button the renderer
 puts on a refused space's "Access unavailable" placeholder, which reaches the
-same retry from inside the worker. The shell calls it when the person navigates
-into a space `spaceaccesslost` named, and when the page regains focus or becomes
-visible. [`docs/features/space-access.md`](../../docs/features/space-access.md)
-says how the answer is kept current.
+same retry from inside the worker and is disabled, reading "Retrying…", while
+any retry of its space is in flight. The shell calls it when the person
+navigates into a space `spaceaccesslost` named, and when the page regains focus
+or becomes visible.
+[`docs/features/space-access.md`](../../docs/features/space-access.md) says how
+the answer is kept current.

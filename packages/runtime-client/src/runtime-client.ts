@@ -1392,10 +1392,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * refusal leaves the space refused. It is for a host with reason to think
    * the verdict changed, such as a notice naming the space or a person
    * returning to a view of it, and does nothing for a space the runtime has
-   * not opened. A call
-   * made while a retry of the same space is in flight, whether this client's
-   * or a rendered retry control's, shares that retry rather than asking
-   * again. It rejects on any failure other than a refusal.
+   * not opened. A call made while a retry of the same space is in flight,
+   * whether this client's or a rendered retry control's, shares that retry
+   * rather than asking again, and a rendered retry control shows it in
+   * flight either way. It rejects on any failure other than a refusal.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({

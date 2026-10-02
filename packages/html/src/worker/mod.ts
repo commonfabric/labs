@@ -16,6 +16,7 @@ export type {
   RenderConfidentialityCeiling,
   RenderDeclassificationPolicy,
   SpaceAccessProvider,
+  SpaceAccessRetryState,
   WorkerJSXElement,
   WorkerProps,
   WorkerReconcilerOptions,

@@ -134,9 +134,12 @@ shell asks on the person's behalf when they may have been granted access since:
 on navigating into a space the runtime reported refused (`spaceaccesslost`), and
 on the page's `focus` or `visibilitychange` to visible, for every space the
 runtime has reported refused, since a view can show content of a space other
-than its own. Both are event-driven, with no timer behind them. An admission
-re-renders the refused content; a refusal leaves the placeholder, and its
-button, as they were.
+than its own. Both are event-driven, with no timer behind them. While a retry
+of the space is in flight, from either caller, the button is disabled and
+reads "Retrying…". An admission re-renders the refused content; a refusal
+leaves the placeholder as it was, with the button enabled again. The
+placeholder's `data-space-access-retries` attribute counts the space's settled
+retries, which is what a test waits on to know that a retry has been decided.
 
 ## Changing the level
 

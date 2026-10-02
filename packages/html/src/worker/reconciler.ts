@@ -81,6 +81,7 @@ import type {
   ReconcileContext,
   RenderDeclassificationPolicy,
   RenderPolicy,
+  SpaceAccessRetryState,
   WorkerProps,
   WorkerReconcilerOptions,
   WorkerRenderNode,
@@ -1498,31 +1499,53 @@ export class WorkerReconciler {
   /**
    * What stands in for content of `space` while its session is refused: a
    * status saying so, and, when the access provider can retry, a control that
-   * asks once more. An admission re-renders the content through the provider's
-   * `subscribe()`.
+   * asks once more. The control is disabled and reads "Retrying…" while a
+   * retry of the space is in flight, and the status carries how many have
+   * settled as `data-space-access-retries`. An admission re-renders the
+   * content through the provider's `subscribe()`, and a refusal re-enables
+   * the control.
    */
   #accessPlaceholderVNode(space: string): WorkerVNode {
+    const props: WorkerProps = {
+      "data-space-access-lost": "true",
+      role: "status",
+    };
     const children: WorkerRenderNode[] = ["Access unavailable"];
-    if (this.#spaceAccess?.retry !== undefined) {
-      const retry = () => this.#spaceAccess?.retry?.(space);
+    const spaceAccess = this.#spaceAccess;
+    if (spaceAccess?.retry !== undefined) {
+      const { retrying, settled } = this.#retryStateOf(space);
+      const retry = () => spaceAccess.retry?.(space);
       this.#accessRetryHandlers.add(retry);
+      props["data-space-access-retries"] = String(settled);
       children.push(" ", {
         type: "vnode",
         name: "button",
         props: {
           type: "button",
           "data-space-access-retry": "true",
+          disabled: retrying,
           onClick: retry,
         },
-        children: ["Retry"],
+        children: [retrying ? "Retrying…" : "Retry"],
       });
     }
-    return {
-      type: "vnode",
-      name: "span",
-      props: { "data-space-access-lost": "true", role: "status" },
-      children,
-    };
+    return { type: "vnode", name: "span", props, children };
+  }
+
+  /**
+   * Names the access placeholder `space` gets now, which changes whenever
+   * what the placeholder shows does.
+   */
+  #accessPlaceholderKey(space: string): string {
+    if (this.#spaceAccess?.retry === undefined) return "access";
+    const { retrying, settled } = this.#retryStateOf(space);
+    return `access:${retrying}:${settled}`;
+  }
+
+  /** Where the retries of `space` stand, as the access provider reports. */
+  #retryStateOf(space: string): SpaceAccessRetryState {
+    return this.#spaceAccess?.retryState?.(space) ??
+      { retrying: false, settled: 0 };
   }
 
   #cellRefForBinding(cell: Cell<unknown>): CellRef {
@@ -4745,6 +4768,10 @@ export class WorkerReconciler {
     // Whether the rendered content was laid out with its URL fetches blocked.
     // A change re-renders rather than reusing what the old decision set.
     let currentRemoteLoadsBlocked = false;
+    // Which placeholder stands in for policy-blocked content, so that a change
+    // of placeholder re-renders even when the value it stands in for has not
+    // changed.
+    let currentPlaceholder: string | undefined;
 
     // §4.9.3 Stage 2: on each render, watch the ACL docs of the spaces this
     // cell's read is labeled with, so a fail-closed over-block upgrades to an
@@ -4791,8 +4818,14 @@ export class WorkerReconciler {
       const sameRemoteLoadDecision =
         currentRemoteLoadsBlocked === remoteLoadsBlocked;
 
+      const placeholder = refusedSpace !== undefined
+        ? this.#accessPlaceholderKey(refusedSpace)
+        : "policy";
       if (!isInitialRender && valueUnchanged) {
-        if (blockedByPolicy && currentContentState === "policy-blocked") {
+        if (
+          blockedByPolicy && currentContentState === "policy-blocked" &&
+          currentPlaceholder === placeholder
+        ) {
           return;
         }
         if (
@@ -4835,6 +4868,7 @@ export class WorkerReconciler {
         childState.isText = false;
         currentCancel = blockedState.cancel;
         currentContentState = "policy-blocked";
+        currentPlaceholder = placeholder;
 
         const beforeId = this.#findNextSiblingId(
           parentState.children,

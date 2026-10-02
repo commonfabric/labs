@@ -14,6 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { renderSpaceAccessProviderFor } from "@/backends/runtime-processor.ts";
+import { SpaceAccessRetries } from "@/backends/space-access-retries.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
 import { EventEmitter } from "@/client/emitter.ts";
 import type {
@@ -98,21 +99,83 @@ describe("space access loss notification", () => {
     }
   });
 
-  it("hands a render boundary's retry of a space to the retry it was given, and offers none without one", async () => {
+  it("retries through the retries it was given, reports their state, and offers no retry without them", async () => {
     const identity = await Identity.fromPassphrase("render access retry");
     const storage = StorageManager.emulate({ as: identity });
     try {
       const retried: MemorySpace[] = [];
+      const gate = Promise.withResolvers<void>();
+      const retries = new SpaceAccessRetries((space) => {
+        retried.push(space);
+        return gate.promise;
+      });
       const provider = renderSpaceAccessProviderFor(
         { storageManager: storage },
-        (space) => retried.push(space),
+        retries,
       );
       provider.retry?.(identity.did());
       expect(retried).toEqual([identity.did()]);
-      expect(
-        renderSpaceAccessProviderFor({ storageManager: storage }).retry,
-      ).toBeUndefined();
+      expect(provider.retryState?.(identity.did())).toEqual({
+        retrying: true,
+        settled: 0,
+      });
+      gate.resolve();
+      await retries.retry(identity.did());
+      expect(provider.retryState?.(identity.did())).toEqual({
+        retrying: false,
+        settled: 1,
+      });
+      const bare = renderSpaceAccessProviderFor({ storageManager: storage });
+      expect(bare.retry).toBeUndefined();
+      expect(bare.retryState).toBeUndefined();
     } finally {
+      await storage.close();
+    }
+  });
+
+  it("tells a subscriber of a refused space when its retry starts and settles, and one of a standing space nothing", async () => {
+    const identity = await Identity.fromPassphrase("render access retry notes");
+    const storage = StorageManager.emulate({ as: identity });
+    const refused = identity.did();
+    const standing = "did:key:z6Mk-render-retry-standing" as MemorySpace;
+    const read = stub(
+      storage,
+      "spaceAccessError",
+      (space) => space === refused ? new Error("access denied") : undefined,
+    );
+    try {
+      const gates: PromiseWithResolvers<void>[] = [];
+      const retries = new SpaceAccessRetries(() => {
+        const gate = Promise.withResolvers<void>();
+        gates.push(gate);
+        return gate.promise;
+      });
+      const provider = renderSpaceAccessProviderFor(
+        { storageManager: storage },
+        retries,
+      );
+      let refusedChanges = 0;
+      let standingChanges = 0;
+      const cancelRefused = provider.subscribe(refused, () => refusedChanges++);
+      const cancelStanding = provider.subscribe(
+        standing,
+        () => standingChanges++,
+      );
+      const retry = retries.retry(refused);
+      const standingRetry = retries.retry(standing);
+      expect(refusedChanges).toBe(1);
+      for (const gate of gates) gate.resolve();
+      await Promise.all([retry, standingRetry]);
+      expect(refusedChanges).toBe(2);
+      expect(standingChanges).toBe(0);
+      cancelRefused();
+      cancelStanding();
+      const later = retries.retry(refused);
+      gates.at(-1)?.resolve();
+      await later;
+      expect(refusedChanges).toBe(2);
+    } finally {
+      read.restore();
       await storage.close();
     }
   });

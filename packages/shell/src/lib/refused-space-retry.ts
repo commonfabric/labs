@@ -21,9 +21,9 @@ interface RefusingRuntime {
 /**
  * Asks a runtime once more for the spaces it reported refused, on the
  * occasions a person may since have been granted access: navigating into one
- * of them, and coming back to the page. Neither the runtime nor the memory
- * server asks again on its own, since a refused session cannot read the access
- * list that would say so, and a grant sends nothing to it.
+ * of them, and coming back to the page. The runtime never asks again on its
+ * own, since a refused session cannot read the access list that would say
+ * so, and a grant sends the session nothing.
  *
  * The spaces are the ones the runtime's `spaceaccesslost` notices named, and
  * a space stays among them once readmitted, since nothing reports a
