@@ -63,7 +63,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "sessionHoldings": true,
     "sessionReadCeiling": true,
     "presenceV1": true,
-    "sessionClose": true
+    "sessionClose": true,
+    "admissionNotice": true
   }
 }
 ```
@@ -86,7 +87,8 @@ If the server accepts the protocol, it returns:
     "sessionHoldings": true,
     "sessionReadCeiling": true,
     "presenceV1": true,
-    "sessionClose": true
+    "sessionClose": true,
+    "admissionNotice": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -295,6 +297,13 @@ its host verifies `connection.auth`; toolshed does under the
 absent: a client then signs each `session.open`, one at a time, since each
 uses the connection's current challenge and receives the next.
 
+`admissionNotice` advertises that the peer takes part in `session/admissible`
+(section 4.2.2). It is build-inherent and defaults to `false` when absent. A
+server sends the notice only on a connection where both peers advertise it: a
+client connected to an older server, or a server connected to an older client,
+leaves a refused principal to learn of a later grant by opening the session
+again.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -492,6 +501,7 @@ interface HelloMessage {
     presenceV1?: boolean;
     sessionClose?: boolean;
     connectionAuth?: boolean;
+    admissionNotice?: boolean;
   };
 }
 
@@ -599,6 +609,8 @@ The server sends:
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
 - `session/revoked` when a session loses ownership to a newer connection
+- `session/admissible` when an access-list change admits a principal this
+  connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
   session has joined (section 4.13)
 
@@ -641,7 +653,38 @@ interface SessionRevoked {
   sessionId: SessionId;
   reason: "taken-over";
 }
+
+interface SessionAdmissible {
+  type: "session/admissible";
+  space: SpaceId;
+  principal: string;
+}
 ```
+
+`session/admissible` names a space and a principal that the server refused
+that space on this connection, and that the space's access list now grants
+`READ`. The server records a refusal when it denies a `session.open` for want
+of `READ`, and when an access-list change revokes a session for the same
+reason. An access-list commit that gives a recorded principal `READ` sends the
+notice to the connection the refusal was recorded on, and removes the record,
+so each refusal is told at most once. A change that leaves the principal
+without `READ` sends nothing, and the notice reaches no other connection.
+
+The notice is a hint and grants nothing. A client that acts on it opens the
+session again through ordinary admission, which decides on the access list as
+it then stands. It tells the principal only that its own access changed, and
+when, which opening the session again would also tell it.
+
+A record lives as long as its connection, and ends with an admitted
+`session.open` of the same space and principal, or with a `connection.release`
+of the principal. A connection holds at most 1024 records, and the oldest is
+dropped past that; its principal then learns of a grant only by opening the
+session again. A connection whose peer did not advertise `admissionNotice`
+records nothing, and neither does a routed connection
+([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
+does a session opened `actingAs: "space-owner"`: only a co-hosted serving
+runtime opens one, and it hears of every access-list commit in process, after
+which its next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -1123,7 +1166,7 @@ interface ConnectionAuthRequest {
 
 /** `ok` of the response. */
 interface ConnectionAuthResult {
-  principal: DID;
+  principal: string;
   /** Unix second the authentication runs out at. */
   expiresAt: number;
 }
@@ -1141,7 +1184,7 @@ interface ConnectionChallengeResult {
 interface ConnectionReleaseRequest {
   type: "connection.release";
   requestId: string;
-  principal: DID;
+  principal: string;
 }
 ```
 
