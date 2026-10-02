@@ -870,6 +870,53 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
+  it("an ancestor link a write sets over a source holding nothing at the nested floor still fails", async () => {
+    // Only a reference the runtime stages, which mints nothing for the stager,
+    // leaves a floor below it nothing to judge where its source holds nothing.
+    // A link a write sets is credited as before: here by nothing.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      await seedLabeledDoc(runtime, "wf-anc-src-empty", { other: "x" }, {});
+      const nestedFloor = {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              secret: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const tx = runtime.edit();
+      const src = runtime.getCell(
+        signer.did(),
+        "wf-anc-src-empty",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-anc-sink-empty",
+        nestedFloor,
+        tx,
+      );
+      sink.set({ out: src as unknown as { secret: string } });
+      tx.prepareCfc();
+      const result = await tx.commit();
+      expect(String((result.error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out/secret",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("an ancestor link whose source carries the nested floor atom passes", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });

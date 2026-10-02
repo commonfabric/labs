@@ -99,6 +99,15 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
+An integrity floor at or below the slot is therefore met only by what the
+link's source holds there. A source that holds the path through a link one of
+its documents stored before the transaction, as a pattern's argument holds the
+binding its caller staged, holds none of the value: the floor credits the
+label of each document the path continues into, beside the source's own, for
+any link it checks. Where a staged reference's source holds nothing at the
+floor's path, nothing lands there, and the floor, which governs values, has
+nothing to judge. A link a write sets keeps the floor's credit as before.
+
 When deriving a pending reference source, schema labels are minted at their
 declaration paths, with wildcard segments bound to the projected source path.
 Covering declarations join their confidentiality and static integrity, including
