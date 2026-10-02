@@ -3475,7 +3475,16 @@ export type CellGetResponse =
        */
       cell?: CellRef;
     })
-    | CellRefusedAnswer
+    | (CellRefusedAnswer & {
+      /**
+       * A ref to the cell the refused read started from, present only where
+       * the request set `includeRef` and the read reached a cell. It carries
+       * no label view, since a refused read gives none, and nothing else of
+       * what the read was refused: it is an address, from which a caller may
+       * read the cell's parts one by one, each decided on its own.
+       */
+      cell?: CellRef;
+    })
   );
 
 /** Rows returned by {@link RequestType.SqliteQuery}. */

@@ -171,6 +171,7 @@ async function shelf() {
   return {
     runtime,
     write,
+    credential,
     importer,
     inlineImporter,
     sealedEntry,
@@ -381,6 +382,31 @@ describe("HostReadGate", () => {
         expect(holds([openPath, sidebar], CREDENTIAL)).toBe(false);
       });
     }
+
+    it("returns the owner the rest of a credential's document, field by field", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+
+      expect("refused" in gate.read(docs.credential.asSchema(true))).toBe(true);
+      expect(
+        gate.read(docs.credential.key("account").asSchema(stringSchema)),
+      ).toEqual({ value: "owner account" });
+    });
+
+    it("names the cell a refused read started from when asked, with no label view", async () => {
+      await using docs = await shelf();
+      const answer = gateFor(docs.runtime, owner).read(
+        docs.importer.asSchema(true),
+        { includeRef: true, includeCfcLabel: true },
+      );
+
+      expect(answer).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+        cell: expect.objectContaining({ id: expect.any(String), path: [] }),
+      });
+      expect("cfcLabelView" in (answer as { cell: object }).cell).toBe(false);
+      expect(holds(answer, CREDENTIAL)).toBe(false);
+    });
 
     it("refuses a visitor the same reads of the owner's piece", async () => {
       await using docs = await shelf();

@@ -49,6 +49,7 @@ import {
   type CellGetResponse,
   type CellReadRefusal,
   type CellRef,
+  type CellRefusedAnswer,
   type CellUpdateNotification,
   type CellValueResponse,
   type HostReadDecided,
@@ -131,7 +132,14 @@ export class HostReadGate {
         policy,
         this.#sources,
       );
-      if (refusal !== undefined) return this.#refuse(refusal, policy);
+      if (refusal !== undefined) {
+        const refused = this.#refuse(refusal, policy);
+        if (!options.includeRef) return refused;
+        // The address alone, without the label view a ref carries: a
+        // refused read gives no label.
+        const { cfcLabelView: _withheld, ...address } = createCellRef(cell);
+        return decided({ ...refused, cell: address });
+      }
       value = read.value;
     }
     const refField = options.includeRef ? { cell: createCellRef(cell) } : {};
@@ -280,7 +288,10 @@ export class HostReadGate {
   }
 
   /** A refusal of a read, reported as a refused render is. */
-  #refuse(refusal: RenderLabelSummary, policy: RenderPolicy): CellGetResponse {
+  #refuse(
+    refusal: RenderLabelSummary,
+    policy: RenderPolicy,
+  ): CellGetResponse & CellRefusedAnswer {
     this.#report(refusal, policy);
     return decided({ refused: DISPLAY_CEILING_REFUSAL });
   }

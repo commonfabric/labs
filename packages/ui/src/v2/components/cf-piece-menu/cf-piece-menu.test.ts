@@ -1,7 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CellScope } from "@commonfabric/api";
-import { $conn, CellHandle, RequestType } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  $onCellRefused,
+  $onCellUpdate,
+  CellHandle,
+  RequestType,
+} from "@commonfabric/runtime-client";
 import type {
   CellRef,
   PieceSourceRevisionSourceView,
@@ -3589,6 +3595,7 @@ function statefulPiece(
     result = {},
     argument: initialArgument = {} as unknown,
     argumentRef,
+    argumentRefused = false,
     getPieceFails = false,
     deferGetPiece = false,
     sendFails = false,
@@ -3597,6 +3604,9 @@ function statefulPiece(
   }: {
     result?: Record<string, unknown>;
     argument?: unknown;
+
+    /** When true, the argument read is refused, with its ref when it has one. */
+    argumentRefused?: boolean;
 
     /** The scope the piece's own cell was reached through. */
     scope?: CellScope;
@@ -3616,9 +3626,11 @@ function statefulPiece(
   const requests: Array<Record<string, unknown>> = [];
   const counters = { subscribes: 0, unsubscribes: 0 };
   const argument = initialArgument;
+  const subscribed: CellHandle[] = [];
   const conn = {
-    subscribe: () => {
+    subscribe: (handle: CellHandle) => {
       counters.subscribes++;
+      subscribed.push(handle);
     },
     unsubscribe: () => {
       counters.unsubscribes++;
@@ -3627,10 +3639,13 @@ function statefulPiece(
     request: (request: Record<string, unknown>) => {
       requests.push(request);
       if (request.type === RequestType.CellGet) {
+        const answer = argumentRefused
+          ? { refused: { refusedBy: "display-ceiling" } }
+          : { value: argument };
         return Promise.resolve(
           request.includeRef && argumentRef
-            ? { value: argument, cell: argumentRef }
-            : { value: argument },
+            ? { ...answer, cell: argumentRef }
+            : answer,
         );
       }
       if (request.type === RequestType.CellSet) {
@@ -3700,6 +3715,22 @@ function statefulPiece(
       schema: eventSchema,
     } as unknown as CellRef);
 
+  /**
+   * The handle the panels subscribed at `path` of the document `id`, the
+   * last one when several were, through which a test delivers what the
+   * worker would.
+   */
+  const subscribedAt = (id: string, path: string[]): CellHandle => {
+    const found = subscribed.findLast((handle) =>
+      handle.ref().id === id &&
+      JSON.stringify(handle.ref().path) === JSON.stringify(path)
+    );
+    if (found === undefined) {
+      throw new Error(`nothing subscribed at ${id} ${path.join("/")}`);
+    }
+    return found;
+  };
+
   return {
     cell,
     requests,
@@ -3708,9 +3739,12 @@ function statefulPiece(
     streamHandle,
     handlerHandle,
     resolveGetPiece,
+    subscribedAt,
     rt,
   };
 }
+
+const REFUSED = { refusedBy: "display-ceiling" } as const;
 
 describe("the data panel", () => {
   it("shows the argument and the result", async () => {
@@ -3756,6 +3790,95 @@ describe("the data panel", () => {
       (request) => request.type === RequestType.CellGet,
     );
     expect(argumentReads.length).toBe(1);
+  });
+
+  describe("for a piece whose whole result the worker refuses", () => {
+    // A piece holding one field the viewer may not see, such as a
+    // credential, is shown field by field: everything the display ceiling
+    // admits, and a mark at each field it refuses.
+    const schema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        auth: { type: "object" },
+        sync: { asCell: ["stream"] },
+      },
+    };
+
+    it("shows each field its schema declares, and marks the refused one", async () => {
+      const piece = statefulPiece({ pieceSchema: schema });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      piece.subscribedAt("of:fid1:piece", ["title"])[$onCellUpdate](
+        "Inbox importer",
+      );
+      piece.subscribedAt("of:fid1:piece", ["auth"])[$onCellRefused](REFUSED);
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"title": "Inbox importer"');
+      expect(rendered).toContain('"auth": "[hidden by policy]"');
+      expect(rendered).toContain("Content hidden by policy");
+    });
+
+    it("shows the whole result again once the worker admits it", async () => {
+      const piece = statefulPiece({ pieceSchema: schema });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      piece.cell[$onCellRefused](REFUSED);
+      piece.subscribedAt("of:fid1:piece", ["auth"])[$onCellRefused](REFUSED);
+
+      piece.cell[$onCellUpdate]({ title: "Inbox importer", auth: "admitted" });
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"auth": "admitted"');
+      expect(rendered).not.toContain("[hidden by policy]");
+    });
+
+    it("lists the handlers the schema declares", async () => {
+      const piece = statefulPiece({ pieceSchema: schema });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("actions");
+
+      piece.cell[$onCellRefused](REFUSED);
+
+      expect(shows(menu)).toContain("piece-action-sync");
+    });
+
+    it("shows a refused argument field by field when its address is given", async () => {
+      const piece = statefulPiece({
+        argumentRefused: true,
+        argumentRef: {
+          id: "of:fid1:argument",
+          space: SPACE,
+          path: [],
+          schema: {
+            type: "object",
+            properties: { account: { type: "string" } },
+          },
+        } as unknown as CellRef,
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.subscribedAt("of:fid1:argument", [])[$onCellRefused](REFUSED);
+      piece.subscribedAt("of:fid1:argument", ["account"])[$onCellUpdate](
+        "owner account",
+      );
+
+      expect(shows(menu)).toContain('"account": "owner account"');
+    });
+
+    it("marks an argument refused before its address could be given", async () => {
+      const piece = statefulPiece({ argumentRefused: true });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      const rendered = shows(menu);
+      expect(rendered).toContain("[hidden by policy]");
+      expect(rendered).not.toContain("Could not read");
+    });
   });
 
   it("reports a data read that failed", async () => {

@@ -1,4 +1,5 @@
 import {
+  CFC_POLICY_PLACEHOLDER_TEXT,
   getPieceBoundary,
   subscribePieceBoundary,
 } from "@commonfabric/html/client";
@@ -16,7 +17,6 @@ import { type JSONSchema, parseFabricRef } from "@commonfabric/runner/shared";
 import {
   $conn,
   CellHandle,
-  CellReadRefusedError,
   isCellHandle,
   RequestType,
 } from "@commonfabric/runtime-client";
@@ -50,6 +50,7 @@ import {
   formatTimestamp,
   patternRefLabel,
 } from "./origin-view.ts";
+import { HIDDEN_BY_POLICY, PanelRead } from "./panel-read.ts";
 
 /** The marker on the rendered piece while its built-in menu is open. */
 export const PIECE_MENU_OPEN_ATTRIBUTE = "data-cf-piece-menu-open";
@@ -182,6 +183,7 @@ function toDisplay(
   depth: number,
   streamKeys?: ReadonlySet<string>,
 ): unknown {
+  if (value === HIDDEN_BY_POLICY) return "[hidden by policy]";
   if (isStreamHandle(value)) return "[stream]";
   if (isCellHandle(value)) {
     const ref = value.ref();
@@ -935,14 +937,20 @@ export class CFPieceMenu extends BaseElement {
   @state()
   private accessor readError: string | undefined = undefined;
 
+  /**
+   * The piece's argument as the panels show it, when it is not read live: a
+   * raw metadata value, or `HIDDEN_BY_POLICY` when the worker refused even
+   * the argument's address. A live read is in `#argumentRead`.
+   */
   @state()
   private accessor argumentValue: unknown = undefined;
 
   @state()
   private accessor argumentLoaded = false;
 
+  /** Bumped when a live read changes what it holds, to render again. */
   @state()
-  private accessor resultValue: unknown = undefined;
+  private accessor dataRevision = 0;
 
   @state()
   private accessor dataError: string | undefined = undefined;
@@ -1029,11 +1037,11 @@ export class CFPieceMenu extends BaseElement {
   /** The schema-bearing handle of the piece's argument cell, when resolved. */
   #argumentCell: CellHandle | undefined;
 
-  /** Cancels the live result subscription. */
-  #cancelResult: (() => void) | undefined;
+  /** The live read of the piece's result. */
+  #resultRead: PanelRead | undefined;
 
-  /** Cancels the live argument subscription. */
-  #cancelArgument: (() => void) | undefined;
+  /** The live read of the piece's argument, when its cell is addressable. */
+  #argumentRead: PanelRead | undefined;
 
   /** True while a dispatch is in flight, so a rapid double-click sends once. */
   #dispatching = false;
@@ -1428,16 +1436,15 @@ export class CFPieceMenu extends BaseElement {
     // any of its remaining steps run, or a late completion could subscribe
     // after this cleanup and leak.
     this.#dataGeneration++;
-    this.#cancelResult?.();
-    this.#cancelResult = undefined;
-    this.#cancelArgument?.();
-    this.#cancelArgument = undefined;
+    this.#resultRead?.cancel();
+    this.#resultRead = undefined;
+    this.#argumentRead?.cancel();
+    this.#argumentRead = undefined;
     this.#pieceCell = undefined;
     this.#argumentCell = undefined;
     this.#dataRequested = false;
     this.argumentValue = undefined;
     this.argumentLoaded = false;
-    this.resultValue = undefined;
     this.dataError = undefined;
     this.dispatchNote = undefined;
   }
@@ -1743,10 +1750,10 @@ export class CFPieceMenu extends BaseElement {
       if (!fresh()) return;
       const pieceCell = (piece?.cell() as CellHandle | undefined) ?? cell;
       this.#pieceCell = pieceCell;
-      this.#cancelResult = pieceCell.subscribe((value) => {
-        if (!fresh()) return;
-        this.resultValue = value;
-      });
+      const changed = () => {
+        if (fresh()) this.dataRevision++;
+      };
+      this.#resultRead = new PanelRead(pieceCell, changed);
       const response = await rt[$conn]().request<RequestType.CellGet>({
         type: RequestType.CellGet,
         cell: pieceCell.ref(),
@@ -1754,28 +1761,26 @@ export class CFPieceMenu extends BaseElement {
         includeRef: true,
       });
       if (!fresh()) return;
-      // A refused read is a failure to read the argument, which the panel
-      // reports as one rather than show as an argument that holds nothing.
-      if ("refused" in response) {
-        throw new CellReadRefusedError(response.refused);
-      }
       if (response.cell) {
         // The argument's own schema-bearing ref: its schema carries the
         // stream declarations for argument-side handlers, and the handle
-        // gives the panel a live view instead of a one-shot snapshot.
+        // gives the panel a live view instead of a one-shot snapshot. A
+        // refused read still names it, so the panel reads its fields one by
+        // one.
         const argumentCell = new CellHandle(
           rt,
           response.cell,
-          CellHandle.deserialize(
+          "refused" in response ? undefined : CellHandle.deserialize(
             new CellHandle(rt, response.cell),
             response.value,
           ),
         );
         this.#argumentCell = argumentCell;
-        this.#cancelArgument = argumentCell.subscribe((value) => {
-          if (!fresh()) return;
-          this.argumentValue = value;
-        });
+        this.#argumentRead = new PanelRead(argumentCell, changed);
+      } else if ("refused" in response) {
+        // Refused before the argument could be named: shown as hidden, not
+        // as an argument that holds nothing.
+        this.argumentValue = HIDDEN_BY_POLICY;
       } else {
         this.argumentValue = CellHandle.deserialize(pieceCell, response.value);
       }
@@ -1845,9 +1850,17 @@ export class CFPieceMenu extends BaseElement {
       argument: this.#argumentCell,
     };
     const scan = (value: unknown, source: "result" | "argument") => {
-      if (!isObjectNotArray(value)) return;
       const declared = this.#schemaProperties(parents[source]);
-      for (const [name, item] of Object.entries(value)) {
+      // The schema's stream declarations name handlers whether or not the
+      // value could be read: a refused value still has them.
+      const names = new Set([
+        ...(isObjectNotArray(value) ? Object.keys(value) : []),
+        ...Object.keys(declared).filter((name) =>
+          schemaDeclaresStream(declared[name])
+        ),
+      ]);
+      for (const name of names) {
+        const item = isObjectNotArray(value) ? value[name] : undefined;
         const declaredStream = schemaDeclaresStream(declared[name]);
         let handle: CellHandle | undefined;
         if (isCellHandle(item)) {
@@ -1886,8 +1899,8 @@ export class CFPieceMenu extends BaseElement {
         actions.push({ name, source, handle, eventSchema });
       }
     };
-    scan(this.resultValue, "result");
-    scan(this.argumentValue, "argument");
+    scan(this.#resultRead?.shown(), "result");
+    scan(this.#argumentRead?.shown() ?? this.argumentValue, "argument");
     return actions;
   }
 
@@ -2538,21 +2551,25 @@ export class CFPieceMenu extends BaseElement {
       <h3 class="section-title">Argument</h3>
       ${this.argumentLoaded
         ? html`
-          <pre class="source">${formatPieceValue(this.argumentValue)}</pre>
+          <pre class="source">${formatPieceValue(
+            this.#argumentRead?.shown() ?? this.argumentValue,
+          )}</pre>
+          ${this.#renderRefusedNote(this.#argumentRead)}
         `
         : html`
           <p>Reading argument…</p>
         `}
       <h3 class="section-title">Result</h3>
-      ${this.resultValue === undefined
+      ${this.#resultRead?.shown() === undefined
         ? html`
           <p>Waiting for a value…</p>
         `
         : html`
           <pre class="source">${formatPieceValue(
-            this.resultValue,
+            this.#resultRead.shown(),
             this.#declaredStreamKeys(),
           )}</pre>
+          ${this.#renderRefusedNote(this.#resultRead)}
         `}
       <p class="note">
         Values stay live while the menu is open.
@@ -2563,9 +2580,24 @@ export class CFPieceMenu extends BaseElement {
     `;
   }
 
+  /**
+   * Says, beneath a read the worker refused as a whole, that it is shown
+   * field by field.
+   */
+  #renderRefusedNote(read: PanelRead | undefined) {
+    if (!read?.refused) return nothing;
+    return html`
+      <p class="note">
+        ${CFC_POLICY_PLACEHOLDER_TEXT}: part of this value. Each field its
+        schema declares is shown on its own, and a field the policy hides is
+        marked.
+      </p>
+    `;
+  }
+
   #renderActions(): TemplateResult {
     if (this.dataError) return this.#renderDataError("handlers");
-    if (!this.argumentLoaded && this.resultValue === undefined) {
+    if (!this.argumentLoaded && !this.#resultRead?.loaded) {
       return html`
         <p>Reading handlers…</p>
       `;
