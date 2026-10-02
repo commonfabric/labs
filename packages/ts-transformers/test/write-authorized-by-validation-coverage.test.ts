@@ -594,3 +594,50 @@ Deno.test(
     assertEquals(await cfcDiagnostics(source), []);
   },
 );
+
+Deno.test(
+  "an author's alias named CfcStamp is walked like any other alias",
+  async () => {
+    const source = `/// <cts-enable />
+      import { toSchema, WriteAuthorizedBy } from "commonfabric";
+
+      const arbitrary = 123;
+      type CfcStamp<T, M> = T;
+
+      const schema = toSchema<
+        CfcStamp<WriteAuthorizedBy<{ title: string }, typeof arbitrary>, {}>
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+    assert(
+      diagnostics[0]!.message.includes(
+        "handler(), module(), requireEventIntegrity()",
+      ),
+    );
+  },
+);
+
+Deno.test(
+  "a policy inside a CFC carrier's payload is reported once",
+  async () => {
+    const source = `/// <cts-enable />
+      import { Confidential, toSchema, WriteAuthorizedBy } from "commonfabric";
+
+      const arbitrary = 123;
+
+      const schema = toSchema<
+        Confidential<
+          WriteAuthorizedBy<{ title: string }, typeof arbitrary>,
+          ["secret"]
+        >
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+  },
+);
