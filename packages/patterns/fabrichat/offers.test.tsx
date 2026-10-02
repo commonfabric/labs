@@ -373,11 +373,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       { label: "bob-done" },
       { await: "alice-done" },
     ],
-    // TODO(danfuzz): The chat's first run is abandoned to load the profile it
-    // reads and then run again, and the runner drops the offer it queued on
-    // that first run with a warning, though the run after it sends the offer
-    // again. Expect no warnings once the runner drops it quietly.
-    allowConsoleWarnings: true,
   };
 });
 
