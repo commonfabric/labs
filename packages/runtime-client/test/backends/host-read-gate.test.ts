@@ -307,6 +307,16 @@ describe("HostReadGate", () => {
       expect("refused" in note).toBe(true);
     });
 
+    it("refuses a visitor a read that stops at a link to a sealed entry, on the entry's own label", async () => {
+      await using docs = await shelf();
+      const answer = gateFor(docs.runtime, visitor).read(
+        docs.piece.key("entry").asSchema({ asCell: ["cell"] }),
+      );
+
+      expect(holds(answer, SEALED_ENTRY)).toBe(false);
+      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+    });
+
     it("returns a visitor the whole of a piece anyone may see", async () => {
       await using docs = await shelf();
       const answer = gateFor(docs.runtime, visitor).read(
