@@ -591,6 +591,22 @@ describe("CellController — a cell whose read the worker refuses", () => {
   // host was never shown.
   const refusal = { refusedBy: "display-ceiling" } as const;
 
+  /**
+   * What `act` asked the handle to write, as the handle's own refusal of it
+   * logs: the controller is to ask nothing, not to lean on that refusal.
+   */
+  const attemptedWrites = (act: () => void): unknown[][] => {
+    const logged: unknown[][] = [];
+    const real = console.error;
+    console.error = (...args: unknown[]) => logged.push(args);
+    try {
+      act();
+    } finally {
+      console.error = real;
+    }
+    return logged;
+  };
+
   it("reads as each controller's empty value, and names the refusal", () => {
     const host = createMockHost();
     const cases = [
@@ -616,9 +632,10 @@ describe("CellController — a cell whose read the worker refuses", () => {
     ctrl.bind(cell);
     pushRefusal(cell, refusal);
 
-    ctrl.removeItem("removed");
+    expect(attemptedWrites(() => ctrl.removeItem("removed"))).toEqual([]);
 
     expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toEqual([]);
   });
 
   it("writes nothing for `toggle()`, which would write `true` over an unseen value", () => {
@@ -627,9 +644,10 @@ describe("CellController — a cell whose read the worker refuses", () => {
     ctrl.bind(cell);
     pushRefusal(cell, refusal);
 
-    ctrl.toggle();
+    expect(attemptedWrites(() => ctrl.toggle())).toEqual([]);
 
     expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe(false);
   });
 
   it("writes nothing for a selection added to an empty list, as a multi-select makes", () => {
@@ -640,9 +658,14 @@ describe("CellController — a cell whose read the worker refuses", () => {
     ctrl.bind(cell);
     pushRefusal(cell, refusal);
 
-    ctrl.setValue([...(ctrl.getValue() ?? []), "chosen now"]);
+    expect(
+      attemptedWrites(() =>
+        ctrl.setValue([...(ctrl.getValue() ?? []), "chosen now"])
+      ),
+    ).toEqual([]);
 
     expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBeUndefined();
   });
 
   it("writes nothing for `addItem()` or `updateItem()`", () => {
@@ -651,8 +674,12 @@ describe("CellController — a cell whose read the worker refuses", () => {
     ctrl.bind(cell);
     pushRefusal(cell, refusal);
 
-    ctrl.addItem("added");
-    ctrl.updateItem("an item", "updated");
+    expect(
+      attemptedWrites(() => {
+        ctrl.addItem("added");
+        ctrl.updateItem("an item", "updated");
+      }),
+    ).toEqual([]);
 
     expect(writesSent(cell)).toEqual([]);
   });
