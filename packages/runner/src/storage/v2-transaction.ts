@@ -26,6 +26,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { readStatsActive, recordDocumentRead } from "../read-stats.ts";
 import {
+  emptyEntityDocument,
   patchOpIsStructural,
   patchOpPointerFields,
 } from "../../../memory/v2/patch.ts";
@@ -95,6 +96,7 @@ import {
 import {
   getBlindStructuralTarget,
   ignoreReadForCommit,
+  ignoreReadForScheduling,
   isDurableReadTx,
   isInternalVerifierRead,
   isMutableTransactionReadAllowed,
@@ -105,6 +107,7 @@ import {
   registerCommitRejectionListener,
   stableInternalVerifierRead,
   takeCoverageWaits,
+  writeDestinationRead,
 } from "./reactivity-log.ts";
 import {
   ReadOnlyAddressError,
@@ -153,6 +156,9 @@ type ReadDocumentEntry = {
   // the overwhelming majority of documents: one is created the first time a
   // write displaces a root some materialized read may still describe.
   displaced?: DisplacedRoot[];
+  // As on `WritableDocumentEntry`. Held here too because a whole-value write
+  // that changes nothing leaves its document read-only, and still poisons.
+  mergeableOpsPoisoned?: Set<string>;
 };
 
 type WritableDocumentEntry = {
@@ -185,14 +191,23 @@ type WritableDocumentEntry = {
   mergeableOps?: Map<string, MergeableOpIntent>;
   // Paths where a mergeable intent cannot faithfully carry the transaction's
   // local change — a second mergeable op of a different kind was recorded, a
-  // foreign write (a reshape such as sort/splice, or a whole-value set at or
-  // above the path) rewrote the array after an op was recorded, or the
-  // commit-time builder abandoned the intent because it no longer described the
-  // local value. Such a path abandons the mergeable fast path and commits the
-  // whole-array diff, which reflects the correct combined local value. Once
-  // poisoned a path stays poisoned for the rest of the transaction, so a later
-  // op does not resurrect a partial intent. Keyed like mergeableOps.
+  // foreign write (a reshape such as sort/splice, or a whole-value set) wrote
+  // the path, or the commit-time builder abandoned the intent because it no
+  // longer described the local value. A poisoned path abandons the mergeable
+  // fast path, at that path and everywhere beneath it, and commits the
+  // whole-value diff, which reflects the correct combined local value. It
+  // stays poisoned for the rest of the transaction, so an op recorded after
+  // the write is refused as one recorded ahead of it is dropped: a `set()`
+  // says what the value is, and an op landing on whatever the store holds
+  // would add to a value the transaction replaced. Keyed like mergeableOps.
   mergeableOpsPoisoned?: Set<string>;
+
+  /**
+   * Whether the commit has recorded its read of the document root, the one
+   * a whole-document `set` from an absent base goes out with (see
+   * `V2StorageTransaction.#recordDocumentRootRead()`).
+   */
+  documentRootRead?: boolean;
 };
 
 type DocumentEntry = ReadDocumentEntry | WritableDocumentEntry;
@@ -1307,9 +1322,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     const doc = this.#writableMergeableTarget(address);
     if (!doc) throw new Error(`${delta.op} target is not writable`);
     const pathKey = encodePointer(address.path);
-    // A poisoned path has already fallen back to the whole-array diff; a further
-    // op does not revive it.
-    if (doc.mergeableOpsPoisoned?.has(pathKey)) {
+    // A poisoned path has already fallen back to the whole-value diff, which
+    // carries everything beneath it; a further op at or beneath it does not
+    // revive the fast path.
+    const poisoned = doc.mergeableOpsPoisoned;
+    if (
+      poisoned !== undefined &&
+      prefixPointers(address.path).some((pointer) => poisoned.has(pointer))
+    ) {
       return;
     }
     const existing = doc.mergeableOps?.get(pathKey);
@@ -1331,43 +1351,45 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
-   * Abandons the mergeable fast path for `address`: a foreign write (a reshape
-   * that is not itself a mergeable op) has rewritten the array after an op was
-   * recorded, so the recorded tail no longer identifies the appended elements.
-   * Drops any covered intent and marks its path poisoned so the commit emits
-   * the whole-array diff (the correct local value) instead.
+   * Abandons the mergeable fast path for `address`, for the rest of the
+   * transaction: a foreign write (a reshape that is not itself a mergeable op)
+   * has written the value there whole. Drops any covered intent and marks the
+   * written path poisoned, so that the commit emits the whole-value diff (the
+   * correct local value) and an op recorded after the write is refused. The
+   * write says what the value is, where an op resolves against whatever the
+   * store holds: a `set([])` and then a `push()` sent as an append would add
+   * to a list another session filled, where the transaction meant one element.
    *
    * The reshape reaches every intent _at_ or _beneath_ the written path: a
    * write to an enclosing object (`doc.set({rows})`) rewrites the array inside
-   * it just as surely as a write to the array itself, and the intent's recorded
-   * tail then spans elements the reshape supplied rather than ones an op
-   * appended. Intents _above_ the write are untouched, which is what keeps an
-   * element edit (`cell.key(i).set(...)`, a write beneath the array) composing
-   * with a push, and leaves a write to a sibling field alone.
+   * it just as surely as a write to the array itself. Intents _above_ the
+   * write are untouched, which is what keeps an element edit
+   * (`cell.key(i).set(...)`, a write beneath the array) composing with a push,
+   * and leaves a write to a sibling field alone.
    *
-   * A path carrying no intent yet is left alone — but that is not a statement
-   * that a reshape before an op is harmless. It is caught later instead, by
-   * each builder's own check at commit that its intent still describes the
-   * local value (see `./mergeable-ops.ts`). The same goes for an element edit,
-   * which is beneath the array and so passes through here untouched: harmless
-   * to a tail op, fatal to a remove-by-value, and the builders are what tell
-   * them apart.
+   * A write that does not come through here — one made straight to the
+   * transaction — poisons nothing, and each builder's own check at commit
+   * that its intent still describes the local value is what catches it (see
+   * `./mergeable-ops.ts`). The same goes for an element edit, which is
+   * beneath the array and so passes through here untouched: harmless to a
+   * tail op, fatal to a remove-by-value, and the builders are what tell them
+   * apart.
    */
   poisonMergeableOp(address: IMemorySpaceAddress): void {
     // Only ever called right after a write on this transaction, so the tx is
-    // editable — no editable() re-check. The write also made the address's
-    // document writable, but a caller could resolve to a different (read-only)
-    // slot, so a non-writable target is a real no-op.
-    const doc = this.#writableMergeableTarget(address);
-    if (!doc?.mergeableOps?.size) {
+    // editable — no editable() re-check. The written path is poisoned whether
+    // or not the write changed anything: a write of the value already there
+    // leaves its document read-only, and says what the value is all the same.
+    const branch = this.#branch(address.space);
+    const { doc } = this.#document(branch, address);
+    (doc.mergeableOpsPoisoned ??= new Set()).add(encodePointer(address.path));
+    if (!isWritableDocument(doc) || !doc.mergeableOps?.size) {
       return;
     }
-    const covered = [...doc.mergeableOps.entries()]
-      .filter(([, intent]) => isPrefixPath(address.path, intent.path))
-      .map(([pathKey]) => pathKey);
-    for (const pathKey of covered) {
-      doc.mergeableOps.delete(pathKey);
-      (doc.mergeableOpsPoisoned ??= new Set()).add(pathKey);
+    for (const [pathKey, intent] of [...doc.mergeableOps.entries()]) {
+      if (isPrefixPath(address.path, intent.path)) {
+        doc.mergeableOps.delete(pathKey);
+      }
     }
   }
 
@@ -1504,32 +1526,51 @@ export class V2StorageTransaction implements IStorageTransaction {
       // A whole-document transaction (markWholeDocumentWrites — the
       // client speculation overlay's seal) takes the same emission,
       // for the reason on that declaration.
-      if (!this.#emitsWholeDocuments) {
+      //
+      // A write to the document root takes the same emission. No patch
+      // expresses one, so the set is what carries it, and a mergeable op
+      // sent in its place would leave the root write out of the commit.
+      const diffed = !this.#emitsWholeDocuments &&
+        !this.#writesDocumentRoot(doc);
+      if (diffed) {
         const mergeable = this.#buildMergeableOps(doc);
+        // A document with no base goes whole, as a `set`. Mergeable ops that
+        // are the transaction's only writes to it are the exception: they
+        // resolve against whatever the store holds, so a write from a session
+        // that has not loaded the document lands on durable state instead of
+        // replacing it. Any other write to the document was computed from
+        // its absence, the label envelope among them, and is sound only where
+        // the store holds no document either. Ops beside such a write are
+        // abandoned for the `set`, which the store refuses where it holds the
+        // document (see below), and the transaction runs again with the
+        // document loaded. The diff against the empty document is what finds
+        // those other writes, holding nothing when the ops' suppressions
+        // cover every write.
+        const hasBase = doc.initial.value !== undefined;
+        const base = doc.initial.value ??
+          (mergeable.ops.length > 0 ? emptyEntityDocument() : undefined);
         const patch = this.#buildPatchOperation(
           id,
           type,
           scope,
           doc,
+          base,
           mergeable.suppress,
         );
         if (mergeable.ops.length > 0) {
-          // Emit the mergeable ops even when there is no base to diff against
-          // (where buildPatchOperation returns null) so a stale-base write lands
-          // against durable state instead of clobbering it with a whole-value
-          // `set`.
-          const basePatches = patch?.op === "patch" ? patch.patches : [];
-          operations.push({
-            op: "patch",
-            id,
-            type,
-            scope,
-            patches: [...mergeable.ops, ...basePatches],
-            value: doc.current.value,
-          });
-          continue;
-        }
-        if (patch) {
+          if (hasBase || patch === null) {
+            operations.push({
+              op: "patch",
+              id,
+              type,
+              scope,
+              patches: [...mergeable.ops, ...(patch?.patches ?? [])],
+              value: doc.current.value,
+            });
+            continue;
+          }
+          this.#abandonMergeableOps(doc);
+        } else if (patch) {
           operations.push(patch);
           continue;
         }
@@ -1537,15 +1578,24 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#abandonMergeableOps(doc);
       }
 
-      operations.push(
-        doc.current.value === undefined ? { op: "delete", id, type, scope } : {
-          op: "set",
-          id,
-          type,
-          scope,
-          value: doc.current.value,
-        },
-      );
+      if (doc.current.value === undefined) {
+        operations.push({ op: "delete", id, type, scope });
+        continue;
+      }
+      // A `set` that the diff above fell through to, for a document with no
+      // base, replaces the whole of a document the transaction saw as
+      // absent. It goes out with a read of the document root, so that the
+      // store refuses it where it holds the document.
+      if (diffed && doc.initial.value === undefined) {
+        this.#recordDocumentRootRead(space, id, scope, doc);
+      }
+      operations.push({
+        op: "set",
+        id,
+        type,
+        scope,
+        value: doc.current.value,
+      });
     }
 
     if (
@@ -3518,21 +3568,26 @@ export class V2StorageTransaction implements IStorageTransaction {
     };
   }
 
+  /**
+   * Builds the patch operation carrying a document's writes as a diff of its
+   * working value against `base`, leaving out the candidates `suppress` names.
+   * Returns `null` when there is no patch to send: `base` or the working value
+   * is absent, or nothing differs. No patch expresses a write to the document
+   * root, so `doc` must hold none (see `#writesDocumentRoot()`).
+   */
   #buildPatchOperation(
     id: URI,
     type: MediaType,
     scope: CellScope,
     doc: WritableDocumentEntry,
-    suppress: readonly OpSuppression[] = [],
-  ): NativeStorageCommitOperation | null {
-    if (doc.initial.value === undefined || doc.current.value === undefined) {
+    base: FabricValue | undefined,
+    suppress: readonly OpSuppression[],
+  ): Extract<NativeStorageCommitOperation, { op: "patch" }> | null {
+    if (base === undefined || doc.current.value === undefined) {
       return null;
     }
 
     const details = [...doc.patchDetails.values()];
-    if (details.some((detail) => detail.address.path.length === 0)) {
-      return null;
-    }
 
     const patchDetails = new Map<string, {
       path: readonly string[];
@@ -3549,7 +3604,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         { allowArrayLength: true },
       );
       const previousValue = readValueAtPath(
-        doc.initial.value,
+        base,
         detail.address.path,
         { allowArrayLength: true },
       );
@@ -3562,7 +3617,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         { allowArrayLength: true },
       );
       const previousPresent = hasValueAtPath(
-        doc.initial.value,
+        base,
         detail.address.path,
         { allowArrayLength: true },
       );
@@ -3578,7 +3633,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
 
       const arrayPatchPath = findDeepestArrayPath(
-        doc.initial.value,
+        base,
         doc.current.value,
         detail.address.path,
       );
@@ -3612,7 +3667,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const nonCoverCandidates: PatchDraftCandidate[] = [];
     for (const arrayPath of arrayGroups.values()) {
-      const beforeValue = readValueAtPath(doc.initial.value, arrayPath, {
+      const beforeValue = readValueAtPath(base, arrayPath, {
         allowArrayLength: true,
       });
       const afterValue = readValueAtPath(doc.current.value, arrayPath, {
@@ -3623,7 +3678,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           arrayPath,
           beforeValue,
           afterValue,
-          hasValueAtPath(doc.initial.value, arrayPath, {
+          hasValueAtPath(base, arrayPath, {
             allowArrayLength: true,
           }),
           hasValueAtPath(doc.current.value, arrayPath, {
@@ -3651,6 +3706,54 @@ export class V2StorageTransaction implements IStorageTransaction {
     assertNoIndexedArrayStructuralOps(patches);
 
     return { op: "patch", id, type, scope, patches, value: doc.current.value };
+  }
+
+  /**
+   * Records a read of the whole of `doc`, for a commit about to replace it
+   * with a `set` computed from its absence. The reads the transaction made on
+   * the way are per path, so they refuse the commit only where another
+   * session wrote one of those paths: the `set` would still replace a field
+   * that session created anywhere else in the document. A read at the
+   * document root conflicts with every revision since the transaction's view
+   * of it, which is the claim the `set` rests on.
+   *
+   * The read is the write machinery's, like the diff's read of each path it
+   * writes, and it is taken at commit: it joins no flow label and schedules
+   * nothing.
+   */
+  #recordDocumentRootRead(
+    space: MemorySpace,
+    id: URI,
+    scope: CellScope,
+    doc: WritableDocumentEntry,
+  ): void {
+    // Building the commit more than once records the read once.
+    if (doc.documentRootRead) {
+      return;
+    }
+    doc.documentRootRead = true;
+    this.#recordReadActivity({
+      space,
+      scope,
+      id,
+      path: toDocumentPath([]),
+      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+      journalIndex: this.#activityClock++,
+    });
+    doc.validated = true;
+  }
+
+  /**
+   * Returns whether the transaction wrote `doc` at its root, replacing the
+   * whole document.
+   */
+  #writesDocumentRoot(doc: WritableDocumentEntry): boolean {
+    for (const detail of doc.patchDetails.values()) {
+      if (detail.address.path.length === 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
