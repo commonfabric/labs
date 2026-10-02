@@ -404,8 +404,9 @@ the policy placeholder in the same places. The exceptions:
 
 - A piece whose own document the viewer may not see shows nothing at all, where
   opening it shows the placeholder.
-- A `cf-cfc-render-boundary` that declassifies does not reach into the piece:
-  what it would release shows as the placeholder.
+- A `cf-cfc-render-boundary` that only declassifies does not reach into the
+  piece: what it would release shows as the placeholder. A boundary that also
+  lowers the ceiling falls under the next item.
 - Inside a `cf-cfc-render-boundary` that lowers the ceiling, or a
   `cf-cfc-authorship` that verifies text integrity, `cf-render` shows a piece
   only when the boundary's ceiling admits everything the piece reaches, and
