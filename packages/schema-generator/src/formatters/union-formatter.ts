@@ -44,12 +44,12 @@ function widenedLiteralType(
 ): "string" | "number" | "boolean" | undefined {
   const values: readonly unknown[] | undefined = schema.enum ??
     ("const" in schema ? [schema.const] : undefined);
-  const first = values?.[0];
-  const type = typeof first;
-  if (type !== "string" && type !== "number" && type !== "boolean") {
-    return undefined;
-  }
-  return values!.every((value) => typeof value === type) ? type : undefined;
+  const types = new Set(values?.map((value) => typeof value));
+  if (types.size !== 1) return undefined;
+  const [type] = types;
+  return type === "string" || type === "number" || type === "boolean"
+    ? type
+    : undefined;
 }
 
 type DefaultUnionKind = "Default" | "DeepDefault";
