@@ -1945,6 +1945,11 @@ type PieceVariantRegistration = {
 };
 
 export class Runner {
+  /** Scoped defaults in a caller-owned setup share its commit or abort. */
+  readonly #callerOwnedSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
   #runtime: Runtime;
   readonly #cancels = new Map<
     `${MemorySpace}/${ScopeKey}/${URI}`,
@@ -2146,11 +2151,14 @@ export class Runner {
    * only while its pattern identity matches the run, a transient rejection
    * included. Eviction or replacement by another pattern's landing can cause
    * another probe and hold. Recording the landing lets the deferred run's
-   * re-check pass the gate.
+   * re-check pass the gate. A caller-owned setup only names dependencies;
+   * its defaults remain in the caller's commit. That landing cannot stand
+   * in for the default preparation of a later independently owned start.
    */
   readonly #namedFamilies = new BoundedKeyMap<
     string,
-    { pending: Promise<void> } | { landed: string }
+    | { pending: Promise<void>; initializesDefaults: boolean }
+    | { landed: string; defaultsPrepared: boolean; seedInRun: boolean }
   >(RESULT_SHORTCUT_LIMIT);
 
   /**
@@ -2682,6 +2690,7 @@ export class Runner {
     options: SetupValidationOptions = {},
   ): Promise<Cell<R>> {
     if (providedTx) {
+      this.#callerOwnedSetupTransactions.add(providedTx);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -2699,6 +2708,7 @@ export class Runner {
       // `#setupInternal()` so callers don't silently continue after a broken
       // setup.
       return this.#runtime.editWithRetry((tx) => {
+        this.#callerOwnedSetupTransactions.add(tx);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -3235,22 +3245,15 @@ export class Runner {
         link: derivedSigilLink,
       });
       setResultCell(derivedCell, resultCell.asSchema(pattern.resultSchema));
-      // Seed the build-time default into an absent instance of the cell. The
-      // manifest entry and this default are written together in one
-      // transaction, so a manifest entry vouches for a durable value; on a
-      // cold-cache resume that value may simply be unsynced. Skipping the probe
-      // where an entry vouches keeps resume read-mostly: a probe read of the
-      // not-yet-loaded value would otherwise enter the commit's conflict set
-      // and lose to the durable value when it streams in, reverting the whole
-      // instantiation commit. A cell scoped narrower than the result cell has
-      // an instance per user or per session, and the entry vouches only for
-      // the one seeded when the pattern was first set up, so such a cell's own
-      // instance is probed on every setup; a synced start pulls that instance
-      // first (`#syncCellsForRunningPattern()`).
-      const vouched = manifestMatch !== -1 &&
-        scopeRank(derivedScope) <=
-          scopeRank(resultCell.getAsNormalizedFullLink().scope);
-      if (!vouched) {
+      // The manifest and the initial default commit together. Later actor
+      // instances are initialized by the start's preparation in transactions
+      // of their own, before setup consumes the piece's other values.
+      if (
+        manifestMatch === -1 ||
+        (this.#callerOwnedSetupTransactions.has(tx) &&
+          scopeRank(derivedScope) >
+            scopeRank(resultCell.getAsNormalizedFullLink().scope))
+      ) {
         const schemaDefault = isObjectOrArray(descriptor.schema)
           ? descriptor.schema.default as JSONValue | undefined
           : undefined;
@@ -5068,7 +5071,16 @@ export class Runner {
             swapToPattern(live, newRef);
             return;
           }
-          const named = this.#syncCellsForRunningPattern(resultCell, live)
+          const named = this.#prepareCellsForRunningPattern(
+            resultCell,
+            live,
+            undefined,
+            {
+              isCurrent: () =>
+                active && startLifecycleEpoch === this.#lifecycleEpoch &&
+                currentPatternKey === newKey,
+            },
+          )
             .then(() => {
               // A pointer that moved again while the sync was in flight
               // has its own swap on the way; this one is stale.
@@ -5244,7 +5256,16 @@ export class Runner {
             });
             // Loaded from the store, so what it reads may be absent here
             // too; named before the swap as on the live path.
-            return this.#syncCellsForRunningPattern(resultCell, loaded).then(
+            return this.#prepareCellsForRunningPattern(
+              resultCell,
+              loaded,
+              undefined,
+              {
+                isCurrent: () =>
+                  active && startLifecycleEpoch === this.#lifecycleEpoch &&
+                  currentPatternKey === newKey,
+              },
+            ).then(
               () => {
                 if (
                   !active || startLifecycleEpoch !== this.#lifecycleEpoch ||
@@ -5905,7 +5926,14 @@ export class Runner {
         patternIdentityKey(current) === expectedPatternKey;
     };
     return (async () => {
-      await this.#syncCellsForRunningPattern(rootCell, resolvedPattern);
+      await this.#prepareCellsForRunningPattern(
+        rootCell,
+        resolvedPattern,
+        undefined,
+        {
+          isCurrent: () => this.#isStartAttemptCurrent(attempt),
+        },
+      );
       if (!this.#isStartAttemptCurrent(attempt)) return false;
       // The result doc can hot-swap while the dependency pre-sync is awaiting
       // I/O. Never carry the old resolved Pattern into the new identity; restart
@@ -6272,7 +6300,18 @@ export class Runner {
     if (named !== undefined && "pending" in named) {
       return { pattern: resolved.pattern, entryKey, identity };
     }
-    if (named?.landed === entryKey) return undefined;
+    if (named?.landed === entryKey) {
+      // A failed dependency load can still run over what is local. Initialize
+      // in that run rather than claiming preparation succeeded or retrying
+      // the same failed load without a bound.
+      if (named.seedInRun) this.#callerOwnedSetupTransactions.add(tx);
+      if (
+        named.defaultsPrepared || this.#callerOwnedSetupTransactions.has(tx)
+      ) {
+        return undefined;
+      }
+      return { pattern: resolved.pattern, entryKey, identity };
+    }
     // A result this runner prepared under this pattern has its family here
     // already, however much of it the store holds; a missing entry costs a
     // probe, never a wrong verdict.
@@ -6510,6 +6549,8 @@ export class Runner {
       identity?: ScopeKeyIdentity;
     },
     argument: unknown,
+    isCurrent: () => boolean,
+    initializeDefaults = true,
   ): Promise<void> {
     const sourceIdentity = toName.identity ??
       cellTx(resultCell)?.tx.scopeKeyIdentity;
@@ -6520,26 +6561,61 @@ export class Runner {
     const resultLink = resultCell.getAsNormalizedFullLink();
     const inFlight = this.#namedFamilies.get(key);
     if (inFlight !== undefined && "pending" in inFlight) {
+      if (initializeDefaults && !inFlight.initializesDefaults) {
+        return inFlight.pending.then(() => {
+          if (!isCurrent()) return;
+          return this.#nameFamilyBeforeRun(
+            resultCell,
+            toName,
+            argument,
+            isCurrent,
+          );
+        });
+      }
       return inFlight.pending;
     }
-    const pending = this.#syncCellsForRunningPattern(
-      resultCell,
-      toName.pattern,
-      argument,
-      identity,
-    ).then(
-      () => {},
-      (error: unknown) => {
-        logger.warn(
-          "runner-start",
-          "naming a piece before its run rejected",
-          [resultLink.id, error],
-        );
-      },
-    ).then(() => {
-      this.#namedFamilies.set(key, { landed: toName.entryKey });
+    let syncFailed = false;
+    const onSyncError = (error: unknown) => {
+      syncFailed = true;
+      logger.warn("runner-start", "naming a piece before its run rejected", [
+        resultLink.id,
+        error,
+      ]);
+    };
+    const preparation = initializeDefaults
+      ? this.#prepareCellsForRunningPattern(
+        resultCell,
+        toName.pattern,
+        argument,
+        {
+          identity,
+          isCurrent,
+          onSyncError,
+        },
+      )
+      : this.#syncCellsForRunningPattern(
+        resultCell,
+        toName.pattern,
+        argument,
+        identity,
+      )
+        .catch(onSyncError);
+    const pending = preparation.then(() => {
+      if (isCurrent()) {
+        this.#namedFamilies.set(key, {
+          landed: toName.entryKey,
+          defaultsPrepared: initializeDefaults && !syncFailed,
+          seedInRun: initializeDefaults && syncFailed,
+        });
+      } else this.#namedFamilies.delete(key);
+    }, (error: unknown) => {
+      this.#namedFamilies.delete(key);
+      throw error;
     });
-    this.#namedFamilies.set(key, { pending });
+    this.#namedFamilies.set(key, {
+      pending,
+      initializesDefaults: initializeDefaults,
+    });
     return pending;
   }
 
@@ -6575,6 +6651,8 @@ export class Runner {
     const startLifecycleEpoch = this.#lifecycleEpoch;
     const ownership = this.#createDeferredStartOwnership(resultCell);
     const speculationContext = speculationRunContextOf(tx);
+    const speculative = speculationContext?.kind === "derivation" ||
+      speculationContext?.kind === "event-handler";
     const durableReads = isDurableReadTx(tx);
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
@@ -6590,9 +6668,29 @@ export class Runner {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
       for (;;) {
-        await this.#nameFamilyBeforeRun(resultCell, toName, argument);
+        try {
+          await this.#nameFamilyBeforeRun(
+            resultCell,
+            toName,
+            argument,
+            () =>
+              !ownership.isCancelled() &&
+              startLifecycleEpoch === this.#lifecycleEpoch,
+            !speculative,
+          );
+        } catch (error) {
+          if (!ownership.isCancelled()) {
+            ownership.cancel();
+            this.#reportPieceStartCommitFailure(actionId, error);
+          }
+          return;
+        }
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
+        // Speculative starts keep defaults in their overlay transaction. A
+        // bookkeeping seed here would escape the parent's destination, and a
+        // later authored start still needs its own durable preparation.
+        if (speculative) this.#callerOwnedSetupTransactions.add(startTx);
         if (attributed) {
           startTx.markCfcAttributedInitialization(
             runtimeWritePolicyAuthorization,
@@ -7237,6 +7335,7 @@ export class Runner {
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> | Promise<never> {
+    this.#callerOwnedSetupTransactions.add(tx);
     const toName = this.#patternToNameBeforeRun(
       pattern,
       argument,
@@ -7244,7 +7343,13 @@ export class Runner {
       resultCell,
     );
     if (toName !== undefined) {
-      return this.#nameFamilyBeforeRun(resultCell, toName, argument).then(
+      return this.#nameFamilyBeforeRun(
+        resultCell,
+        toName,
+        argument,
+        () => true,
+        false,
+      ).then(
         () => {
           throw new RetryImmediately(
             "Loading the compiled child's execution family",
@@ -7592,6 +7697,7 @@ export class Runner {
       }
     };
     if (givenTx) {
+      this.#callerOwnedSetupTransactions.add(givenTx);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -7736,7 +7842,11 @@ export class Runner {
     try {
       // If a new pattern was specified, make sure to sync any new cells
       if (pattern || !synced) {
-        await this.#syncCellsForRunningPattern(resultCell, presyncPattern);
+        if (givenTx) {
+          await this.#syncCellsForRunningPattern(resultCell, presyncPattern);
+        } else {
+          await this.#prepareCellsForRunningPattern(resultCell, presyncPattern);
+        }
       }
 
       if (setupRes?.needsStart && options?.start !== false) {
@@ -8116,6 +8226,139 @@ export class Runner {
   }
 
   /**
+   * Loads a run's dependencies and fills absent actor instances of defaults
+   * that an accepted setup already declared. Each seed has a transaction of
+   * its own: binding the piece's other values must not label a constant
+   * default with their confidentiality, nor can one private seed label another.
+   */
+  async #prepareCellsForRunningPattern(
+    resultCell: Cell<any>,
+    pattern: Pattern,
+    inputs?: any,
+    options: {
+      identity?: ScopeKeyIdentity;
+      isCurrent?: () => boolean;
+      onSyncError?: (error: unknown) => void;
+    } = {},
+  ): Promise<boolean> {
+    const sourceIdentity = options.identity ??
+      cellTx(resultCell)?.tx.scopeKeyIdentity;
+    const identity = sourceIdentity === undefined
+      ? undefined
+      : { ...sourceIdentity };
+    const epoch = this.#lifecycleEpoch;
+    const isCurrent = () =>
+      epoch === this.#lifecycleEpoch &&
+      !this.#runtime.writeTeardownSignal.aborted &&
+      (options.isCurrent?.() ?? true);
+    const instances: ResumePatternInstance[] = [];
+    let synced: boolean;
+    try {
+      synced = await this.#syncCellsForRunningPattern(
+        resultCell,
+        pattern,
+        inputs,
+        identity,
+        instances,
+      );
+    } catch (error) {
+      if (options.onSyncError === undefined) throw error;
+      options.onSyncError(error);
+      synced = false;
+    }
+    for (const instance of instances) {
+      for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
+        const resultLink = instance.resultCell.getAsNormalizedFullLink();
+        const derivedLink = getDerivedInternalCellLink(
+          instance.resultCell,
+          descriptor,
+        );
+        if (scopeRank(derivedLink.scope) <= scopeRank(resultLink.scope)) {
+          continue;
+        }
+        const schemaDefault = isObjectOrArray(descriptor.schema)
+          ? descriptor.schema.default
+          : undefined;
+        if (schemaDefault === undefined) continue;
+        if (!isCurrent()) return synced;
+        const outcome = await this.#runtime.editWithRetry((tx) => {
+          if (!isCurrent()) return;
+          if (identity !== undefined) {
+            tx.tx.scopeKeyIdentity = identity;
+            if (identity.principal !== undefined) {
+              setCfcTrustSnapshot(
+                tx,
+                this.#runtime.trustSnapshotForPrincipal(identity.principal),
+              );
+            }
+          }
+          this.#runtime.stampServerRun(tx, {
+            actionId: `scoped-default/${derivedLink.id}`,
+            kind: "bookkeeping",
+            ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+          });
+          markDurableReadTx(tx);
+          const owner = this.#runtime.getCellFromLink(
+            resultLink,
+            undefined,
+            tx,
+          );
+          const current = getPatternIdentityRef(owner) ??
+            this.#sessionPatternPointer(owner);
+          const expected = this.#runtime.patternManager.getArtifactEntryRef(
+            instance.pattern,
+          );
+          // A fresh runtime has no pointer for a keyless piece. Its exact
+          // accepted manifest still vouches for this descriptor's default;
+          // a keyed piece needs its durable pointer as well.
+          if (
+            (current === undefined && expected !== undefined &&
+              !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
+            (current !== undefined && (expected === undefined ||
+              patternIdentityKey(current) !== patternIdentityKey(expected)))
+          ) return;
+          const manifest = convertibleJsFromFabricValue(
+            owner.getMetaRaw("internal", {
+              meta: ignoreReadForScheduling,
+            }),
+          );
+          const derived = getDerivedInternalCell(owner, descriptor, tx);
+          const expectedLink = derived.getAsWriteRedirectLink({
+            base: owner,
+            includeSchema: true,
+          });
+          if (
+            !Array.isArray(manifest) ||
+            !manifest.some((entry) =>
+              isObjectOrArray(entry) && "link" in entry &&
+              valueEqual(fabricFromConvertibleJsValue(entry.link), expectedLink)
+            )
+          ) return;
+          if (
+            derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
+              undefined
+          ) return;
+          setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
+          const value = fabricFromConvertibleJsValue(schemaDefault);
+          derived.setRawUntyped(value);
+          tx.recordCfcWritePolicyInput({
+            kind: "initialization",
+            mode: "seed",
+            target: { ...derivedLink, path: [] },
+            value,
+          }, runtimeWritePolicyAuthorization);
+        });
+        if (outcome.error) {
+          throw new Error(
+            `Could not initialize scoped default ${derivedLink.id}: ${outcome.error.message}`,
+          );
+        }
+      }
+    }
+    return synced;
+  }
+
+  /**
    * Pre-syncs what a run of `pattern` on `resultCell` reads before it runs:
    * the result document, what each node's plan names under its read schema,
    * and the cells the pattern owns; on a fresh run the plans bind against an
@@ -8127,6 +8370,7 @@ export class Runner {
     pattern: Pattern,
     inputs?: any,
     identity = cellTx(resultCell)?.tx.scopeKeyIdentity,
+    preparedInstances?: ResumePatternInstance[],
   ): Promise<boolean> {
     const capturedIdentity = identity === undefined
       ? undefined
@@ -8139,6 +8383,7 @@ export class Runner {
           pattern,
           inputs,
           capturedIdentity,
+          preparedInstances,
         );
       } finally {
         // Resume-boot decomposition: this is the dependency pre-sync a fresh
@@ -8161,6 +8406,7 @@ export class Runner {
     pattern: Pattern,
     inputs?: any,
     identity?: ScopeKeyIdentity,
+    preparedInstances?: ResumePatternInstance[],
   ): Promise<boolean> {
     const resultSyncStart = performance.now();
     await this.#syncFamilyCell(resultCell, identity);
@@ -8345,6 +8591,10 @@ export class Runner {
       logger.time(argumentLinksStart, "start", "resumeArgumentLinksSync");
     }
 
+    if (preparedInstances !== undefined) {
+      for (const instance of instances) preparedInstances.push(instance);
+      for (const instance of listInstances) preparedInstances.push(instance);
+    }
     return true;
   }
 
