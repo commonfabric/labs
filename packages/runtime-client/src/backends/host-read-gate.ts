@@ -25,9 +25,11 @@ import {
   type DisplayFitSources,
   displayLabelView,
   type FitWatch,
+  normalizeRenderConfidentialityCeiling,
   readRefusal,
   type RenderLabelSummary,
   type RenderPolicy,
+  rootRenderPolicyFor,
 } from "@commonfabric/html/worker";
 import type { CellScope } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -76,7 +78,10 @@ import {
   type PieceRef,
   type SlugResponse,
   type TelemetryNotification,
+  TransportNotificationType,
   type TriggerTraceResponse,
+  type WorkerConsoleLevel,
+  type WorkerConsoleNotification,
 } from "@/protocol/mod.ts";
 import { createCellRef } from "./utils.ts";
 
@@ -167,6 +172,20 @@ export class HostReadGate {
   constructor(policy: RenderPolicy | undefined, sources: DisplayFitSources) {
     this.#policy = policy;
     this.#sources = sources;
+  }
+
+  /**
+   * A gate decided by the configured ceiling alone, `configured` as a host
+   * sends it, with none of the resolver and providers that admit a space's
+   * members: it refuses what a worker's full gate might admit, and admits
+   * nothing that gate would refuse. For what is decided before, or apart
+   * from, the runtime that holds those.
+   */
+  static forConfiguredCeiling(configured: unknown): HostReadGate {
+    return new HostReadGate(
+      rootRenderPolicyFor(normalizeRenderConfidentialityCeiling(configured)),
+      {},
+    );
   }
 
   /**
@@ -586,6 +605,26 @@ export class HostReadGate {
       type: NotificationType.ConsoleMessage as const,
       ...message,
       args: withheld ? [WITHHELD] : args,
+    });
+  }
+
+  /**
+   * One line of the worker's own console, as a host may see it, or
+   * `undefined` where none is forwarded. The worker's console holds whatever
+   * its code logged, the runtime's and every pattern's alike, and no read
+   * measured what that was made from, so under a policy nothing of it is
+   * forwarded. A pattern's own console calls reach the host as
+   * {@link console} decides them.
+   */
+  workerConsole(
+    level: WorkerConsoleLevel,
+    text: string,
+  ): WorkerConsoleNotification | undefined {
+    if (this.#policy !== undefined) return undefined;
+    return decided({
+      type: TransportNotificationType.WorkerConsole as const,
+      level,
+      text,
     });
   }
 

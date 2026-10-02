@@ -3999,15 +3999,25 @@ export const WORKER_CONSOLE_LEVELS = ["log", "warn", "error"] as const;
 export type WorkerConsoleLevel = (typeof WORKER_CONSOLE_LEVELS)[number];
 
 /**
+ * What the worker's console bridge posts for one line of its console: the
+ * notification the gate built, or `undefined` where it forwards none.
+ */
+export type WorkerConsoleForward = (
+  level: WorkerConsoleLevel,
+  text: string,
+) => WorkerConsoleNotification | undefined;
+
+/**
  * One line of the worker's own `console` output, forwarded so that it reaches
- * the page console too. Opt-in, through `SetForwardWorkerConsole`.
+ * the page console too. Opt-in, through `SetForwardWorkerConsole`, and built
+ * only by the host-read gate, which forwards none under a display ceiling.
  *
  * The subject is the worker itself, where `ConsoleNotification`'s is a pattern
  * running inside it. That is also why this one carries text: the worker's own
  * logging is rendered where it is written, and a pattern's arguments cross as
  * values.
  */
-export type WorkerConsoleNotification = {
+export type WorkerConsoleNotification = HostReadDecided & {
   type: TransportNotificationType.WorkerConsole;
 
   /**

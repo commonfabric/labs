@@ -15,7 +15,7 @@
  * test builds from a `MessageChannel` are the same thing here.
  */
 
-import { transportFailureReport } from "./host-read-gate.ts";
+import { HostReadGate, transportFailureReport } from "./host-read-gate.ts";
 import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -31,6 +31,7 @@ import {
   isIPCClientMessage,
   isIPCClientNotification,
   RequestType,
+  type WorkerConsoleForward,
 } from "@/protocol/mod.ts";
 import { RuntimeProcessor } from "@/backends/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
@@ -69,11 +70,12 @@ const ipcTimingLogger = getLogger("runner.ipc", { enabled: false });
 
 export interface RuntimeClientsOptions {
   /**
-   * Turns the worker's console forwarding on and off. It patches the worker's
-   * own `console`, which is the worker entry's to own, so it arrives from
-   * there rather than being done here.
+   * Turns the worker's console forwarding on, with what to post for each
+   * line, or off, with `undefined`. It patches the worker's own `console`,
+   * which is the worker entry's to own, so it arrives from there rather than
+   * being done here.
    */
-  setConsoleBridge: (enabled: boolean) => void;
+  setConsoleBridge: (forward: WorkerConsoleForward | undefined) => void;
 
   /**
    * The client that owns the worker. Defaults to the one speaking over the
@@ -107,7 +109,16 @@ export class RuntimeClients {
   #nextClientId: ClientId = OWNER_CLIENT_ID + 1;
 
   readonly #owner: WorkerClient;
-  readonly #setConsoleBridge: (enabled: boolean) => void;
+  readonly #setConsoleBridge: (
+    forward: WorkerConsoleForward | undefined,
+  ) => void;
+
+  /**
+   * What decides each line the console bridge forwards: the ceiling the
+   * runtime was initialized with, which stays the same for its life, or, before
+   * initialization, no ceiling, since no runtime has read anything yet.
+   */
+  #consoleGate = new HostReadGate(undefined, {});
   readonly #initializeRuntime: (
     data: InitializationData,
     clients: () => Iterable<WorkerClient>,
@@ -118,6 +129,18 @@ export class RuntimeClients {
     this.#setConsoleBridge = options.setConsoleBridge;
     this.#initializeRuntime = options.initializeRuntime ??
       ((data, clients) => RuntimeProcessor.initialize(data, clients));
+  }
+
+  /**
+   * Turns console forwarding on or off, each line posted as the console gate
+   * decides it.
+   */
+  #forwardConsole(enabled: boolean): void {
+    this.#setConsoleBridge(
+      enabled
+        ? (level, text) => this.#consoleGate.workerConsole(level, text)
+        : undefined,
+    );
   }
 
   /** The client that owns the worker and initializes its runtime. */
@@ -275,7 +298,10 @@ export class RuntimeClients {
         if (this.#initialization) {
           throw new Error("Initialization of WorkerRuntime already attempted.");
         }
-        this.#setConsoleBridge(request.data.forwardWorkerConsole === true);
+        this.#consoleGate = HostReadGate.forConfiguredCeiling(
+          request.data.renderConfidentialityCeiling,
+        );
+        this.#forwardConsole(request.data.forwardWorkerConsole === true);
         this.#initialization = this.#initializeRuntime(request.data, () => [
           this.#owner,
           ...[...this.#attachedClients.values()]
@@ -359,7 +385,7 @@ export class RuntimeClients {
             "Only the client that owns the worker may forward its console.",
           );
         }
-        this.#setConsoleBridge(request.enabled);
+        this.#forwardConsole(request.enabled);
         this.#reply({ msgId }, request.type, client);
         return;
       }

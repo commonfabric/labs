@@ -4,9 +4,10 @@
  * cell's contents to the host either has its answers built by the host-read
  * gate, or says here why it does not.
  *
- * The tables are typed as records over every `RequestType` and every
- * `NotificationType`, so a request or a notification added later fails to
- * type-check until it is given a disposition. A disposition of `decided` is
+ * The tables are typed as records over every `RequestType`,
+ * `NotificationType` and `TransportNotificationType`, so a request or a
+ * notification added later fails to type-check until it is given a
+ * disposition. A disposition of `decided` is
  * held to the answer types as well: the check below the tables fails to
  * type-check unless exactly the requests and notifications marked `decided`
  * have answers that carry the gate's mark, `HostReadDecided`, which only the
@@ -17,8 +18,10 @@ import {
   type CommandResponse,
   type HostReadDecided,
   type IPCRemoteNotification,
+  type IPCTransportNotification,
   NotificationType,
   RequestType,
+  TransportNotificationType,
 } from "./types.ts";
 
 /**
@@ -231,6 +234,15 @@ export const NOTIFICATION_DISPOSITIONS = {
   },
 } as const satisfies Record<NotificationType, HostReadDisposition>;
 
+/**
+ * Every notification the transport carries beside the runtime's. They are
+ * the channel's own traffic, but they reach the host all the same.
+ */
+export const TRANSPORT_NOTIFICATION_DISPOSITIONS = {
+  [TransportNotificationType.WorkerReady]: lifecycle,
+  [TransportNotificationType.WorkerConsole]: DECIDED,
+} as const satisfies Record<TransportNotificationType, HostReadDisposition>;
+
 /** The requests and notifications whose disposition is `decided`. */
 type DecidedRequest = {
   [K in RequestType]: (typeof REQUEST_DISPOSITIONS)[K]["kind"] extends "decided"
@@ -242,6 +254,13 @@ type DecidedNotification = {
     "decided" ? K : never;
 }[NotificationType];
 
+type DecidedTransportNotification = {
+  [K in TransportNotificationType]:
+    (typeof TRANSPORT_NOTIFICATION_DISPOSITIONS)[K]["kind"] extends "decided"
+      ? K
+      : never;
+}[TransportNotificationType];
+
 /** The requests and notifications whose answers carry the gate's mark. */
 type MarkedRequest = {
   [K in RequestType]: CommandResponse<K> extends HostReadDecided ? K : never;
@@ -250,6 +269,13 @@ type MarkedNotification = {
   [K in NotificationType]: Extract<IPCRemoteNotification, { type: K }> extends
     HostReadDecided ? K : never;
 }[NotificationType];
+
+type MarkedTransportNotification = {
+  [K in TransportNotificationType]: Extract<
+    IPCTransportNotification,
+    { type: K }
+  > extends HostReadDecided ? K : never;
+}[TransportNotificationType];
 
 /** Whether two unions hold the same members. */
 type Same<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;
@@ -261,4 +287,8 @@ type Same<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;
 export const DISPOSITIONS_MATCH_ANSWER_TYPES: {
   readonly requests: Same<DecidedRequest, MarkedRequest>;
   readonly notifications: Same<DecidedNotification, MarkedNotification>;
-} = { requests: true, notifications: true };
+  readonly transport: Same<
+    DecidedTransportNotification,
+    MarkedTransportNotification
+  >;
+} = { requests: true, notifications: true, transport: true };

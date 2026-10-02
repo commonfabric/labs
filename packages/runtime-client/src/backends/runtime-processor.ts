@@ -4046,13 +4046,8 @@ export class RuntimeProcessor {
     // none of the resolver and providers that admit a space's members, so
     // that it refuses what the processor's gate might admit and admits
     // nothing it would refuse.
-    const earlyGate = new HostReadGate(
-      rootRenderPolicyFor(
-        normalizeRenderConfidentialityCeiling(
-          data.renderConfidentialityCeiling,
-        ),
-      ),
-      {},
+    const earlyGate = HostReadGate.forConfiguredCeiling(
+      data.renderConfidentialityCeiling,
     );
     const gate = () =>
       processor === undefined ? earlyGate : processor.#hostReadGate;
