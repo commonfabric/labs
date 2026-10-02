@@ -3,6 +3,7 @@ import { Table } from "@cliffy/table";
 import { cliText } from "../lib/cli-name.ts";
 import { render } from "../lib/render.ts";
 import {
+  bindGmail,
   type ChannelConfig,
   listChannels,
   mintChannel,
@@ -10,6 +11,7 @@ import {
   resolveSpaceDid,
   revokeChannel,
   rotateChannel,
+  unbindGmail,
 } from "../lib/ingest-channels.ts";
 
 // `cf ingest` — self-serve ingest channels.
@@ -283,6 +285,63 @@ export const ingest = new Command()
     render(
       `Revoked ${id} at ${revokedAt}. Further POSTs are refused; the ` +
         `registration is retained as an audit record.`,
+    );
+  })
+  /* ingest gmail-bind */
+  .command(
+    "gmail-bind <id:string>",
+    "Bind a channel you own to a Gmail mailbox, so that Gmail push " +
+      "notifications for the mailbox reach the channel.",
+  )
+  .usage(`${commonUsage} --gmail-access-token <token> <id>`)
+  // The token is a credential, so the environment is the better carrier: an
+  // option value is visible in the process list and lands in shell history.
+  .env(
+    "CF_GMAIL_ACCESS_TOKEN=<token:string>",
+    "A Google access token that can read the mailbox.",
+    { prefix: "CF_" },
+  )
+  .option(
+    "--gmail-access-token <token:string>",
+    "A Google access token that can read the mailbox. The server uses it for " +
+      "one profile lookup, to learn which mailbox it is, and does not keep it.",
+  )
+  .action(async (options, id: string) => {
+    const config = parseConfig(options);
+    if (!options.gmailAccessToken) {
+      throw new ValidationError(
+        `Missing required option: "--gmail-access-token", or ` +
+          `"CF_GMAIL_ACCESS_TOKEN".`,
+        { exitCode: 1 },
+      );
+    }
+    const { emailAddress } = await bindGmail(config, {
+      id,
+      accessToken: options.gmailAccessToken,
+      requestId: newRequestId(),
+    });
+    render(
+      `Bound ${id} to ${emailAddress}. Gmail push notifications for that ` +
+        `mailbox are now appended to the channel's journal, once a ` +
+        `\`users.watch\` on the mailbox names this deployment's topic.`,
+    );
+  })
+  /* ingest gmail-unbind */
+  .command(
+    "gmail-unbind <id:string>",
+    "Stop Gmail push notifications reaching a channel you own.",
+  )
+  .usage(`${commonUsage} <id>`)
+  .action(async (options, id: string) => {
+    const config = parseConfig(options);
+    const { unbound } = await unbindGmail(config, {
+      id,
+      requestId: newRequestId(),
+    });
+    render(
+      unbound
+        ? `Unbound ${id} from its mailbox.`
+        : `${id} was not bound to a mailbox.`,
     );
   })
   // Returns the chain to the top-level `ingest` command. Without it the export

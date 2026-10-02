@@ -136,6 +136,11 @@ cleared. It answers with the same statuses as `gmail-bind`, except that its
 recent request ids can still stop delivery at once by revoking the channel,
 since a revoked channel is skipped.
 
+From the command line, `cf ingest gmail-bind <id>` binds a channel, reading
+the access token from `--gmail-access-token` or, better for a credential, from
+the `CF_GMAIL_ACCESS_TOKEN` environment variable. `cf ingest gmail-unbind <id>`
+removes the binding. Each sends a fresh `requestId` for you.
+
 `gmail-bind` shares the mint and rotate rate-limit bucket, because each call
 costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it
 stays available when binding is throttled and never spends the budget that
@@ -190,6 +195,9 @@ a log line.
   mailbox.
 
 ## Setting up the Google side
+
+[`gmail-push-setup.md`](gmail-push-setup.md) has the commands for everything
+in this section, and for a deployment Google cannot reach.
 
 Gmail requires the topic to be in the same Google Cloud project as the OAuth
 client whose token calls `users.watch`. A deployment whose users sign in

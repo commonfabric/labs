@@ -523,3 +523,79 @@ describe("cf ingest revoke", () => {
     ).rejects.toThrow("No ingest channel chan-missing");
   });
 });
+
+describe("cf ingest gmail-bind", () => {
+  it("sends the access token with a request id and prints the bound mailbox", async () => {
+    const { output, calls } = await run([
+      "gmail-bind",
+      "chan-1",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--gmail-access-token",
+      "ya29.token",
+    ], { "gmail-bind": { id: "chan-1", emailAddress: "alice@example.com" } });
+
+    expect(calls[0].verb).toBe("gmail-bind");
+    expect(calls[0].body.id).toBe("chan-1");
+    expect(calls[0].body.accessToken).toBe("ya29.token");
+    expect(typeof calls[0].body.requestId).toBe("string");
+    expect(output).toContain("Bound chan-1 to alice@example.com.");
+  });
+
+  it("reads the access token from `CF_GMAIL_ACCESS_TOKEN`", async () => {
+    await withEnv("CF_GMAIL_ACCESS_TOKEN", "ya29.from-env", async () => {
+      const { calls } = await run([
+        "gmail-bind",
+        "chan-1",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+      ], { "gmail-bind": { id: "chan-1", emailAddress: "alice@example.com" } });
+
+      expect(calls[0].body.accessToken).toBe("ya29.from-env");
+    });
+  });
+
+  it("throws a `ValidationError` without an access token", async () => {
+    await withEnv("CF_GMAIL_ACCESS_TOKEN", undefined, async () => {
+      await expectValidationError(
+        ["gmail-bind", "chan-1", "--identity", keyPath, "--api-url", API_URL],
+        `Missing required option: "--gmail-access-token"`,
+      );
+    });
+  });
+});
+
+describe("cf ingest gmail-unbind", () => {
+  it("sends a request id and says the channel was unbound", async () => {
+    const { output, calls } = await run([
+      "gmail-unbind",
+      "chan-1",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+    ], { "gmail-unbind": { id: "chan-1", unbound: true } });
+
+    expect(calls[0].verb).toBe("gmail-unbind");
+    expect(calls[0].body.id).toBe("chan-1");
+    expect(typeof calls[0].body.requestId).toBe("string");
+    expect(output).toContain("Unbound chan-1 from its mailbox.");
+  });
+
+  it("says so when the channel was not bound", async () => {
+    const { output } = await run([
+      "gmail-unbind",
+      "chan-1",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+    ], { "gmail-unbind": { id: "chan-1", unbound: false } });
+
+    expect(output).toContain("chan-1 was not bound to a mailbox.");
+  });
+});

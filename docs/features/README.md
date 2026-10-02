@@ -107,6 +107,10 @@ a line for each new document to the index below.
   path of a Gmail push notification, in diagrams: the servers and clients
   involved, who runs each one, what each hop between them proves, and what
   absorbs each failure
+- [`gmail-push-setup.md`](gmail-push-setup.md) — the Google Cloud resources,
+  permissions, and deployment settings Gmail push needs outside this
+  repository, as commands, for a deployment Google can reach and for one on a
+  private network
 - [`gmail-push-ingest.md`](gmail-push-ingest.md) — how a Gmail `users.watch`
   notification, pushed by Cloud Pub/Sub, reaches the ingest channels bound to
   its mailbox, what proves a caller may bind a mailbox, and what the syncer

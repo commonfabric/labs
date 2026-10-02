@@ -290,7 +290,8 @@ otherwise force arbitrary allocation with a garbage signature.
 
 ### Client
 
-`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. `cf ingest rotate <id>`
+`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`, and `cf ingest gmail-bind`
+and `cf ingest gmail-unbind` for [Gmail push](gmail-push-ingest.md). `cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
 would take the channel down with it. Rotate and revoke are addressed to the
