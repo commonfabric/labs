@@ -1139,11 +1139,14 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     );
 
     await t.step(
-      "follows `cf-picker`'s list as its items change, and binds again once it holds no refused item",
+      "follows `cf-picker`'s list as its items change, and binds again once nothing it reaches is refused",
       async () => {
         // A public piece added to the list keeps the binding, a sealed one
         // removes it, and taking the sealed piece out binds the list again.
-        // A field that links to a list is followed to whichever list it names.
+        // A field that links to a list is followed to whichever list it names,
+        // a label written afterwards on an item of the list it names removes
+        // the binding, and a list withheld because the document holding that
+        // field is sealed binds once the label is gone.
 
         const piece = (id: string) =>
           write(id, {
@@ -1187,7 +1190,14 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           }
         }
         const repointed = await write("changing-repointed-array", [first]);
-        const refused = await write("changing-refused-array", [sealed]);
+        const laterValue = {
+          [NAME]: "Later shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+        };
+        const later = await write(
+          "changing-later-array",
+          [link(await write("changing-later-piece", laterValue))],
+        );
         const pointTo = (array: Cell<unknown>) =>
           write("changing-repointing", {
             items: link(array.asSchema(pieceListSchema)),
@@ -1205,9 +1215,19 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         );
         try {
           const seen: { bound: number; removed: number }[] = [];
-          for (const array of [repointed, refused, repointed]) {
-            if (seen.length > 0) {
-              await pointTo(array);
+          for (
+            const change of [
+              undefined,
+              () => pointTo(later),
+              () =>
+                write("changing-later-piece", laterValue, [[[], [
+                  sealedAtom,
+                ]]]),
+              () => pointTo(repointed),
+            ]
+          ) {
+            if (change !== undefined) {
+              await change();
               await t.settle();
             }
             seen.push({
@@ -1219,6 +1239,28 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         } finally {
           mounted.cancel();
         }
+        const unsealedValue = {
+          items: link(repointed.asSchema(pieceListSchema)),
+        };
+        await write("changing-unsealed", unsealedValue, [[[], [sealedAtom]]]);
+        const unsealed = await mount(
+          createCellRef(
+            await pickerView(
+              "changing-unsealed-view",
+              runtime.getCell(space, "changing-unsealed").key("items")
+                .asSchema(true),
+            ),
+          ),
+          visitor,
+        );
+        try {
+          const before = unsealed.bindings("items").length;
+          await write("changing-unsealed", unsealedValue);
+          await t.settle();
+          outcomes.unsealed = [before, unsealed.bindings("items").length];
+        } finally {
+          unsealed.cancel();
+        }
         const followed = [
           { bound: 1, removed: 0 },
           { bound: 1, removed: 0 },
@@ -1229,11 +1271,8 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           any: followed,
           typed: followed,
           linked: followed,
-          repointed: [
-            { bound: 1, removed: 0 },
-            { bound: 1, removed: 1 },
-            { bound: 2, removed: 1 },
-          ],
+          repointed: followed,
+          unsealed: [0, 1],
         });
       },
     );
