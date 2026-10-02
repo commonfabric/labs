@@ -61,7 +61,6 @@ import {
   type Cancel,
   type Cell,
   ContextualFlowControl,
-  convertCellsToLinks,
   encodeSqliteParams,
   entityIdFrom,
   type EventIntentOutcome,
@@ -70,12 +69,12 @@ import {
   getPatternIdentityRef,
   hasOperationStorageCapability,
   hasPresenceStorageCapability,
+  hostValueOf,
   type IExtendedStorageTransaction,
   type IOperationStorageCapability,
   isCell,
   isCellResult,
   isLoopbackHostname,
-  KeepAsCell,
   markDurableReadTx,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -436,26 +435,6 @@ function sqliteParamForRuntime(
     );
   }
   return value;
-}
-
-/**
- * Converts a runtime cell value into the client wire domain. Each link it
- * mints for a cell carries the display form of that cell's CFC label view,
- * with every caveat's source redacted. A sigil link already in the value is
- * rebuilt as the container it is, view and all; stored data carries no view
- * on a link, the persist seam having stripped it, so the minted links are
- * where a view crosses.
- */
-function cellValueForClient(value: unknown): FabricValue {
-  return convertCellsToLinks(
-    value as Parameters<typeof convertCellsToLinks>[0],
-    {
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-      doNotConvertCellResults: true,
-      includeCfcLabelView: true,
-    },
-  );
 }
 
 /**
@@ -1545,7 +1524,7 @@ export class RuntimeProcessor {
     // `convertCellsToLinks()` preserves a `FabricPrimitive` by identity, and
     // the envelope's encoding carries one to the main thread with its class,
     // so what the response holds is what the cell held.
-    const converted = cellValueForClient(value);
+    const converted = hostValueOf(value);
     // The resolved cell's own schema-bearing ref, when asked for — for a meta
     // link read this addresses the linked cell itself, so the caller can
     // subscribe to it or consult its schema's declarations.
@@ -1618,10 +1597,10 @@ export class RuntimeProcessor {
             "Cell backing value is incompatible with its schema.",
           );
         }
-        return cellValueForClient(projected);
+        return hostValueOf(projected);
       }
       cell.set(initial);
-      return cellValueForClient(initial);
+      return hostValueOf(initial);
     });
     if (result.error) throw new Error(result.error.message);
     return { value: result.ok };
@@ -2110,7 +2089,7 @@ export class RuntimeProcessor {
             `  schema: ${JSON.stringify(request.cell.schema)}`,
         );
       }
-      const converted = cellValueForClient(value);
+      const converted = hostValueOf(value);
       // The sink read the raw label on its tracked tx (so cfc writes re-fire
       // it); redact Caveat.source here before it crosses to the main thread.
       const redactedLabel = request.includeCfcLabel
