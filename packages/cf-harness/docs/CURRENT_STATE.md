@@ -554,6 +554,11 @@ The current package provides:
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
+- parent-only, host-opt-in `weaver_action`, which asks the person's client to
+  run client actions mid-turn and waits for each settlement (idle timeout of
+  five minutes reset by each settlement; cancel declines the rest), settled
+  through the `resolve_client_action` request or the console's
+  `POST /api/client-actions`;
 - parent-only `finish_task` for a completed answer, a question, or a give-up
   reason, admitted through ordinary policy and artifacts as the sole call in a
   model turn. A completed answer satisfies the Fabric piece contract and may
@@ -576,10 +581,12 @@ The current package provides:
   name without a slug permits at most one registry lookup; only a unique
   released match allows work to proceed;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
-  run for cell addresses, recorded in `run-state.json`, and carried across
-  resume; the prompt loop swaps addresses to tokens in model-bound tool output
-  and resolves tokens in model-authored tool arguments before policy evaluation
-  and dispatch, `delegate_task` arguments excepted;
+  run for cell addresses, recorded in `run-state.json`, carried across resume,
+  and committed with an interactive session's checkpoint so each turn's run
+  starts from the table the session kept; the prompt loop swaps addresses to
+  tokens in model-bound tool output and resolves tokens in model-authored tool
+  arguments before policy evaluation and dispatch, `delegate_task` arguments
+  excepted;
 - cross-agent handles: a delegation seeds the child's own table with a verbatim
   copy of every parent address entry or non-cell referent whose token the `goal`
   or `context` names or a selected current research kit declares as an input,

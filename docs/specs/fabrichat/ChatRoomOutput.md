@@ -69,7 +69,11 @@ space up. Either way the space's default pattern, not the room, is its root.
 
 When the manager creates a space for a conversation, the creator holds OWNER,
 and each other member WRITE. Its access list MUST NOT contain the `"*"`
-wildcard: a room is not open to principals its space hasn't admitted. A room in
+wildcard, so a room is not open to principals its space hasn't admitted,
+except for a group room its creator makes joinable by its link (see
+[`createGroup`](ChatManagerOutput.md#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean)):
+that one grants `"*"` WRITE, and its address is all that keeps it private. A
+direct room is never joinable by its link. A room in
 an existing space takes the space's access list as it is, and adds nothing to
 it.
 

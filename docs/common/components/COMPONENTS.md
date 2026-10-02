@@ -398,6 +398,25 @@ const gridView = GridView({ items });
 
 See [composition](../patterns/composition.md) for more on pattern composition.
 
+A piece bound to `cf-render` with `$cell` passes the same confidentiality gates
+as when it is opened by its address, so what the viewer may not see renders as
+the policy placeholder in the same places. The exceptions:
+
+- A piece whose own document the viewer may not see shows nothing at all, where
+  opening it shows the placeholder.
+- A `cf-cfc-render-boundary` that only declassifies does not reach into the
+  piece: what it would release shows as the placeholder. A boundary that also
+  lowers the ceiling falls under the next item.
+- Inside a `cf-cfc-render-boundary` that lowers the ceiling, or a
+  `cf-cfc-authorship` that verifies text integrity, `cf-render` shows a piece
+  only when the boundary's ceiling admits everything the piece reaches, and
+  nothing otherwise. A nested render does not verify text integrity, so under
+  an authorship boundary the piece's own text shows whether or not it carries
+  the required endorsement.
+
+[Render-boundary composition](../../specs/cfc-render-boundary-composition.md)
+holds the rules.
+
 ### UI variants (CT-1321)
 
 A piece can expose a **size spectrum** of renderings as optional sibling output
@@ -422,12 +441,23 @@ Pick a variant with the `variant` attribute (default `"full"`):
 export the requested variant key, `cf-render` substitutes a per-variant platform
 default:
 
-- `chip` → a `cf-cell-link` bound to the piece (renders it by its `[NAME]`).
+- `chip` → a chip showing the piece's `[NAME]` and the short form of its id,
+  which navigates to the piece when clicked and drags it as a `cf-cell-link`
+  does. The name is a render of its own, so a name the viewer may not see shows
+  as the policy placeholder.
 - `tile` → the full `[UI]` rendered small at ~0.5 scale, clipped to a static
   preview and clickable to navigate to the piece (like `cf-cell-link`).
 
 Because `full`/`[UI]` is the universal floor, a piece that exports only `[UI]`
 still renders correctly at `chip` and `tile`.
+
+A piece exports a variant when its own document holds any value at the key,
+`null` included: `cf-render` decides by whether the key holds something, not by
+what it holds, so a key holding `null` renders as an empty variant rather than
+the default. Leave the key out to get the default.
+
+A `cf-render` with no cell shows nothing; it shows its loading state only while
+the cell it holds is rendering.
 
 A pattern exports the spectrum by returning the sibling keys:
 
@@ -1100,9 +1130,27 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
 ## cf-owner-view
 
 `cf-owner-view` checks whether the runtime's authenticated principal matches
-the single root `represents-principal` attestation on `$originator`. It writes
-the result to the per-user boolean `$result` cell and renders no content of its
-own. A missing, unreadable, or conflicting attestation leaves the result false.
+the single root `represents-principal` attestation on `$originator`, and writes
+the answer to the per-user `$result` cell, which holds a `boolean | null`:
+`true` when the attestation names the acting principal, `false` when it names
+another, and `null` when it is missing, unreadable, or conflicting, when the
+acting principal is unknown, or before the component has decided. The component
+renders no content of its own.
+
+The component follows `$originator` through a subscription of its own that
+carries labels, so a change to the label alone reaches it even when another
+handle on the same cell subscribed first for the value alone. It decides when
+it binds and again on each update that subscription delivers, from the label
+the update carries, or from a read of the label when the update carries none.
+An attestation that is not readable when the component binds, as when its
+document has not loaded yet, decides the result once an update brings it, and
+an update that finds the attestation no longer readable sets the result back
+to `null`. The client drops an update whose value is undefined, which it treats
+as a conflict that a settled value follows, so such an update decides nothing.
+The component writes a decision once for each label it decides from, until the
+label or the binding changes. It stops following while disconnected and
+follows again once reconnected, as after a move to another parent.
+
 The component does not use the selected `#profile`, which may represent a
 different persona. The predicate selects presentation; CFC labels govern reads.
 

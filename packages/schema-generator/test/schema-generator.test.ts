@@ -4146,15 +4146,20 @@ interface HasImage {
      * The schema of `Root`'s `narrowed`, a node recorded as narrowing the value
      * the first property of `Wholes` declares, spelled by its node, or by the
      * node of the property `spelledBy` names. With `inner`, the hint is on the
-     * node inside `narrowed`'s parentheses.
+     * node inside `narrowed`'s parentheses. `declarations` are added beside
+     * `Root` and `Wholes`.
      */
     const narrowedSchema = async (
       root: string,
       whole: string,
-      { inner = false, spelledBy }: { inner?: boolean; spelledBy?: string } =
-        {},
+      { inner = false, spelledBy, declarations = "" }: {
+        inner?: boolean;
+        spelledBy?: string;
+        declarations?: string;
+      } = {},
     ) => {
       const { checker, sourceFile } = await createTestProgram(`${LABELS}
+        ${declarations}
         type Root = ${root};
         interface Wholes { ${whole} }`);
       let rootNode: ts.TypeNode | undefined;
@@ -4211,6 +4216,30 @@ interface HasImage {
       );
 
       expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from a recursive cell alias no labels of the recursion, and returns", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        "value: Recursive",
+        { declarations: "type Recursive = Cell<Recursive> | null;" },
+      );
+
+      expect(narrowed).toEqual(A_ONLY);
+    });
+
+    it("puts the labels of a value that may be missing on the narrowed node's labeled value member", async () => {
+      const { narrowed } = await narrowedSchema(
+        '{ narrowed: Confidential<{ a: string }, ["y"]> | null }',
+        'value: Confidential<Secret, ["x"]> | null',
+      );
+
+      expect(narrowed).toEqual({
+        anyOf: [
+          { ...A_ONLY, ifc: { confidentiality: ["y", "x"] } },
+          { type: "null" },
+        ],
+      });
     });
 
     it("gives a node narrowed from an optional property its value's labels", async () => {

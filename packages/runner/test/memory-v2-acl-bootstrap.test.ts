@@ -635,3 +635,91 @@ Deno.test("runtime.createSpace names the runtime's identity OWNER beside the gra
     await server.close();
   }
 });
+
+Deno.test("a READ member can cold-start a shared piece without persisting its scoped default", async () => {
+  const owner = await Identity.fromPassphrase("scoped-default-acl-owner");
+  const reader = await Identity.fromPassphrase("scoped-default-acl-reader");
+  const server = createServer("scoped-default-read-only-start");
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const ownerStorage = TestStorageManager.overServer({ as: owner }, factory);
+  const readerStorage = TestStorageManager.overServer({ as: reader }, factory);
+  const open = (storageManager: TestStorageManager) =>
+    new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      experimental: { serverExecution: false },
+    });
+  const author = open(ownerStorage);
+  const viewer = open(readerStorage);
+  try {
+    const space = await ownerStorage.createSpace({
+      [owner.did()]: "OWNER",
+      [reader.did()]: "READ",
+    });
+    const compiled = await author.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `import { pattern, Writable } from "commonfabric";
+      export default pattern<Record<string, never>, { title: string; draft: Writable<{title:string}> }>(() => ({
+        title: "Shared", draft: Writable.perUser.of({title:""}),
+      }));`,
+      }],
+    }, { space });
+    const original = author.getCell(space, "read-only-scoped-draft");
+    await author.runSynced(original, compiled, {});
+    await author.idle();
+    author.runner.stop(original);
+
+    const reached = viewer.getCellFromLink(original.getAsNormalizedFullLink())
+      .asSchema(compiled.resultSchema);
+    const deniedBeforeStart = server.aclStats.denied;
+    expect(await viewer.start(reached)).toBe(true);
+    await viewer.idle();
+    expect(server.aclStats.denied).toBe(deniedBeforeStart);
+    expect(reached.key("title").get()).toBe("Shared");
+    expect(reached.key("draft").get()).toEqual({ title: "" });
+    expect(reached.key("draft").resolveAsCell().getRawUntyped())
+      .toBeUndefined();
+
+    for (const live of [false, true]) {
+      const title = live ? "Already loaded update" : "Cold loaded update";
+      const program = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `import { pattern, Writable } from "commonfabric";
+        export default pattern<Record<string, never>, { title: string; draft: Writable<{title:string}> }>(() => ({
+          title: ${
+            JSON.stringify(title)
+          }, draft: Writable.perUser.of({title:""}),
+        }));`,
+        }],
+      };
+      const updated = await author.patternManager.compilePattern(program, {
+        space,
+      });
+      if (live) await viewer.patternManager.compilePattern(program);
+      await author.runSynced(original, updated, {}, { start: false });
+      await author.idle();
+      await reached.sync();
+      await viewer.runner.idlePointerMaintenance();
+      await viewer.idle();
+      expect(reached.key("title").get()).toBe(title);
+      expect(reached.key("draft").resolveAsCell().getRawUntyped())
+        .toBeUndefined();
+      expect(server.aclStats.denied).toBe(deniedBeforeStart);
+    }
+
+    const denied = viewer.edit();
+    reached.key("draft").withTx(denied).set({ title: "unauthorized" });
+    expect((await denied.commit()).error?.name).toBe("AuthorizationError");
+    expect(original.key("title").get()).toBe("Already loaded update");
+  } finally {
+    await viewer.dispose({ closeStorage: false });
+    await author.dispose({ closeStorage: false });
+    await readerStorage.close();
+    await ownerStorage.close();
+    await server.close();
+  }
+});

@@ -33,6 +33,7 @@ import {
   runHarnessInteractiveChatStdioCli,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
+import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
 import { HarnessChatStoreHeldError } from "../src/session-store.ts";
 import {
@@ -956,6 +957,172 @@ Deno.test("interactive NDJSON transport validates method-specific params", async
     "ok" in response && response.ok === false ? response.error.code : "",
     "invalid_request",
   );
+});
+
+Deno.test("interactive NDJSON transport keeps an answer that arrives while its request is still being written", async () => {
+  const action = {
+    kind: "open_loom",
+    loomId: "loom-0123456789abcdef",
+  } as const;
+  const output: string[] = [];
+  const requestWriting = Promise.withResolvers<string>();
+  const answerWritten = Promise.withResolvers<void>();
+  const outcomes = Promise.withResolvers<unknown>();
+  const line = (requestId: string, method: string, params: unknown) =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+  async function* lines() {
+    yield line("start", "start_session", {
+      sessionId: "s",
+      workspace: { hostPath: "/w" },
+      model: "m",
+      clientActions: true,
+    });
+    yield line("turn", "start_turn", {
+      sessionId: "s",
+      turnId: "t",
+      input: { text: "go" },
+    });
+    yield line("answer", "resolve_client_action", {
+      sessionId: "s",
+      actionId: await requestWriting.promise,
+      outcome: "done",
+      result: "opened",
+    });
+  }
+  let ids = 0;
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: lines(),
+    writeLine: async (text) => {
+      output.push(text);
+      const envelope = JSON.parse(text) as HarnessInteractiveChatOutputEnvelope;
+      if ("requestId" in envelope && envelope.requestId === "answer") {
+        answerWritten.resolve();
+      }
+      if (
+        "event" in envelope &&
+        envelope.event.kind === "client_action_requested"
+      ) {
+        // The request's write is still in flight when the client answers it.
+        requestWriting.resolve(envelope.event.actionId);
+        await answerWritten.promise;
+      }
+    },
+    createService: (onEvent, onEventDeliveryError) =>
+      new HarnessInteractiveChatService({
+        onEvent,
+        onEventDeliveryError,
+        randomUUID: () => `id-${++ids}`,
+        createPromptLoop: (options) => ({
+          runTranscript: async (run) => {
+            const request = (options as {
+              requestClientActions?: HarnessClientActionRequester;
+            }).requestClientActions!;
+            outcomes.resolve(await request([action], run.signal));
+            const finalMessage = {
+              role: "assistant" as const,
+              content: "done",
+            };
+            return {
+              model: "m",
+              finalAssistantText: "done",
+              transcript: [...run.transcript, finalMessage],
+              modelTurns: 1,
+              runState: {} as HarnessPromptLoopResult["runState"],
+            };
+          },
+        }),
+      }),
+  });
+
+  assertEquals(await outcomes.promise, [
+    { action, outcome: "done", result: "opened" },
+  ]);
+  const envelopes = decodeLines(output);
+  assertEquals(
+    envelopes.flatMap((envelope) =>
+      "requestId" in envelope && envelope.requestId === "answer"
+        ? [envelope.ok]
+        : []
+    ),
+    [true],
+  );
+  assertEquals(
+    envelopes.flatMap((envelope) =>
+      "event" in envelope && envelope.event.kind.startsWith("client_action_")
+        ? [envelope.event.kind]
+        : []
+    ),
+    ["client_action_requested", "client_action_resolved"],
+  );
+});
+
+Deno.test("interactive NDJSON transport validates resolve_client_action and clientActions params", async () => {
+  const output: string[] = [];
+  const line = (requestId: string, method: string, params: unknown) =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      // Well formed, but no such session: reaches the service.
+      line("ok", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "done",
+        result: "opened",
+      }),
+      line("bad-outcome", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "maybe",
+      }),
+      line("missing-id", "resolve_client_action", {
+        sessionId: "s",
+        outcome: "done",
+      }),
+      line("long-result", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "failed",
+        result: "x".repeat(501),
+      }),
+      line("bad-opt-in", "start_session", {
+        workspace: { hostPath: "/w" },
+        clientActions: "yes",
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+  });
+
+  const codes = Object.fromEntries(
+    decodeLines(output).flatMap((response) =>
+      "requestId" in response
+        ? [[
+          response.requestId,
+          response.ok ? "ok" : response.error.code,
+        ]]
+        : []
+    ),
+  );
+  assertEquals(codes, {
+    "ok": "session_not_found",
+    "bad-outcome": "invalid_request",
+    "missing-id": "invalid_request",
+    "long-result": "invalid_request",
+    "bad-opt-in": "invalid_request",
+  });
 });
 
 Deno.test("interactive NDJSON transport rejects malformed policy params", async () => {

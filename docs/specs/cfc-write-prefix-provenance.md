@@ -148,6 +148,17 @@ attempt. They must be assigned index `−∞` (before all writes) so they gate
 channel escape the per-write gate. (H5 already folds trigger reads into the
 transaction-global gate; D4 must keep them in every prefix.)
 
+The address a trigger read names is the run's own read whose value the write
+changed: the scheduler compares the value at each path the run read, and a
+change at one of them is what schedules the run. A write that creates or
+replaces a whole document schedules a reader of one field through that field,
+so the labels of the document's other fields, which a change to them alone
+would not have scheduled the run, do not join it. A read of an array's
+`length` observes the array's membership, so a trigger read of a `length` is
+also charged as a shape read of its parent, whatever the parent holds when the
+rerun prepares. It joins the labels that apply at the parent itself, such as an
+`observes: "enumerate"` or `structure` entry.
+
 ## 5. Consequences for the two payoffs
 
 - **Vacuous-pass fix (#14).** Under the last-overlapping-write prefix a floored

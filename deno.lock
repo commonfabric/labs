@@ -120,6 +120,7 @@
     "npm:@types/leaflet@^1.9.21": "1.9.21",
     "npm:@types/react-dom@19.2.5": "19.2.5_@types+react@19.2.18",
     "npm:@types/react@19.2.18": "19.2.18",
+    "npm:@types/ws@8.18.1": "8.18.1",
     "npm:@types/ws@^8.18.1": "8.18.1",
     "npm:@viz-js/viz@3.26.0": "3.26.0",
     "npm:@xyflow/react@^12.11.5": "12.11.5_@types+react@19.2.18_@types+react-dom@19.2.5__@types+react@19.2.18_react@19.2.8_react-dom@19.2.8__react@19.2.8",
@@ -136,6 +137,7 @@
     "npm:esbuild@~0.25.12": "0.25.12",
     "npm:esbuild@~0.25.5": "0.25.12",
     "npm:fake-indexeddb@6.0.0": "6.0.0",
+    "npm:fflate@0.8.3": "0.8.3",
     "npm:fuse-native@*": "2.2.6",
     "npm:hash-wasm@^4.12.0": "4.12.0",
     "npm:hono-pino@~0.10.3": "0.10.3_hono@4.12.31_pino@10.3.1",
@@ -161,6 +163,7 @@
     "npm:typescript@6.0.3": "6.0.3",
     "npm:unicode-case-folding@1.1.1": "1.1.1",
     "npm:web-tree-sitter@0.26.12": "0.26.12",
+    "npm:ws@8.22.0": "8.22.0",
     "npm:ws@^8.21.3": "8.21.3",
     "npm:zod@^4.4.3": "4.4.3"
   },
@@ -1991,6 +1994,9 @@
         "web-streams-polyfill"
       ]
     },
+    "fflate@0.8.3": {
+      "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="
+    },
     "finalhandler@2.1.1": {
       "integrity": "sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA==",
       "dependencies": [
@@ -2765,6 +2771,9 @@
     "ws@8.21.3": {
       "integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="
     },
+    "ws@8.22.0": {
+      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="
+    },
     "yaml@2.9.0": {
       "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
       "bin": true
@@ -2939,7 +2948,10 @@
           "jsr:@denosaurs/plug@^1.1.0",
           "npm:@codemirror/collab@^6.1.1",
           "npm:@codemirror/state@^6.7.1",
-          "npm:@opentelemetry/api@^1.9.1"
+          "npm:@opentelemetry/api@^1.9.1",
+          "npm:@types/ws@8.18.1",
+          "npm:fflate@0.8.3",
+          "npm:ws@8.22.0"
         ]
       },
       "packages/patterns": {

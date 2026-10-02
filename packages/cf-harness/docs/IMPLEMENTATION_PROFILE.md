@@ -299,13 +299,14 @@ overrides its model does not inherit parent provider controls; explicit run-wide
 compaction disablement is the exception.
 
 The session-local address handle table maps positively identified cell addresses
-to deterministic per-run `cfh:a:` tokens. Model-bound tool output and
+to deterministic `cfh:a:` tokens salted per table. Model-bound tool output and
 model-authored tool arguments pass through the table before policy evaluation
 and dispatch. Bare Fabric IDs are not converted. A delegation explicitly seeds
 the child table with only the parent handles named in its goal or context; child
 references are resolved at the child boundary and re-minted into the parent
 table, while any unheld token-shaped text is scrubbed. Raw artifacts retain
-canonical references, and the table is persisted across batch resume.
+canonical references, and the table is persisted across batch resume and
+committed with an interactive session's checkpoint for the next turn's run.
 
 Resume preserves recorded transcript/run configuration and rejects unsupported
 new inputs such as image or skill changes. The local Loom host additionally
@@ -360,13 +361,13 @@ placeholders resolve only at the SQLite query boundary.
    web tools.
 4. **Incomplete opaque-reference boundary.** Address handles cover cell
    addresses but not the reserved value-handle form. Denial-path messages are
-   not swapped, interactive restore does not persist the table, and cross-agent
-   transfer exists only across an explicit delegation boundary. Shape inspection
-   does not expose values, and there is no value dereference, release, or
-   garbage-collection contract. Raw operator reports may expose artifact paths
-   and canonical references. Owner: `cf-harness`. Retirement: every model-facing
-   path uses held opaque handles with explicit lifetime and release/readback
-   semantics while operator tooling retains resolvable provenance.
+   not swapped, and cross-agent transfer exists only across an explicit
+   delegation boundary. Shape inspection does not expose values, and there is no
+   value dereference, release, or garbage-collection contract. Raw operator
+   reports may expose artifact paths and canonical references. Owner:
+   `cf-harness`. Retirement: every model-facing path uses held opaque handles
+   with explicit lifetime and release/readback semantics while operator tooling
+   retains resolvable provenance.
 5. **Durable trusted-host pattern execution.** Each `run_pattern` call creates a
    detached Fabric piece whose source revision remains a retention root. The
    piece stays out of the piece list until `assign_slug` names it; abort stops

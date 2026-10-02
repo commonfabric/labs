@@ -1,10 +1,12 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   bindingIdentities,
   callSchemas,
+  emittedSchemas,
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
@@ -14,7 +16,7 @@ import { transformFiles, transformSource } from "./utils.ts";
 describe("protected cell policy", () => {
   it("accepts a computed read of a wished profile's defaulted owner-protected field", async () => {
     const diagnostics: TransformationDiagnostic[] = [];
-    await transformSource(
+    const output = await transformSource(
       `import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, WriteAuthorizedBy, computed, handler, pattern, wish } from "commonfabric";
 const setBio = handler<void, {}>(() => {});
 type OwnerProtected<T, Binding> = RepresentsCurrentUser<
@@ -34,6 +36,27 @@ export default pattern<{}>(() => {
     );
 
     expect(diagnostics.filter(isError)).toEqual([]);
+    // The capture reads the field whole, out of a result that may be missing.
+    expect(callSchemas(parseModule(output), "lift")[0]).toMatchObject({
+      properties: {
+        profileWish: {
+          properties: {
+            result: {
+              properties: {
+                bio: {
+                  ifc: {
+                    ownerPrincipal: { __ctCurrentPrincipal: true },
+                    writeAuthorizedBy: {
+                      __ctWriterIdentityOf: { path: ["setBio"] },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
   });
 
   it("preserves a writer binding in a lifted cell's result schema", async () => {
@@ -832,5 +855,211 @@ export default pattern(() => {
 
     expect(await severities(false)).toEqual(["error"]);
     expect(await severities(true)).toEqual(["error"]);
+  });
+
+  describe("a capture of an owner-protected cell", () => {
+    // A closure narrows its capture of the cell to what it does with it, and
+    // the narrowed capture is rebuilt from the cell's type, whose print spells
+    // `typeof removeItem` as the handler's structural type. Two writers of the
+    // same signature have the same policy type, so only the syntax the value
+    // was declared with names the writer.
+
+    const constructed =
+      `const items = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");`;
+    const transform = async (result: string, declaration = constructed) =>
+      parseModule(
+        await transformSource(
+          `import { Cfc, CurrentPrincipal, cell, computed, Default, handler, pattern, RepresentsCurrentUser, UI, wish, Writable, WriteAuthorizedBy } from "commonfabric";
+type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
+interface Item { id: string }
+const removeItem = handler<void, { items: Writable<Item[]>; id: string }>((_, { items, id }) => {
+  items.set(items.get().filter((item) => item.id !== id));
+});
+export type Listed = { items: Default<Owned<Item[], typeof removeItem>, []> };
+export default pattern(() => {
+  ${declaration}
+  return ${result};
+});`,
+          { types: COMMONFABRIC_TYPES, typeCheck: true },
+        ),
+      );
+    // Each item's button hands the captured list to its handler as a
+    // shorthand property.
+    const list = `{
+    [UI]: <ul>{items.map((item) => <li><button type="button" onClick={removeItem({ items, id: item.id })}>Remove</button></li>)}</ul>,
+  }`;
+    const count = `{ count: computed(() => items.get().length) }`;
+    const callbackSchema = (root: ts.SourceFile) =>
+      emittedSchemas(root).find(({ properties }) =>
+        typeof properties === "object" && properties !== null &&
+        "params" in properties
+      );
+    const ownerPolicy = {
+      writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["removeItem"] } },
+      ownerPrincipal: { __ctCurrentPrincipal: true },
+      addIntegrity: [{
+        kind: "represents-principal",
+        subject: { __ctCurrentPrincipal: true },
+      }],
+    };
+    const callbackKeepsPolicy = (root: ts.SourceFile) =>
+      expect(callbackSchema(root)).toMatchObject({
+        properties: {
+          params: { properties: { items: { ifc: ownerPolicy } } },
+        },
+      });
+    const computedKeepsPolicy = (root: ts.SourceFile) =>
+      expect(callSchemas(root, "lift")[0]).toMatchObject({
+        properties: { items: { ifc: ownerPolicy } },
+      });
+
+    it("keeps the cell's writer beside its owner in a list callback's parameters", async () => {
+      callbackKeepsPolicy(await transform(list));
+    });
+
+    it("keeps the cell's writer beside its owner in a computed value's input", async () => {
+      computedKeepsPolicy(await transform(count));
+    });
+
+    it("keeps the writer a declaration's annotation names on a capture written as a shorthand property", async () => {
+      callbackKeepsPolicy(
+        await transform(
+          list,
+          `const items: Writable<Owned<Item[], typeof removeItem>> = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");`,
+        ),
+      );
+    });
+
+    describe("a cell a constructor's `of()` makes", () => {
+      const made =
+        `const items = Writable.of<Owned<Item[], typeof removeItem>>([]);`;
+
+      it("keeps the cell's writer in a list callback's parameters", async () => {
+        callbackKeepsPolicy(await transform(list, made));
+      });
+
+      it("keeps the cell's writer in a computed value's input", async () => {
+        computedKeepsPolicy(await transform(count, made));
+      });
+
+      it("keeps the cell's writer in the pattern's result", async () => {
+        expect(
+          patternSchemas(await transform(`{ items }`, made)).output,
+        ).toMatchObject({ properties: { items: { ifc: ownerPolicy } } });
+      });
+    });
+
+    describe("a cell the `cell<T>()` function makes", () => {
+      const made = `const items = cell<Owned<Item[], typeof removeItem>>([]);`;
+
+      it("keeps the cell's writer in a list callback's parameters", async () => {
+        callbackKeepsPolicy(await transform(list, made));
+      });
+
+      it("keeps the cell's writer in a computed value's input", async () => {
+        computedKeepsPolicy(await transform(count, made));
+      });
+
+      it("keeps the writer of a cell its writer alone protects", async () => {
+        const root = await transform(
+          count,
+          `const items = cell<WriteAuthorizedBy<Item[], typeof removeItem>>([]);`,
+        );
+        expect(callSchemas(root, "lift")[0]).toMatchObject({
+          properties: {
+            items: {
+              ifc: {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: { path: ["removeItem"] },
+                },
+              },
+            },
+          },
+        });
+      });
+    });
+
+    it("does not follow a property of an object literal that a later spread may replace", async () => {
+      // The spread can supply another `items`, so the property is not the
+      // value the binding receives, and its writer is not the binding's.
+      const root = await transform(
+        count,
+        `const { items } = { items: new Writable<Owned<Item[], typeof removeItem>>([]).for("items"), ...{} };`,
+      );
+      const items = (callSchemas(root, "lift")[0] as {
+        properties?: { items?: { ifc?: Record<string, unknown> } };
+      }).properties?.items;
+      expect(items?.ifc?.writeAuthorizedBy).toBeUndefined();
+    });
+
+    it("keeps the writer of a cell whose value may be missing on its value member", async () => {
+      const root = await transform(
+        `{ count: computed(() => items.get()?.length ?? 0) }`,
+        `const items = new Writable<Owned<Item[], typeof removeItem> | undefined>(undefined).for("items");`,
+      );
+      expect(callSchemas(root, "lift")[0]).toMatchObject({
+        properties: {
+          items: {
+            anyOf: expect.arrayContaining([
+              expect.objectContaining({
+                ifc: {
+                  ...ownerPolicy,
+                  writeAuthorizedBy: {
+                    __ctWriterIdentityOf: {
+                      file: "/test.tsx",
+                      path: ["removeItem"],
+                    },
+                  },
+                },
+              }),
+            ]),
+          },
+        },
+      });
+    });
+
+    it("keeps the writer of a cell destructured straight out of an object literal", async () => {
+      computedKeepsPolicy(
+        await transform(
+          count,
+          `const { items } = { items: new Writable<Owned<Item[], typeof removeItem>>([]).for("items") };`,
+        ),
+      );
+    });
+
+    it("keeps the writer a declared member names on a value read from a wished result", async () => {
+      const root = await transform(
+        `{ count: computed(() => listed.result?.items.length ?? 0) }`,
+        `const listed = wish<Listed>({ query: "#listed" });`,
+      );
+      // The result may be missing, so its schema is a union with `undefined`.
+      expect(callSchemas(root, "lift")[0]).toMatchObject({
+        properties: {
+          listed: {
+            properties: {
+              result: {
+                anyOf: expect.arrayContaining([
+                  expect.objectContaining({
+                    properties: {
+                      items: expect.objectContaining({
+                        ifc: {
+                          ...ownerPolicy,
+                          writeAuthorizedBy: {
+                            __ctWriterIdentityOf: {
+                              file: "/test.tsx",
+                              path: ["removeItem"],
+                            },
+                          },
+                        },
+                      }),
+                    },
+                  }),
+                ]),
+              },
+            },
+          },
+        },
+      });
+    });
   });
 });
