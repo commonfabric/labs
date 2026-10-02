@@ -63,6 +63,29 @@ const requireSpace = (space: string | undefined): string => {
   return space;
 };
 
+/**
+ * Helper for the verbs that act on one channel, which returns the space
+ * channel `id` writes into: `named` when the caller passed `--space`, and
+ * otherwise the space of that channel in the caller's own list. A request is
+ * addressed to the channel's space, so it has to be known before it is sent.
+ */
+async function channelSpace(
+  config: ChannelConfig,
+  id: string,
+  named: string | undefined,
+): Promise<string> {
+  const space = named
+    ? await resolveSpaceDid(config.identityPath, named)
+    : (await listChannels(config)).find((c) => c.id === id)?.space;
+  if (space === undefined) {
+    throw new Error(
+      `No ingest channel ${id} among the ones you minted. Pass --space to ` +
+        `name the space it writes into.`,
+    );
+  }
+  return space;
+}
+
 /** The token is returned once and never again — say so where it is printed. */
 const renderMinted = (
   minted: {
@@ -207,17 +230,7 @@ export const ingest = new Command()
   )
   .action(async (options, id: string) => {
     const config = parseConfig(options);
-    // The request is addressed to the channel's space, so the space has to be
-    // known before the rotate is sent.
-    const space = options.space
-      ? await resolveSpaceDid(config.identityPath, options.space)
-      : (await listChannels(config)).find((c) => c.id === id)?.space;
-    if (space === undefined) {
-      throw new Error(
-        `No ingest channel ${id} among the ones you minted. Pass --space to ` +
-          `name the space it writes into.`,
-      );
-    }
+    const space = await channelSpace(config, id, options.space);
     const minted = await rotateChannel(config, {
       space,
       id,
@@ -306,6 +319,12 @@ export const ingest = new Command()
     "A Google access token that can read the mailbox. The server uses it for " +
       "one profile lookup, to learn which mailbox it is, and does not keep it.",
   )
+  // No `-s` short form, for the reason `revoke --space` has none.
+  .option(
+    "--space <space:string>",
+    "The space the channel writes into. Without it the space is looked up " +
+      "among the channels you minted.",
+  )
   .action(async (options, id: string) => {
     const config = parseConfig(options);
     if (!options.gmailAccessToken) {
@@ -316,6 +335,7 @@ export const ingest = new Command()
       );
     }
     const { emailAddress } = await bindGmail(config, {
+      space: await channelSpace(config, id, options.space),
       id,
       accessToken: options.gmailAccessToken,
       requestId: newRequestId(),
@@ -332,9 +352,16 @@ export const ingest = new Command()
     "Stop Gmail push notifications reaching a channel you own.",
   )
   .usage(`${commonUsage} <id>`)
+  // No `-s` short form, for the reason `revoke --space` has none.
+  .option(
+    "--space <space:string>",
+    "The space the channel writes into. Without it the space is looked up " +
+      "among the channels you minted, which a revoked channel is not in.",
+  )
   .action(async (options, id: string) => {
     const config = parseConfig(options);
     const { unbound } = await unbindGmail(config, {
+      space: await channelSpace(config, id, options.space),
       id,
       requestId: newRequestId(),
     });

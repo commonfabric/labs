@@ -15,6 +15,7 @@ The commands use these placeholders:
 | `<account>` | The service account's email, `<name>@<project>.iam.gserviceaccount.com`. |
 | `<audience>` | The audience on push tokens. By convention, the push endpoint's URL. |
 | `<toolshed>` | The toolshed deployment's origin. |
+| `<service space>` | The space the deployment keeps its ingest registry in: the DID `INGEST_SERVICE_SPACE` names, or with that unset, the DID of the deployment's own identity, which `GET <toolshed>/api/meta` reports as `did`. |
 
 ## Choosing the project
 
@@ -93,7 +94,7 @@ HTTPS with a certificate Google accepts:
 ```bash
 gcloud pubsub subscriptions create <subscription> --project <project> \
   --topic <topic> \
-  --push-endpoint="<toolshed>/api/ingest-push/gmail" \
+  --push-endpoint="<toolshed>/api/spaces/<service space>/ingest-push/gmail" \
   --push-auth-service-account="<account>" \
   --push-auth-token-audience="<audience>"
 ```
@@ -103,8 +104,9 @@ gcloud pubsub subscriptions create <subscription> --project <project> \
 A deployment reachable only on a private network, a tailnet for instance,
 cannot be a push endpoint: Google has no route to it. A pull subscription
 works in its place, with a relay on the private network that pulls each
-message and posts it to toolshed the way a push subscription would. The relay
-needs no certificate, since it reaches toolshed from inside the network.
+message and posts it to `<toolshed>/api/spaces/<service space>/ingest-push/gmail`
+the way a push subscription would. The relay needs no certificate, since it
+reaches toolshed from inside the network.
 
 ```bash
 gcloud pubsub subscriptions create <subscription> --project <project> \

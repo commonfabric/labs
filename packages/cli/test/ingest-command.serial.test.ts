@@ -525,7 +525,9 @@ describe("cf ingest revoke", () => {
 });
 
 describe("cf ingest gmail-bind", () => {
-  it("sends the access token with a request id and prints the bound mailbox", async () => {
+  const bound = { id: "chan-1", emailAddress: "alice@example.com" };
+
+  it("looks the channel's space up, then sends the access token with a request id", async () => {
     const { output, calls } = await run([
       "gmail-bind",
       "chan-1",
@@ -535,13 +537,35 @@ describe("cf ingest gmail-bind", () => {
       API_URL,
       "--gmail-access-token",
       "ya29.token",
-    ], { "gmail-bind": { id: "chan-1", emailAddress: "alice@example.com" } });
+    ], { list: { channels: [channel({})] }, "gmail-bind": bound });
 
-    expect(calls[0].verb).toBe("gmail-bind");
-    expect(calls[0].body.id).toBe("chan-1");
-    expect(calls[0].body.accessToken).toBe("ya29.token");
-    expect(typeof calls[0].body.requestId).toBe("string");
+    expect(calls.map((c) => c.verb)).toEqual(["list", "gmail-bind"]);
+    expect(calls[1].space).toBe(SPACE_DID);
+    expect(calls[1].body).toEqual({
+      id: "chan-1",
+      accessToken: "ya29.token",
+      requestId: calls[1].body.requestId,
+    });
+    expect(typeof calls[1].body.requestId).toBe("string");
     expect(output).toContain("Bound chan-1 to alice@example.com.");
+  });
+
+  it("sends the bind straight to the space `--space` names", async () => {
+    const { calls } = await run([
+      "gmail-bind",
+      "chan-1",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--gmail-access-token",
+      "ya29.token",
+      "--space",
+      OTHER_DID,
+    ], { "gmail-bind": bound });
+
+    expect(calls.map((c) => c.verb)).toEqual(["gmail-bind"]);
+    expect(calls[0].space).toBe(OTHER_DID);
   });
 
   it("reads the access token from `CF_GMAIL_ACCESS_TOKEN`", async () => {
@@ -553,9 +577,9 @@ describe("cf ingest gmail-bind", () => {
         keyPath,
         "--api-url",
         API_URL,
-      ], { "gmail-bind": { id: "chan-1", emailAddress: "alice@example.com" } });
+      ], { list: { channels: [channel({})] }, "gmail-bind": bound });
 
-      expect(calls[0].body.accessToken).toBe("ya29.from-env");
+      expect(calls[1].body.accessToken).toBe("ya29.from-env");
     });
   });
 
@@ -567,10 +591,25 @@ describe("cf ingest gmail-bind", () => {
       );
     });
   });
+
+  it("throws for a channel that is not among the caller's own", async () => {
+    await expect(
+      run([
+        "gmail-bind",
+        "chan-missing",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--gmail-access-token",
+        "ya29.token",
+      ], { list: { channels: [channel({})] } }),
+    ).rejects.toThrow("No ingest channel chan-missing");
+  });
 });
 
 describe("cf ingest gmail-unbind", () => {
-  it("sends a request id and says the channel was unbound", async () => {
+  it("looks the channel's space up, sends a request id, and says the channel was unbound", async () => {
     const { output, calls } = await run([
       "gmail-unbind",
       "chan-1",
@@ -578,11 +617,15 @@ describe("cf ingest gmail-unbind", () => {
       keyPath,
       "--api-url",
       API_URL,
-    ], { "gmail-unbind": { id: "chan-1", unbound: true } });
+    ], {
+      list: { channels: [channel({})] },
+      "gmail-unbind": { id: "chan-1", unbound: true },
+    });
 
-    expect(calls[0].verb).toBe("gmail-unbind");
-    expect(calls[0].body.id).toBe("chan-1");
-    expect(typeof calls[0].body.requestId).toBe("string");
+    expect(calls.map((c) => c.verb)).toEqual(["list", "gmail-unbind"]);
+    expect(calls[1].space).toBe(SPACE_DID);
+    expect(calls[1].body.id).toBe("chan-1");
+    expect(typeof calls[1].body.requestId).toBe("string");
     expect(output).toContain("Unbound chan-1 from its mailbox.");
   });
 
@@ -594,6 +637,8 @@ describe("cf ingest gmail-unbind", () => {
       keyPath,
       "--api-url",
       API_URL,
+      "--space",
+      SPACE_DID,
     ], { "gmail-unbind": { id: "chan-1", unbound: false } });
 
     expect(output).toContain("chan-1 was not bound to a mailbox.");

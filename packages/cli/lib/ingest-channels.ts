@@ -201,25 +201,37 @@ export function revokeChannel(
 }
 
 /**
- * Binds channel `id` to the Gmail mailbox `accessToken` reads, so that Gmail
- * push notifications for the mailbox are appended to the channel's journal.
- * The server uses the token for one profile lookup and does not keep it.
+ * Binds channel `input.id`, which writes into `input.space`, to the Gmail
+ * mailbox `input.accessToken` reads, so that Gmail push notifications for the
+ * mailbox are appended to the channel's journal. The server uses the token
+ * for one profile lookup and does not keep it.
  */
 export function bindGmail(
   config: ChannelConfig,
-  input: { id: string; accessToken: string; requestId: string },
+  input: { space: string; id: string; accessToken: string; requestId: string },
 ): Promise<{ id: string; emailAddress: string }> {
+  const { space, ...payload } = input;
   return call<{ id: string; emailAddress: string }>(
     config,
     "gmail-bind",
-    input,
+    payload,
+    space,
   );
 }
 
-/** Unbinds channel `id` from its Gmail mailbox, if it is bound to one. */
+/**
+ * Unbinds channel `input.id`, which writes into `input.space`, from its Gmail
+ * mailbox, if it is bound to one.
+ */
 export function unbindGmail(
   config: ChannelConfig,
-  input: { id: string; requestId: string },
+  input: { space: string; id: string; requestId: string },
 ): Promise<{ id: string; unbound: boolean }> {
-  return call<{ id: string; unbound: boolean }>(config, "gmail-unbind", input);
+  const { space, ...payload } = input;
+  return call<{ id: string; unbound: boolean }>(
+    config,
+    "gmail-unbind",
+    payload,
+    space,
+  );
 }

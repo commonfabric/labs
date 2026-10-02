@@ -139,7 +139,9 @@ since a revoked channel is skipped.
 From the command line, `cf ingest gmail-bind <id>` binds a channel, reading
 the access token from `--gmail-access-token` or, better for a credential, from
 the `CF_GMAIL_ACCESS_TOKEN` environment variable. `cf ingest gmail-unbind <id>`
-removes the binding. Each sends a fresh `requestId` for you.
+removes the binding. Each sends a fresh `requestId` for you, and addresses the
+channel's space, which it looks up among the channels you minted unless
+`--space` names it.
 
 `gmail-bind` shares the mint and rotate rate-limit bucket, because each call
 costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it
