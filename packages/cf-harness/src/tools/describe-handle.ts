@@ -900,9 +900,10 @@ const invokeDescribeHandle = async (
     ? undefined
     : resolveReferentToken(context.handleTable, token);
   if (referent !== undefined) {
-    // A held referent that is not a cell. For a document the model saw its
-    // content when the tool returned it, and what is reported here is what
-    // it is and the atom types of the label it was admitted under. Research
+    // A held referent that is not a cell. What is reported for a document
+    // is what it is and the atom types of the label it was admitted under,
+    // never its content: a retrieved row's content reached the model when
+    // the tool returned it, and a Weaver command's answer never does. Research
     // findings are the content a reader has not seen, so they are returned,
     // with the kit's CFC projection beside them for the model context.
     const findings = referent.kind === "research" &&
