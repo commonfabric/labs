@@ -581,18 +581,156 @@ const boundPayloadOf = (metadata: CarriedMetadata): ts.Type | undefined => {
 };
 
 /**
+ * The labels that are evidence a value carries, which a part of a value may
+ * carry only where it provably came from the policy's payload. Every other
+ * label restricts what may happen to the value or is a claim the runtime
+ * verifies at the write, and is safe wherever the payload's data may be.
+ */
+const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
+  "integrity",
+  "addIntegrity",
+]);
+
+/**
+ * A mapped type as the checker holds it, with the type it maps over:
+ * `modifiersType` is `T` in `{ readonly [K in keyof T]: T[K] }`, which the
+ * checker sets once it resolves the mapped type's members.
+ */
+type MappedTypeWithInternals = ts.ObjectType & {
+  readonly modifiersType?: ts.Type;
+};
+
+/**
+ * Whether nothing between a value of `type` and the CFC carriers it holds
+ * writes over the payload's members: each carrier sits in an intersection
+ * beside them, or a mapped type copied it from such a type. A spread's result
+ * holds the carrier the spread of a labeled value copied into it, and a later
+ * spread of a value of the payload's own type writes over the payload's
+ * members while keeping their declarations, so the type cannot tell which
+ * value a member came from. Any other object type that holds a carrier beside
+ * members or an index signature of its own, as an interface extending a CFC
+ * alias does, counts as one; so does a mapped type whose carrier did not come
+ * from the type it maps over, or that the checker holds no such type for.
+ */
+const holdsCarriersUnwritten = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Type> = new Set(),
+): boolean => {
+  if (seen.has(type)) return true;
+  seen.add(type);
+  if (type.isUnionOrIntersection()) {
+    return type.types.every((part) =>
+      holdsCarriersUnwritten(part, checker, seen)
+    );
+  }
+  if (
+    !type.getProperty(CFC_CARRIER_PROPERTY) ||
+    (isCfcCarrier(type) && checker.getIndexInfosOfType(type).length === 0)
+  ) {
+    return true;
+  }
+  if (
+    ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0
+  ) {
+    return false;
+  }
+  const source = (type as MappedTypeWithInternals).modifiersType;
+  return source !== undefined &&
+    source.getProperty(CFC_CARRIER_PROPERTY) !== undefined &&
+    holdsCarriersUnwritten(source, checker, seen);
+};
+
+/**
+ * Which members of a value of `type` a policy whose payload is `of` reaches:
+ * those that may hold the payload's data, where a restriction belongs, and
+ * those that must, where evidence belongs. `all` stands for the whole value.
+ */
+const payloadReach = (
+  type: ts.Type,
+  of: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
+  const payloadMembers = of && dataMemberDeclarations(of, checker);
+  const indexed = !!of &&
+    (of.isUnion() ? of.types : [of]).some((alternative) =>
+      checker.getIndexInfosOfType(alternative).length > 0
+    );
+  // No payload recorded, or one with no members of its own, as a primitive
+  // has none: the value is the payload.
+  if (!payloadMembers || (payloadMembers.size === 0 && !indexed)) {
+    return { may: "all", must: "all" };
+  }
+  const valueMembers = [...dataMemberDeclarations(type, checker)];
+  const unwritten = holdsCarriersUnwritten(type, checker);
+  if (valueMembers.length === 0) {
+    const whole = payloadMembers.size === 0;
+    return {
+      may: whole ? "all" : [],
+      must: whole && unwritten ? "all" : [],
+    };
+  }
+  const may = indexed ? "all" as const : valueMembers
+    .filter(([name]) => payloadMembers.has(name))
+    .map(([name]) => name);
+  const must = !unwritten ? [] : valueMembers
+    .filter(([name, declarations]) => {
+      const payload = payloadMembers.get(name);
+      if (!payload) return false;
+      // A member a mapped type such as `Record` synthesizes has no
+      // declaration on either side; a mapped type cannot write over it.
+      return declarations.length === 0 && payload.length === 0
+        ? true
+        : declarations.some((declaration) => payload.includes(declaration));
+    })
+    .map(([name]) => name);
+  const whole = (members: readonly string[] | "all") =>
+    members === "all" ||
+      (members.length > 0 && members.length === valueMembers.length)
+      ? "all" as const
+      : members;
+  return { may: whole(may), must: whole(must) };
+};
+
+/**
+ * `schema` with `labels` on `members` of the value: the whole value, or each
+ * of those members alone, or nowhere where there are none. Read for its
+ * labels alone (`labelsOnly`), a value whose label belongs to some of its
+ * members carries none at its top.
+ */
+const placeLabelsOn = (
+  schema: MutableJSONSchema,
+  labels: Record<string, unknown>,
+  members: readonly string[] | "all",
+  context: GenerationContext,
+): MutableJSONSchema => {
+  if (members === "all") return withIfcLabels(schema, labels);
+  if (members.length === 0 || context.labelsOnly) return schema;
+  const properties = isObjectOrArray(schema) && !Array.isArray(schema) &&
+      isObjectOrArray(schema.properties)
+    ? schema.properties as Record<string, MutableJSONSchema>
+    : undefined;
+  if (!properties) return withIfcLabels(schema, labels);
+  const labeled: Record<string, MutableJSONSchema> = { ...properties };
+  for (const name of members) {
+    const property = labeled[name];
+    if (property !== undefined) {
+      labeled[name] = withIfcLabels(property, labels);
+    }
+  }
+  return { ...(schema as MutableJSONSchemaObj), properties: labeled };
+};
+
+/**
  * `schema`, the schema of a value of `type`, with each of `placed`'s labels
- * on the part of the value its policy was written around (`CarrierStamp.of`).
- * A member of the value is the payload's where one of its declarations is the
- * payload's own: an intersection, a spread or a mapped type carries the
- * member's declarations with it, and a member written over the payload's,
- * as a spread's later property is, has its own. The label is on the whole
- * value where every member the value holds is the payload's, and where the
- * carrier records no payload or one with no members, as a primitive has
- * none. Where the value holds other members too it is on each of the
- * payload's members alone, and where the value holds none of them, nowhere.
- * Read for its labels alone (`labelsOnly`), a value whose label belongs to
- * some of its members carries none at its top.
+ * on the part of the value its policy was written around (`CarrierStamp.of`;
+ * `payloadReach()`). A restriction goes wherever the payload's data may be:
+ * the members of the payload's names, or the whole value for a payload that
+ * an index signature leaves open. Evidence goes only where the payload's data
+ * must be: members whose declarations are the payload's own, and only where
+ * nothing writes over them (`holdsCarriersUnwritten()`). Either is on the
+ * whole value where it reaches every member, and nowhere where it reaches
+ * none.
  */
 const placeCarriedLabels = (
   schema: MutableJSONSchema,
@@ -603,41 +741,20 @@ const placeCarriedLabels = (
   }[],
   context: GenerationContext,
 ): MutableJSONSchema => {
-  const checker = context.typeChecker;
-  const valueMembers = [...dataMemberDeclarations(type, checker)];
   let result = schema;
   for (const { labels, of } of placed) {
-    const payloadMembers = of && dataMemberDeclarations(of, checker);
-    if (!payloadMembers || payloadMembers.size === 0) {
-      result = withIfcLabels(result, labels);
-      continue;
+    const reach = payloadReach(type, of, context.typeChecker);
+    const evidence: Record<string, unknown> = {};
+    const restrictions: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(labels)) {
+      (EVIDENCE_LABELS.has(key) ? evidence : restrictions)[key] = value;
     }
-    const covered = valueMembers.filter(([name, declarations]) =>
-      declarations.some((declaration) =>
-        payloadMembers.get(name)?.includes(declaration)
-      )
-    ).map(([name]) => name);
-    if (covered.length > 0 && covered.length === valueMembers.length) {
-      result = withIfcLabels(result, labels);
-      continue;
+    if (Object.keys(restrictions).length > 0) {
+      result = placeLabelsOn(result, restrictions, reach.may, context);
     }
-    if (covered.length === 0 || context.labelsOnly) continue;
-    const properties = isObjectOrArray(result) && !Array.isArray(result) &&
-        isObjectOrArray(result.properties)
-      ? result.properties as Record<string, MutableJSONSchema>
-      : undefined;
-    if (!properties) {
-      result = withIfcLabels(result, labels);
-      continue;
+    if (Object.keys(evidence).length > 0) {
+      result = placeLabelsOn(result, evidence, reach.must, context);
     }
-    const labeled: Record<string, MutableJSONSchema> = { ...properties };
-    for (const name of covered) {
-      const property = labeled[name];
-      if (property !== undefined) {
-        labeled[name] = withIfcLabels(property, labels);
-      }
-    }
-    result = { ...(result as MutableJSONSchemaObj), properties: labeled };
   }
   return result;
 };
