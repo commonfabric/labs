@@ -684,14 +684,22 @@ function createObjectView(
     return result === ABSENT ? undefined : result;
   };
 
-  // Listing the keys tells the reader which children there are, so each
-  // listed child's existence is observed, at the instant the view describes.
+  // Listing the keys tells the reader which children the data carries, so the
+  // existence of each listed key the data carries is observed, at the instant
+  // the view describes. A key the schema supplies — a declared default or
+  // stream the data does not carry — is listed whether or not the data carries
+  // it, since a property carrying either one is never turned down, so listing
+  // it observes nothing at its path. That the data lacks it is a fact about
+  // the container's membership, which the container's own read consumes, and
+  // its value is read where the reader reads it.
   const listKeys = (): string[] => {
     const keys = visibleKeys(schema, value);
     const hasWrites = tx.hasWrites();
     const previous = hasWrites ? tx.enterReadEpoch(epoch) : undefined;
     try {
-      for (const key of keys) observeChildExistence(tx, link, key);
+      for (const key of keys) {
+        if (Object.hasOwn(value, key)) observeChildExistence(tx, link, key);
+      }
     } finally {
       if (hasWrites) tx.exitReadEpoch(previous);
     }

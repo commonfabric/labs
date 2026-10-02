@@ -276,6 +276,53 @@ describe("schema-view presence labels", () => {
         ),
       ).toEqual([]);
     });
+
+    describe("a key the schema supplies with a default", () => {
+      const DEFAULTED_EXTRA: JSONSchema = {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          extra: { type: "string", default: "d" },
+        },
+      } as const;
+
+      /** Lists `argument`'s keys into `listed`, and returns how many. */
+      const listInto =
+        (listed: (string | symbol)[]) => (argument: object | undefined) => {
+          listed.push(...Reflect.ownKeys(argument ?? {}));
+          return listed.length;
+        };
+
+      it("carries nothing from that key's path where the data does not carry it", async () => {
+        await seed("default-absent", { name: "n" }, [
+          existence(["extra"], "absent-path"),
+        ]);
+        const listed: (string | symbol)[] = [];
+        expect(
+          await readAndCopy(
+            "default-absent",
+            DEFAULTED_EXTRA,
+            listInto(listed),
+          ),
+        ).toEqual([]);
+        expect(listed).toContain("extra");
+      });
+
+      it("carries that key's existence label where the data carries it", async () => {
+        await seed("default-present", { name: "n", extra: "x" }, [
+          existence(["extra"], "seal"),
+        ]);
+        const listed: (string | symbol)[] = [];
+        expect(
+          await readAndCopy(
+            "default-present",
+            DEFAULTED_EXTRA,
+            listInto(listed),
+          ),
+        ).toContain("seal");
+        expect(listed).toContain("extra");
+      });
+    });
   });
 
   describe("a lift", () => {
