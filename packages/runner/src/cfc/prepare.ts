@@ -1641,8 +1641,6 @@ const writeIsRuntimeInitialization = (
   // the slot keeps its link, so nothing is repointed.
   if (input.mode === "capture" && covering.length === 0) return true;
   // What one covering write's snapshot held at the slot, if it can tell.
-  // Overlapping write paths can capture different intermediate states, so
-  // every covering snapshot is consulted; the deepest alone is insufficient.
   const previousAtSlot = (
     detail: (typeof covering)[number],
   ): { present: false } | { present: true; value: FabricValue } | undefined => {
@@ -1658,19 +1656,23 @@ const writeIsRuntimeInitialization = (
     }
     return { present: true, value: previous };
   };
-  const previous = covering.map(previousAtSlot);
+  // The slot as it stood before the transaction. A write detail keeps its
+  // path's state from before the path was first written, and details come in
+  // the order their paths were first written, so the first covering detail
+  // saw the slot before anything in the transaction covered it. A later one
+  // saw the transaction's own earlier writes: a slot filled and then
+  // rewritten through its parent shows the link there, which says nothing
+  // about what the slot held before. Overlapping write paths capture
+  // different intermediate states, so the deepest detail is no substitute.
+  const first = covering[0];
+  const before = first === undefined ? undefined : previousAtSlot(first);
+  if (before === undefined) return false;
   // A capture staged again, under whatever schema its link now carries, over
-  // a slot that held a link to the same cell repoints nothing. Every snapshot
-  // has to show that link or absence, so a slot emptied and refilled within
-  // the transaction is judged by what it held before.
+  // a slot that held a link to the same cell repoints nothing, even when the
+  // transaction empties and refills the slot.
   if (
-    input.mode === "capture" &&
-    previous.every((state) =>
-      state !== undefined &&
-      (!state.present ||
-        linksNameSameCell(state.value, input.value, { ...target, path: [] }))
-    ) &&
-    previous.some((state) => state?.present === true)
+    input.mode === "capture" && before.present &&
+    linksNameSameCell(before.value, input.value, { ...target, path: [] })
   ) return true;
   // A declaration the stored envelope already makes on the slot keeps its own
   // requirement, whatever the candidate schema introduces beside it.
@@ -1685,8 +1687,7 @@ const writeIsRuntimeInitialization = (
         entry.schema.ifc?.writePolicyAnyOf !== undefined)
     )
   ) return false;
-  return previous.length > 0 &&
-    previous.every((state) => state?.present === false);
+  return !before.present;
 };
 
 /**

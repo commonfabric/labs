@@ -426,6 +426,59 @@ describe("reference-initialization", () => {
       expect(message).not.toContain("writeAuthorizedBy");
     });
 
+    it("refuses a link installed into an absent field whose stored policy names a writer, even when the transaction then rewrites the field's parent", async () => {
+      // The field was absent before the transaction. Rewriting its parent
+      // afterwards records a snapshot in which the field already holds the
+      // link, which must not pass for a link the field held before.
+      const holderSchema: JSONSchema = {
+        type: "object",
+        properties: {
+          holder: {
+            type: "object",
+            properties: {
+              element: {
+                type: "object",
+                properties: { body: { type: "string" } },
+                ifc: { writeAuthorizedBy: writer },
+              },
+              n: { type: "number" },
+            },
+          },
+        },
+      };
+      const seed = runtime.edit();
+      entryCell(seed, "entry", "a");
+      runtime.getCell(space, "holder-argument", holderSchema, seed).set({
+        holder: { n: 1 },
+      });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+
+      for (const rewriteParent of [false, true]) {
+        const tx = runtime.edit();
+        const link = runtime.getCell(space, "entry", undefined, tx).getAsLink();
+        const raw = runtime.getCell(space, "holder-argument", undefined, tx);
+        raw.key("holder").key("element").setRaw(link);
+        if (rewriteParent) raw.key("holder").setRaw({ element: link, n: 2 });
+        const argument = runtime.getCell(
+          space,
+          "holder-argument",
+          holderSchema,
+          tx,
+        ).getAsNormalizedFullLink();
+        recordReferencedArgumentFields(
+          tx,
+          { ...argument, path: [...argument.path, "holder"] },
+          ["element"],
+        );
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy requires a trusted verified binding identity at /holder/element",
+        );
+      }
+    });
+
     it("refuses a link to another cell staged over a field that holds one", async () => {
       const first = runtime.edit();
       const created = runtime.getCell(space, "argument", argumentSchema, first);
