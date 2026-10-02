@@ -8,6 +8,7 @@ import type { CellRef } from "@commonfabric/runtime-client";
 
 import { getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
+import "../cf-cell-link/index.ts";
 import "../cf-drag-source/index.ts";
 // The entrypoint registers cf-render in the browser.
 import "./index.ts";
@@ -60,5 +61,94 @@ Deno.test("a default chip inside a drag source starts one cell-link drag, and le
     expect(previews()).toHaveLength(0);
   } finally {
     outer.remove();
+  }
+});
+
+/**
+ * Presses the pointer on `target`, moves it past the drag threshold when
+ * `dragged`, releases it, and, when `clicked`, dispatches the click a browser
+ * follows a release over the element it was pressed on with. Returns the
+ * navigations that followed.
+ */
+function pressAndRelease(
+  target: Element,
+  dragged: boolean,
+  clicked = true,
+): unknown[] {
+  const navigations: unknown[] = [];
+  const listener = (event: Event) =>
+    navigations.push((event as CustomEvent).detail);
+  globalThis.addEventListener("cf-navigate", listener);
+  try {
+    const pointer = { bubbles: true, composed: true, pointerId: 1 };
+    const at = dragged ? 40 : 10;
+    target.dispatchEvent(
+      new PointerEvent("pointerdown", { ...pointer, clientX: 10, clientY: 10 }),
+    );
+    if (dragged) {
+      document.dispatchEvent(
+        new PointerEvent("pointermove", {
+          ...pointer,
+          clientX: at,
+          clientY: at,
+        }),
+      );
+    }
+    document.dispatchEvent(
+      new PointerEvent("pointerup", { ...pointer, clientX: at, clientY: at }),
+    );
+    if (clicked) {
+      target.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true }),
+      );
+    }
+  } finally {
+    globalThis.removeEventListener("cf-navigate", listener);
+  }
+  return navigations;
+}
+
+Deno.test("a drag of a default chip, or of a cell link, does not navigate, and a click after it does", async () => {
+  // A drag released over something else gets no click on the chip, and the
+  // click after it still navigates.
+
+  const { cell } = createRenderableCellHandle<unknown>(undefined, {
+    id: "of:fid1:dragged-abcdef" as CellRef["id"],
+  });
+  Object.assign(cell.runtime(), { signal: new AbortController().signal });
+  cell.resolveAsCell = () => Promise.resolve(cell);
+
+  const element = document.createElement("cf-render") as CFRender;
+  element.variant = "chip";
+  element.cell = cell;
+  const link = document.createElement("cf-cell-link");
+  link.cell = cell;
+  document.body.append(element, link);
+
+  try {
+    await element.updateComplete;
+    await element.accessForTestingOnly.renderCell();
+    await link.updateComplete;
+    const chips = {
+      "default chip": element.shadowRoot?.querySelector("cf-chip"),
+      "cell link": link.shadowRoot?.querySelector("cf-chip"),
+    };
+    const outcomes: Record<string, number[]> = {};
+    for (const [id, chip] of Object.entries(chips)) {
+      if (!chip) throw new Error(`the ${id} did not render`);
+      outcomes[id] = [
+        pressAndRelease(chip, true).length,
+        pressAndRelease(chip, false).length,
+        pressAndRelease(chip, true, false).length,
+        pressAndRelease(chip, false).length,
+      ];
+    }
+    expect(outcomes).toEqual({
+      "default chip": [0, 1, 0, 1],
+      "cell link": [0, 1, 0, 1],
+    });
+  } finally {
+    element.remove();
+    link.remove();
   }
 });

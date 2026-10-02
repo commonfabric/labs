@@ -15,6 +15,7 @@ import { state } from "lit/decorators.js";
 import { createRef, type Ref, ref } from "lit/directives/ref.js";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { suppressClickAfterDrag } from "../../core/drag-state.ts";
 import { createNameChip } from "../../core/name-chip.ts";
 
 import "../cf-loader/index.ts";
@@ -657,11 +658,14 @@ export class CFRender extends BaseElement {
     // The chip is the drag source for its piece, as a cell link is, so a drag
     // source around the `cf-render` does not start a second drag.
     const onPointerDown = (e: Event) => e.stopPropagation();
+    const onDragEnd = () => suppressClickAfterDrag(source);
     chip.addEventListener("click", onClick);
     source.addEventListener("pointerdown", onPointerDown);
+    source.addEventListener("cf-drag-end", onDragEnd);
     return () => {
       chip.removeEventListener("click", onClick);
       source.removeEventListener("pointerdown", onPointerDown);
+      source.removeEventListener("cf-drag-end", onDragEnd);
       cleanup();
       source.remove();
     };
