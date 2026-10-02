@@ -3581,12 +3581,9 @@ const isSessionRevoked = (
 
 const isSessionAdmissible = (
   message: unknown,
-): message is SessionAdmissibleMessage => {
-  if (!isPlainObject(message)) return false;
-  const { type, space, principal } = message;
-  return type === "session/admissible" && typeof space === "string" &&
-    typeof principal === "string";
-};
+): message is SessionAdmissibleMessage =>
+  isPlainObject(message) && message.type === "session/admissible" &&
+  typeof message.space === "string" && typeof message.principal === "string";
 
 const isPresencePush = (
   message: unknown,
