@@ -1009,6 +1009,9 @@ export interface SchedulerEventExecutionState {
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
   ) => void;
+
+  /** Notes that the dispatch aborts `originTx` in order to run it again. */
+  readonly noteLineageRerun: (originTx: IExtendedStorageTransaction) => void;
   readonly getOriginLocalSeq: (
     originTx: IExtendedStorageTransaction,
     space: MemorySpace,
@@ -1495,6 +1498,7 @@ export async function processPullQueuedEventDuringExecute(
       state.releaseLineageEvent(originTx, event),
     recordLineageEvent: (originTx, event) =>
       state.recordLineageEvent(originTx, event),
+    noteLineageRerun: (originTx) => state.noteLineageRerun(originTx),
     getOriginLocalSeq: (originTx, space) =>
       state.getOriginLocalSeq(originTx, space),
     collectPendingLoadParkKeys: (event, log) =>
@@ -1526,6 +1530,9 @@ export async function dispatchQueuedEvent(state: {
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
   ) => void;
+
+  /** Notes that the dispatch aborts `originTx` in order to run it again. */
+  readonly noteLineageRerun: (originTx: IExtendedStorageTransaction) => void;
   readonly getOriginLocalSeq: (
     originTx: IExtendedStorageTransaction,
     space: MemorySpace,
@@ -1987,10 +1994,14 @@ export async function dispatchQueuedEvent(state: {
       // access-list commit conflicted. Abort this run's transaction and re-queue
       // the event so the handler re-runs.
       if (error instanceof RetryImmediately) {
+        const rerun = retry || served !== undefined;
+        // Before the abort, whose settle callback drops the follow-ups this
+        // attempt sent: the re-run sends its own.
+        if (rerun) state.noteLineageRerun(tx);
         if (tx.status().status === "ready") {
           tx.abort(error);
         }
-        if (retry || served !== undefined) {
+        if (rerun) {
           requeueForNameResolution();
         } else {
           // An unserved retries:false event is a one-shot; it does not re-run to
