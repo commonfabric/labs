@@ -333,7 +333,16 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
     if (act === "delivered") {
       const id = event?.id ?? state.id;
-      if (typeof id !== "string") return;
+      // An event's type doesn't refuse an event that lacks a field it
+      // requires, so each act refuses the request itself, where a rendered
+      // control's binding doesn't supply the field.
+      if (typeof id !== "string") {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "The request names no notice.",
+        });
+        return;
+      }
       outgoingNotices.set(
         ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
           notice,
@@ -403,6 +412,13 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         });
         return;
       }
+      if (draft === undefined && !Array.isArray(event?.members)) {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "A group's members must be listed.",
+        });
+        return;
+      }
       const listed = event?.members ?? principalsIn(draft?.members ?? "");
       const notPrincipals = listed.filter((member) => !isPrincipalDID(member));
       if (notPrincipals.length > 0) {
@@ -430,7 +446,13 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     }
 
     const room = event?.room ?? state.room;
-    if (room === undefined) return;
+    if (room === undefined) {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no room.",
+      });
+      return;
+    }
 
     if (act === "forget") {
       rooms.set(
