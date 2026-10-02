@@ -3377,14 +3377,16 @@ export class Runner {
         throw new Error("Invalid argument link in updateArgument");
       }
       // The argument document is new, so a protected field the caller leaves
-      // to its default is the setup's initialization, whatever later reads
-      // or projects the field.
+      // out, and setup fills with its default, is the setup's initialization,
+      // whatever later reads or projects the field. A field the caller
+      // supplies is the caller's write, even where it equals the default.
       if (nextArgument !== undefined) {
         recordNewDocumentProtectedDefaults(
           tx,
           argumentLink,
           pattern.argumentSchema,
           defaults,
+          argument,
           nextArgument,
         );
       }
