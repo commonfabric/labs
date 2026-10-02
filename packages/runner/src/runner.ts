@@ -5081,6 +5081,7 @@ export class Runner {
               isCurrent: () =>
                 active && startLifecycleEpoch === this.#lifecycleEpoch &&
                 currentPatternKey === newKey,
+              allowReadOnly: true,
             },
           )
             .then(() => {
@@ -5266,6 +5267,7 @@ export class Runner {
                 isCurrent: () =>
                   active && startLifecycleEpoch === this.#lifecycleEpoch &&
                   currentPatternKey === newKey,
+                allowReadOnly: true,
               },
             ).then(
               () => {

@@ -682,10 +682,39 @@ Deno.test("a READ member can cold-start a shared piece without persisting its sc
     expect(reached.key("draft").resolveAsCell().getRawUntyped())
       .toBeUndefined();
 
+    for (const live of [false, true]) {
+      const title = live ? "Already loaded update" : "Cold loaded update";
+      const program = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `import { pattern, Writable } from "commonfabric";
+        export default pattern<Record<string, never>, { title: string; draft: Writable<{title:string}> }>(() => ({
+          title: ${
+            JSON.stringify(title)
+          }, draft: Writable.perUser.of({title:""}),
+        }));`,
+        }],
+      };
+      const updated = await author.patternManager.compilePattern(program, {
+        space,
+      });
+      if (live) await viewer.patternManager.compilePattern(program);
+      await author.runSynced(original, updated, {}, { start: false });
+      await author.idle();
+      await reached.sync();
+      await viewer.runner.idlePointerMaintenance();
+      await viewer.idle();
+      expect(reached.key("title").get()).toBe(title);
+      expect(reached.key("draft").resolveAsCell().getRawUntyped())
+        .toBeUndefined();
+      expect(server.aclStats.denied).toBe(deniedBeforeStart);
+    }
+
     const denied = viewer.edit();
     reached.key("draft").withTx(denied).set({ title: "unauthorized" });
     expect((await denied.commit()).error?.name).toBe("AuthorizationError");
-    expect(original.key("title").get()).toBe("Shared");
+    expect(original.key("title").get()).toBe("Already loaded update");
   } finally {
     await viewer.dispose({ closeStorage: false });
     await author.dispose({ closeStorage: false });
