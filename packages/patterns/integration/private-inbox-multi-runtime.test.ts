@@ -105,6 +105,21 @@ describe("private inbox across runtimes", () => {
     writeRefusals(getLoggerCountsBreakdown());
 
   /**
+   * Whether the memory server refuses the sender's runtime the inbox's space.
+   * Without server execution the sender's runtime runs the inbox's `receive`
+   * itself, which it cannot do in a space it may not read: the event waits
+   * for a load that is refused, and nothing commits that a delivery wait could
+   * see. With server execution the space's server runs it, so the sender's
+   * own access does not decide delivery, and this is `false`.
+   */
+  const senderRefusedInbox = async (): Promise<boolean> =>
+    !SERVER_EXECUTION &&
+    await sender.read(["offers"], { piece: inbox }).then(
+      () => false,
+      () => true,
+    );
+
+  /**
    * Has the sender's own handler send an offer through the owner's first
    * profile, and waits for the owner to read it or for the append to be
    * refused, then asserts the first. The append is a consequence of a
@@ -115,8 +130,9 @@ describe("private inbox across runtimes", () => {
     await sender.send("offer", { space: harness.spaceDid, title });
     await harness.settleUntil(async () =>
       (await ownerOffers()).some((each) => each.title === title) ||
-      await refusals() > refusedBefore
+      await refusals() > refusedBefore || await senderRefusedInbox()
     );
+    expect(await senderRefusedInbox()).toBe(false);
     expect(await refusals()).toBe(refusedBefore);
     expect((await ownerOffers()).map((each) => each.title)).toContain(title);
   };
