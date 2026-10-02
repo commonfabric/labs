@@ -11,21 +11,30 @@ import {
 } from "./v2-auth-test-helpers.ts";
 
 /** A reconnectable transport using the real server's handshake and sessions. */
-function reconnectableTransport(server: Server) {
+function reconnectableTransport(
+  server: Server,
+  options: { holdFirstTransact?: boolean } = {},
+) {
   let connection: ReturnType<Server["connect"]> | undefined;
   let receiver = (_payload: string) => {};
   let closeReceiver = (_error?: Error) => {};
   let connections = 0;
   const duplicateHello = Promise.withResolvers<string>();
+  const resetCalled = Promise.withResolvers<void>();
+  const transactSent = Promise.withResolvers<void>();
+  let heldOnce = false;
+  let holding = false;
   const reset = () => {
     connection?.close();
     connection = undefined;
+    holding = false;
   };
   const transport = {
     async send(payload: string) {
       if (!connection) {
         connections++;
-        connection = server.connect((message) => {
+        const opened = server.connect((message) => {
+          if (connection !== opened || holding) return;
           const encoded = encodeMemoryBoundary(message);
           receiver(encoded);
           const response = decodeMemoryBoundary(encoded) as {
@@ -35,10 +44,23 @@ function reconnectableTransport(server: Server) {
             duplicateHello.resolve(response.error.message);
           }
         });
+        connection = opened;
       }
-      await connection.receive(payload);
+      const message = decodeMemoryBoundary(payload) as { type: string };
+      const held = options.holdFirstTransact && !heldOnce &&
+        message.type === "transact";
+      if (held) {
+        heldOnce = true;
+        holding = true;
+      }
+      const received = connection.receive(payload);
+      if (held) transactSent.resolve();
+      await received;
     },
-    reset,
+    reset() {
+      reset();
+      resetCalled.resolve();
+    },
     close() {
       reset();
       return Promise.resolve();
@@ -53,11 +75,13 @@ function reconnectableTransport(server: Server) {
   return {
     transport,
     duplicateHello: duplicateHello.promise,
+    resetCalled: resetCalled.promise,
+    transactSent: transactSent.promise,
     get connections() {
       return connections;
     },
     drop() {
-      transport.reset();
+      reset();
       closeReceiver(new Error("test connection dropped"));
     },
   };
@@ -198,9 +222,19 @@ describe("v2-client-reconnect-recovery", () => {
         }],
       });
       pending.catch(() => {});
+      const restored = client.restoreConnection().then(() => "restored");
+      restored.catch(() => {});
       expect(
         await Promise.race([
-          client.restoreConnection().then(() => "restored"),
+          wire.resetCalled.then(() => "reset"),
+          wire.duplicateHello,
+        ]),
+      ).toBe("reset");
+      await healthy.whenRestored();
+      expect(wire.connections).toBe(3);
+      expect(
+        await Promise.race([
+          restored,
           wire.duplicateHello,
         ]),
       ).toBe("restored");
@@ -211,6 +245,114 @@ describe("v2-client-reconnect-recovery", () => {
       expect(healthyAttempts).toBe(2);
       expect(wire.connections).toBe(3);
       expect(client.connectionState).toBe("connected");
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+
+  it("retains a commit in flight on a restored session when its sibling fails", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-inflight-commit"),
+    });
+    const wire = reconnectableTransport(server, { holdFirstTransact: true });
+    const client = await connect({ transport: wire.transport });
+    const flaky = await client.mount(
+      "did:key:z6Mk-reconnect-inflight-flaky",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const healthy = await client.mount(
+      "did:key:z6Mk-reconnect-inflight-healthy",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const healthyRestored = Promise.withResolvers<void>();
+    const restoreHealthy = healthy.restore.bind(healthy);
+    using _healthy = stub(healthy, "restore", async () => {
+      await restoreHealthy();
+      healthyRestored.resolve();
+    });
+    const restoreFlaky = flaky.restore.bind(flaky);
+    let attempts = 0;
+    let pending: ReturnType<typeof healthy.transact> | undefined;
+    using _flaky = stub(flaky, "restore", async () => {
+      if (++attempts === 1) {
+        await healthyRestored.promise;
+        pending = healthy.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id: "of:inflight", value: { value: 1 } }],
+        });
+        pending.catch(() => {});
+        await wire.transactSent;
+        throw new Error("transient session restoration failure");
+      }
+      return restoreFlaky();
+    });
+    try {
+      wire.drop();
+      await client.restoreConnection();
+      expect(pending).toBeDefined();
+      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      expect(wire.connections).toBe(3);
+    } finally {
+      await client.close();
+      await pending?.catch(() => {});
+      await server.close();
+    }
+  });
+
+  it("retains replayed commits when the same session fails to restore its watches", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-replay-watch-failure"),
+    });
+    const wire = reconnectableTransport(server, { holdFirstTransact: true });
+    const client = await connect({ transport: wire.transport });
+    const session = await client.mount(
+      "did:key:z6Mk-reconnect-replay-watch-failure",
+      {},
+      testSessionOpenAuthFactory,
+    );
+    await session.watchAddSync([{
+      id: "watched",
+      kind: "graph",
+      query: {
+        roots: [{ id: "of:replayed", selector: { path: [], schema: false } }],
+      },
+    }]);
+    // A reopened session whose watches were forgotten re-establishes them
+    // after starting its retained commits' replay.
+    const open = client.openSession.bind(client);
+    using _open = stub(client, "openSession", async (...args) => ({
+      ...await open(...args),
+      resumed: false,
+    }));
+    const watchSet = session.watchSetSync.bind(session);
+    let attempts = 0;
+    using _watchSet = stub(session, "watchSetSync", async (...args) => {
+      if (++attempts === 1) {
+        await wire.transactSent;
+        throw new Error("transient watch restoration failure");
+      }
+      return watchSet(...args);
+    });
+    let pending: ReturnType<typeof session.transact> | undefined;
+    try {
+      wire.drop();
+      pending = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:replayed", value: { value: 1 } }],
+      });
+      pending.catch(() => {});
+      await client.restoreConnection();
+      await expect(pending).resolves.toMatchObject({ seq: 1 });
+      expect(attempts).toBe(2);
+      expect(wire.connections).toBe(3);
     } finally {
       await client.close();
       await pending?.catch(() => {});

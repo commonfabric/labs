@@ -455,9 +455,9 @@ Rules:
   `retriable` is permanent: the client stops reopening that session and
   terminates it with the real error rather than retrying the identical handshake
   forever. A `retriable` authorization race (an expired, used, or mismatched
-  challenge; a stale signed `exp`) and every transport-level disconnect still
-  retry, so a transient blip or a fresh-challenge race heals. A permanent
-  protocol-flag mismatch at `hello` ends the whole connection the same way. See
+  challenge; a stale signed `exp`) or a transport-level disconnect can recover
+  through retries on a transport that can discard its failed connection. A
+  permanent protocol-flag mismatch at `hello` ends the whole connection. See
   [`../../features/authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md)
   for how the client, the runner storage layer, and the CLI act on this
   classification end to end.

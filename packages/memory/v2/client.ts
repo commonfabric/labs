@@ -108,7 +108,8 @@ export type Transport = {
 
   /**
    * Discards the current connection without disposing the transport. The next
-   * send opens a fresh connection; frames from the discarded one are ignored.
+   * send opens a fresh connection; frames and close callbacks from the
+   * discarded one are ignored.
    * Reconnectable transports implement this so a failed session restoration
    * can retry the handshake on a connection that has not accepted `hello`.
    * Without it, a failed reconnect terminates the client with that failure.
@@ -1222,7 +1223,10 @@ export class Client {
             }
             return;
           }
-          this.#rejectPending(err);
+          // Requests lost with this connection have no server verdict. Keep
+          // their commits outstanding for replay, regardless of which error
+          // caused a session's restore to fail.
+          this.#rejectPending(toConnectionError(err));
           for (const session of this.#spaces) {
             session.handleDisconnect();
           }
