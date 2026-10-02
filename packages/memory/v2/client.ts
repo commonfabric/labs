@@ -38,6 +38,7 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  type SessionAdmissibleMessage,
   type SessionEffectMessage,
   type SessionHolding,
   type SessionOpenAuthMetadata,
@@ -428,6 +429,11 @@ export class Client {
    */
   #stateChanged: PromiseWithResolvers<void> | null = null;
 
+  /** Observers of `session/admissible`, as `subscribeAdmissible()` added. */
+  #admissibleObservers = new Set<
+    (space: string, principal: string) => void
+  >();
+
   readonly #transport: Transport;
 
   private constructor(
@@ -475,6 +481,21 @@ export class Client {
    */
   delivered(): Promise<void> {
     return this.#transport.delivered?.() ?? Promise.resolve();
+  }
+
+  /**
+   * Calls `observer` with each `session/admissible` the server sends: the
+   * space it refused `principal` on this client, which a `session.open`
+   * would now be admitted to. The notice is a hint, and grants nothing until
+   * a session opens. Returns the function that ends the subscription.
+   */
+  subscribeAdmissible(
+    observer: (space: string, principal: string) => void,
+  ): () => void {
+    this.#admissibleObservers.add(observer);
+    return () => {
+      this.#admissibleObservers.delete(observer);
+    };
   }
 
   async close(): Promise<void> {
@@ -1181,6 +1202,16 @@ export class Client {
           session.space === message.space
         ) {
           session.handleRevoked(message.reason);
+        }
+      }
+      return;
+    }
+    if (isSessionAdmissible(message)) {
+      for (const observer of [...this.#admissibleObservers]) {
+        try {
+          observer(message.space, message.principal);
+        } catch (cause) {
+          console.error("session-admissible subscriber threw:", cause);
         }
       }
       return;
@@ -3546,6 +3577,15 @@ const isSessionRevoked = (
     typeof space === "string" &&
     typeof sessionId === "string" &&
     (reason === "taken-over" || reason === "unauthorized");
+};
+
+const isSessionAdmissible = (
+  message: unknown,
+): message is SessionAdmissibleMessage => {
+  if (!isPlainObject(message)) return false;
+  const { type, space, principal } = message;
+  return type === "session/admissible" && typeof space === "string" &&
+    typeof principal === "string";
 };
 
 const isPresencePush = (

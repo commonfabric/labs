@@ -114,6 +114,7 @@ import {
   type WatchSpec,
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
+import { AdmissionWaiters } from "./admission-waiters.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
 import * as Engine from "./engine.ts";
 import {
@@ -898,6 +899,7 @@ class Connection {
   #closed = false;
   #syncSchemaTable = false;
   #stableExpressionResultIds = false;
+  #admissionNotice = false;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
@@ -955,6 +957,11 @@ class Connection {
   /** Whether the peer declared the expression result identity contract. */
   get stableExpressionResultIds(): boolean {
     return this.#stableExpressionResultIds;
+  }
+
+  /** Whether both peers advertised `admissionNotice`. */
+  get admissionNotice(): boolean {
+    return this.#admissionNotice;
   }
 
   hasSession(space: string, sessionId: string): boolean {
@@ -1034,6 +1041,12 @@ class Connection {
     });
   }
 
+  /** Tells the peer that `principal` would now be admitted to `space`. */
+  sendAdmissible(space: string, principal: string): void {
+    if (this.#closed) return;
+    this.#send({ type: "session/admissible", space, principal });
+  }
+
   issueSessionOpenAuth(): SessionOpenAuthMetadata {
     const sessionOpen = this.#server.sessionOpenHandshake();
     this.#sessionOpenChallenge = {
@@ -1067,6 +1080,7 @@ class Connection {
   /** Ends the authentication of `principal`, if it has one. */
   releasePrincipal(principal: string): void {
     this.#principals.delete(principal);
+    this.#server.forgetAdmissionWaits(this.id, principal);
   }
 
   /** Whether this connection is bound to a verified Mode A context. */
@@ -1537,6 +1551,8 @@ class Connection {
       const serverFlags = parseMemoryProtocolFlags(response.flags);
       this.#stableExpressionResultIds =
         clientFlags?.stableExpressionResultIds === true;
+      this.#admissionNotice = clientFlags?.admissionNotice === true &&
+        serverFlags?.admissionNotice === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
       this.#ready = true;
@@ -2029,6 +2045,9 @@ export type EngineOpener = (
 export class Server {
   #sessions: SessionRegistry;
   #connections = new Map<string, Connection>();
+
+  /** The principals refused a space, by the connection to tell on a grant. */
+  #admissionWaiters = new AdmissionWaiters();
 
   /** Whole-evaluation caches, one per space (see QueryEvaluationCache in
    * query.ts for the sharing, purity, and seq-rotation rules), held for at
@@ -2904,6 +2923,13 @@ export class Server {
         session.actingPrincipal ?? session.principal,
       );
       if (capability !== null && isCapable(capability, "READ")) continue;
+      if (session.actingPrincipal === undefined) {
+        this.#awaitAdmission(
+          session.ownerConnectionId,
+          space,
+          session.principal,
+        );
+      }
       // Drop the de-authorized session from the registry: the refresh loop
       // iterates registered sessions, so removal stops all further watch
       // pushes, and its next message fails closed (Unknown session).
@@ -2929,6 +2955,44 @@ export class Server {
           "unauthorized",
         );
       }
+    }
+  }
+
+  /**
+   * Records that `principal` was refused `space` on `connectionId`, so that
+   * an access-list change admitting it tells that connection
+   * (`#noticeAdmissions()`). A routed connection records nothing, and
+   * neither does one whose peer did not advertise `admissionNotice`.
+   */
+  #awaitAdmission(
+    connectionId: string | null,
+    space: string,
+    principal: string | undefined,
+  ): void {
+    if (connectionId === null || principal === undefined) return;
+    const connection = this.#connections.get(connectionId);
+    if (
+      connection === undefined || connection.routed ||
+      !connection.admissionNotice
+    ) {
+      return;
+    }
+    this.#admissionWaiters.add(connectionId, space, principal);
+  }
+
+  /**
+   * After an access-list change, sends `session/admissible` to each
+   * connection that was refused `space` for a principal that now holds
+   * `READ` there. Each refusal is told once.
+   */
+  #noticeAdmissions(engine: Engine.Engine, space: string): void {
+    if (!this.isAclActive()) return;
+    const admitted = this.#admissionWaiters.take(space, (principal) => {
+      const capability = this.#capabilityFor(engine, space, principal);
+      return capability !== null && isCapable(capability, "READ");
+    });
+    for (const { connectionId, principal } of admitted) {
+      this.#connections.get(connectionId)?.sendAdmissible(space, principal);
     }
   }
 
@@ -2965,9 +3029,15 @@ export class Server {
 
   disconnect(connection: Connection): void {
     this.#connections.delete(connection.id);
+    this.#admissionWaiters.removeConnection(connection.id);
     if (this.#connections.size === 0) {
       this.#cancelScheduledRefresh();
     }
+  }
+
+  /** Forgets every refusal of `principal` on `connectionId`. */
+  forgetAdmissionWaits(connectionId: string, principal: string): void {
+    this.#admissionWaiters.removePrincipal(connectionId, principal);
   }
 
   detachSession(
@@ -3175,6 +3245,7 @@ export class Server {
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#revokeDeauthorizedSessions(engine, request.space);
+        this.#noticeAdmissions(engine, request.space);
         this.markSpaceDirty(request.space, [
           toDirtyKey(aclDocId(request.space)),
         ]);
@@ -4203,6 +4274,9 @@ export class Server {
         "READ",
       );
       if (deny) {
+        if (actingAs === undefined) {
+          this.#awaitAdmission(connection.id, message.space, principal);
+        }
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
       }
       const requestedRoot = message.session.genesisRoot;
@@ -4308,6 +4382,9 @@ export class Server {
             "Session was revoked while opening",
           ),
         );
+      }
+      if (principal !== undefined) {
+        this.#admissionWaiters.remove(connection.id, message.space, principal);
       }
       const nextSessionOpen = connection.issueSessionOpenAuth();
       // Activation trigger (serving-loop.md §1): session open makes the
@@ -5063,6 +5140,7 @@ export class Server {
               message.space,
               message.sessionId,
             );
+            this.#noticeAdmissions(engine, message.space);
           }
           span.setAttribute("commit.seq", commit.seq);
           return {
