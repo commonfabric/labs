@@ -15,6 +15,8 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { type JSONSchema } from "../src/builder/types.ts";
+import { type CfcConfClause } from "../src/cfc/clause.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -98,20 +100,20 @@ describe("schema-view presence labels", () => {
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
-    } as FabricValue);
+    });
     expect((await tx.commit()).ok).toBeDefined();
   };
 
   /** The confidentiality of every derived entry stored on document `id`. */
-  const derivedConfidentiality = (id: string): string[] => {
-    const replica = storageManager.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
-    };
-    return (replica.getDocument(id)?.cfc?.labelMap?.entries ?? [])
-      .filter((entry) => entry.origin === "derived")
-      .flatMap((entry) => entry.label.confidentiality ?? []);
+  const derivedConfidentiality = (id: string) => {
+    const tx = runtime.edit();
+    try {
+      return (readStoredCfcMetadata(tx, { space, id })?.labelMap.entries ?? [])
+        .filter((entry) => entry.origin === "derived")
+        .flatMap((entry) => entry.label.confidentiality ?? []);
+    } finally {
+      tx.abort();
+    }
   };
 
   /**
@@ -119,18 +121,20 @@ describe("schema-view presence labels", () => {
    * what it read to `body`, writes what that returns to a fresh document, and
    * returns the confidentiality the write was stamped with.
    */
-  const readAndCopy = async (
+  const readAndCopy = async <T extends object>(
     source: string,
     schema: JSONSchema,
-    body: (argument: any) => unknown,
+    body: (argument: T | undefined) => unknown,
     { lazy = true }: { lazy?: boolean } = {},
-  ): Promise<string[]> => {
+  ): Promise<CfcConfClause[]> => {
     const tx = runtime.edit();
     if (lazy) tx.markLazyMaterialize(true);
-    const result = body(runtime.getCell(space, source, schema, tx).get());
+    const result = body(
+      runtime.getCell<T | undefined>(space, source, schema, tx).get(),
+    );
     tx.markLazyMaterialize(false);
     const out = runtime.getCell(space, `${source}-out`, undefined, tx);
-    out.set({ result } as FabricValue);
+    out.set({ result });
     tx.prepareCfc();
     expect((await tx.commit()).ok).toBeDefined();
     return derivedConfidentiality(out.getAsNormalizedFullLink().id);
@@ -226,7 +230,8 @@ describe("schema-view presence labels", () => {
         await readAndCopy(
           "listed",
           OPTIONAL_SECRET,
-          (argument) => Reflect.ownKeys(argument).length,
+          (argument: object | undefined) =>
+            Reflect.ownKeys(argument ?? {}).length,
         ),
       ).toContain("seal");
     });
@@ -239,7 +244,8 @@ describe("schema-view presence labels", () => {
         await readAndCopy(
           "listed-value",
           OPTIONAL_SECRET,
-          (argument) => Reflect.ownKeys(argument).length,
+          (argument: object | undefined) =>
+            Reflect.ownKeys(argument ?? {}).length,
         ),
       ).toEqual([]);
     });
@@ -266,8 +272,8 @@ describe("schema-view presence labels", () => {
         schema,
         { type: "string" } as const,
       );
-      const readNamePattern = pattern<{ source: unknown }>(
-        ({ source }) => ({ out: readName(source as never) }),
+      const readNamePattern = pattern<{ source: { name: string } }>(
+        ({ source }) => ({ out: readName(source) }),
       );
 
       const tx = runtime.edit();
