@@ -35,6 +35,10 @@ import {
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
+import {
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  harnessClientProtocolEcho,
+} from "../src/contracts/client-command.ts";
 import { HarnessChatStoreHeldError } from "../src/session-store.ts";
 import {
   openSqliteHarnessChatSessionStore,
@@ -2024,4 +2028,73 @@ Deno.test("interactive NDJSON transport starts a session whose protocol it serve
       "protocol_mismatch",
     ]],
   );
+});
+
+Deno.test("interactive NDJSON transport echoes its client protocol on an accepted session and turn", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "start_session",
+        params: {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+          model: "gpt-test",
+          protocol: { protocolVersion: 1, requires: ["client_actions"] },
+        },
+      }),
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-2",
+        method: "start_turn",
+        params: {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Hello" },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+    createService: (onEvent) =>
+      new HarnessInteractiveChatService({
+        onEvent,
+        createPromptLoop: () => ({
+          runTranscript: (options) => {
+            const finalMessage = {
+              role: "assistant" as const,
+              content: "Hello.",
+            };
+            return Promise.resolve({
+              model: "gpt-test",
+              finalAssistantText: "Hello.",
+              transcript: [...options.transcript, finalMessage],
+              modelTurns: 1,
+              runState: {} as HarnessPromptLoopResult["runState"],
+            });
+          },
+        }),
+      }),
+  });
+
+  const echoes = decodeLines(output).flatMap((envelope) =>
+    "ok" in envelope && envelope.ok
+      ? [[
+        envelope.requestId,
+        (envelope.result as { protocol?: unknown }).protocol,
+      ]]
+      : []
+  );
+  assertEquals(echoes, [
+    ["request-1", harnessClientProtocolEcho()],
+    ["request-2", harnessClientProtocolEcho()],
+  ]);
+  assertEquals(harnessClientProtocolEcho().features, [
+    ...HARNESS_SUPPORTED_CLIENT_FEATURES,
+  ]);
 });

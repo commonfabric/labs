@@ -872,7 +872,8 @@ answers 400. An accepted task's answer, and `GET /api/status`, carry
 `protocol: { "protocolVersion": 1, "features": [...] }`. A task without a
 declaration requires nothing and is served as before. The stdio `start_session`
 and `start_turn` take the same `protocol` param and refuse with error code
-`protocol_mismatch`, the same fields in `details`.
+`protocol_mismatch`, the same fields in `details`; an accepted one carries the
+same `protocol` echo beside the status in its result.
 
 The features are `client_actions`, the actions above, and `typed_commands`, the
 typed command invocation, catalog, and settlement defined in

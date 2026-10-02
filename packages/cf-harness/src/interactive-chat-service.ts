@@ -90,6 +90,8 @@ import {
 import {
   checkHarnessClientProtocol,
   type HarnessClientProtocolDeclaration,
+  type HarnessClientProtocolEcho,
+  harnessClientProtocolEcho,
   type HarnessCommandResolveBody,
 } from "./contracts/client-command.ts";
 
@@ -360,6 +362,21 @@ const protocolMismatchError = (
     details: { ...details },
   });
 };
+
+/**
+ * An accepted stdio `start_session` or `start_turn` answer, carrying the
+ * console's client protocol as `POST /api/task` does, so a host learns what
+ * this console serves from an acceptance and not only from a refusal.
+ */
+const withProtocolEcho = <Result extends object>(
+  response: HarnessChatResponse<Result>,
+): HarnessChatResponse<Result & { protocol: HarnessClientProtocolEcho }> =>
+  response.ok
+    ? {
+      ...response,
+      result: { ...response.result, protocol: harnessClientProtocolEcho() },
+    }
+    : response;
 
 const sessionExistsError = (
   requestId: string,
@@ -1320,9 +1337,13 @@ export class HarnessInteractiveChatService {
     const method = String(request.method);
     switch (request.method) {
       case "start_session":
-        return await this.startSession(request.requestId, request.params);
+        return withProtocolEcho(
+          await this.startSession(request.requestId, request.params),
+        );
       case "start_turn":
-        return await this.startTurn(request.requestId, request.params);
+        return withProtocolEcho(
+          await this.startTurn(request.requestId, request.params),
+        );
       case "cancel_turn":
         return await this.cancelTurn(
           request.requestId,

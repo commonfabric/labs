@@ -227,7 +227,9 @@ export interface HarnessChatStartSessionParams {
   /**
    * The client protocol the host speaks and the features it requires. A
    * mismatch is refused with `protocol_mismatch` before the session starts;
-   * an absent declaration requires nothing.
+   * an absent declaration requires nothing. An accepted stdio `start_session`
+   * or `start_turn` answer carries the console's `protocol` echo beside the
+   * status, whether or not the host declared one.
    */
   protocol?: HarnessClientProtocolDeclaration;
 
