@@ -25,6 +25,27 @@ clients use its `hello`, `connection.challenge`, `connection.auth`,
 - The router pings a quiet client and closes the connection when no frame
   answers, so a vanished client releases its worker.
 
+The public endpoint accepts `/api/storage/memory` for shared connections and
+`/api/storage/memory?space=<DID>` for dedicated connections. The optional query
+contains exactly one `space` parameter with a canonical Ed25519 DID, including
+the percent-encoded form emitted by `URLSearchParams`. Repeated parameters,
+additional fields and malformed escapes are refused. A dedicated socket denies
+frames naming another space. The URL grants no authority and never selects a
+private endpoint: each space frame still requires authoritative directory
+admission and toolshed verification. Unknown DIDs receive the same generic
+request denial after authentication; the upgrade does not reveal directory
+membership.
+
+`sharedMemoryConnection` controls the runner's socket topology. Both topologies
+supply a `SessionPrincipal`, so authentication follows the peer's advertised
+capabilities. A routed peer always requires signed `connection.auth`; a direct
+peer without that capability receives signed `session.open`. A deployment can
+install routed-capable clients and toolsheds with sharing off, move Memory
+WebSockets from nginx to this router, verify dedicated connections, then enable
+sharing. Clients that only sign direct session opens require an SDK update
+before that switch. Each dedicated socket consumes its own isolated worker and
+source-admission slot.
+
 The router issues a challenge through its link agent's channel-assigned context.
 A client completes it within 60 seconds. The agent verifies the fixed-format
 signed statement itself before admitting the worker, hashes its exact bytes and
