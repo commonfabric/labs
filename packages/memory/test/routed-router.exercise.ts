@@ -605,7 +605,12 @@ function workerStats() {
         fds: [...Deno.readDirSync(`${path}/fd`)].length,
       });
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      // A worker can exit between listing /proc and reading it; its files
+      // then report ENOENT, or ESRCH once its address space is gone.
+      const exited = error instanceof Deno.errors.NotFound ||
+        (error instanceof Error &&
+          error.message.startsWith("No such process (os error 3):"));
+      if (!exited) throw error;
     }
   }
   return result;
