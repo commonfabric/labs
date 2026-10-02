@@ -859,4 +859,40 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
       }
     },
   );
+
+  await t.step(
+    "under the block, a plain-props style that comes to name a URL is removed",
+    async () => {
+      const id = "remote-loads-style-change-plain";
+      const styled = (style: string) => ({
+        type: "vnode",
+        name: "p",
+        props: { style },
+        children: ["Styled"],
+      });
+      await seed(styled("color: red"), [owner], id);
+      const { collector, cancel } = await mountBlocked(
+        // Without the renderer's schema, props arrive as a plain object and
+        // take the static path.
+        runtime.getCell(owner, id),
+      );
+      try {
+        assertEquals(setProps(collector.all(), "style"), ["color: red"]);
+        collector.clear();
+        await seed(styled(`background: url(${ATTACKER_URL})`), [owner], id);
+        await t.settle();
+        const ops = collector.all();
+        assertEquals(setProps(ops, "style"), []);
+        assertEquals(
+          ops.some((op) =>
+            op.op === "remove-node" ||
+            (op.op === "remove-prop" && op.key === "style")
+          ),
+          true,
+        );
+      } finally {
+        cancel();
+      }
+    },
+  );
 });
