@@ -66,19 +66,26 @@ export interface OfferEvent {
    */
   kind: string;
 
-  /** The DID of the space the offered thing lives in. */
-  space: string;
+  /**
+   * The DID of the space the offered thing lives in. It may be left out when
+   * `entry` is given, since a link names the space it reaches into.
+   */
+  space?: string;
 
   /**
-   * The origin of the host serving `space`, such as `https://example.com`;
-   * absent for the host the inbox is read from.
+   * The origin of the host serving the offered thing's space, such as
+   * `https://example.com`; absent for the host the inbox is read from.
    */
   host?: string;
 
   // `Cell<…>` is written out rather than reached through an alias: the
   // handler's event schema marks a reference position only where the wrapper
   // is written in the event type.
-  /** The piece offered, in `space`. */
+  /**
+   * The piece offered. A value sent here that is not a link arrives as a link
+   * to the event's own copy of that value, so what it reaches is the sender's
+   * claim, to be checked like any other.
+   */
   entry?: Cell<OfferEntry>;
 
   /** What the sender calls the offered thing, cut to the longest kept. */
@@ -93,10 +100,13 @@ export interface Offer {
    */
   kind: string;
 
-  /** The DID of the space the offered thing lives in. */
-  space: string;
+  /** The DID of the space the offered thing lives in, if the sender named it. */
+  space?: string;
 
-  /** The origin of the host serving `space`, if the sender named one. */
+  /**
+   * The origin of the host serving the offered thing's space, if the sender
+   * named one.
+   */
   host?: string;
 
   /** The piece offered, if the sender named one. */
@@ -183,15 +193,19 @@ function isOfferHost(host: unknown): boolean {
 
 /**
  * Appends the offer `event` describes, stamped with the event's actor and the
- * time. An event with a malformed `kind`, `space` or `host`, or with no actor,
- * appends nothing.
+ * time. An event with no actor, with a malformed `kind` or `host`, with a
+ * `space` that is not a DID, or with neither a `space` nor an `entry`, appends
+ * nothing.
  */
 const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
   (event, { offers }) => {
     const from = currentPrincipal();
     if (
       from === undefined || !isOfferKind(event?.kind) ||
-      !isWellFormedDID(event.space) || !isOfferHost(event.host)
+      !isOfferHost(event.host) ||
+      (event.space === undefined
+        ? event.entry === undefined
+        : !isWellFormedDID(event.space))
     ) {
       return;
     }
@@ -200,7 +214,7 @@ const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
       : undefined;
     offers.push({
       kind: event.kind,
-      space: event.space,
+      ...(event.space !== undefined ? { space: event.space } : {}),
       ...(event.host !== undefined ? { host: event.host } : {}),
       ...(event.entry !== undefined ? { entry: event.entry } : {}),
       ...(title !== undefined ? { title } : {}),
@@ -247,9 +261,9 @@ function inboxLinkOf(inbox: unknown): unknown {
  * principal's writes as well where it is not; see
  * `InSpaceOptions.grantsWithoutServerExecution`.
  *
- * The pointing is a second step, queued behind this one: the inbox piece
- * exists only once this handler's run has committed, and a profile's stream
- * reached before then receives a link to nothing.
+ * The pointing is a second step, queued behind this one. A profile is given
+ * the inbox's own result document, which this handler's run creates, so the
+ * profiles are pointed in an event of its own, once this run has committed.
  */
 export const ensurePrivateInbox = handler<
   void,

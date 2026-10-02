@@ -3086,9 +3086,13 @@ describe("runtime-processor", () => {
      * A processor over a real runtime on emulated storage, whose Home pattern
      * is a stand-in holding `rows` as its space list and recording what is
      * sent to its streams. The space creation, the site table, and the
-     * adoption run for real.
+     * adoption run for real. `onEnsurePrivateInbox` runs as each event sent to
+     * `ensurePrivateInbox` is recorded, and a throw from it fails that send.
      */
-    async function homeWorker(rows: readonly unknown[] | (() => unknown)) {
+    async function homeWorker(
+      rows: readonly unknown[] | (() => unknown),
+      onEnsurePrivateInbox: () => void = () => {},
+    ) {
       const signer = await Identity.generate({ implementation: "noble" });
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
@@ -3111,6 +3115,7 @@ describe("runtime-processor", () => {
               getRaw: () => ({ $stream: true }),
               send: (event: unknown) => {
                 sent.push({ stream: name, event });
+                if (name === "ensurePrivateInbox") onEnsurePrivateInbox();
                 return Promise.resolve();
               },
             },
@@ -3143,6 +3148,12 @@ describe("runtime-processor", () => {
         runtime,
         processor,
         sent,
+        /** What was sent to the streams that change the space list. */
+        spaceListSends: () =>
+          sent.filter(({ stream }) => stream !== "ensurePrivateInbox"),
+        /** How many events were sent to `ensurePrivateInbox`. */
+        privateInboxSends: () =>
+          sent.filter(({ stream }) => stream === "ensurePrivateInbox").length,
         siteTable,
         async [Symbol.asyncDispose]() {
           ensure.restore();
@@ -3161,7 +3172,7 @@ describe("runtime-processor", () => {
       });
 
       expect(await worker.runtime.spaceExists(space)).toBe(true);
-      expect(worker.sent).toEqual([
+      expect(worker.spaceListSends()).toEqual([
         { stream: "addSpace", event: { did: space, name: "Notebook" } },
       ]);
       expect(await worker.siteTable()).toEqual([
@@ -3176,7 +3187,7 @@ describe("runtime-processor", () => {
         type: RequestType.CreateSpace,
       });
 
-      expect(worker.sent).toEqual([
+      expect(worker.spaceListSends()).toEqual([
         { stream: "addSpace", event: { did: space, name: "" } },
       ]);
     });
@@ -3195,7 +3206,7 @@ describe("runtime-processor", () => {
 
       expect(second.space).not.toBe(first.space);
       expect(first.space).not.toBe(await legacySpaceDid("Notebook"));
-      expect(worker.sent.map(({ event }) => event)).toEqual([
+      expect(worker.spaceListSends().map(({ event }) => event)).toEqual([
         { did: first.space, name: "Notebook" },
         { did: second.space, name: "Notebook" },
       ]);
@@ -3213,12 +3224,12 @@ describe("runtime-processor", () => {
           type: RequestType.EnsureHomePatternRunning,
         });
         expect(first.cell).toBeDefined();
-        expect(worker.sent).toEqual([]);
+        expect(worker.spaceListSends()).toEqual([]);
 
         await worker.processor.handleEnsureHomePatternRunning({
           type: RequestType.EnsureHomePatternRunning,
         });
-        expect(worker.sent).toEqual([{
+        expect(worker.spaceListSends()).toEqual([{
           stream: "adoptSpace",
           event: {
             name: "team-lunch",
@@ -3250,7 +3261,7 @@ describe("runtime-processor", () => {
       });
 
       // One adoption of the name-only row, and none of the keyed one.
-      expect(worker.sent).toEqual([
+      expect(worker.spaceListSends()).toEqual([
         { stream: "adoptSpace", event: { name: "team-lunch", did: legacy } },
         { stream: "addSpace", event: { did: space, name: "Fresh" } },
       ]);
@@ -3258,6 +3269,53 @@ describe("runtime-processor", () => {
         { did: legacy, host: "http://home-worker.test", source: "adopted" },
         { did: space, host: "http://home-worker.test", source: "created" },
       ]);
+    });
+
+    it("has Home ensure the private inbox once per worker", async () => {
+      await using worker = await homeWorker([]);
+
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      await worker.processor.handleCreateSpace({
+        type: RequestType.CreateSpace,
+        label: "Fresh",
+      });
+
+      expect(worker.privateInboxSends()).toBe(1);
+      expect(worker.sent).toContainEqual({
+        stream: "ensurePrivateInbox",
+        event: {},
+      });
+    });
+
+    it("opens Home when ensuring the private inbox fails, and ensures it on the next ensure", async () => {
+      let attempts = 0;
+      await using worker = await homeWorker([], () => {
+        if (attempts++ === 0) throw new Error("transient send failure");
+      });
+      const warn = stub(console, "warn", () => {});
+      try {
+        const first = await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        expect(first.cell).toBeDefined();
+        expect(worker.privateInboxSends()).toBe(1);
+
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        expect(worker.privateInboxSends()).toBe(2);
+        expect(warn.calls.length).toBe(1);
+      } finally {
+        warn.restore();
+      }
     });
   });
 

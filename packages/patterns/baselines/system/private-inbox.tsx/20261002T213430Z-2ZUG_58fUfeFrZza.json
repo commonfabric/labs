@@ -15,7 +15,7 @@
             "type": "string"
           },
           "host": {
-            "description": "The origin of the host serving `space`, if the sender named one.",
+            "description": "The origin of the host serving the offered thing's space, if the sender\nnamed one.",
             "type": "string"
           },
           "kind": {
@@ -27,7 +27,7 @@
             "type": "number"
           },
           "space": {
-            "description": "The DID of the space the offered thing lives in.",
+            "description": "The DID of the space the offered thing lives in, if the sender named it.",
             "type": "string"
           },
           "title": {
@@ -37,7 +37,6 @@
         },
         "required": [
           "kind",
-          "space",
           "from",
           "receivedAt"
         ],
@@ -108,7 +107,7 @@
             "type": "string"
           },
           "host": {
-            "description": "The origin of the host serving `space`, if the sender named one.",
+            "description": "The origin of the host serving the offered thing's space, if the sender\nnamed one.",
             "type": "string"
           },
           "kind": {
@@ -120,7 +119,7 @@
             "type": "number"
           },
           "space": {
-            "description": "The DID of the space the offered thing lives in.",
+            "description": "The DID of the space the offered thing lives in, if the sender named it.",
             "type": "string"
           },
           "title": {
@@ -130,7 +129,6 @@
         },
         "required": [
           "kind",
-          "space",
           "from",
           "receivedAt"
         ],
@@ -148,10 +146,10 @@
         "properties": {
           "entry": {
             "$ref": "#/$defs/OfferEntry",
-            "description": "The piece offered, in `space`."
+            "description": "The piece offered. A value sent here that is not a link arrives as a link\nto the event's own copy of that value, so what it reaches is the sender's\nclaim, to be checked like any other."
           },
           "host": {
-            "description": "The origin of the host serving `space`, such as `https://example.com`;\nabsent for the host the inbox is read from.",
+            "description": "The origin of the host serving the offered thing's space, such as\n`https://example.com`; absent for the host the inbox is read from.",
             "type": "string"
           },
           "kind": {
@@ -159,7 +157,7 @@
             "type": "string"
           },
           "space": {
-            "description": "The DID of the space the offered thing lives in.",
+            "description": "The DID of the space the offered thing lives in. It may be left out when\n`entry` is given, since a link names the space it reaches into.",
             "type": "string"
           },
           "title": {
@@ -168,8 +166,7 @@
           }
         },
         "required": [
-          "kind",
-          "space"
+          "kind"
         ],
         "type": "object"
       },

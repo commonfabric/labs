@@ -79,9 +79,13 @@ An offer holds:
 
 - `kind`: what is offered, as lowercase words joined by hyphens, such as
   `fabrichat-room`. A reader acts only on the kinds it knows.
-- `space`: the DID of the space the offered thing lives in.
-- `host`: the origin of the host serving `space`, when the sender names one.
-- `entry`: a link to the offered piece in `space`, when the sender names one.
+- `space`: the DID of the space the offered thing lives in, when the sender
+  names it. A sender that holds only a link to the offered piece leaves it out,
+  since a pattern has no way to read a link's space.
+- `host`: the origin of the host serving that space, when the sender names
+  one.
+- `entry`: a link to the offered piece, when the sender names one. A link
+  names the space it reaches into, and `spaceAccess()` takes it as it stands.
 - `title`: what the sender calls the offered thing, when it names one.
 - `from`: the DID of the event's actor, from `currentPrincipal()`. Nothing in
   the event's payload can choose it. With server execution on, the serving loop
@@ -98,10 +102,15 @@ directly is then refused, since it holds no `WRITE` in the space.
 
 `receive` appends nothing for an event that has no actor, whose `kind` is not
 as described above or is longer than `OFFER_KIND_MAX_LENGTH`, whose `space` is
-not a DID, or whose `host` is not an `http` or `https` origin of at most
-`OFFER_HOST_MAX_LENGTH` characters. A `title` longer than
-`OFFER_TITLE_MAX_LENGTH` is cut to that length. The sender is not told: a
-refusal inside `receive` happens in the inbox, which the sender cannot read.
+not a DID, that names neither a `space` nor an `entry`, or whose `host` is not
+an `http` or `https` origin of at most `OFFER_HOST_MAX_LENGTH` characters.
+`receive` cannot tell whether `entry` names a piece: a value sent there that is
+not a link arrives as a link to the event's own copy of the value. So a reader
+checks what `entry` reaches before acting on it, and does not take an answer
+from `spaceAccess(entry)` as a sign that the link names the offered thing. A
+`title` longer than `OFFER_TITLE_MAX_LENGTH` is cut to that length. The sender
+is not told: a refusal inside `receive` happens in the inbox, which the sender
+cannot read.
 
 ## Reading them
 
