@@ -220,8 +220,8 @@ The deployment writes each record into that space under its own identity, so
 that identity needs WRITE there. Where the user's identity and the
 deployment's are the same, as with a local server run under the default
 development identity, there is nothing to grant. Otherwise grant it, naming
-the `did` that `GET <toolshed>/api/meta` reports; without the grant, minting
-returns 409:
+the `did` that `GET <toolshed>/api/meta` reports. Without the grant, minting
+is refused, with an error that names the same DID and says to grant it WRITE:
 
 ```bash
 cf acl set <deployment did> WRITE --space <space>
