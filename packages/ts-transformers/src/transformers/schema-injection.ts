@@ -2862,7 +2862,10 @@ function reportUnknownPatternResult(
   if (paths.length === 0) return;
   const fields = paths.map((p) => `\`${p}\``).join(", ");
   context.reportDiagnosticOnce({
-    severity: "error",
+    // A reload of stored source reconstructs what was admitted when it was
+    // deployed, so a shape this check has covered only since then reports
+    // there without refusing the reload.
+    severity: context.options.storedSource ? "warning" : "error",
     type: "pattern-result:unknown-type",
     message:
       `pattern() output ${paths.length > 1 ? "fields" : "field"} ${fields} ` +

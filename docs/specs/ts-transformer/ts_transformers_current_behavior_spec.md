@@ -819,7 +819,10 @@ structurally representable.
   rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
-  (`reportUnknownPatternResult()` in `schema-injection.ts`)
+  (`reportUnknownPatternResult()` in `schema-injection.ts`). Under
+  `TransformationOptions.storedSource` it reports as a **Warning**: a reload of
+  stored source reconstructs what was admitted when it was deployed, which may
+  hold a shape this check covers only since
 - authors who intentionally want a permissive/opaque output boundary must make
   it explicit with `pattern<Input, Output>(...)`
 
@@ -1164,8 +1167,9 @@ report these through the same collector (deduplicated via §2.2's
 - **Error** `pattern-context:inline-reactive-root-access`
   (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
   reactive-root read at a position that stage cannot lower
-- **Error** `pattern-result:unknown-type` (`schema-injection.ts:2621`) — see
-  §6.6
+- **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
+  `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
+  `TransformationOptions.storedSource`
 - **Error** `pattern-result:opaque-reserved-key`
   (`reserved-result-keys.ts`, called from `schema-generator.ts`) — a pattern's
   own result declares one of the framework's reserved keys `unknown` at its

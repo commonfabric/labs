@@ -755,6 +755,34 @@ export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
         });
       }
     }
+
+    it("reports an `unknown` element as a warning over stored source, and as an error otherwise", async () => {
+      // A reload of stored source reconstructs what was admitted when it was
+      // deployed, which may hold a shape this check covers only since.
+
+      /** The result diagnostics compiling the pattern as `storedSource`. */
+      const reported = async (storedSource: boolean) => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+export default pattern<{ u: unknown }>(({ u }) => ({ f: [u, 1] as const }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+          storedSource,
+        });
+        return diagnostics.map(({ type, severity }) => ({ type, severity }));
+      };
+
+      expect(await reported(true)).toEqual([
+        { type: "pattern-result:unknown-type", severity: "warning" },
+      ]);
+      expect(await reported(false)).toEqual([
+        { type: "pattern-result:unknown-type", severity: "error" },
+      ]);
+    });
   });
 
   describe("a printed result type that holds CFC labels", () => {
