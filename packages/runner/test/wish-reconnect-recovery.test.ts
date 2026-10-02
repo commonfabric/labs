@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -87,19 +88,6 @@ class DroppingTransport implements MemoryV2Client.Transport {
   }
 }
 
-/** Advances logical time until `done` holds, failing after a fixed budget. */
-async function advanceUntil(
-  runtime: Runtime,
-  done: () => boolean,
-  what: string,
-): Promise<void> {
-  for (let step = 0; step < 200 && !done(); step++) {
-    await clock.tick(100);
-    await runtime.idle();
-  }
-  if (!done()) throw new Error(`Timed out waiting for ${what}`);
-}
-
 describe("wish-reconnect-recovery", () => {
   it("restores a favorite whose load failed on a dropped connection", async () => {
     const server = new MemoryV2Server.Server({
@@ -177,19 +165,29 @@ describe("wish-reconnect-recovery", () => {
       const candidates = () =>
         (found.key("candidates").get() as Cell<unknown>[] | undefined)
           ?.length;
+      const waitForCandidates = (
+        accept: (count: number | undefined) => boolean,
+        stuckLabel: string,
+      ) =>
+        waitForCellValue<Cell<unknown>[]>(
+          runtime,
+          found.key("candidates"),
+          (value) => accept(value?.length),
+          { stuckLabel },
+        );
       const selected = found.key("result").asSchema<{ name: string }>({
         type: "object",
         properties: { name: { type: "string" } },
       });
 
-      await advanceUntil(runtime, () => candidates() !== undefined, "a result");
+      await waitForCandidates((count) => count !== undefined, "a result");
       expect(transport.dropped).toBe(true);
       expect(found.key("error").get()).toBeUndefined();
       expect(candidates()).toBe(1);
       expect(selected.key("name").get()).toBe("Readable provider");
 
       transport.reconnect.resolve();
-      await advanceUntil(runtime, () => candidates() === 2, "recovery");
+      await waitForCandidates((count) => count === 2, "recovery");
       expect(selected.key("name").get()).toBe("Dropped provider");
     } finally {
       transport.reconnect.resolve();

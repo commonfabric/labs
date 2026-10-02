@@ -15,11 +15,18 @@ type Roster = {
   entries: Entry[];
   defaultIndex?: number;
   mruIndices?: number[];
+
+  /**
+   * What `defaultProfile` and `mru` link to: the roster's own document, or a
+   * distinct document in the same profile space (the picker stores the
+   * profile's result cell while the roster stores its pattern cell).
+   */
+  references?: "roster" | "distinct";
 };
 
 /**
- * Builds a home roster with each profile in its own space. A failing profile
- * is never written and its space's provider returns a load error for it.
+ * Builds a home roster with each profile in its own space. A failing profile's
+ * space is unavailable: nothing in it is written, and every load fails.
  */
 async function makeRoster(label: string, roster: Roster) {
   const signer = await Identity.fromPassphrase(`profile unavailable ${label}`);
@@ -30,6 +37,8 @@ async function makeRoster(label: string, roster: Roster) {
   });
   const restores: (() => void)[] = [];
   const profiles: Cell<unknown>[] = [];
+  const references: Cell<unknown>[] = [];
+  const distinct = roster.references === "distinct";
   for (const [index, entry] of roster.entries.entries()) {
     const space = (await Identity.fromPassphrase(
       `profile unavailable ${label} space ${index}`,
@@ -38,29 +47,32 @@ async function makeRoster(label: string, roster: Roster) {
       const tx = runtime.edit();
       const cell = runtime.getCell(space, "profile", undefined, tx);
       cell.set(profileValue(`Profile ${index}`));
+      const reference = distinct
+        ? runtime.getCell(space, "profile result", undefined, tx)
+        : cell;
+      if (distinct) reference.set(profileValue(`Profile ${index}`));
       expect((await tx.commit()).error).toBeUndefined();
       profiles.push(cell);
+      references.push(reference);
       continue;
     }
-    const cell = runtime.getCell(space, "profile");
     const provider = manager.open(space);
     const originalSync = provider.sync.bind(provider);
-    const failingId = cell.getAsNormalizedFullLink().id;
-    provider.sync = (id, ...options) =>
-      id === failingId
-        ? Promise.resolve({ error: new Error("Profile load failed") })
-        : originalSync(id, ...options);
+    provider.sync = () =>
+      Promise.resolve({ error: new Error("Profile space unavailable") });
     restores.push(() => provider.sync = originalSync);
+    const cell = runtime.getCell(space, "profile");
     profiles.push(cell);
+    references.push(distinct ? runtime.getCell(space, "profile result") : cell);
   }
 
   const home = runtime.edit();
   const defaultPattern: Record<string, unknown> = { profiles };
   if (roster.defaultIndex !== undefined) {
-    defaultPattern.defaultProfile = profiles[roster.defaultIndex];
+    defaultPattern.defaultProfile = references[roster.defaultIndex];
   }
   if (roster.mruIndices !== undefined) {
-    defaultPattern.mru = roster.mruIndices.map((index) => profiles[index]);
+    defaultPattern.mru = roster.mruIndices.map((index) => references[index]);
   }
   runtime.getHomeSpaceCell(home).key("defaultPattern").set(defaultPattern);
   expect((await home.commit()).error).toBeUndefined();
@@ -214,6 +226,55 @@ describe("wish-profile-unavailable", () => {
       expect(errorOf(found)).toContain(
         'No profile found matching "#resources"',
       );
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  // The MRU names a different document in the failed profile's space, so
+  // resolving it starts a load of its own that fails with the space.
+  const distinctReferences: Roster = {
+    entries: ["readable", "failing"],
+    defaultIndex: 0,
+    mruIndices: [1],
+    references: "distinct",
+  };
+  for (const query of ["#profile", "#profileName"]) {
+    it(`resolves ${query} when a skipped profile's MRU reference is a separate document`, async () => {
+      const fixture = await makeRoster(`distinct ${query}`, distinctReferences);
+      try {
+        const found = await fixture.wish(query);
+        expect(errorOf(found)).toBeUndefined();
+        const result = found.key("result").get();
+        expect(typeof result === "string" ? result : nameOf(found))
+          .toBe("Profile 0");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  }
+
+  it("keeps a profile search past a skipped profile's separate MRU reference", async () => {
+    const fixture = await makeRoster("distinct search", distinctReferences);
+    try {
+      const found = await fixture.wish("#resources", ["profile"]);
+      expect(errorOf(found)).toContain(
+        'No profile found matching "#resources"',
+      );
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("reports a failed MRU head named by a separate document", async () => {
+    const fixture = await makeRoster("distinct head", {
+      entries: ["readable", "failing"],
+      mruIndices: [1],
+      references: "distinct",
+    });
+    try {
+      const found = await fixture.wish("#profile");
+      expect(errorOf(found)).toContain("Could not load document");
     } finally {
       await fixture.dispose();
     }

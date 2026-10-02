@@ -294,9 +294,10 @@ type WishContext = {
   candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
 
   /**
-   * Profiles left out of the roster because their load failed. Their failures
-   * are not discovery failures: they only exempt those documents from the
-   * final load check.
+   * Documents of profiles left out of the roster because their load failed:
+   * the roster entry, and any default or MRU reference into the same profile
+   * space. Their failures are not discovery failures: they only exempt those
+   * documents from the final load check.
    */
   skippedProfiles?: Set<Cell<unknown>>;
 
@@ -652,8 +653,16 @@ function getProfileCandidateCells(
   const selectedFailure = failures.get(ordered[0]);
   if (selectedFailure) throw selectedFailure;
   if (failures.size === 0) return { ordered, defaultValid };
-  ctx.skippedProfiles ??= new Set();
-  for (const cell of failures.keys()) ctx.skippedProfiles.add(cell);
+  // A default or MRU reference can name another document in a skipped
+  // profile's space (see sameProfileCell); resolving it loaded that document,
+  // which fails with the rest of the space.
+  const skipped = ctx.skippedProfiles ??= new Set();
+  for (const cell of failures.keys()) {
+    skipped.add(cell);
+    for (const reference of [defaultCell, ...mruCells]) {
+      if (sameProfileCell(reference, cell, homeSpace)) skipped.add(reference);
+    }
+  }
   return {
     ordered: ordered.filter((cell) => !failures.has(cell)),
     defaultValid,
