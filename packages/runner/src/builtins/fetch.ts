@@ -21,7 +21,7 @@ import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { validateAgainstSchema } from "../cfc/schema-sanitization.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import {
@@ -606,12 +606,6 @@ function fetchBuiltin(kind: FetchKind) {
           setResultCell(result, parentCell);
           setResultCell(error, parentCell);
           setResultCell(internal, parentCell);
-          // Link the new result cells to the pattern cell too
-          const patternCellPtr = parentCell.key("pattern");
-          setPatternCell(pending, patternCellPtr);
-          setPatternCell(result, patternCellPtr);
-          setPatternCell(error, patternCellPtr);
-          setPatternCell(internal, patternCellPtr);
 
           // Kick off sync in the background
           pending.sync();

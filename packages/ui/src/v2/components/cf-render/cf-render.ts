@@ -1,5 +1,4 @@
 import { getPieceBoundary, render } from "@commonfabric/html/client";
-import { NestedRenderReferenceSchema } from "@commonfabric/runner/component-read-contract";
 import type { DID } from "@commonfabric/identity";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
@@ -16,6 +15,7 @@ import { createRef, type Ref, ref } from "lit/directives/ref.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { suppressClickAfterDrag } from "../../core/drag-state.ts";
+import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { createNameChip } from "../../core/name-chip.ts";
 
 import "../cf-loader/index.ts";
@@ -315,11 +315,27 @@ export class CFRender extends BaseElement {
   private _containerRef: Ref<HTMLDivElement> = createRef();
 
   private _cleanup?: () => void;
-  private _linkTargetCell?: CellHandle;
-  private _linkTargetObserved?: CellHandle;
-  private _linkTargetSetup?: Promise<CellHandle | undefined>;
-  private _linkTargetToken?: object;
-  private _linkTargetUnsubscribe?: () => void;
+
+  /**
+   * Follows the target of a `cell` holding a link, rendering again when the
+   * link moves to a different piece.
+   */
+  #linkTarget = new LinkTargetWatch({
+    isCurrent: (cell) => this.cell?.equals(cell) ?? false,
+    onRetarget: (target) => {
+      closePieceMenuFor(this);
+      this._resolvedCell = undefined;
+      if (target === undefined) {
+        this._renderGeneration++;
+        this._hasRendered = true;
+        this._cleanupRender();
+        this.#showUnavailable();
+      } else {
+        this._hasRendered = false;
+        void this._renderCell();
+      }
+    },
+  });
 
   /**
    * Render generation. Each render captures one, so older asynchronous work
@@ -352,9 +368,13 @@ export class CFRender extends BaseElement {
     }
   }
 
-  /** Exposes the render container, generation, and render entry for focused tests. */
+  /**
+   * Exposes the render container, generation, render entry, and link-target
+   * watch for focused tests.
+   */
   get accessForTestingOnly(): {
     containerRef: Ref<HTMLDivElement>;
+    readonly linkTarget: LinkTargetWatch;
     readonly renderGeneration: number;
     renderCell(): Promise<void>;
   } {
@@ -367,6 +387,7 @@ export class CFRender extends BaseElement {
       set containerRef(value) {
         outerThis._containerRef = value;
       },
+      linkTarget: this.#linkTarget,
       get renderGeneration() {
         return outerThis._renderGeneration;
       },
@@ -514,108 +535,21 @@ export class CFRender extends BaseElement {
     }
   }
 
-  private async _watchLinkTarget(
+  /**
+   * Helper for `_renderCell()`, which follows `cell`'s link target and returns
+   * the current one. TypeScript-`private` because `cf-render.test.ts` replaces
+   * it by assignment.
+   */
+  private _watchLinkTarget(
     cell: CellHandle,
     resolved: CellHandle,
   ): Promise<CellHandle | undefined> {
-    if (
-      this._linkTargetToken !== undefined &&
-      this._linkTargetCell?.equals(cell)
-    ) {
-      if (this._linkTargetSetup !== undefined) {
-        return await this._linkTargetSetup;
-      }
-      return this._linkTargetObserved;
-    }
-    if (resolved.equals(cell)) {
-      this._cleanupLinkTargetSubscription();
-      return resolved;
-    }
-
-    this._cleanupLinkTargetSubscription();
-    const token = {};
-    this._linkTargetCell = cell;
-    this._linkTargetToken = token;
-    const setup = this._setupLinkTargetSubscription(cell, token);
-    this._linkTargetSetup = setup;
-    try {
-      return await setup;
-    } finally {
-      if (this._linkTargetSetup === setup) {
-        this._linkTargetSetup = undefined;
-      }
-    }
+    return this.#linkTarget.watch(cell, resolved);
   }
 
-  private async _setupLinkTargetSubscription(
-    cell: CellHandle,
-    token: object,
-  ): Promise<CellHandle | undefined> {
-    // This schema reports the current target as a Cell. The subscription can
-    // also wake for a write within that target, so the callback compares target
-    // identity before starting another render.
-    const linkCell = cell.asSchema<CellHandle>(NestedRenderReferenceSchema);
-    try {
-      const synchronizedTarget = await linkCell.sync();
-      if (
-        this._linkTargetToken !== token ||
-        !this.cell?.equals(cell)
-      ) {
-        return undefined;
-      }
-      let observedTarget = isCellHandle(synchronizedTarget)
-        ? synchronizedTarget
-        : undefined;
-      this._linkTargetObserved = observedTarget;
-      const unsubscribe = linkCell.subscribe((nextTarget) => {
-        const validTarget = isCellHandle(nextTarget) ? nextTarget : undefined;
-        if (
-          validTarget === undefined
-            ? observedTarget === undefined
-            : validTarget.equals(observedTarget)
-        ) {
-          return;
-        }
-        if (this._linkTargetToken !== token) return;
-        if (!this.cell?.equals(cell)) return;
-        closePieceMenuFor(this);
-        observedTarget = validTarget;
-        this._linkTargetObserved = validTarget;
-        this._resolvedCell = undefined;
-        if (validTarget === undefined) {
-          this._renderGeneration++;
-          this._hasRendered = true;
-          this._cleanupRender();
-          this.#showUnavailable();
-        } else {
-          this._hasRendered = false;
-          void this._renderCell();
-        }
-      });
-      if (this._linkTargetToken === token) {
-        this._linkTargetUnsubscribe = unsubscribe;
-      } else {
-        unsubscribe();
-      }
-      return observedTarget;
-    } catch (error) {
-      if (this._linkTargetToken === token) {
-        this._linkTargetToken = undefined;
-        this._linkTargetCell = undefined;
-        this._linkTargetObserved = undefined;
-      }
-      throw error;
-    }
-  }
-
+  /** Stops following `cell`'s link target. */
   private _cleanupLinkTargetSubscription(): void {
-    const unsubscribe = this._linkTargetUnsubscribe;
-    this._linkTargetToken = undefined;
-    this._linkTargetUnsubscribe = undefined;
-    this._linkTargetCell = undefined;
-    this._linkTargetObserved = undefined;
-    this._linkTargetSetup = undefined;
-    unsubscribe?.();
+    this.#linkTarget.cancel();
   }
 
   /**

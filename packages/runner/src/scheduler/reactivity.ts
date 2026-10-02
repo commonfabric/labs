@@ -1,4 +1,5 @@
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 
 import { canonicalizeDocumentPath } from "../cfc/canonical.ts";
 import {
@@ -90,7 +91,8 @@ export function trustedEventWriteCandidatesFromTransaction(
       ...(transactionLog.attemptedWrites ?? []),
     ]
   ) {
-    addCandidate(write, canonicalizeDocumentPath(write.path));
+    // The reactivity log records the journal's document-rooted paths.
+    addCandidate(write, canonicalizeDocumentPath(toDocumentPath(write.path)));
     detailSpaces.add(write.space);
   }
 

@@ -499,7 +499,7 @@ Deno.test("GPT-5.6 cache controls fail before sending an older model", async () 
         promptCacheMode: "explicit",
       })),
     Error,
-    "prompt cache mode explicit requires a GPT-5.6 model",
+    "prompt cache mode explicit requires a GPT-5.6 or GPT-6.1 Sol model",
   );
   assertEquals(captured.length, 0);
 });
@@ -511,7 +511,7 @@ Deno.test("unsupported GPT-5.6 reasoning effort fails before sending", async () 
   await assertRejects(
     () => client.complete(turn({ reasoningEffort: "ultra" })),
     Error,
-    "reasoning effort ultra is not supported by gpt-5.6-terra",
+    'reasoning effort `"ultra"` is not supported by `"gpt-5.6-terra"`',
   );
   assertEquals(captured.length, 0);
 });

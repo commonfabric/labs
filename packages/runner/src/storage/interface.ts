@@ -28,6 +28,7 @@ import type {
   CommitClass,
   CommitPrecondition,
   DeliveryFailureClass,
+  DocumentPath,
   EntityDocument,
   EntityIdListOptions,
   EntityIdListResult,
@@ -90,6 +91,12 @@ import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
+import type {
+  PendingCommitContext,
+  SpaceStorageDiagnostic,
+  StorageDiagnostics,
+} from "./diagnostics.ts";
+
 export type {
   ACL,
   DID,
@@ -479,7 +486,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * invisible to the barrier. The registration must tolerate rejection and
    * drop the promise once it settles.
    */
-  trackPendingCommit(promise: Promise<unknown>): void;
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void;
+
+  /** Snapshot pending work without waiting for durability or starting I/O. */
+  getDiagnostics?(): StorageDiagnostics;
 
   /**
    * Whether any registered commit is still unconfirmed. Every write flows
@@ -2940,6 +2953,14 @@ export type IMemorySpaceAddress = IMemoryAddress & {
   space: MemorySpace;
 };
 
+/**
+ * A memory address as the transaction journal records it: its path is rooted
+ * at the stored document, so user data sits under `value`.
+ */
+export type IMemorySpaceDocumentAddress = IMemorySpaceAddress & {
+  path: DocumentPath;
+};
+
 export type MemoryAddressPathComponent = string;
 
 export interface Assert {
@@ -3021,6 +3042,9 @@ export interface ViewInterestLease {
 }
 
 export interface ISpaceReplica extends ISpace {
+  /** Existing session progress without starting I/O or awaiting commits. */
+  getDiagnostics?(): SpaceStorageDiagnostic;
+
   /**
    * Return a state for the requested entry or returns `undefined` if replica
    * does not have it. The state carries `since`, the commit sequence the
@@ -3447,7 +3471,7 @@ export interface TransactionReactivityLog {
 }
 
 export interface TransactionWriteDetail {
-  address: IMemorySpaceAddress;
+  address: IMemorySpaceDocumentAddress;
   value?: FabricValue;
   previousValue?: FabricValue;
 
@@ -3505,10 +3529,10 @@ export interface NativeStorageCommit {
 
 export type Activity = Variant<{
   read: IReadActivity;
-  write: IMemorySpaceAddress;
+  write: IMemorySpaceDocumentAddress;
 }>;
 
-export interface IReadActivity extends IMemorySpaceAddress {
+export interface IReadActivity extends IMemorySpaceDocumentAddress {
   meta: Metadata;
   nonRecursive?: boolean;
 
@@ -3536,7 +3560,7 @@ export interface IReadActivity extends IMemorySpaceAddress {
  * the transaction inspection surface sees. `journalIndex` is the shared
  * activity clock (see {@link IReadActivity.journalIndex}).
  */
-export interface IWriteAttempt extends IMemorySpaceAddress {
+export interface IWriteAttempt extends IMemorySpaceDocumentAddress {
   journalIndex: number;
 }
 

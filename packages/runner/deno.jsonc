@@ -35,7 +35,6 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
-    "./inbox": "./src/inbox.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",

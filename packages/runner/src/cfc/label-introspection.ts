@@ -3,6 +3,7 @@ import {
   type FabricValue,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
@@ -177,7 +178,7 @@ export const parseConfLabelTargetPath = (
   } catch {
     return undefined;
   }
-  const canonical = canonicalizeDocumentPath(segments);
+  const canonical = canonicalizeDocumentPath(toDocumentPath(segments));
   if (canonical[0] === "cfc") {
     return undefined;
   }

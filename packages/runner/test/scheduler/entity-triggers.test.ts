@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import {
   assertNoTriggerDrift,
+  createTriggerReference,
   EntityTriggers,
   resetTriggerScanWork,
   triggerEquivalenceEnabled,
@@ -151,6 +152,33 @@ describe("EntityTriggers", () => {
     });
 
     describe("set()", () => {
+      it("checks a broad registration without comparing every pair of reads", () => {
+        expect(triggerEquivalenceEnabled((name) => Deno.env.get(name))).toBe(
+          true,
+        );
+        const count = 1024;
+        let componentReads = 0;
+        const paths = Array.from(
+          { length: count },
+          (_, index) =>
+            new Proxy(["value", `member-${index}`], {
+              get(target, property, receiver) {
+                if (property === "0" || property === "1") componentReads++;
+                return Reflect.get(target, property, receiver);
+              },
+            }),
+        );
+        const triggers = new EntityTriggers();
+        triggers.set(reader("broad"), paths);
+
+        // Count comparisons through the paths instead of elapsed time. A full
+        // scan for each moved path reads over a million components here.
+        expect(componentReads).toBeLessThan(count * 512);
+        expect(matched(triggers, ["value", "member-8"])).toEqual({
+          broad: [["value", "member-8"]],
+        });
+      });
+
       it("replaces what the action read before", () => {
         const triggers = new EntityTriggers();
         const action = reader("moved");
@@ -254,6 +282,68 @@ describe("EntityTriggers", () => {
       expect(() => triggers.set(action, [["other"]])).toThrow(
         "Registered read `value` is missing from the index.",
       );
+    });
+  });
+
+  describe("createTriggerReference()", () => {
+    it("agrees with a full overlap scan for prefixes, extensions, and absent paths", () => {
+      const registered = [
+        ["value", "b", "child"],
+        ["a/b"],
+        ["value"],
+        ["value", "a"],
+        ["value", "ab"],
+        [],
+        ["value", "b"],
+        ["value", "b"],
+        ["a", "b"],
+        [""],
+        ["\u{1f369}", "glaze"],
+        ["\u{e000}"],
+      ];
+      const writes = [
+        ...registered,
+        ["value", "a", "absent"],
+        ["value", "b", "absent"],
+        ["value", "between"],
+        ["absent"],
+        ["z"],
+        ["\u{1f369}"],
+        ["\u{e000}", "absent"],
+      ];
+      const reference = createTriggerReference(registered);
+      for (const writePath of writes) {
+        const expected = new Set(
+          registered.filter((path) => arraysOverlap(path, writePath))
+            .map((path) => JSON.stringify(path)),
+        );
+        expect(
+          new Set(
+            [...reference(writePath)].map((path) => JSON.stringify(path)),
+          ),
+        ).toEqual(expected);
+      }
+    });
+
+    it("returns no paths from an empty registration", () => {
+      const reference = createTriggerReference([]);
+      expect([...reference([])]).toEqual([]);
+      expect([...reference(["value"])]).toEqual([]);
+    });
+
+    it("preserves drift detection for an incomplete or excessive trie result", () => {
+      const registered = [["value", "a"], ["value", "b"], ["other"]];
+      const reference = createTriggerReference(registered);
+      expect(() =>
+        assertNoTriggerDrift([], reference(["value", "a"]), ["value", "a"])
+      ).toThrow('Trigger index drift for write ["value","a"]: ["value","a"]');
+      expect(() =>
+        assertNoTriggerDrift(
+          [["value", "a"], ["value", "b"]],
+          reference(["value", "a"]),
+          ["value", "a"],
+        )
+      ).toThrow('Trigger index drift for write ["value","a"]: ["value","b"]');
     });
   });
 
