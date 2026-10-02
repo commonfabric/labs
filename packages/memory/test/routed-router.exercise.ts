@@ -605,16 +605,40 @@ function workerStats() {
         fds: [...Deno.readDirSync(`${path}/fd`)].length,
       });
     } catch (error) {
-      // A worker can exit between listing /proc and reading it; its files
-      // then report ENOENT, or ESRCH once its address space is gone.
-      const exited = error instanceof Deno.errors.NotFound ||
-        (error instanceof Error &&
-          error.message.startsWith("No such process (os error 3):"));
-      if (!exited) throw error;
+      if (!exited(error)) throw error;
     }
   }
   return result;
 }
+/**
+ * A process can exit between listing /proc and reading it; its files then
+ * report ENOENT, or ESRCH once its address space is gone.
+ */
+function exited(error: unknown) {
+  return error instanceof Deno.errors.NotFound ||
+    (error instanceof Error &&
+      error.message.startsWith("No such process (os error 3):"));
+}
+/** Resident KiB of the router process serving `role`. */
+function roleRssKb(role: string) {
+  for (const entry of Deno.readDirSync("/proc")) {
+    if (!/^\d+$/.test(entry.name)) continue;
+    try {
+      const path = `/proc/${entry.name}`;
+      if (Deno.readTextFileSync(`${path}/cmdline`).split("\0")[1] !== role) {
+        continue;
+      }
+      return Number(
+        Deno.readTextFileSync(`${path}/status`).match(/^VmRSS:\s+(\d+)/m)
+          ?.[1],
+      );
+    } catch (error) {
+      if (!exited(error)) throw error;
+    }
+  }
+  throw new Error(`no ${role} process`);
+}
+const agentRssKb = () => roleRssKb("link-agent") + roleRssKb("directory");
 try {
   for (let i = 0; i < 2; i++) {
     toolsheds.push(new Toolshed(i));
@@ -986,6 +1010,8 @@ try {
   pass(
     "slow incomplete client times out without blocking an authenticated peer",
   );
+  // Resident memory, including file-backed pages, unlike workers' privateKb.
+  const agentsBeforeKb = agentRssKb();
   const pool: { client: Client; session: string }[] = [{ client, session: b }];
   for (let i = 0; i < 31; i++) {
     const peer = await new Client(`127.0.0.${10 + i % 8}`).start();
@@ -1028,15 +1054,18 @@ try {
     }
   }));
   const activeElapsedMs = performance.now() - started;
+  const statsActiveEnd = workerStats();
+  const agentKbPerClient = (agentRssKb() - agentsBeforeKb) / 31;
   console.log(JSON.stringify({
     resource: {
       build: "release",
       concurrency: 32,
       idleStart: statsIdle,
       idleEnd: statsIdleEnd,
-      activeEnd: workerStats(),
+      activeEnd: statsActiveEnd,
       activeTransactions: 3200,
       activeElapsedMs,
+      agentKbPerClient,
       clockTicksPerSecond: Number(
         (await command(["getconf", "CLK_TCK"])).trim(),
       ),
@@ -1045,6 +1074,16 @@ try {
   pass(
     "32 optimized workers: actual private memory / CPU / descriptors / cgroups, idle and 3200 active transactions",
   );
+  // With a MAX_PACKET buffer on every IPC receive, this gate measured on
+  // x86_64 811 KiB per client in these two agents and a 900 KiB median worker.
+  // With buffers sized from the packet: 78 KiB and 376 KiB. glibc keeps arena
+  // memory at its high-water mark, so threads from earlier gates' clients hide
+  // part of the old growth; the 811 already includes that.
+  assert(agentKbPerClient <= 256, `agents grew ${agentKbPerClient} KiB/client`);
+  const workerKb = statsActiveEnd.map((w) => w.privateKb).sort((x, y) => x - y);
+  const medianKb = workerKb[workerKb.length >> 1];
+  assert(medianKb <= 640, `median worker private ${medianKb} KiB`);
+  pass("IPC receive buffers keep agent and worker memory per client bounded");
   for (const entry of pool.slice(1)) entry.client.close();
   await until(() => workerStats().length === 1);
 
