@@ -4,7 +4,6 @@
 
 export * from "./cell-handle.ts";
 export * from "./piece-handle.ts";
-export * from "./piece-exports.ts";
 export * from "./runtime-client.ts";
 export * from "./favorites-manager.ts";
 export * from "./client/emitter.ts";
