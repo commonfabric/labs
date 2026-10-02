@@ -3,17 +3,25 @@ import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 import { MAX_TTL_DAYS } from "./ingest-channels.utils.ts";
 
-// The CONTROL plane for ingest channels: mint, list, rotate, revoke.
+// The CONTROL plane for ingest channels: mint, list, rotate, revoke, and the
+// Gmail binding verbs.
 //
-// Mounted at its own prefix, deliberately NOT under `/api/ingest/*`:
-//   1. `/api/ingest/*` carries `cors({ origin: "*", allowMethods: ["POST"] })`.
+// A verb that acts on one space carries that space in its path, under
+// `/api/spaces/:space/`, so that whatever dispatches requests by space can
+// send it to the deployment holding that space without reading the body. The
+// one verb that names no space, the caller's own list, sits at
+// `/api/ingest-channels/list`.
+//
+// Both prefixes are deliberately NOT under the data plane's `/api/ingest/*` or
+// `/api/spaces/:space/ingest/*`:
+//   1. Those carry `cors({ origin: "*", allowMethods: ["POST"] })`.
 //      Inheriting that would make this a credentialed cross-origin POST surface,
 //      against a written invariant of the first-party auth spec ("the protected
 //      routes do not expose wildcard CORS").
 //   2. `POST /api/ingest/channels` would collide with `POST /api/ingest/:id`.
 //   3. Data plane and control plane should not share middleware.
-// Keep the two prefixes separate LITERAL strings — a future `/api/ingest*`
-// would silently merge them again.
+// Keep the `ingest` and `ingest-channels` path segments separate LITERAL
+// strings — a future `ingest*` pattern would silently merge them again.
 //
 // EVERY verb is POST, including list and revoke. Not aesthetics: the in-runtime
 // signer is a hardcoded POST-only path allowlist
@@ -23,12 +31,18 @@ import { MAX_TTL_DAYS } from "./ingest-channels.utils.ts";
 
 const tags = ["Ingest Channels"];
 
-export const BASE = "/api/ingest-channels";
+/** The prefix of every verb that acts on one space, named in the path. */
+export const SPACE_BASE = "/api/spaces/:space/ingest-channels";
 
-const spaceField = z.string().describe(
-  "The did:key of the space to write into. You must hold an explicit OWNER " +
-    "grant on its ACL.",
-);
+/** The prefix of the one verb that names no space: the caller's own list. */
+export const CALLER_BASE = "/api/ingest-channels";
+
+const spaceParams = z.object({
+  space: z.string().describe(
+    "The did:key of the space the channel writes into. You must hold an " +
+      "explicit OWNER grant on its ACL.",
+  ),
+});
 
 // An idempotency key; see `claimMintRequest` for why a credential-minting route
 // needs one when request proofs have no replay cache.
@@ -70,7 +84,9 @@ const commonResponses = {
   // over the deployment's whole space inventory.
   [HttpStatusCodes.FORBIDDEN]: {
     ...jsonError,
-    description: "Not an owner of that space, or no such space",
+    description:
+      "Not an owner of that space, no such space, or no such channel " +
+      "writing into it",
   },
   [HttpStatusCodes.CONFLICT]: {
     ...jsonError,
@@ -113,15 +129,15 @@ const mintResult = z.object({
 });
 
 export const mint = createRoute({
-  path: `${BASE}/mint`,
+  path: `${SPACE_BASE}/mint`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
           schema: z.object({
-            space: spaceField,
             installId: z.string().describe(
               "Stable per-device id. Also the cross-repo join key and the " +
                 "provenance mark's audience.",
@@ -144,47 +160,59 @@ export const mint = createRoute({
   },
 });
 
+const listResponses = (description: string) => ({
+  [HttpStatusCodes.OK]: {
+    content: {
+      "application/json": {
+        schema: z.object({ channels: z.array(channelSummary) }),
+      },
+    },
+    description,
+  },
+  ...commonResponses,
+});
+
 export const list = createRoute({
-  path: `${BASE}/list`,
+  path: `${SPACE_BASE}/list`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
+    body: { content: { "application/json": { schema: z.object({}) } } },
+  },
+  responses: listResponses(
+    "EVERY channel targeting the space, whoever minted it, including revoked " +
+      "ones, which is how a space's current owner discovers a channel minted " +
+      "by someone whose access has since been removed, and the only place a " +
+      "revoked channel's `revision` can be read. Requires owning the space. " +
+      "Never includes secretHash.",
+  ),
+});
+
+export const listOwn = createRoute({
+  path: `${CALLER_BASE}/list`,
+  method: "post",
+  tags,
+  request: {
+    // Strict, so that a caller sending `space` here, where it would be
+    // dropped and the wrong list returned, is told instead.
     body: {
-      content: {
-        "application/json": {
-          schema: z.object({
-            space: z.string().optional().describe("Filter to one space."),
-          }),
-        },
-      },
+      content: { "application/json": { schema: z.object({}).strict() } },
     },
   },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({ channels: z.array(channelSummary) }),
-        },
-      },
-      description:
-        "Without `space`: the channels this caller minted, live ones only — " +
-        "the owner index is pruned on revoke because its length is the " +
-        "live-channel cap. With `space`: EVERY channel targeting that space " +
-        "whoever minted it, including revoked ones, which is how a space's " +
-        "current owner discovers a channel minted by someone whose access has " +
-        "since been removed, and the only place a revoked channel's " +
-        "`revision` can be read. Requires owning the space. Never includes " +
-        "secretHash.",
-    },
-    ...commonResponses,
-  },
+  responses: listResponses(
+    "The channels this caller minted, in whichever spaces, live ones only — " +
+      "the owner index is pruned on revoke because its length is the " +
+      "live-channel cap. Never includes secretHash.",
+  ),
 });
 
 export const rotate = createRoute({
-  path: `${BASE}/rotate`,
+  path: `${SPACE_BASE}/rotate`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
@@ -207,10 +235,11 @@ export const rotate = createRoute({
 });
 
 export const revoke = createRoute({
-  path: `${BASE}/revoke`,
+  path: `${SPACE_BASE}/revoke`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
@@ -263,10 +292,11 @@ export const revoke = createRoute({
 });
 
 export const gmailBind = createRoute({
-  path: `${BASE}/gmail-bind`,
+  path: `${SPACE_BASE}/gmail-bind`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
@@ -312,10 +342,11 @@ export const gmailBind = createRoute({
 });
 
 export const gmailUnbind = createRoute({
-  path: `${BASE}/gmail-unbind`,
+  path: `${SPACE_BASE}/gmail-unbind`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
@@ -346,6 +377,7 @@ export const gmailUnbind = createRoute({
 
 export type MintRoute = typeof mint;
 export type ListRoute = typeof list;
+export type ListOwnRoute = typeof listOwn;
 export type RotateRoute = typeof rotate;
 export type RevokeRoute = typeof revoke;
 export type GmailBindRoute = typeof gmailBind;

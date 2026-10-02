@@ -1,8 +1,9 @@
 /**
  * Provision a vouched ingest channel — the OPERATOR / break-glass path.
  *
- * PREFER `cf ingest mint`. Users can now mint their own channels against
- * /api/ingest-channels, signing with their own identity key; the server checks
+ * PREFER `cf ingest mint`. Users can mint their own channels through the
+ * ingest-channel control plane, signing with their own identity key; the
+ * server checks
  * they hold an explicit OWNER grant on the target space's ACL, which is what
  * closes the confused-deputy hole that kept creation out-of-band originally.
  * See docs/features/self-serve-ingest-channels.md.
@@ -36,11 +37,13 @@ import {
   channelId,
   generateIngestSecret,
   getRegistration,
+  ingestUrl,
   isValidSegment,
   MAX_REVOCATION_HISTORY,
   RegistrationConflictError,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
+import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
 import { DEFAULT_TTL_DAYS } from "@/routes/ingest-channels/ingest-channels.utils.ts";
 
 const USAGE =
@@ -181,7 +184,7 @@ export async function provisionChannel(
       ...(existing?.secretHash !== undefined
         ? { previousSecretHash: existing.secretHash }
         : {}),
-      createdBy: serviceSpace,
+      createdBy: identity.did(),
       createdAt: existing?.createdAt ?? now.toISOString(),
       enabled: true,
       expiresAt,
@@ -230,7 +233,7 @@ export async function provisionChannel(
 export async function main(
   args: string[],
   makeRuntime: () => Runtime = defaultRuntime,
-  serviceSpace: string = identity.did(),
+  serviceSpace: string = ingestServiceSpace,
   log: (line: string) => void = console.log,
   logError: (line: string) => void = console.error,
 ): Promise<number> {
@@ -262,7 +265,7 @@ export async function main(
       return outcome.code;
     }
 
-    const url = `${env.API_URL}/api/ingest/${outcome.id}`;
+    const url = ingestUrl(env.API_URL, request.space, outcome.id);
     log("\nIngest channel provisioned.\n");
     log(`  id:          ${outcome.id}`);
     log(`  name:        ${outcome.name}`);

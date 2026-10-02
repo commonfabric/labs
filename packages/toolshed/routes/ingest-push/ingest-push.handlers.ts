@@ -8,7 +8,7 @@ import { createRemoteJWKSet } from "@panva/jose";
 
 import type { AppRouteHandler } from "@/lib/types.ts";
 import { runtime } from "@/index.ts";
-import { identity } from "@/lib/identity.ts";
+import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
 import { GOOGLE_OIDC_JWKS_URL, processGmailPush } from "./gmail-push.utils.ts";
 import {
   gmailPushAudience,
@@ -22,10 +22,16 @@ const googleKeys = createRemoteJWKSet(new URL(GOOGLE_OIDC_JWKS_URL));
 
 /** Handles one Gmail notification delivered by a Pub/Sub push subscription. */
 export const gmail: AppRouteHandler<GmailPushRoute> = async (c) => {
+  // A push addressed to another registry is one this deployment cannot
+  // deliver, and saying so with a 404 has Pub/Sub redeliver it; acknowledging
+  // it would lose the notification.
+  if (c.req.valid("param").space !== ingestServiceSpace) {
+    return c.json({ error: "Not found" }, 404);
+  }
   const result = await processGmailPush(
     {
       runtime,
-      serviceSpace: identity.did(),
+      serviceSpace: ingestServiceSpace,
       keys: googleKeys,
       audience: gmailPushAudience,
       serviceAccounts: gmailPushServiceAccounts,

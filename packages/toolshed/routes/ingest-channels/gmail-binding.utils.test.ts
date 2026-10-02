@@ -170,6 +170,34 @@ describe("gmail-binding.utils", () => {
       expect(await bound()).toEqual([]);
     });
 
+    it("returns 403 for a bind addressed to a space the channel does not write into, without asking Gmail", async () => {
+      const id = await mintChannel();
+
+      const result = await processGmailBind(deps, alice.did(), {
+        id,
+        accessToken: "token-1",
+        requestId: "req-1",
+        space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+      });
+
+      expect(result.status).toBe(403);
+      expect(lookups).toEqual([]);
+      expect(await bound()).toEqual([]);
+    });
+
+    it("binds a channel addressed through the space it writes into", async () => {
+      const id = await mintChannel();
+
+      const result = await processGmailBind(deps, alice.did(), {
+        id,
+        accessToken: "token-1",
+        requestId: "req-1",
+        space,
+      });
+
+      expect(ok(result)).toEqual({ id, emailAddress: MAILBOX });
+    });
+
     it("returns 403 for a channel that does not exist", async () => {
       const result = await bind(
         "ing_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -345,6 +373,50 @@ describe("gmail-binding.utils", () => {
 
       expect(result.status).toBe(429);
       expect(await bound()).toEqual([id]);
+    });
+
+    it("returns 403 and leaves the binding in place for an unbind addressed to a space the channel does not write into", async () => {
+      const id = await mintChannel();
+      ok(await bind(id, "req-1"));
+
+      const result = await processGmailUnbind(deps, alice.did(), {
+        id,
+        requestId: "req-u",
+        space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+      });
+
+      expect(result.status).toBe(403);
+      expect(await bound()).toEqual([id]);
+    });
+  });
+
+  describe("a registry kept in a space other than the operator's own", () => {
+    // What `INGEST_SERVICE_SPACE` asks of the space it names: an access list
+    // in which the operator is OWNER.
+
+    it("mints into it and binds through it", async () => {
+      const registry = await Identity.fromPassphrase("gb-registry");
+      await genesisAcl(factory, registry, { [operator.did()]: "OWNER" });
+      const elsewhere = { ...deps, serviceSpace: registry.did() };
+
+      const { id } = ok(
+        await processMint(elsewhere, alice.did(), {
+          space,
+          installId: "loom-registry",
+          requestId: "req-mint",
+        }),
+      );
+      const result = await processGmailBind(elsewhere, alice.did(), {
+        id,
+        accessToken: "token-1",
+        requestId: "req-bind",
+        space,
+      });
+
+      expect(ok(result)).toEqual({ id, emailAddress: MAILBOX });
+      expect(await getMailboxChannels(runtime, registry.did(), MAILBOX))
+        .toEqual([id]);
+      expect(await bound()).toEqual([]);
     });
   });
 });

@@ -27,9 +27,9 @@ flowchart TB
         end
     end
     subgraph toolshed["Toolshed deployment, run by its operator"]
-        control["Control plane<br/>/api/ingest-channels"]
-        push["Push endpoint<br/>/api/ingest-push/gmail"]
-        service[("Toolshed's own space<br/>registrations and bindings")]
+        control["Control plane<br/>/api/spaces/:space/ingest-channels"]
+        push["Push endpoint<br/>/api/spaces/:space/ingest-push/gmail"]
+        service[("Service space<br/>registrations and bindings")]
         userspace[("User's space<br/>channel journal")]
     end
     subgraph machine["User's machine, run by the user"]
@@ -60,7 +60,7 @@ setup, or repeat on a schedule.
 | Pub/Sub topic and push subscription | The Google Cloud project that owns the syncer's OAuth client | The syncer's developers | The topic, the push endpoint URL, the audience, and the service account that signs push tokens. |
 | Google signing keys | Google | Google | Key rotation. Toolshed caches the keys and fetches them again for a key id it has not seen. |
 | Push endpoint and control plane | The toolshed deployment | The deployment's operator | Whether the feature is on, and which audience and service accounts are accepted. |
-| Toolshed's own space | The toolshed deployment | The deployment's operator | Holds channel registrations and mailbox bindings for every user. |
+| The service space | The toolshed deployment | The deployment's operator | Holds channel registrations and mailbox bindings for every user. |
 | The user's space | The toolshed deployment | The user, as OWNER in its ACL | Who may mint a channel into it. The journal lands here. |
 | Syncer | The user's machine | The user | Calling and renewing `users.watch`, binding, and when to sync. |
 
@@ -98,8 +98,26 @@ sequenceDiagram
 ```
 
 The syncer never uses the channel's token. A channel is normally written by a
-device presenting that token to `POST /api/ingest/:id`. Here toolshed is the
-writer, and what authorizes each write is the push token and the binding.
+device presenting that token to `POST /api/spaces/:space/ingest/:id`. Here
+toolshed is the writer, and what authorizes each write is the push token and
+the binding.
+
+## What each request is addressed to
+
+Every request toolshed receives on this path names a space in its URL, so
+that whatever dispatches requests by space can send it to the deployment
+holding that space.
+
+| Request | The space in its path |
+| --- | --- |
+| Mint, `gmail-bind`, `gmail-unbind` | The user's space, which the channel writes into. |
+| The push from Pub/Sub | The service space, which holds the bindings. Pub/Sub knows a mailbox and no user's space. |
+
+The push is the one request that cannot name the user's space, and a binding
+is written wherever its `gmail-bind` was handled. So the push subscription's
+endpoint names the service space of the deployment that holds the user's
+space, and one topic serving several deployments has one subscription for
+each.
 
 ## When new mail arrives
 

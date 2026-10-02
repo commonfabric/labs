@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createRouter } from "@/lib/create-app.ts";
 import { ingestGate } from "./gate.ts";
-import { BASE } from "./ingest-channels.routes.ts";
+import { SPACE_BASE } from "./ingest-channels.routes.ts";
 
 describe("self-serve gate", () => {
   // The gate's ROUTING consequence, which env.test.ts does not cover — that
@@ -16,14 +16,19 @@ describe("self-serve gate", () => {
   const build = (enabled: boolean) => {
     const seen: string[] = [];
     const router = createRouter();
-    router.use(`${BASE}/*`, ingestGate(enabled));
-    router.use(`${BASE}/*`, async (_c, next) => {
+    router.use(`${SPACE_BASE}/*`, ingestGate(enabled));
+    router.use(`${SPACE_BASE}/*`, async (_c, next) => {
       seen.push("downstream");
       await next();
     });
-    router.post(`${BASE}/mint`, (c) => c.json({ ok: true }));
+    router.post(`${SPACE_BASE}/mint`, (c) => c.json({ ok: true }));
     return { router, seen };
   };
+
+  const BASE = SPACE_BASE.replace(
+    ":space",
+    "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+  );
 
   const spellings = [
     `${BASE}/mint`,

@@ -25,7 +25,7 @@ dead and look healthy. Fixing that is worth more than the self-serve endpoint.
 
 ## The constraint that produced today's design
 
-`ingest.index.ts` deliberately mounts only `POST /api/ingest/:id`. An unauthed
+`ingest.index.ts` deliberately mounts only the data plane's POST. An unauthed
 create taking a caller-supplied target space is a confused-deputy write
 primitive: anyone could register a channel targeting another user's space and
 get legitimately-minted `ExternalIngest` marks written there. Two facts make
@@ -217,18 +217,32 @@ or the test proves nothing.
 
 ## Surface
 
-A **separate prefix**, `/api/ingest-channels` — not a sub-path of
-`/api/ingest/*`. Three reasons, all concrete:
+**A verb that acts on one space names that space in its path**, under
+`/api/spaces/:space/ingest-channels`. Whatever dispatches requests by space
+can then send the request to the deployment holding that space without reading
+the body. For mint and for the space's list, `:space` is the space the request
+is about. For the verbs that take a channel id, it is the space that channel
+writes into: the authorization is still made against the space in the stored
+registration, and a channel addressed through any other space answers exactly
+like one the caller does not own. So the path can only narrow what an id
+reaches, never widen it.
 
-1. `/api/ingest/*` carries `cors({ origin: "*" })` (`ingest.index.ts:18-26`).
+One verb names no space: the caller's own list, at
+`/api/ingest-channels/list`.
+
+Both are **separate prefixes** from the data plane's `/api/ingest/*` and
+`/api/spaces/:space/ingest/*`, not sub-paths of them. Three reasons, all
+concrete:
+
+1. The data plane carries `cors({ origin: "*" })` (`ingest.index.ts`).
    Mounting a credentialed control plane under a wildcard-CORS prefix violates a
    written invariant: "The protected routes do not expose wildcard CORS"
    (`docs/specs/toolshed-access-control.md:31-33`).
 2. `POST /api/ingest/channels` collides with `POST /api/ingest/:id` at the
    router.
-3. Data plane and control plane should not share middleware. Keep the two
-   prefixes as separate **literal** strings — a future `/api/ingest*` would
-   silently merge them.
+3. Data plane and control plane should not share middleware. Keep `ingest` and
+   `ingest-channels` as separate **literal** path segments — a future
+   `ingest*` pattern would silently merge them.
 
 **All verbs are POST**, including list and revoke. This is not aesthetics: the
 in-runtime signer is a hardcoded, POST-only path allowlist
@@ -238,12 +252,25 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 
 | Verb | Purpose |
 |---|---|
-| `POST /api/ingest-channels/mint` | mint (or rotate-in-place); returns the token **once** |
-| `POST /api/ingest-channels/list` | the caller's own channels; never returns `secretHash` |
-| `POST /api/ingest-channels/rotate` | new token, same id and target |
-| `POST /api/ingest-channels/revoke` | flips `enabled: false` |
-| `POST /api/ingest-channels/gmail-bind` | binds a channel to a Gmail mailbox; see [gmail-push-ingest.md](gmail-push-ingest.md) |
-| `POST /api/ingest-channels/gmail-unbind` | removes that binding |
+| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); returns the token **once** |
+| `POST /api/spaces/:space/ingest-channels/list` | every channel targeting the space, whoever minted it, revoked ones included; never returns `secretHash` |
+| `POST /api/ingest-channels/list` | the caller's own live channels, in whichever spaces; never returns `secretHash` |
+| `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target |
+| `POST /api/spaces/:space/ingest-channels/revoke` | flips `enabled: false` |
+| `POST /api/spaces/:space/ingest-channels/gmail-bind` | binds a channel to a Gmail mailbox; see [gmail-push-ingest.md](gmail-push-ingest.md) |
+| `POST /api/spaces/:space/ingest-channels/gmail-unbind` | removes that binding |
+
+The caller's own list takes an empty body and refuses any other, so a request
+that names a space there, where it would be dropped, is told so with a 422
+rather than handed the wrong list.
+
+Mint and rotate return the URL the device writes to,
+`POST /api/spaces/:space/ingest/:id`, which names the channel's space for the
+same reason the control plane does. The token is the credential and the space
+grants nothing: a channel addressed through a space it does not write into
+answers the 401 of an unknown channel, whatever token comes with it.
+`POST /api/ingest/:id` reaches the same channel for a device whose URL names
+no space.
 
 *Correction found while testing:* not mounting `cors()` here does **not** yield
 an absent `access-control-allow-origin`. `routes/static` and `routes/shell`
@@ -266,7 +293,9 @@ otherwise force arbitrary allocation with a garbage signature.
 `cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. `cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
-would take the channel down with it. The CLI is the only client that can sign
+would take the channel down with it. Rotate and revoke are addressed to the
+channel's space, which the CLI reads off the caller's own list, or takes from
+`--space` for a channel that list does not hold. The CLI is the only client that can sign
 today — the shell cannot sign at all (zero references to `toolshed-http-auth`
 across `packages/shell`, `packages/lib-shell`, `packages/runtime-client`), and
 the in-pattern `fetch` builtin is bound to the three-entry allowlist above.
@@ -464,7 +493,8 @@ interprets, and it rejects rather than strips — silently rewriting a record
 would break verbatim storage from the other side.
 
 The cross-repo contract in `ingest-channels-journal-sink.md` §"Cross-repo
-contract" is untouched: the data plane `POST /api/ingest/:id` does not change.
+contract" is untouched: a device POSTs the same body, with the same bearer
+token, to whichever URL mint handed it.
 
 ## Attacks considered and confirmed *not* to work
 

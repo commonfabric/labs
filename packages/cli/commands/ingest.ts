@@ -197,9 +197,27 @@ export const ingest = new Command()
     "--ttl-days <days:number>",
     "Days until the new token expires. Omit to keep the current window.",
   )
+  // No `-s` short form, for the reason `revoke --space` has none.
+  .option(
+    "--space <space:string>",
+    "The space the channel writes into. Without it the space is looked up " +
+      "among the channels you minted.",
+  )
   .action(async (options, id: string) => {
     const config = parseConfig(options);
+    // The request is addressed to the channel's space, so the space has to be
+    // known before the rotate is sent.
+    const space = options.space
+      ? await resolveSpaceDid(config.identityPath, options.space)
+      : (await listChannels(config)).find((c) => c.id === id)?.space;
+    if (space === undefined) {
+      throw new Error(
+        `No ingest channel ${id} among the ones you minted. Pass --space to ` +
+          `name the space it writes into.`,
+      );
+    }
     const minted = await rotateChannel(config, {
+      space,
       id,
       ttlDays: options.ttlDays,
       requestId: newRequestId(),
@@ -255,6 +273,7 @@ export const ingest = new Command()
       );
     }
     const { revokedAt } = await revokeChannel(config, {
+      space: found.space,
       id,
       requestId: newRequestId(),
       expectedRevision: found.revision,

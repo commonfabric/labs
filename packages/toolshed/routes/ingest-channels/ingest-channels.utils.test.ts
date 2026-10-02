@@ -297,6 +297,59 @@ describe("ingest-channels control plane", () => {
     expect(still.status).toBe(200);
   });
 
+  it("returns the unowned denial for a rotate and a revoke addressed to a space the channel does not write into", async () => {
+    // The owner asks, so only the space the request was addressed to stands
+    // between the request and the channel.
+
+    const first = await mint(alice, "req-as1");
+    const id = ok(first).id;
+
+    const rot = await processRotate(deps, alice.did(), {
+      id,
+      requestId: "req-as2",
+      space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+    });
+    expect(rot.status).toBe(403);
+    expect("token" in rot.body).toBe(false);
+
+    const rev = await processRevoke(deps, alice.did(), {
+      id,
+      requestId: "rv-as1",
+      expectedRevision: await revOf(id),
+      space: "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+    });
+    expect(rev.status).toBe(403);
+
+    const still = await processIngest(
+      runtime,
+      operator.did(),
+      id,
+      ok(first).token,
+      JSON.stringify({ partition: "2026-08-04", records: [{ x: 1 }] }),
+    );
+    expect(still.status).toBe(200);
+  });
+
+  it("rotates a channel addressed through the space it writes into", async () => {
+    const first = await mint(alice, "req-as3");
+
+    const rotated = await processRotate(deps, alice.did(), {
+      id: ok(first).id,
+      requestId: "req-as4",
+      space,
+    });
+
+    expect(rotated.status).toBe(200);
+  });
+
+  it("returns a URL that names the channel's space ahead of its id", async () => {
+    const minted = ok(await mint(alice, "req-url"));
+
+    expect(minted.url).toBe(
+      `${deps.apiUrl}/api/spaces/${space}/ingest/${minted.id}`,
+    );
+  });
+
   it("answers identically for an unknown channel id and an unowned one", async () => {
     const first = await mint(alice, "req-u1");
     const unowned = await processRevoke(deps, mallory.did(), {

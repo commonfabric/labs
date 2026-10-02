@@ -347,6 +347,16 @@ export function channelId(space: string, installId: string): string {
   return `ing_${hashSecret(`${space}\n${installId}`)}`;
 }
 
+/**
+ * Builds the URL a device POSTs records to for channel `id`, which writes
+ * into `space`. The space is in the path so that whatever dispatches requests
+ * by space can send the write to the deployment holding that space; it grants
+ * nothing, since the bearer token is the credential.
+ */
+export function ingestUrl(apiUrl: string, space: string, id: string): string {
+  return `${apiUrl}/api/spaces/${space}/ingest/${id}`;
+}
+
 export function generateIngestSecret(): { secret: string; secretHash: string } {
   const secret = `ingsec_${randomBase62(INGEST_SECRET_BYTES)}`;
   return { secret, secretHash: hashSecret(secret) };
@@ -1147,6 +1157,10 @@ export type IngestResult =
  * 400, batch cap) is unit-testable against a real runtime. `rawBody` is the raw
  * request body text; it is parsed only AFTER auth succeeds, so a bad/unknown/
  * disabled/wrong-sink token gets a uniform 401 regardless of body validity.
+ *
+ * `addressedSpace` is the space the request named in its path, for a request
+ * that named one. A channel writing into any other space answers exactly like
+ * an unknown channel, whatever token came with it.
  */
 export async function processIngest(
   runtime: Runtime,
@@ -1155,6 +1169,7 @@ export async function processIngest(
   token: string,
   rawBody: string,
   logger?: IngestLogger,
+  addressedSpace?: string,
 ): Promise<IngestResult> {
   // Storage errors must 502, not masquerade as 401.
   let registration: IngestRegistration | null;
@@ -1170,8 +1185,12 @@ export async function processIngest(
 
   // EXACTLY TWO compares on every path — current, then previous-or-dummy — so
   // unknown / wrong / rotated are indistinguishable by timing. A missing
-  // channel burns both against the dummy.
-  if (!registration) {
+  // channel burns both against the dummy, and so does one addressed through a
+  // space it does not write into.
+  if (
+    !registration ||
+    (addressedSpace !== undefined && registration.space !== addressedSpace)
+  ) {
     verifyIngestSecret(token, DUMMY_HASH);
     verifyIngestSecret(token, DUMMY_HASH);
     return { status: 401, body: { error: "Invalid request" } };

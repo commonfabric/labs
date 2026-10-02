@@ -319,6 +319,48 @@ describe("ingest journal sink", () => {
     expect(cell.get()).toEqual([{ point_id: "a" }, { point_id: "b" }]);
   });
 
+  describe("a write addressed through a space", () => {
+    const body = JSON.stringify({
+      partition: "2026-07-06",
+      records: [{ point_id: "a" }],
+    });
+
+    it("returns 200 when the space is the one the channel writes into", async () => {
+      const { r, secret } = await savedReg({ id: "ing_addressed" });
+
+      const res = await processIngest(
+        runtime,
+        space,
+        r.id,
+        secret,
+        body,
+        undefined,
+        r.space,
+      );
+
+      expect(res.status).toBe(200);
+    });
+
+    it("returns the 401 of an unknown channel for any other space, and writes nothing", async () => {
+      const { r, secret } = await savedReg({ id: "ing_elsewhere" });
+
+      const res = await processIngest(
+        runtime,
+        space,
+        r.id,
+        secret,
+        body,
+        undefined,
+        "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
+      );
+
+      expect(res).toEqual({ status: 401, body: { error: "Invalid request" } });
+      const cell = journalCell(runtime, r, "2026-07-06");
+      await cell.sync();
+      expect(cell.get()).toBeUndefined();
+    });
+  });
+
   it("processIngest: hostile / missing partition -> 400, no write", async () => {
     const { secret } = await savedReg({ id: "ing_part" });
     for (const bad of ["../x", "", "a/b", "..", "."]) {

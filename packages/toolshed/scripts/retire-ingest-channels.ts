@@ -48,6 +48,7 @@ import {
   RegistrationConflictError,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
+import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
 import { plainRevocations } from "@/routes/ingest-channels/ingest-channels.utils.ts";
 
 export interface RetirePlan {
@@ -183,7 +184,7 @@ export const defaultRuntime = (): Runtime =>
 export async function main(
   args: string[],
   makeRuntime: () => Runtime = defaultRuntime,
-  serviceSpace: string = identity.did(),
+  serviceSpace: string = ingestServiceSpace,
   log: (line: string) => void = console.log,
   logError: (line: string) => void = console.error,
 ): Promise<number> {

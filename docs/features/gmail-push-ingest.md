@@ -29,18 +29,29 @@ space is a signal that something changed, never mail.
 3. It calls Gmail's `users.watch` with that user's token, naming the Pub/Sub
    topic, and repeats the call before the watch expires.
 4. When the mailbox changes, Gmail publishes to the topic, and the push
-   subscription POSTs the message to `/api/ingest-push/gmail`.
+   subscription POSTs the message to
+   `/api/spaces/:space/ingest-push/gmail`.
 5. Toolshed checks the push token, looks the mailbox up, and appends one
    record to each live bound channel's journal.
 6. The syncer sees the new record and runs an incremental sync.
 
 ## Routes
 
-### `POST /api/ingest-push/gmail`
+### `POST /api/spaces/:space/ingest-push/gmail`
 
-The push endpoint, called by Pub/Sub and by nothing else. It sits under its own
-prefix, apart from `/api/ingest/*`, where `POST /api/ingest/:id` would shadow
-it and the prefix's wildcard CORS would apply to it.
+The push endpoint, called by Pub/Sub and by nothing else.
+
+`:space` is the space this deployment keeps its ingest registry in, the
+[service space](#the-service-space), and not a user's space. A notification
+names a mailbox and nothing else, and which channels that mailbox reaches is
+what the registry says, so the registry's space is the one a push can be
+addressed to. Whatever dispatches requests by space then sends the push to the
+deployment whose bindings it should be read against. A push naming any other
+space gets a 404.
+
+The route sits under its own `ingest-push` path segment, apart from the data
+plane's `ingest`, where `POST /api/spaces/:space/ingest/:id` would shadow it
+and that prefix's wildcard CORS would apply to it.
 
 A request is accepted when its `Authorization` header carries a Google-signed
 OIDC token that:
@@ -63,6 +74,7 @@ each status is chosen for what Pub/Sub does next:
 | 200 `{ delivered }` | Delivered to `delivered` channels, which is zero for a mailbox nobody bound | Acknowledges |
 | 200 `{ delivered: 0 }` | The body is not a Gmail notification | Acknowledges, so the message is not redelivered for as long as the subscription retains it |
 | 401 | No token, or one that fails any check above | Redelivers with backoff |
+| 404 | Gmail push is not configured, or `:space` is not this deployment's service space; checked before the token | Redelivers with backoff |
 | 413 | Body over 16 KB, checked before the token | Redelivers with backoff |
 | 502 | Google's keys could not be fetched, or a lookup or append failed | Redelivers with backoff |
 
@@ -70,12 +82,14 @@ An append that fails partway through a delivery is redelivered in full, so a
 channel can receive one notification twice. Records carry the history id,
 which makes that harmless to a reader.
 
-### `POST /api/ingest-channels/gmail-bind` and `gmail-unbind`
+### `POST /api/spaces/:space/ingest-channels/gmail-bind` and `gmail-unbind`
 
 Two verbs on the ingest-channel control plane. They share its first-party
 request proof, its 16 KB body limit, and its gate on
 `INGEST_SELF_SERVE_ENABLED`, and are gated a second time on Gmail push being
-configured.
+configured. Like the other verbs that take a channel id, they are addressed
+to the space the channel writes into, and a channel addressed through any
+other space answers as one the caller does not own.
 
 `gmail-bind` takes `{ id, accessToken, requestId }` and returns
 `{ id, emailAddress }`.
@@ -107,7 +121,7 @@ a request that failed leaves its id free to retry with.
 | 200 | Bound |
 | 400 | Gmail did not accept the access token, or `requestId` is malformed |
 | 401 | Missing or invalid first-party request proof |
-| 403 | Not an owner of the channel's space, or no such channel |
+| 403 | Not an owner of the channel's space, no such channel, or the channel does not write into `:space` |
 | 409 | `requestId` was already used, the channel is revoked or expired, the mailbox is at its limit, the binding changed concurrently, or this deployment cannot write to the space |
 | 413 | Body over 16 KB, checked before the proof |
 | 422 | Body failed schema validation, checked after the proof |
@@ -148,9 +162,22 @@ integer and a JSON number that large loses precision. The record carries the
 ExternalIngest mark every journal append carries, and the delivery stamps the
 channel's last-seen time.
 
+## The service space
+
+Channel registrations and mailbox bindings live in one space, which only this
+deployment reads. It is the space `INGEST_SERVICE_SPACE` names, or with that
+unset, the space named by the deployment's own identity.
+
+A push is delivered against the bindings of the deployment that receives it,
+and a binding is written by the deployment that handled the `gmail-bind`. So
+where a space decides which deployment a request reaches, three things have to
+land together: the user's space, the registration of the channel that writes
+into it, and the service space the push is addressed to. A deployment in that
+position names a service space that is dispatched to it.
+
 ## Bindings
 
-Bindings live in toolshed's service space, beside the channel registrations.
+Bindings live in the service space, beside the channel registrations.
 A mailbox's key is a hash of its address, lowercased and trimmed, so no
 address appears in a cell id, and neither the address nor the key appears in
 a log line.
@@ -169,14 +196,21 @@ client whose token calls `users.watch`. A deployment whose users sign in
 through more than one client needs one topic per client's project; every
 topic's push subscription can deliver to the same endpoint.
 
+A topic delivers each message to every subscription on it, and nothing in a
+notification says which deployment holds the mailbox's binding. So where more
+than one deployment serves the mailboxes behind one topic, each gets a
+subscription of its own, addressed to its own service space. Every one of
+them receives every notification, and the ones holding no binding for the
+mailbox acknowledge it with `delivered: 0`.
+
 For each project:
 
 1. Create a topic, and grant `gmail-api-push@system.gserviceaccount.com` the
    Pub/Sub Publisher role on it.
 2. Create a service account for the push subscription to sign as.
 3. Create a push subscription on the topic, with the endpoint
-   `https://<toolshed>/api/ingest-push/gmail`, OIDC authentication as that
-   service account, and an audience.
+   `https://<toolshed>/api/spaces/<service space>/ingest-push/gmail`, OIDC
+   authentication as that service account, and an audience.
 4. Add the service account to `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS`. Every
    subscription uses the one audience set in `INGEST_GMAIL_PUSH_AUDIENCE`.
 
@@ -210,4 +244,6 @@ push endpoint and both control-plane verbs answer 404.
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | Comma-separated service accounts the push subscriptions sign as. |
 
 The binding verbs also need `INGEST_SELF_SERVE_ENABLED`, which mounts the
-control plane they sit on.
+control plane they sit on. `INGEST_SERVICE_SPACE`, described in
+[CONFIGURATION.md](../development/CONFIGURATION.md#ingest-registry), names
+the service space.

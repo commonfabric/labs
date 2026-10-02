@@ -61,7 +61,9 @@ const replayed = (channel: string): ControlResult<never> => ({
  * Binds channel `input.id` to the mailbox `input.accessToken` reads, moving it
  * off any mailbox it was bound to before. The caller must own the channel's
  * space, and the channel must be live. The access token is used for one
- * profile lookup and kept nowhere.
+ * profile lookup and kept nowhere. `input.space`, when given, is the space the
+ * request was addressed to, and a channel writing into any other is refused
+ * as an unowned one is.
  *
  * `input.requestId` makes the bind at most once: the proof on a request stays
  * valid for minutes, and without the id a late duplicate of an earlier bind
@@ -70,10 +72,10 @@ const replayed = (channel: string): ControlResult<never> => ({
 export async function processGmailBind(
   deps: GmailBindDeps,
   callerDid: string,
-  input: { id: string; accessToken: string; requestId: string },
+  input: { id: string; accessToken: string; requestId: string; space?: string },
 ): Promise<ControlResult<{ id: string; emailAddress: string }>> {
   if (!isValidRequestId(input.requestId)) return INVALID_REQUEST_ID;
-  const owned = await loadOwned(deps, callerDid, input.id);
+  const owned = await loadOwned(deps, callerDid, input.id, input.space);
   if (!owned.ok) return owned.result;
   if (channelRefusal(owned.registration) !== null) {
     return {
@@ -149,6 +151,7 @@ export async function processGmailBind(
  * Unbinds channel `input.id` from its mailbox. The caller must own the
  * channel's space; the channel need not be live, so that a revoked channel
  * can still be cleared. `unbound` says whether it was bound to anything.
+ * `input.space` narrows as it does for `processGmailBind()`.
  *
  * `input.requestId` makes the unbind at most once, so that a late duplicate
  * cannot clear a binding made after the first one landed. An unbind whose id
@@ -159,10 +162,10 @@ export async function processGmailBind(
 export async function processGmailUnbind(
   deps: ControlDeps,
   callerDid: string,
-  input: { id: string; requestId: string },
+  input: { id: string; requestId: string; space?: string },
 ): Promise<ControlResult<{ id: string; unbound: boolean }>> {
   if (!isValidRequestId(input.requestId)) return INVALID_REQUEST_ID;
-  const owned = await loadOwned(deps, callerDid, input.id);
+  const owned = await loadOwned(deps, callerDid, input.id, input.space);
   if (!owned.ok) return owned.result;
 
   const claim = {

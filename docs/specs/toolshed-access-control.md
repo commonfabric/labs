@@ -22,7 +22,8 @@ These routes require a first-party HTTP request proof:
 - `POST /api/agent-tools/web-search`
 - `POST /api/agent-tools/web-read`
 - `POST /api/sandbox/exec`
-- `POST /api/ingest-channels/{mint,list,rotate,revoke,gmail-bind,gmail-unbind}`
+- `POST /api/spaces/:space/ingest-channels/{mint,list,rotate,revoke,gmail-bind,gmail-unbind}`
+- `POST /api/ingest-channels/list`
 - `POST /api/inbox/{enable,status,send,list,get,acknowledge}`
 
 The first three were selected because first-party code calls them through the
@@ -121,8 +122,8 @@ These routes are privileged but are not changed in this pass:
   expiration and method, authority, path, query, DID, and body binding limit
   where that captured request can be used. A route whose response MINTS a
   credential needs more than that, because a replay would hand the replayer a
-  live token that outlives the proof window: `/api/ingest-channels/mint` and
-  `/rotate` therefore take a caller-supplied `requestId`, persisted beside the
+  live token that outlives the proof window: the ingest-channel `mint` and
+  `rotate` verbs therefore take a caller-supplied `requestId`, persisted beside the
   registration, and answer a repeat with 409 and no secret. Any future
   credential-minting route needs the same treatment.
 - A verified proof proves control of the DID key. It does not prove that the

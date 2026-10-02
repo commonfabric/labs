@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import env from "@/env.ts";
 import app from "@/app.ts";
+import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
 import { BASE } from "./ingest-push.routes.ts";
 
 if (env.ENV !== "test") {
@@ -16,11 +17,24 @@ describe("ingest-push.routes", () => {
   // delivery rules are tested against a real runtime in
   // gmail-push.utils.test.ts.
 
-  const push = (init: RequestInit) =>
-    app.request(`${BASE}/gmail`, { method: "POST", ...init });
+  const OTHER_SPACE = "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA";
+
+  const push = (init: RequestInit, space = ingestServiceSpace) =>
+    app.request(`${BASE.replace(":space", space)}/gmail`, {
+      method: "POST",
+      ...init,
+    });
 
   it("sits apart from the `/api/ingest/` prefix", () => {
-    expect(BASE.startsWith("/api/ingest/")).toBe(false);
+    expect(BASE.split("/")).not.toContain("ingest");
+  });
+
+  it("returns 404 for a push addressed to a space other than the one holding the registry", async () => {
+    const res = await push(
+      { headers: { Authorization: "Bearer not-a-jwt" }, body: "{}" },
+      OTHER_SPACE,
+    );
+    expect(res.status).toBe(404);
   });
 
   it("returns 401 for a push without a bearer token", async () => {
@@ -45,26 +59,32 @@ describe("ingest-push.routes", () => {
   });
 
   it("returns 401 for an unsigned `gmail-bind` request", async () => {
-    const res = await app.request("/api/ingest-channels/gmail-bind", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Forwarded-For": "10.9.0.1",
+    const res = await app.request(
+      `/api/spaces/${OTHER_SPACE}/ingest-channels/gmail-bind`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-For": "10.9.0.1",
+        },
+        body: JSON.stringify({ id: "ing_x", accessToken: "t", requestId: "r" }),
       },
-      body: JSON.stringify({ id: "ing_x", accessToken: "t", requestId: "r" }),
-    });
+    );
     expect(res.status).toBe(401);
   });
 
   it("returns 401 for an unsigned `gmail-unbind` request", async () => {
-    const res = await app.request("/api/ingest-channels/gmail-unbind", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Forwarded-For": "10.9.0.2",
+    const res = await app.request(
+      `/api/spaces/${OTHER_SPACE}/ingest-channels/gmail-unbind`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-For": "10.9.0.2",
+        },
+        body: JSON.stringify({ id: "ing_x", requestId: "r" }),
       },
-      body: JSON.stringify({ id: "ing_x", requestId: "r" }),
-    });
+    );
     expect(res.status).toBe(401);
   });
 });

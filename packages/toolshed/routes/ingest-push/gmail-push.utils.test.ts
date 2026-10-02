@@ -38,7 +38,7 @@ import {
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
 
-const AUDIENCE = "https://toolshed.test/api/ingest-push/gmail";
+const AUDIENCE = "https://toolshed.test/gmail-push";
 const PUSH_ACCOUNT = "gmail-push@loom-internal.iam.gserviceaccount.com";
 const MAILBOX = "alice@example.com";
 const PUBLISH_TIME = "2026-09-30T12:34:56.789Z";
