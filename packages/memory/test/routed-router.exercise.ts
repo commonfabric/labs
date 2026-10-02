@@ -207,7 +207,12 @@ async function waitFile(path: string) {
       Deno.statSync(path);
       return true;
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      // /proc/smaps_rollup can return ESRCH after a worker loses its address
+      // space during exit, before its proc directory is removed (ENOENT).
+      const exited = error instanceof Deno.errors.NotFound ||
+        (error instanceof Error &&
+          error.message.startsWith("No such process (os error 3):"));
+      if (!exited) throw error;
       return false;
     }
   };
