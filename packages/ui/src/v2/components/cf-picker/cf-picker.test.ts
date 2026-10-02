@@ -68,7 +68,7 @@ describe("CFPicker", () => {
     // The reconciler decides the `$items` binding on this read, and on each
     // item read as the `cf-render` it is handed to reads its cell, so the
     // registry entry has to name the read the picker makes.
-    const { cell } = createRenderableCellHandle([]);
+    const { cell } = createRenderableCellHandle<unknown[]>([]);
     const subscribed = spy(cell.runtime()[$conn](), "subscribe");
     const element = new CFPicker();
     element.items = cell;
