@@ -1,9 +1,7 @@
 import ts from "typescript";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
-import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
 import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
 import {
-  denotesSameType,
   readAuthoredTypeNodeOnce,
   readMemberAnnotation,
   unwrapTypeParentheses,
@@ -13,7 +11,6 @@ import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";
 import {
-  detectCellFactoryCallKind,
   detectDirectBuilderCall,
   detectNewExpressionKind,
 } from "./call-kind.ts";
@@ -462,20 +459,7 @@ export function expressionToTypeNode(
     context.checker,
     context.state.typeRegistry,
   );
-  if (constructedCell) {
-    // The node spells the cell's value with its constructor's type arguments,
-    // and a pass that rebuilds it from its type prints a `typeof` writer
-    // binding among them as a structural type, so what it is rebuilt into
-    // narrows the value the node spells.
-    const type = context.state.typeRegistry.get(constructedCell);
-    if (type) {
-      context.state.recordDeclaredValue(constructedCell, {
-        type,
-        typeNode: constructedCell,
-      });
-    }
-    return constructedCell;
-  }
+  if (constructedCell) return constructedCell;
   const symbol = ts.isIdentifier(expr)
     ? context.checker.getSymbolAtLocation(expr)
     : undefined;
@@ -508,13 +492,9 @@ export function expressionToTypeNode(
 
 /**
  * The type of a cell an expression constructs, written with the type arguments
- * its author gave the constructor: a `new`, or a constructor's static `of()`.
- * The expression is read back to the construction through the forms that keep
- * the cell's identity: an unannotated `const`, a binding an unannotated
- * `const` destructures straight out of an object literal
- * ({@link destructuredLiteralValue}), and `.for()`. A property of an object
- * held elsewhere is a slot a write can replace, so it is not followed.
- * Printing the inferred type instead expands `typeof handler` into a
+ * its author gave the constructor. The expression is read back to the `new`
+ * through the forms that keep the cell's identity: an unannotated `const`, and
+ * `.for()`. Printing the inferred type instead expands `typeof handler` into a
  * structural function type, which cannot name a CFC writer, so this applies
  * only where the arguments name a value binding ({@link namesValueBinding}).
  *
@@ -534,14 +514,26 @@ export function getConstructedCellTypeNode(
   if (seen.has(node)) return undefined;
   seen.add(node);
   if (ts.isIdentifier(node)) {
-    const declaration = readValueSymbol(node, checker)?.valueDeclaration;
-    const value = declaration && ts.isVariableDeclaration(declaration)
-      ? constInitializer(declaration)
-      : declaration && ts.isBindingElement(declaration)
-      ? destructuredLiteralValue(declaration)
-      : undefined;
-    return value &&
-      getConstructedCellTypeNode(value, checker, typeRegistry, seen);
+    const symbol = checker.getSymbolAtLocation(node);
+    let declaration = symbol?.valueDeclaration;
+    if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
+      declaration = checker.getShorthandAssignmentValueSymbol(declaration)
+        ?.valueDeclaration;
+    }
+    if (declaration && ts.isVariableDeclaration(declaration)) {
+      if (
+        declaration.type || !ts.isVariableDeclarationList(declaration.parent) ||
+        !(declaration.parent.flags & ts.NodeFlags.Const)
+      ) return undefined;
+      if (declaration.initializer) {
+        return getConstructedCellTypeNode(
+          declaration.initializer,
+          checker,
+          typeRegistry,
+          seen,
+        );
+      }
+    }
   }
   if (
     ts.isCallExpression(node) &&
@@ -556,14 +548,12 @@ export function getConstructedCellTypeNode(
     );
   }
   if (
-    !(ts.isNewExpression(node) || ts.isCallExpression(node)) ||
+    !ts.isNewExpression(node) ||
     !node.typeArguments?.some((argument) =>
       namesValueBinding(argument, checker)
     )
   ) return undefined;
-  const kind = ts.isNewExpression(node)
-    ? detectNewExpressionKind(node, checker)
-    : detectCellFactoryCallKind(node, checker);
+  const kind = detectNewExpressionKind(node, checker);
   if (!kind) return undefined;
   const typeNode = ts.factory.createTypeReferenceNode(
     ts.factory.createQualifiedName(
@@ -575,72 +565,6 @@ export function getConstructedCellTypeNode(
   const type = checker.getTypeAtLocation(node);
   typeRegistry?.set(typeNode, type);
   return typeNode;
-}
-
-/**
- * The initializer of `declaration` where nothing can replace the value it
- * gives: a `const` that writes no type of its own, which would be the
- * value's spelling instead.
- */
-function constInitializer(
-  declaration: ts.VariableDeclaration,
-): ts.Expression | undefined {
-  return !declaration.type &&
-      ts.isVariableDeclarationList(declaration.parent) &&
-      (declaration.parent.flags & ts.NodeFlags.Const) !== 0
-    ? declaration.initializer
-    : undefined;
-}
-
-/**
- * The expression in an object literal that `binding` takes its value from,
- * where an unannotated `const` destructures it straight out of that literal,
- * through any nesting of object patterns:
- * `const { items } = { items: new Writable<…>(…) }`. The literal exists only
- * to be destructured, so no write can replace the value first. `undefined`
- * for a binding with a default, a rest or computed key, a property a later
- * spread may override, or any other source.
- */
-function destructuredLiteralValue(
-  binding: ts.BindingElement,
-): ts.Expression | undefined {
-  if (binding.initializer || binding.dotDotDotToken) return undefined;
-  const pattern = binding.parent;
-  if (!ts.isObjectBindingPattern(pattern)) return undefined;
-  const name = binding.propertyName
-    ? getPropertyNameText(binding.propertyName)
-    : ts.isIdentifier(binding.name)
-    ? binding.name.text
-    : undefined;
-  const host = pattern.parent;
-  const source = ts.isVariableDeclaration(host)
-    ? constInitializer(host)
-    : ts.isBindingElement(host)
-    ? destructuredLiteralValue(host)
-    : undefined;
-  const literal = source && unwrapExpression(source);
-  if (
-    name === undefined || !literal || !ts.isObjectLiteralExpression(literal)
-  ) {
-    return undefined;
-  }
-  const index = literal.properties.findLastIndex((property) =>
-    (ts.isPropertyAssignment(property) ||
-      ts.isShorthandPropertyAssignment(property)) &&
-    getPropertyNameText(property.name) === name
-  );
-  const property = literal.properties[index];
-  if (
-    !property ||
-    literal.properties.slice(index + 1).some(ts.isSpreadAssignment)
-  ) {
-    return undefined;
-  }
-  return ts.isPropertyAssignment(property)
-    ? property.initializer
-    : ts.isShorthandPropertyAssignment(property)
-    ? property.name
-    : undefined;
 }
 
 /**
@@ -1389,24 +1313,6 @@ function describeCapture(expression: ts.Expression, fallback: string): string {
 }
 
 /**
- * The symbol of the value `identifier` reads. Written as a shorthand property
- * (`{ x }`), the identifier's own symbol is the property of the object literal
- * it writes, which declares nothing about the value; the value's symbol is the
- * binding `x` names.
- */
-function readValueSymbol(
-  identifier: ts.Identifier,
-  checker: ts.TypeChecker,
-): ts.Symbol | undefined {
-  const symbol = checker.getSymbolAtLocation(identifier);
-  return symbol?.valueDeclaration &&
-      ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
-    ? checker.getShorthandAssignmentValueSymbol(symbol.valueDeclaration) ??
-      symbol
-    : symbol;
-}
-
-/**
  * The property of a destructured aggregate that `identifier`, a binding the
  * destructuring declares, reads, or `undefined` for any other identifier. A
  * `{ x }` shorthand resolves to a value symbol, and the binding element keeps
@@ -1422,7 +1328,17 @@ function destructuredSourceProperty(
   localName: string,
   checker: ts.TypeChecker,
 ): ts.Symbol | undefined {
-  const binding = readValueSymbol(identifier, checker)?.valueDeclaration;
+  let symbol = checker.getSymbolAtLocation(identifier);
+  if (
+    symbol?.valueDeclaration &&
+    ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
+  ) {
+    symbol = checker.getShorthandAssignmentValueSymbol(
+      symbol.valueDeclaration,
+    ) ??
+      symbol;
+  }
+  const binding = symbol?.valueDeclaration;
   if (
     !binding || !ts.isBindingElement(binding) ||
     !ts.isObjectBindingPattern(binding.parent)
@@ -1505,7 +1421,7 @@ export function buildTypeElementsFromCaptureTree(
       typeNode = expressionToTypeNode(childNode.expression, context);
       const declaring = ts.isIdentifier(childNode.expression)
         ? destructuredSourceProperty(childNode.expression, propName, checker) ??
-          readValueSymbol(childNode.expression, checker)
+          checker.getSymbolAtLocation(childNode.expression)
         : ts.isPropertyAccessExpression(childNode.expression)
         ? checker.getSymbolAtLocation(childNode.expression.name)
         : undefined;
@@ -1520,18 +1436,10 @@ export function buildTypeElementsFromCaptureTree(
       }
       // A print spells a `typeof` binding as the structural type of the value
       // it names, from which no reader can tell the binding, so where the
-      // annotation of the member or binding the leaf reads names one, the
-      // print is read as that annotation.
+      // member's annotation names one, the print is read as that annotation.
       const printedType = context.state.printedFrom(typeNode);
       const annotation = declaring && printedType &&
-        (readMemberAnnotation(declaring, printedType, checker) ??
-          (declared &&
-              denotesSameType(
-                checker.getTypeFromTypeNode(declared),
-                printedType,
-              )
-            ? declared
-            : undefined));
+        readMemberAnnotation(declaring, printedType, checker);
       if (annotation && namesValueBinding(annotation, checker)) {
         context.state.recordSchemaHint(typeNode, { spelledBy: annotation });
       }
