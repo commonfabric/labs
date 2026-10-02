@@ -71,6 +71,14 @@ const shownRefusal = (root: unknown): string =>
   `${displayOf(root, "fabrichat-start-refusal")}:` +
   textContent(findNodeById(root, "fabrichat-start-refusal"));
 
+// The cell the first element named `name` under `root` binds as its `prop`,
+// such as a control's `$value`.
+const boundCell = (root: unknown, name: string, prop: string) =>
+  propsOf(
+    findNode(root, (node) =>
+      readValue((node as { name?: unknown })?.name) === name),
+  )?.[prop] as { set(value: unknown): void };
+
 // The cell the first `cf-cell-link` labeled `label` under `root` links: a
 // listed room's, labeled `Open`, or a notice's, which carries no label.
 const cellLinked = (
@@ -394,6 +402,24 @@ export default pattern(() => {
         event: { requestId: "d-carol", counterpart: CAROL },
       },
       { assertion: assert(() => shownRefusal(group[UI]) === "none:") },
+      // A group composed in the rendering is created even when the draft has
+      // lost a field, as a reloaded page's draft can: here the checkbox's.
+      {
+        action: action(() => {
+          boundCell(group[UI], "cf-checkbox", "$checked").set(undefined);
+          boundCell(group[UI], "cf-input", "$value").set("Draft team");
+          boundCell(group[UI], "cf-textarea", "$value").set(CAROL);
+        }),
+      },
+      { action: action(() => clickButton(group[UI], "Create group")) },
+      {
+        assertion: assert(() =>
+          shownRefusal(group[UI]) === "none:" &&
+          groupRooms.get().some((entry) =>
+            entry.room.key("about").get()?.title === "Draft team"
+          )
+        ),
+      },
 
       // Accepting a group room it was admitted to.
       {
