@@ -25,9 +25,10 @@ const current = (await Identity.fromPassphrase("current space")).did();
 
 type SpaceEntry = { name: string; did?: string };
 
-// A Home pattern reduced to its space list and the two streams the controller
-// sends to it. The handlers are the ones `packages/patterns/system/home.tsx`
-// defines, so the list a case reads back is the one a real Home would hold.
+// A Home pattern reduced to its space list and the streams the controller
+// sends to it. The space handlers are the ones
+// `packages/patterns/system/home.tsx` defines, so the list a case reads back is
+// the one a real Home would hold; `ensurePrivateInbox` only counts its events.
 const HOME_SOURCE = `
 import { handler, pattern, Writable } from "commonfabric";
 
@@ -54,12 +55,21 @@ const adoptSpace = handler<
   spaces.removeByValue(spaces.elementById(name));
 });
 
+const ensurePrivateInbox = handler<void, { ensured: Writable<number> }>(
+  (_event, { ensured }) => {
+    ensured.set(ensured.get() + 1);
+  },
+);
+
 export default pattern<void>(() => {
   const spaces = new Writable<SpaceEntry[]>([]).for("spaces");
+  const ensured = new Writable(0).for("ensured");
   return {
     spaces,
+    ensured,
     addSpace: addSpace({ spaces }),
     adoptSpace: adoptSpace({ spaces }),
+    ensurePrivateInbox: ensurePrivateInbox({ ensured }),
   };
 });
 `;
@@ -358,6 +368,28 @@ describe("pieces-controller", () => {
 
           await expect(pieces.adoptLegacySpaces()).rejects.toThrow(
             "Only a controller over the identity's Home space can adopt legacy spaces",
+          );
+        });
+      });
+
+      describe("ensurePrivateInbox()", () => {
+        it("sends Home's `ensurePrivateInbox`", async () => {
+          const home = await open(signer.did());
+          const ensured = (await home.ensureDefaultPattern()).getCell().key(
+            "ensured",
+          );
+
+          await home.ensurePrivateInbox();
+          await runtime.idle();
+
+          expect(await ensured.pull()).toBe(1);
+        });
+
+        it("throws on a controller over a space other than the identity's Home", async () => {
+          const pieces = await open(await runtime.createSpace());
+
+          await expect(pieces.ensurePrivateInbox()).rejects.toThrow(
+            "Only a controller over the identity's Home space can ensure a private inbox",
           );
         });
       });

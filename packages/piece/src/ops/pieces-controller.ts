@@ -2224,6 +2224,20 @@ export class PiecesController<T = unknown> {
     await this.#recordServingHosts(adopted, "adopted");
   }
 
+  /**
+   * Has the identity's Home create the identity's private inbox if it holds
+   * none, and point each of the identity's profiles that points at no inbox
+   * at it, by sending Home's `ensurePrivateInbox`. Sending it again creates
+   * and re-points nothing. A Home pattern without that stream is left as it
+   * is. This controller must be over the identity's Home space.
+   */
+  async ensurePrivateInbox(): Promise<void> {
+    this.#assertHomeSpace("ensure a private inbox");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    if (home.key("ensurePrivateInbox").getRaw() === undefined) return;
+    await home.key("ensurePrivateInbox").send({});
+  }
+
   #assertHomeSpace(operation: string): void {
     if (this.#space !== this.runtime.userIdentityDID) {
       throw new Error(
