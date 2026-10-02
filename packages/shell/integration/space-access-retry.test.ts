@@ -13,6 +13,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type DID, Identity } from "@commonfabric/identity";
 import {
+  awaitViewSettled,
   createTestSpace,
   env,
   type Page,
@@ -124,6 +125,29 @@ async function waitForRetryOutcome(
   }, { args: [retries] });
 }
 
+/**
+ * Returns whether the page shows a retry under way or past, given that it
+ * showed `retries` settled ones when the space was refused: the Retry button
+ * disabled and reading "Retrying…", a higher settled count, or the piece in
+ * the placeholder's place. Reads the page once, as it stands.
+ */
+async function retryHasStarted(page: Page, retries: number): Promise<boolean> {
+  // A predicate that always answers with an object holds at its first check,
+  // so this wait returns that check's reading rather than waiting for one.
+  const reading = await waitForCondition(page, (probe, before) => {
+    const placeholders = probe.collect("[data-space-access-lost]");
+    const started = placeholders.length === 0 ||
+      placeholders.some((el) => {
+        const button = el.querySelector("[data-space-access-retry]");
+        return Number(el.getAttribute("data-space-access-retries")) > before ||
+          (button instanceof HTMLButtonElement && button.disabled &&
+            probe.deepText(button).trim() === "Retrying…");
+      });
+    return { started };
+  }, { args: [retries] });
+  return reading?.started === true;
+}
+
 describe("shell space access retry", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
@@ -131,12 +155,13 @@ describe("shell space access retry", () => {
   /**
    * Shows the owner's piece to a member in the shell, removes the member from
    * the space and waits for the refusal, grants the member the space again,
-   * and hands `recover` the page and the space to bring the piece back with.
-   * Then waits for the retry that brings about to settle, and requires that
-   * it left the piece rather than the refusal.
+   * and hands `recover` the page, the space, and the settled retries the
+   * refusal showed, to bring the piece back with. Then waits for the retry
+   * that brings about to settle, and requires that it left the piece rather
+   * than the refusal.
    */
   async function refuseThenRegrant(
-    recover: (page: Page, space: DID) => Promise<void>,
+    recover: (page: Page, space: DID, retries: number) => Promise<void>,
   ): Promise<void> {
     await using ownerFile = await writeTempIdentity({
       implementation: "noble",
@@ -166,7 +191,7 @@ describe("shell space access retry", () => {
       const retries = await waitForRefusal(page);
 
       await acl.set(member.did(), "WRITE");
-      await recover(page, space);
+      await recover(page, space, retries);
       expect(await waitForRetryOutcome(page, retries)).toBe("piece");
     } finally {
       await controller.dispose();
@@ -174,8 +199,13 @@ describe("shell space access retry", () => {
   }
 
   it("shows the piece again once the member presses Retry", async () => {
-    await refuseThenRegrant(async (page) => {
+    await refuseThenRegrant(async (page, _space, retries) => {
       await clickPierce(page, "[data-space-access-retry]");
+      // The click reaches the worker before the settle request does, and the
+      // worker marks the retry in flight while handling it, so once the view
+      // has settled the page shows the retry under way or past.
+      await awaitViewSettled(page);
+      expect(await retryHasStarted(page, retries)).toBe(true);
     });
   });
 
