@@ -74,17 +74,13 @@ export type OpSuppression = {
  * `initialArray` is that base array itself (undefined when there was no base
  * array), which a tail op checks its recorded tail against — length and hole
  * layout both, since the diff it suppresses can only express a prefix that
- * matches the base in both. `workingValue` and `initialValue` are whatever the
- * working document and the base hold at the op's path (undefined when the
- * path holds nothing), which an increment checks its recorded delta against.
+ * matches the base in both.
  */
 export interface MergeableBuildContext {
   readonly workingArray?: readonly FabricValue[];
   readonly hadInitialArray: boolean;
   readonly hadInitialValue: boolean;
   readonly initialArray?: readonly FabricValue[];
-  readonly workingValue?: FabricValue;
-  readonly initialValue?: FabricValue;
 }
 
 /**
@@ -214,7 +210,7 @@ const buildTailOp = (
   // situations, and each one must abandon the op rather than let that
   // replacement be suppressed:
   //
-  //   1. the prefix changed length (a `set` here or at a parent that shrank or
+  //   1. the prefix changed length (a write here or at a parent that shrank or
   //      grew it) — the base elements it removed have no surviving removal
   //      candidate, so the store keeps them and appends on top: a doubled list;
   //   2. the prefix's HOLE LAYOUT changed — punching or filling a hole without
@@ -291,13 +287,13 @@ const withRemovalsApplied = (
 // to be exactly the base with the removed values taken out.
 //
 // Anything else the transaction changed on the same array — an element edit, a
-// whole-value `set` at this path or at a parent — otherwise loses the candidate
+// whole-value write at this path or at a parent — otherwise loses the candidate
 // that would have carried it and is silently discarded, while the writing
-// session's own value shows the change. Neither shape is caught earlier: an
-// element edit writes BENEATH the array and so deliberately does not poison the
-// intent, and a `set` landing before the op has no intent to poison yet. When
-// the check fails, abandon the intent and let the whole-array diff commit the
-// local value.
+// session's own value shows the change. Neither shape is always caught
+// earlier: an element edit writes BENEATH the array and so deliberately does
+// not poison the intent, and a whole-value write made straight to the
+// transaction poisons nothing. When the check fails, abandon the intent and
+// let the whole-array diff commit the local value.
 const buildRemoveByValue = (
   intent: RemoveIntent,
   ctx: MergeableBuildContext,
@@ -325,51 +321,6 @@ const buildRemoveByValue = (
   };
 };
 
-type IncrementIntent = Extract<MergeableOpIntent, { op: "increment" }>;
-
-// An increment says "add `by` to whatever number the store holds", and its
-// suppression drops the value candidate at its path, so the op is the commit's
-// only carrier for that number. It is honest only while applying it to the
-// base reproduces the working value, a missing base counting as zero the way
-// the wire op applies (`incrementAtPath` in `@commonfabric/memory/v2/patch`). A
-// `set()` landing ahead of the increment breaks that equality with no intent
-// yet to poison, and so does a base the wire op refuses, one that is not a
-// number. Either way the intent is abandoned and the diff commits the local
-// value.
-const buildIncrement = (
-  intent: IncrementIntent,
-  ctx: MergeableBuildContext,
-): MergeableBuildResult => {
-  // Increments that summed to zero (a +1 and a -1) are a no-op: the working
-  // value already reflects no change, so emit nothing (and nothing to
-  // suppress). Deliberately NOT abandoned: with the value unchanged the diff
-  // has no candidate at this path either, so there is no replacement write
-  // whose reads need restoring — abandoning would only put the op's own read
-  // back into the conflict set and make a net-zero increment false-conflict
-  // with a concurrent one.
-  if (intent.by === 0) {
-    return { ops: [], suppress: [] };
-  }
-  const base = ctx.initialValue;
-  if (
-    (base !== undefined && typeof base !== "number") ||
-    ctx.workingValue !== (base ?? 0) + intent.by
-  ) {
-    return { ops: [], suppress: [], abandon: true };
-  }
-  return {
-    ops: [
-      {
-        op: "increment",
-        path: encodePointer(intent.path),
-        by: intent.by,
-        ...(ctx.hadInitialValue ? {} : { createsKey: true }),
-      },
-    ],
-    suppress: [{ path: intent.path }],
-  };
-};
-
 const mergeableOpDescriptors: Record<MergeableWireOp, MergeableOpDescriptor> = {
   append: descriptor<AppendIntent, AppendDelta>({
     op: "append",
@@ -386,7 +337,7 @@ const mergeableOpDescriptors: Record<MergeableWireOp, MergeableOpDescriptor> = {
     payloadContains: tailOpPayloadContains,
   }),
   increment: descriptor<
-    IncrementIntent,
+    Extract<MergeableOpIntent, { op: "increment" }>,
     Extract<MergeableOpDelta, { op: "increment" }>
   >({
     op: "increment",
@@ -395,7 +346,25 @@ const mergeableOpDescriptors: Record<MergeableWireOp, MergeableOpDescriptor> = {
       path,
       by: (existing?.op === "increment" ? existing.by : 0) + delta.by,
     }),
-    build: buildIncrement,
+    // Increments that summed to zero (a +1 and a -1) are a no-op: the working
+    // value already reflects no change, so emit nothing (and nothing to
+    // suppress). Deliberately NOT abandoned: with the value unchanged the diff
+    // has no candidate at this path either, so there is no replacement write
+    // whose reads need restoring — abandoning would only put the op's own read
+    // back into the conflict set and make a net-zero increment false-conflict
+    // with a concurrent one.
+    build: (intent, ctx) =>
+      intent.by === 0 ? { ops: [], suppress: [] } : {
+        ops: [
+          {
+            op: "increment",
+            path: encodePointer(intent.path),
+            by: intent.by,
+            ...(ctx.hadInitialValue ? {} : { createsKey: true }),
+          },
+        ],
+        suppress: [{ path: intent.path }],
+      },
   }),
   "remove-by-value": descriptor<
     Extract<MergeableOpIntent, { op: "remove-by-value" }>,

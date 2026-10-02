@@ -80,7 +80,7 @@ describe("mergeable op createsKey stamping", () => {
     expect(
       buildMergeableIntent(
         { op: "increment", path: ["value", "n"], by: 3 },
-        { hadInitialArray: false, hadInitialValue: false, workingValue: 3 },
+        { hadInitialArray: false, hadInitialValue: false },
       ).ops,
     ).toEqual([
       { op: "increment", path: "/value/n", by: 3, createsKey: true },
@@ -91,12 +91,7 @@ describe("mergeable op createsKey stamping", () => {
     expect(
       buildMergeableIntent(
         { op: "increment", path: ["value", "n"], by: 3 },
-        {
-          hadInitialArray: false,
-          hadInitialValue: true,
-          initialValue: 4,
-          workingValue: 7,
-        },
+        { hadInitialArray: false, hadInitialValue: true },
       ).ops,
     ).toEqual([{ op: "increment", path: "/value/n", by: 3 }]);
   });
@@ -325,57 +320,6 @@ describe("mergeable remove-by-value build guards", () => {
     expect(
       buildMergeableIntent(removeIntent("a"), ctx(undefined, ["a", "b"])),
     ).toEqual({ ops: [], suppress: [], abandon: true });
-  });
-});
-
-describe("mergeable increment build guards", () => {
-  // An increment suppresses the value candidate at its path, so it is the
-  // commit's only carrier for that number. It may be emitted only when
-  // applying it to the base reproduces the working value, a missing base
-  // counting as zero.
-
-  const incrementIntent = (by: number) =>
-    ({ op: "increment", path: ["value"], by }) as const;
-
-  const ctx = (workingValue: FabricValue, initialValue?: FabricValue) => ({
-    hadInitialArray: false,
-    hadInitialValue: initialValue !== undefined,
-    workingValue,
-    initialValue,
-  });
-
-  const abandoned = { ops: [], suppress: [], abandon: true };
-
-  it("emits the op when the working value is the base plus the delta", () => {
-    expect(buildMergeableIntent(incrementIntent(2), ctx(7, 5))).toEqual({
-      ops: [{ op: "increment", path: "/value", by: 2 }],
-      suppress: [{ path: ["value"] }],
-    });
-  });
-
-  it("abandons the intent when a write ahead of it changed the number", () => {
-    expect(buildMergeableIntent(incrementIntent(1), ctx(11, 5))).toEqual(
-      abandoned,
-    );
-  });
-
-  it("abandons the intent when there was no base and a write ahead of it set the number", () => {
-    expect(buildMergeableIntent(incrementIntent(1), ctx(11))).toEqual(
-      abandoned,
-    );
-  });
-
-  it("abandons the intent when the base is not a number", () => {
-    expect(buildMergeableIntent(incrementIntent(1), ctx(1, "zero"))).toEqual(
-      abandoned,
-    );
-  });
-
-  it("returns no op and keeps the intent when the deltas summed to zero", () => {
-    expect(buildMergeableIntent(incrementIntent(0), ctx(5, 5))).toEqual({
-      ops: [],
-      suppress: [],
-    });
   });
 });
 

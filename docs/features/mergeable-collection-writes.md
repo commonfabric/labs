@@ -311,6 +311,23 @@ first, since the op carries only the delta.
   predetermined order. Code must not assume a specific interleaving of
   independently-issued appends.
 
+- **An op after a whole-value `set()` commits as a value write.** A `set()`
+  says what the value is; an op resolves against whatever the store holds. So
+  a `set()` poisons its path for the rest of the transaction, as it does the
+  ops recorded ahead of it: an op that follows it, at that path or beneath it,
+  records no intent, and the commit carries the value the transaction
+  computed. `rows.set([])` and then `rows.push(x)` therefore leaves one
+  element where another session had put twenty, including when the writing
+  session never loaded them; sent as an append, the push would land after
+  those twenty. The same holds for a `set()` that replaces every element
+  without changing the length, for a `set()` of an enclosing object, for a
+  `set()` that writes the value already there, and for `set(10)` and then
+  `increment(1)`. The value write is conflict-checked like any other: the
+  op's own read of the value is back in the commit's conflict set, so a
+  session whose view of the list is stale is refused and runs again. That
+  transaction's write forfeits merging, and a write beneath the list (an
+  element edit) or to a sibling field forfeits nothing.
+
 - **Mixed ops on one path fall back to the whole-array diff.** A tail-relative
   intent can only carry the change it recorded. When one transaction records more
   than one kind of mergeable op at the same array path (an `addUnique` and a
@@ -325,7 +342,8 @@ first, since the op carries only the delta.
   the poisoned path, not as a closed-class guarantee for every op: what makes it
   hold is the list of commit-time checks below, each of which had to be found.
   The rule is that every whole-value write poisons the ops it
-  covers, so the sites to keep in step are every path that performs one:
+  covers, those recorded ahead of it and those that would follow, so the
+  sites to keep in step are every path that performs one:
   `Cell.set` and `Cell.setRawUntyped`. Plus `recordMergeableOp` itself, on a
   second, different op kind at one path. `poisonMergeableOp` is what they all call, and
   it acts on every intent at *or beneath* the path written — a
@@ -343,11 +361,9 @@ first, since the op carries only the delta.
   an op appended.
 
 - **A reshape the surviving diff cannot express falls back too.** The poison
-  sites all fire at the moment of the write, so they see only a reshape that
-  lands *after* an op was recorded. A reshape that lands *before* the op —
-  `rows.set([])` and then `addUnique`, the clear-and-reseed idiom — is invisible
-  to them. The tail op's builder therefore re-checks, at commit, the invariant
-  its suppression rests on.
+  sites cover the writes that go through them. A whole-value write made
+  straight to the transaction poisons nothing, so the tail op's builder
+  re-checks, at commit, the invariant its suppression rests on.
 
   The suppression drops the whole-array candidate at the op's path outright,
   plus every element candidate at or past the tail start. What is left to carry
@@ -357,12 +373,12 @@ first, since the op carries only the delta.
   three situations, and each one abandons the op instead:
 
   1. **the prefix changed length** — the base array's length no longer equals
-     the tail start, `max(0, working.length - count)`. This is what keeps a
-     clear-and-reseed honest: a tail op cannot express "and remove everything
-     that was here", and its suppression covers the very candidates that would
-     have carried the removal, so without the check the store keeps the old
-     elements and appends the new ones on top — a silently doubled list, with
-     the writing session's own local value showing the correct one.
+     the tail start, `max(0, working.length - count)`. A tail op cannot
+     express "and remove everything that was here", and its suppression covers
+     the very candidates that would have carried the removal, so without the
+     check the store keeps the old elements and appends the new ones on top —
+     a silently doubled list, with the writing session's own local value
+     showing the correct one.
   2. **the prefix's hole layout changed** — a hole punched or filled without a
      length change. Presence is not expressible per index, and sparse arrays are
      preserved elsewhere in the runner, so this must not be flattened away.
@@ -376,10 +392,13 @@ first, since the op carries only the delta.
   Abandoning is the same fallback the poison sites produce, decided at commit
   rather than at the write.
 
-  A *dense* same-length replacement (`rows.set(["x","y","z"])` and then a
-  `push`) does *not* need the fallback and keeps its op: it diffs into per-index
-  candidates below the tail, which survive the suppression and commit alongside
-  the append. Value changes are fine; length and presence changes are not.
+  A *dense* same-length replacement written that way keeps its op: it diffs
+  into per-index candidates below the tail, which survive the suppression and
+  commit alongside the append. The check is that the pieces sent reproduce the
+  local value against the base, and they do. It says nothing about a store
+  another session appended to, where the replacements and the append land
+  around that session's element, which is why a whole-value write belongs
+  behind a poison site.
 
   Abandoning at build time drops the intent from the transaction rather than
   merely skipping the op: a live intent still narrows reads out of the commit's
@@ -413,20 +432,6 @@ first, since the op carries only the delta.
   update pushes onto the message list. Their commit carries `basisSeq` of NOW
   and does not export its read set, so what changes there is which local
   dependencies the transaction registers, not what the server arbitrates.
-
-- **An `increment` that does not account for the local number falls back
-  too.** Its suppression drops the value candidate at its path, so the op is
-  the commit's only carrier for that number, and it carries a delta rather
-  than a value. The builder therefore checks, at commit, that applying the
-  recorded delta to the base reproduces the working value, a missing base
-  counting as zero the way the store applies the op. A `set()` landing ahead
-  of the increment breaks the equality with no intent yet to poison: `set(10)`
-  and then `increment(1)` holds 11 locally, and the op alone would store the
-  base plus one. A base that is not a number breaks it too, since the store
-  refuses to increment one. The intent is abandoned and the diff commits the
-  local value. The comparison is exact, so several fractional increments in
-  one transaction can fall back as well: the op carries their sum, and adding
-  that sum to the base need not round the way adding them one at a time did.
 
 - **An op on a document with no base, beside another write, falls back to a
   whole-document `set`.** A transaction that sees no document has nothing to
@@ -462,12 +467,12 @@ first, since the op carries only the delta.
   the equality and abandons the intent, and the whole-array diff commits the
   local value instead.
 
-  Two ordinary shapes need it, and neither is caught earlier. An element edit —
+  Two shapes need it, and neither is caught earlier. An element edit —
   the "edit one row and delete another in the same handler" shape — writes
   *beneath* the array and so deliberately does not poison the intent, yet the
   subtree suppression discards its per-index candidate; a tail op survives that
-  composition, a removal cannot. And a whole-value `set` landing *before* the
-  removal (at this path or at a parent) has no intent to poison yet. In both
+  composition, a removal cannot. And a whole-value write made straight to the
+  transaction, at this path or at a parent, poisons nothing. In both
   cases the store would otherwise apply the removals to an untouched base and
   drop everything else, while the writing session's own value shows the change.
 

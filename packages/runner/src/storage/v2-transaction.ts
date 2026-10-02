@@ -154,6 +154,9 @@ type ReadDocumentEntry = {
   // the overwhelming majority of documents: one is created the first time a
   // write displaces a root some materialized read may still describe.
   displaced?: DisplacedRoot[];
+  // As on `WritableDocumentEntry`. Held here too because a whole-value write
+  // that changes nothing leaves its document read-only, and still poisons.
+  mergeableOpsPoisoned?: Set<string>;
 };
 
 type WritableDocumentEntry = {
@@ -186,13 +189,15 @@ type WritableDocumentEntry = {
   mergeableOps?: Map<string, MergeableOpIntent>;
   // Paths where a mergeable intent cannot faithfully carry the transaction's
   // local change — a second mergeable op of a different kind was recorded, a
-  // foreign write (a reshape such as sort/splice, or a whole-value set at or
-  // above the path) rewrote the array after an op was recorded, or the
-  // commit-time builder abandoned the intent because it no longer described the
-  // local value. Such a path abandons the mergeable fast path and commits the
-  // whole-array diff, which reflects the correct combined local value. Once
-  // poisoned a path stays poisoned for the rest of the transaction, so a later
-  // op does not resurrect a partial intent. Keyed like mergeableOps.
+  // foreign write (a reshape such as sort/splice, or a whole-value set) wrote
+  // the path, or the commit-time builder abandoned the intent because it no
+  // longer described the local value. A poisoned path abandons the mergeable
+  // fast path, at that path and everywhere beneath it, and commits the
+  // whole-value diff, which reflects the correct combined local value. It
+  // stays poisoned for the rest of the transaction, so an op recorded after
+  // the write is refused as one recorded ahead of it is dropped: a `set()`
+  // says what the value is, and an op landing on whatever the store holds
+  // would add to a value the transaction replaced. Keyed like mergeableOps.
   mergeableOpsPoisoned?: Set<string>;
 };
 
@@ -1308,9 +1313,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     const doc = this.#writableMergeableTarget(address);
     if (!doc) throw new Error(`${delta.op} target is not writable`);
     const pathKey = encodePointer(address.path);
-    // A poisoned path has already fallen back to the whole-array diff; a further
-    // op does not revive it.
-    if (doc.mergeableOpsPoisoned?.has(pathKey)) {
+    // A poisoned path has already fallen back to the whole-value diff, which
+    // carries everything beneath it; a further op at or beneath it does not
+    // revive the fast path.
+    const poisoned = doc.mergeableOpsPoisoned;
+    if (
+      poisoned !== undefined &&
+      prefixPointers(address.path).some((pointer) => poisoned.has(pointer))
+    ) {
       return;
     }
     const existing = doc.mergeableOps?.get(pathKey);
@@ -1332,43 +1342,45 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
-   * Abandons the mergeable fast path for `address`: a foreign write (a reshape
-   * that is not itself a mergeable op) has rewritten the array after an op was
-   * recorded, so the recorded tail no longer identifies the appended elements.
-   * Drops any covered intent and marks its path poisoned so the commit emits
-   * the whole-array diff (the correct local value) instead.
+   * Abandons the mergeable fast path for `address`, for the rest of the
+   * transaction: a foreign write (a reshape that is not itself a mergeable op)
+   * has written the value there whole. Drops any covered intent and marks the
+   * written path poisoned, so that the commit emits the whole-value diff (the
+   * correct local value) and an op recorded after the write is refused. The
+   * write says what the value is, where an op resolves against whatever the
+   * store holds: a `set([])` and then a `push()` sent as an append would add
+   * to a list another session filled, where the transaction meant one element.
    *
    * The reshape reaches every intent _at_ or _beneath_ the written path: a
    * write to an enclosing object (`doc.set({rows})`) rewrites the array inside
-   * it just as surely as a write to the array itself, and the intent's recorded
-   * tail then spans elements the reshape supplied rather than ones an op
-   * appended. Intents _above_ the write are untouched, which is what keeps an
-   * element edit (`cell.key(i).set(...)`, a write beneath the array) composing
-   * with a push, and leaves a write to a sibling field alone.
+   * it just as surely as a write to the array itself. Intents _above_ the
+   * write are untouched, which is what keeps an element edit
+   * (`cell.key(i).set(...)`, a write beneath the array) composing with a push,
+   * and leaves a write to a sibling field alone.
    *
-   * A path carrying no intent yet is left alone — but that is not a statement
-   * that a reshape before an op is harmless. It is caught later instead, by
-   * each builder's own check at commit that its intent still describes the
-   * local value (see `./mergeable-ops.ts`). The same goes for an element edit,
-   * which is beneath the array and so passes through here untouched: harmless
-   * to a tail op, fatal to a remove-by-value, and the builders are what tell
-   * them apart.
+   * A write that does not come through here — one made straight to the
+   * transaction — poisons nothing, and each builder's own check at commit
+   * that its intent still describes the local value is what catches it (see
+   * `./mergeable-ops.ts`). The same goes for an element edit, which is
+   * beneath the array and so passes through here untouched: harmless to a
+   * tail op, fatal to a remove-by-value, and the builders are what tell them
+   * apart.
    */
   poisonMergeableOp(address: IMemorySpaceAddress): void {
     // Only ever called right after a write on this transaction, so the tx is
-    // editable — no editable() re-check. The write also made the address's
-    // document writable, but a caller could resolve to a different (read-only)
-    // slot, so a non-writable target is a real no-op.
-    const doc = this.#writableMergeableTarget(address);
-    if (!doc?.mergeableOps?.size) {
+    // editable — no editable() re-check. The written path is poisoned whether
+    // or not the write changed anything: a write of the value already there
+    // leaves its document read-only, and says what the value is all the same.
+    const branch = this.#branch(address.space);
+    const { doc } = this.#document(branch, address);
+    (doc.mergeableOpsPoisoned ??= new Set()).add(encodePointer(address.path));
+    if (!isWritableDocument(doc) || !doc.mergeableOps?.size) {
       return;
     }
-    const covered = [...doc.mergeableOps.entries()]
-      .filter(([, intent]) => isPrefixPath(address.path, intent.path))
-      .map(([pathKey]) => pathKey);
-    for (const pathKey of covered) {
-      doc.mergeableOps.delete(pathKey);
-      (doc.mergeableOpsPoisoned ??= new Set()).add(pathKey);
+    for (const [pathKey, intent] of [...doc.mergeableOps.entries()]) {
+      if (isPrefixPath(address.path, intent.path)) {
+        doc.mergeableOps.delete(pathKey);
+      }
     }
   }
 
@@ -3807,8 +3819,6 @@ export class V2StorageTransaction implements IStorageTransaction {
       initialArray: Array.isArray(initial)
         ? initial as readonly FabricValue[]
         : undefined,
-      workingValue: working,
-      initialValue: initial,
     };
   }
 }
