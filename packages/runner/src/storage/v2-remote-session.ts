@@ -830,15 +830,6 @@ export class RemoteSessionFactory implements SessionFactory {
     });
   }
 
-  #createSessionOpenAuth(
-    signer: Signer,
-    space: MemorySpace,
-    session: MemoryClient.MountOptions,
-    context: MemoryClient.SessionOpenAuthContext,
-  ): Promise<MemoryClient.SessionOpenAuth> {
-    return createSignedSessionOpenAuth(signer, space, session, context);
-  }
-
   create(
     space: MemorySpace,
     signer = this.#defaultSigner,
@@ -851,6 +842,26 @@ export class RemoteSessionFactory implements SessionFactory {
     return this.#sharedConnections
       ? this.#createShared(space, signer, mountOptions, signal)
       : this.#createDedicated(space, signer, mountOptions, signal);
+  }
+
+  /**
+   * Helper for `create()`, which returns both authentication signers for the
+   * key. The server's capabilities select authentication independently of
+   * whether the factory shares connections.
+   */
+  #sessionPrincipal(signer: Signer): MemoryClient.SessionPrincipal {
+    return {
+      did: signer.did(),
+      authorizeConnection: (context) =>
+        createSignedConnectionAuth(signer, context),
+      authorizeSessionOpen: (space, descriptor, context) =>
+        createSignedSessionOpenAuth(
+          signer,
+          space as MemorySpace,
+          descriptor,
+          context,
+        ),
+    };
   }
 
   /**
@@ -873,18 +884,12 @@ export class RemoteSessionFactory implements SessionFactory {
       signal,
     );
     try {
-      const session = await client.mount(space, mountOptions, {
-        did: signer.did(),
-        authorizeConnection: (context) =>
-          createSignedConnectionAuth(signer, context),
-        authorizeSessionOpen: (targetSpace, descriptor, context) =>
-          this.#createSessionOpenAuth(
-            signer,
-            targetSpace as MemorySpace,
-            descriptor,
-            context,
-          ),
-      }, signal);
+      const session = await client.mount(
+        space,
+        mountOptions,
+        this.#sessionPrincipal(signer),
+        signal,
+      );
       return {
         client: new SharedSessionConnection(client, session),
         session,
@@ -982,17 +987,7 @@ export class RemoteSessionFactory implements SessionFactory {
         const session = await client.mount(
           space,
           mountOptions,
-          (
-            targetSpace: string,
-            descriptor: MemoryClient.MountOptions,
-            context: MemoryClient.SessionOpenAuthContext,
-          ) =>
-            this.#createSessionOpenAuth(
-              signer,
-              targetSpace as MemorySpace,
-              descriptor,
-              context,
-            ),
+          this.#sessionPrincipal(signer),
           signal,
         );
         if (signal?.aborted) throw abortError();

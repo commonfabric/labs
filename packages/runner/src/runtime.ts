@@ -390,11 +390,12 @@ export interface ExperimentalOptions {
    * The memory sessions of every space on one host share one connection,
    * which each key authenticates on once
    * (`docs/specs/memory-v2/connection-multiplexing.md`). When false, each
-   * space has a connection of its own, named in the connection's address,
-   * and every `session.open` is signed. A memory server under this flag
-   * verifies `connection.auth` and advertises `connectionAuth`. Defaults to
-   * off: a deployment that routes a connection by the space its address
-   * names cannot serve a connection that carries several.
+   * space has a connection of its own, named in the connection's address.
+   * Authentication follows the server's capabilities in either topology:
+   * `connection.auth` when advertised, otherwise a signed `session.open`.
+   * A memory server under this flag verifies `connection.auth` and advertises
+   * `connectionAuth`; a routed server advertises it independently of this
+   * flag. Defaults to off.
    */
   sharedMemoryConnection?: boolean | undefined;
 }

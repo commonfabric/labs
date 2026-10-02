@@ -7,8 +7,11 @@ import WebSocket from "ws";
 import { Client as MemoryClient, type SessionPrincipal } from "../v2/client.ts";
 import {
   createSignedConnectionAuth,
+  createStorageAddressResolver,
+  RemoteSessionFactory,
   WebSocketTransport,
 } from "../../runner/src/storage/v2-remote-session.ts";
+import type { MemorySpace } from "../interface.ts";
 import { getMemoryProtocolFlags } from "../v2.ts";
 import { decodeRoutedFrame } from "../v2/routed-parser.ts";
 import {
@@ -460,8 +463,10 @@ class Client {
   binaryFrames = 0;
   hello!: Record<string, unknown>;
   /** `deflate` offers permessage-deflate, as every browser does. */
-  constructor(localAddress = "127.0.0.1", deflate = false) {
-    this.ws = new WebSocket("wss://localhost:8443/api/storage/memory", {
+  constructor(localAddress = "127.0.0.1", deflate = false, space?: string) {
+    const address = new URL("wss://localhost:8443/api/storage/memory");
+    if (space !== undefined) address.searchParams.set("space", space);
+    this.ws = new WebSocket(address, {
       ca: Deno.readTextFileSync(publicTls.cert),
       perMessageDeflate: deflate,
       family: 4,
@@ -851,12 +856,12 @@ try {
   );
   pass("release blocks new opens while preserving the original session lease");
   const sdkAudiences: string[] = [];
-  const socketFactory = (address: URL) => {
+  const socketFactory = (address: URL, localAddress = "127.0.0.7") => {
     const socket = new WebSocket(address, {
       ca: Deno.readTextFileSync(publicTls.cert),
       perMessageDeflate: false,
       family: 4,
-      localAddress: "127.0.0.7",
+      localAddress,
       headers: { Origin: "https://stage.example" },
     });
     socket.binaryType = "arraybuffer";
@@ -895,6 +900,99 @@ try {
   } finally {
     await sdk.close();
   }
+  for (const shared of [false, true]) {
+    const dialed: URL[] = [];
+    const sockets: WebSocket[] = [];
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      alice,
+      (address) => {
+        dialed.push(new URL(address));
+        const connected = socketFactory(
+          address,
+          shared ? "127.0.0.28" : "127.0.0.27",
+        );
+        sockets.push(connected.socket);
+        return connected;
+      },
+    );
+    factory.setSharedConnections(shared);
+    const opened = await Promise.all(
+      spaces.map((space, i) =>
+        factory.create(space as MemorySpace, i === 0 ? alice : bob)
+      ),
+    );
+    try {
+      assertEquals(dialed.length, shared ? 1 : 2);
+      assertEquals(
+        dialed.map((address) => address.searchParams.get("space")).toSorted(),
+        shared ? [null] : [...spaces].toSorted(),
+      );
+      for (const { session } of opened) {
+        await session.queryGraph({ roots: [] });
+      }
+      if (!shared) {
+        const lost = new Promise<void>((resolve) =>
+          sockets[0].once("close", () => resolve())
+        );
+        sockets[0].terminate();
+        await lost;
+        await opened[0].session.queryGraph({ roots: [] });
+        assertEquals(dialed.length, 3);
+        assertEquals(dialed[2].searchParams.get("space"), spaces[0]);
+        pass(
+          "sharing-off SDK reconnects with the same DID URL and fresh routed authorization",
+        );
+      }
+    } finally {
+      await Promise.all(opened.map(({ client }) => client.close()));
+      await factory.close();
+    }
+    pass(
+      shared
+        ? "sharing-on factory uses one space-free socket across two toolsheds and principals"
+        : "sharing-off factory uses two DID URL sockets with routed authentication",
+    );
+  }
+  const scoped = await new Client("127.0.0.25", false, spaces[0]).start();
+  clients.push(scoped);
+  await scoped.authenticate(bob, 180, true);
+  assert(
+    (await scoped.request({
+      type: "session.open",
+      space: spaces[1],
+      principal: bob.did(),
+      session: {},
+    })).error !== undefined,
+  );
+  await scoped.authenticate(alice, 180);
+  assert(
+    (await scoped.request({
+      type: "session.open",
+      space: spaces[0],
+      principal: alice.did(),
+      session: {},
+    })).ok !== undefined,
+  );
+  scoped.close();
+  await scoped.closed.promise;
+  pass(
+    "DID URL cannot open a different admitted space even with its owner's signature",
+  );
+  const unknownUrl = await new Client("127.0.0.26", false, alice.did()).start();
+  clients.push(unknownUrl);
+  await unknownUrl.authenticate(alice, 180, true);
+  assert(
+    (await unknownUrl.request({
+      type: "session.open",
+      space: alice.did(),
+      principal: alice.did(),
+      session: {},
+    })).error !== undefined,
+  );
+  unknownUrl.close();
+  await unknownUrl.closed.promise;
+  pass("unknown DID URL receives no space authority or upstream admission");
   const expiring = await new Client("127.0.0.2").start();
   clients.push(expiring);
   await expiring.authenticate(alice, 2, true);

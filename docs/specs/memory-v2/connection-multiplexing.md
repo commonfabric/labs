@@ -23,10 +23,11 @@ chosen by the `sharedMemoryConnection` flag:
 
 - **One connection per space**, the default. Each space gets a
   `WebSocketTransport` and a `Client` of its own, dialed at an address that
-  names the space in its `space` query parameter, and its `session.open` is
-  signed. Ending the session closes the connection. This is what a deployment
-  that routes a connection to a toolshed by the space its address names
-  requires.
+  names the space in its `space` query parameter. Authentication follows
+  the server's capabilities: `connection.auth` when advertised, otherwise
+  a signed `session.open`. Ending the session closes the connection. This is
+  what a deployment that routes a connection to a toolshed by the space its
+  address names requires.
 - **One connection per host**, under the flag. The factory dials one
   connection per storage address, with no space in it, and mounts the session
   of every space on that host on it. Each key the manager acts as authenticates
@@ -487,12 +488,18 @@ on a router link, never by a session.
 | 1 | Server: `connection.auth`, `connection.challenge`, `connection.release`, unsigned `session.open` naming a principal, per-space turns, `session.close`, presence membership per session | done |
 | 2 | Client: authentication per key, concurrent mounts, parallel restore, `session.close` on release | done |
 | 3 | Runner: one pooled client per host, session release in place of client close, behind `sharedMemoryConnection` | done |
-| 4 | Routed-auth negotiation and client signing context, the router link, forwarded statements and evidence, `connection/challenge`, the space field in the binary envelope | proposed |
-| 5 | Mode A router, link tickets, and space directory | proposed |
+| 4 | Routed-auth negotiation and client signing context, the router link, forwarded statements and evidence, `connection/challenge`, the space field in the binary envelope | implemented; public deployment gated |
+| 5 | Mode A router, link tickets, and space directory | implemented; public deployment gated |
 | 6 | `session/detached` for restoring one session without closing the client connection | proposed |
 
-The flag stays off in a deployment that routes a connection by the space its
-address names, until phase 5 gives it a router.
+The flag can stay off while Memory WebSockets move from the HTTP placement
+router to the Mode A router. Routed-capable clients and toolsheds must be
+installed first. Dedicated connections keep `?space=<DID>`, negotiate routed
+`connection.auth`, and can use only that space. After that path passes
+acceptance, enabling the flag uses the space-free URL and shares one socket
+across spaces. The URL parameter grants no space authority; directory admission,
+client signature verification, ownership, session bindings and ACLs apply in
+both topologies.
 
 ## 8. Open questions
 

@@ -759,15 +759,21 @@ holds the measurements and the conditions for revisiting.
   open without a signature of their own. Toolshed under the flag verifies
   `connection.auth` and advertises the [`connectionAuth`](#connectionauth)
   capability. With the flag off, each space has a connection of its own
-  whose address names the space, every `session.open` is signed, and
-  toolshed advertises no `connectionAuth`. A client with the flag on
-  against a server that does not advertise `connectionAuth` still shares
-  the connection, and signs each `session.open` on it, one at a time.
+  whose address names the space. Authentication follows the server's
+  advertised capabilities in either topology: `connection.auth` when
+  advertised, otherwise a signed `session.open`. A routed toolshed
+  advertises `connectionAuth` independently of this flag. Direct toolshed
+  advertises it under the flag. A client with the flag on against a server
+  that does not advertise `connectionAuth` still shares the connection,
+  and signs each `session.open` on it, one at a time.
 - **Current default and planned end state.** Off by default. A deployment
   that routes a memory connection to a toolshed by the space its address
   names cannot serve a connection that carries several spaces, so the flag
-  stays off there until a router terminates client connections. The end
-  state is always-on.
+  stays off there until a router terminates client connections. The Mode A
+  router also accepts the dedicated `?space=<DID>` address, so routed-capable
+  clients and toolsheds can be installed with sharing off, Memory WebSockets
+  moved to the router, and sharing enabled after that path passes acceptance.
+  The end state is always-on.
 - **Status on 2026-09-29.** Implemented behind the flag. The server side is
   covered by `packages/memory/test/v2-server-connection-auth.test.ts`, the
   client library by `packages/memory/test/v2-client-connection-auth.test.ts`,
