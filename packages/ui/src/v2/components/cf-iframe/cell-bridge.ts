@@ -397,16 +397,22 @@ function cellContextResources(
 }
 
 /**
- * `cell`'s value once pulled, or `undefined` when the worker refuses the
- * read, in which case nothing of the value is known.
+ * The names of the fields `cell` holds: the keys of its value while the
+ * worker admits the read, or, while it refuses it, the fields the worker
+ * lists, each of which answers for its own reads. None when the worker
+ * refuses even the list.
  */
-async function pulledOrRefused<T>(
-  cell: CellHandle<T>,
-): Promise<Readonly<T> | undefined> {
+async function fieldNames<T>(cell: CellHandle<T>): Promise<string[]> {
   try {
-    return await cell.pull();
+    const current = await cell.pull();
+    return current && typeof current === "object" ? Object.keys(current) : [];
   } catch (error) {
-    if (error instanceof CellReadRefusedError) return undefined;
+    if (!(error instanceof CellReadRefusedError)) throw error;
+  }
+  try {
+    return Object.keys(await cell.fields());
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return [];
     throw error;
   }
 }
@@ -434,20 +440,15 @@ export async function resolveCellContextBridge(
   context: CellHandle<Record<string, unknown>>,
   resourceKinds: Readonly<Record<string, CellContextResourceKind>> = {},
 ): Promise<FabricBridge> {
-  // A context whose read is refused names the resources its schema declares,
-  // each of which answers for its own reads.
-  const sourceCurrent = await pulledOrRefused(context);
+  // A context whose read is refused still names its fields, each of which
+  // answers for its own reads.
+  const contextNames = await fieldNames(context);
   const root = await context.resolveAsCell();
-  const resolvedCurrent = await pulledOrRefused(root);
   const properties = schemaProperties(root.ref().schema);
   const names = new Set([
     ...Object.keys(properties),
-    ...(sourceCurrent && typeof sourceCurrent === "object"
-      ? Object.keys(sourceCurrent)
-      : []),
-    ...(resolvedCurrent && typeof resolvedCurrent === "object"
-      ? Object.keys(resolvedCurrent)
-      : []),
+    ...contextNames,
+    ...await fieldNames(root),
   ]);
   const entries = await Promise.all([...names].map(async (name) => {
     const source = context.key(name);

@@ -177,6 +177,12 @@ export enum RequestType {
   /** Reads a cell's display CFC label, without its value. */
   CellGetCfcLabel = "cell:getCfcLabel",
 
+  /**
+   * Lists the fields a record cell holds, each as a ref to the field, with
+   * nothing of what the fields hold.
+   */
+  CellFields = "cell:fields",
+
   /** Prepares an exact snapshot and audience for trusted host confirmation. */
   SnapshotSharePrepare = "snapshotShare:prepare",
 
@@ -1253,6 +1259,16 @@ export type CellGetCfcLabelRequest = BaseRequest & {
 
   /**
    * The cell whose label to read.
+   */
+  cell: CellRef;
+};
+
+/** The {@link RequestType.CellFields} request. */
+export type CellFieldsRequest = BaseRequest & {
+  type: RequestType.CellFields;
+
+  /**
+   * The record whose fields to list.
    */
   cell: CellRef;
 };
@@ -3291,6 +3307,7 @@ export type IPCClientRequest =
   | CellUnsubscribeRequest
   | CellResolveAsCellRequest
   | CellGetCfcLabelRequest
+  | CellFieldsRequest
   | SnapshotSharePrepareRequest
   | SnapshotShareCommitRequest
   | SnapshotShareCancelRequest
@@ -3524,6 +3541,23 @@ export type CellGetResponse =
        */
       cell?: CellRef;
     })
+  );
+
+/**
+ * The fields a record holds, by name, each as the address of the field within
+ * the record, or the refusal that stands in place of the list. An address
+ * carries nothing the field holds and no label view, so the list is decided
+ * on the label of the record itself, not on those of its fields: a field the
+ * viewer may not see is listed, and a read of it is refused on its own.
+ */
+export type CellFieldsResponse =
+  & HostReadDecided
+  & (
+    | {
+      /** Each field the record holds, by name, as its address. */
+      fields: { readonly [name: string]: CellRef };
+    }
+    | CellRefusedAnswer
   );
 
 /** Rows returned by {@link RequestType.SqliteQuery}. */
@@ -4065,6 +4099,7 @@ export type RemoteResponse =
   | CellGetResponse
   | CellResponse
   | CfcLabelViewResponse
+  | CellFieldsResponse
   | SnapshotSharePreview
   | CustodySealPreview
   | CustodySealCommitResponse
@@ -4289,6 +4324,10 @@ export type Commands = {
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;
     response: CfcLabelViewResponse;
+  };
+  [RequestType.CellFields]: {
+    request: CellFieldsRequest;
+    response: CellFieldsResponse;
   };
   [RequestType.SnapshotSharePrepare]: {
     request: SnapshotSharePrepareRequest;

@@ -58,6 +58,7 @@ import {
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import {
+  EmulatedStorageManager,
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
@@ -3426,6 +3427,52 @@ describe("runtime-processor", () => {
         }),
       ).resolves.toEqual({ value: { ready: true } });
       expect(calls).toEqual(["pull", "commits"]);
+    });
+  });
+
+  describe("`RuntimeProcessor` cell fields IPC", () => {
+    it("lists the fields of a record it has not loaded yet, once it has synced it", async () => {
+      const server = newLoopbackServer();
+      const connect = () =>
+        new Runtime({
+          apiUrl: new URL("http://localhost/"),
+          storageManager: EmulatedStorageManager.connectTo(server, {
+            as: cfcSigner,
+          }),
+        });
+      const writer = connect();
+      const reader = connect();
+      try {
+        const space = cfcSigner.did();
+        const record = writer.getCell(space, "fields-record", undefined);
+        await writer.editWithRetry((tx) => {
+          record.withTx(tx).set({ title: "Inbox", count: 3 });
+        });
+        await writer.storageManager.synced();
+        const ref: CellRef = {
+          id: record.getAsNormalizedFullLink().id,
+          space,
+          scope: "space",
+          path: [],
+        };
+        const processor = buildProcessor({ runtime: reader, space });
+
+        const response = await processor.handleRequest({
+          type: RequestType.CellFields,
+          cell: ref,
+        });
+
+        expect(response).toEqual({
+          fields: {
+            title: { ...ref, path: ["title"] },
+            count: { ...ref, path: ["count"] },
+          },
+        });
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
     });
   });
 

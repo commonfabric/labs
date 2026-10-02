@@ -2,22 +2,21 @@
  * A live read of a piece's result or argument for the piece menu's panels.
  *
  * While the worker admits the cell's read, the read is the whole value. While
- * the worker refuses it, the read is each field the cell's schema declares,
- * read on its own, so that the panel shows everything the display ceiling
- * admits and marks the fields it refuses, the way a render shows a placeholder
- * where a part of it is refused. One field the viewer may not see, such as a
- * credential, then hides that field rather than the whole piece. Fields the
- * schema does not declare cannot be named without reading the value, and are
- * not shown.
+ * the worker refuses it, the read is each field the cell holds, read on its
+ * own, so that the panel shows everything the display ceiling admits and
+ * marks the fields it refuses, the way a render shows a placeholder where a
+ * part of it is refused. One field the viewer may not see, such as a
+ * credential, then hides that field rather than the whole piece. The worker
+ * lists the fields (`CellHandle.fields()`), from the record rather than its
+ * schema, which a host may hold only as a reference it cannot resolve.
  */
 
-import type {
-  Cancel,
-  CellHandle,
-  CellReadRefusal,
-  JSONSchema,
+import {
+  type Cancel,
+  type CellHandle,
+  type CellReadRefusal,
+  CellReadRefusedError,
 } from "@commonfabric/runtime-client";
-import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /**
  * Stands in a displayed value for a field the worker refused, as `[stream]`
@@ -33,23 +32,20 @@ type Read =
 /** A field read on its own: what it holds, that it is refused, or nothing yet. */
 type FieldRead = Read | { readonly pending: true };
 
-/** The properties `schema` declares, by name. */
-export function declaredProperties(
-  schema: JSONSchema | undefined,
-): Record<string, JSONSchema> {
-  if (!isObjectNotArray(schema)) return {};
-  const properties = schema.properties;
-  return isObjectNotArray(properties)
-    ? properties as Record<string, JSONSchema>
-    : {};
-}
-
 export class PanelRead {
   readonly #cell: CellHandle;
   readonly #onChange: () => void;
   #whole: Read | undefined;
   #fields = new Map<string, FieldRead>();
   #cancelFields: Cancel[] = [];
+  /** Whether the worker refused even the list of fields. */
+  #listRefused = false;
+  /**
+   * Advanced whenever the field reads open or close, so that a list that
+   * arrives after the whole was admitted again opens nothing.
+   */
+  #generation = 0;
+  #listing = false;
   readonly #cancelWhole: Cancel;
 
   /**
@@ -66,7 +62,7 @@ export class PanelRead {
     }, {
       onRefused: (refused) => {
         this.#whole = { refused };
-        this.#openFields();
+        void this.#openFields();
         this.#onChange();
       },
     });
@@ -89,13 +85,15 @@ export class PanelRead {
 
   /**
    * What the panel shows: the value, or, while the whole is refused, an
-   * object of the declared fields read so far, with `HIDDEN_BY_POLICY` at
-   * each field the worker refuses.
+   * object of the fields read so far, with `HIDDEN_BY_POLICY` at each field
+   * the worker refuses, or `HIDDEN_BY_POLICY` alone where the worker refuses
+   * even the list of fields.
    */
   shown(): unknown {
     const whole = this.#whole;
     if (whole === undefined) return undefined;
     if ("value" in whole) return whole.value;
+    if (this.#listRefused) return HIDDEN_BY_POLICY;
     const shown: Record<string, unknown> = {};
     for (const [name, field] of this.#fields) {
       if ("pending" in field) continue;
@@ -110,19 +108,29 @@ export class PanelRead {
     this.#closeFields();
   }
 
-  #openFields(): void {
-    if (this.#cancelFields.length > 0) return;
-    const parent = this.#cell.asSchema<Record<string, unknown>>({
-      type: "object",
-    });
-    for (
-      const [name, fragment] of Object.entries(
-        declaredProperties(this.#cell.ref().schema),
-      )
-    ) {
-      // Addressed at the field, so that the read is decided on the field's
-      // labels, not on those of the whole document the cell starts from.
-      const field = parent.key(name).asSchema(fragment);
+  async #openFields(): Promise<void> {
+    if (this.#listing || this.#cancelFields.length > 0) return;
+    const generation = ++this.#generation;
+    this.#listing = true;
+    let fields: Record<string, CellHandle<unknown>>;
+    try {
+      fields = await this.#cell.fields();
+    } catch (error) {
+      if (generation !== this.#generation) return;
+      this.#listing = false;
+      if (!(error instanceof CellReadRefusedError)) {
+        // Shown as nothing listed yet, as a field list a read failed to
+        // make; the next refusal of the whole asks again.
+        console.error("[PanelRead] Listing the fields failed:", error);
+        return;
+      }
+      this.#listRefused = true;
+      this.#onChange();
+      return;
+    }
+    if (generation !== this.#generation) return;
+    this.#listing = false;
+    for (const [name, field] of Object.entries(fields)) {
       this.#fields.set(name, { pending: true });
       this.#cancelFields.push(field.subscribe((value) => {
         this.#fields.set(name, { value });
@@ -134,9 +142,13 @@ export class PanelRead {
         },
       }));
     }
+    this.#onChange();
   }
 
   #closeFields(): void {
+    this.#generation++;
+    this.#listing = false;
+    this.#listRefused = false;
     for (const cancel of this.#cancelFields) cancel();
     this.#cancelFields = [];
     this.#fields = new Map();

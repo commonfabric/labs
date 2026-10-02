@@ -207,6 +207,12 @@ function gateFor(runtime: Runtime, viewer: Identity): HostReadGate {
   });
 }
 
+/** `cell`'s address, as a ref carries it with no label view. */
+function address(cell: Cell<unknown>) {
+  const { cfcLabelView: _withheld, ...ref } = createCellRef(cell);
+  return ref;
+}
+
 /** Whether `text` appears anywhere in `answer`. */
 function holds(answer: unknown, text: string): boolean {
   return JSON.stringify(answer ?? null).includes(text);
@@ -417,6 +423,48 @@ describe("HostReadGate", () => {
           gate.read(docs.importer.key(field).asSchema(FIELD_SHAPE_SCHEMA)),
         ).toEqual({ refused: { refusedBy: "display-ceiling" } });
       }
+    });
+  });
+
+  describe("fields()", () => {
+    for (const piece of ["importer", "inlineImporter"] as const) {
+      const where = piece === "importer"
+        ? "a document of its own"
+        : "the piece's own document";
+
+      it(`lists the owner every field of a piece holding a credential in ${where}, whose whole read it refuses`, async () => {
+        await using docs = await shelf();
+        const gate = gateFor(docs.runtime, owner);
+        expect("refused" in gate.read(docs[piece].asSchema(true))).toBe(true);
+
+        const answer = gate.fields(docs[piece]);
+
+        expect(holds(answer, CREDENTIAL)).toBe(false);
+        expect(answer).toEqual({
+          fields: Object.fromEntries(
+            ["$NAME", "openPath", "sidebarUI", "auth"].map((name) => [
+              name,
+              { ...address(docs[piece]), path: [name] },
+            ]),
+          ),
+        });
+        // Each field's own read is decided on its own.
+        expect(gate.read(docs[piece].key("auth").asSchema(true))).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+        expect(gate.read(docs[piece].key(NAME).asSchema(true))).toEqual({
+          value: "Importer",
+        });
+      });
+    }
+
+    it("refuses a visitor the list of a piece only its owner may see", async () => {
+      await using docs = await shelf();
+
+      const answer = gateFor(docs.runtime, visitor).fields(docs.sealedPiece);
+
+      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(answer, SEALED_NAME)).toBe(false);
     });
   });
 

@@ -161,6 +161,8 @@ import {
 import {
   type ActionRunTraceResponse,
   BooleanResponse,
+  type CellFieldsRequest,
+  type CellFieldsResponse,
   type CellGetCfcLabelRequest,
   type CellGetRequest,
   type CellGetResponse,
@@ -2345,6 +2347,19 @@ export class RuntimeProcessor {
     return answer === undefined ? {} : { answer };
   }
 
+  /**
+   * The fields a record holds, each as a link to its own cell, as the
+   * host-read gate decides them. Synced first, so that the labels the list
+   * is decided on are the record's.
+   */
+  async handleCellFields(
+    request: CellFieldsRequest,
+  ): Promise<CellFieldsResponse> {
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.sync();
+    return this.#hostReadGate.fields(cell);
+  }
+
   handleCellGetCfcLabel(
     request: CellGetCfcLabelRequest,
   ): CfcLabelViewResponse {
@@ -3538,6 +3553,8 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.CellFields:
+        return await this.handleCellFields(request);
       case RequestType.SnapshotSharePrepare:
         return await this.handleSnapshotSharePrepare(request, client);
       case RequestType.SnapshotShareCommit:

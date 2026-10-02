@@ -30,6 +30,7 @@ import {
 } from "@commonfabric/html/worker";
 import type { CellScope } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type Cancel,
   type Cell,
@@ -59,6 +60,7 @@ import {
 import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
 
 import {
+  type CellFieldsResponse,
   type CellGetResponse,
   type CellReadRefusal,
   type CellRef,
@@ -81,6 +83,7 @@ import {
 import { createCellRef } from "./utils.ts";
 
 /**
+/**
  * The document a diagnostic names by space and id, which a diagnostic is
  * decided on: its root, whose labels cover everything it holds.
  */
@@ -92,6 +95,16 @@ export type DocumentAt = (
 
 /** What stands in a diagnostic for a value the ceiling refuses. */
 const WITHHELD = CFC_POLICY_PLACEHOLDER_TEXT;
+
+/**
+ * The read that lists a record's fields: each field as a link to its own
+ * cell, so that nothing a field holds is read, and the read consumes the
+ * record's own label and no field's.
+ */
+const FIELDS_SCHEMA = {
+  type: "object",
+  additionalProperties: { asCell: ["cell"] },
+} as const;
 
 /** What the display ceiling's refusal of a host's read says. */
 const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
@@ -128,6 +141,11 @@ export function transportFailureReport(reason: string): ErrorNotification {
  */
 function holdsEvents(cell: Cell<unknown>): boolean {
   return isStream(cell);
+}
+
+/** The names of the fields a {@link FIELDS_SCHEMA} read listed. */
+function fieldNamesOf(value: unknown): string[] {
+  return isObjectNotArray(value) ? Object.keys(value) : [];
 }
 
 /** The label view a read asked for, with each caveat's source redacted. */
@@ -653,17 +671,79 @@ export class HostReadGate {
     } catch {
       return true;
     }
-    if (read.confidentiality.length === 0) return false;
-    const spaces = [...read.modulePolicySpaces.values()].flatMap((set) => [
+    return this.#consumedRefusal(read, policy) !== undefined;
+  }
+
+  /**
+   * The fields the record `cell` holds, each as the address of the field
+   * within it, or the refusal that stands in place of the list. The list is
+   * read under {@link FIELDS_SCHEMA}, which reads nothing a field holds, and
+   * is decided on what that read consumed and on the label of the record's
+   * own node, not on the labels of the fields inside it, as a read of the
+   * record's value is. A record that holds one field the viewer may not see
+   * so lists every field, and each field's own read is decided as any read
+   * is. The names come from the record, not its schema, which a host may
+   * hold only as a reference it cannot resolve. An address carries no label
+   * view, as no ref but {@link ref}'s does: the field's own read decides
+   * whether its label may be seen.
+   */
+  fields(cell: Cell<unknown>): CellFieldsResponse {
+    const listed = cell.asSchema(FIELDS_SCHEMA);
+    const policy = this.#policy;
+    let names: string[];
+    if (policy === undefined) {
+      names = fieldNamesOf(listed.get());
+    } else {
+      const read = readProjected(listed, fieldNamesOf);
+      const refusal = this.#consumedRefusal(read.consumed, policy) ??
+        cellLabelRefusal(
+          listed,
+          cellLabelSources(listed)?.map((source) => ({
+            ...source,
+            view: source.view === undefined ? undefined : {
+              version: 1 as const,
+              entries: source.view.entries.filter((entry) =>
+                entry.path.length === 0
+              ),
+            },
+          })),
+          policy,
+          this.#sources,
+        );
+      if (refusal !== undefined) return this.#refuse(refusal, policy);
+      names = read.value;
+    }
+    const fields: Record<string, CellRef> = {};
+    for (const name of names) fields[name] = createCellRef(cell.key(name));
+    return decided({ fields });
+  }
+
+  /**
+   * The refusal of `consumed`, the labels a read consumed, or `undefined`
+   * when the policy admits them. A read that consumed no labeled value is
+   * admitted.
+   */
+  #consumedRefusal(
+    consumed: SinkConsumedLabel,
+    policy: RenderPolicy,
+  ): RenderLabelSummary | undefined {
+    if (consumed.confidentiality.length === 0) return undefined;
+    const spaces = [...consumed.modulePolicySpaces.values()].flatMap((set) => [
       ...set,
     ]);
-    return !canRenderLabelUnderPolicy(
-      read.confidentiality,
-      read.integrity,
-      () => spaces,
-      policy,
-      this.#sources,
-    );
+    return canRenderLabelUnderPolicy(
+        consumed.confidentiality,
+        consumed.integrity,
+        () => spaces,
+        policy,
+        this.#sources,
+      )
+      ? undefined
+      : {
+        labelSource: "consumed",
+        confidentiality: consumed.confidentiality,
+        integrity: consumed.integrity,
+      };
   }
 
   /** A refusal of a read, reported as a refused render is. */
