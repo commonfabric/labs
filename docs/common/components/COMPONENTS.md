@@ -414,6 +414,11 @@ the policy placeholder in the same places. The exceptions:
   an authorship boundary the piece's own text shows whether or not it carries
   the required endorsement.
 
+`cf-picker` shows each of its `$items` through a `cf-render` of its own, so
+each item passes the same gates as a piece bound to `cf-render`, with the same
+exceptions. Where a `cf-render` would show nothing for one item, the picker
+shows no items at all, since it is handed the whole list or none of it.
+
 [Render-boundary composition](../../specs/cfc-render-boundary-composition.md)
 holds the rules.
 
