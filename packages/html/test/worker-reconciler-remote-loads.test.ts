@@ -411,6 +411,164 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     }
   });
 
+  // A caveated cell that points at a separate, clean view document. Reading
+  // the clean view does not pass through the caveated cell, so its own labels
+  // admit every fetch; only the block the caveated cell sets on its subtree
+  // can refuse one. The caveated cell decided which view to show, so loading
+  // anything in it tells a host what it decided.
+  const pointer = async (view: unknown, caveated: boolean) => {
+    const target = await seed(view, [owner]);
+    const ref = await seed(
+      linkTo(target),
+      caveated ? [owner, unscreened] : [owner],
+    );
+    const id = await seed({
+      type: "vnode",
+      name: "div",
+      props: {},
+      children: [linkTo(ref)],
+    }, [owner]);
+    return { id, ref, target };
+  };
+
+  // A caveated view whose own document embeds a separate, clean view through
+  // a link child. Reading the embedded view passes through neither the
+  // caveated document nor a link in it, so only the block the caveated view
+  // sets on its subtree can refuse a fetch inside it.
+  const embedded = async (view: unknown) => {
+    const inner = await seed(view, [owner]);
+    const outer = await seed({
+      type: "vnode",
+      name: "section",
+      props: {},
+      children: [linkTo(inner)],
+    }, [owner, unscreened]);
+    return await seed({
+      type: "vnode",
+      name: "div",
+      props: {},
+      children: [linkTo(outer)],
+    }, [owner]);
+  };
+
+  await t.step(
+    "a caveated cell pointing at a clean view sets none of its fetches",
+    async () => {
+      const { id } = await pointer(pixelView(), true);
+      const { collector, cancel } = await render(id);
+      try {
+        const ops = collector.all();
+        assertEquals(texts(ops).includes("Owner text"), true);
+        assertEquals(setProps(ops, "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "an uncaveated cell pointing at the same view fetches (control)",
+    async () => {
+      const { id } = await pointer(pixelView(), false);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "an embedded view's render boundary keeps the block",
+    async () => {
+      const id = await embedded({
+        type: "vnode",
+        name: "cf-cfc-render-boundary",
+        props: {},
+        children: [{
+          type: "vnode",
+          name: "img",
+          props: { src: ATTACKER_URL },
+          children: [],
+        }],
+      });
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "an embedded view's <style> text does not render",
+    async () => {
+      const css = `body { background: url(${ATTACKER_URL}) }`;
+      const id = await embedded({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          { type: "vnode", name: "style", props: {}, children: [css] },
+          "Visible text",
+        ],
+      });
+      const { collector, cancel } = await render(id);
+      try {
+        const rendered = texts(collector.all());
+        assertEquals(rendered.includes("Visible text"), true);
+        assertEquals(rendered.includes(css), false);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "a view that gains the caveat stops the clean view it embeds fetching",
+    async () => {
+      // The relabelled view's own document changes, so it re-decides; the
+      // clean view it embeds does not, so only the re-decision can take back
+      // the src it set. (A label change on a document a link merely passes
+      // through is not observed at all, for the display gate either.)
+      const inner = await seed(pixelView(), [owner]);
+      const outer = "remote-loads-embedding-flip";
+      const embedding = {
+        type: "vnode",
+        name: "section",
+        props: {},
+        children: [linkTo(inner)],
+      };
+      await seed(embedding, [owner], outer);
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [linkTo(outer)],
+      }, [owner]);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
+        collector.clear();
+        await seed(embedding, [owner, unscreened], outer);
+        await t.settle();
+        const ops = collector.all();
+        assertEquals(setProps(ops, "src"), []);
+        assertEquals(
+          ops.some((op) =>
+            op.op === "remove-node" ||
+            (op.op === "remove-prop" && op.key === "src")
+          ),
+          true,
+        );
+      } finally {
+        cancel();
+      }
+    },
+  );
+
   await t.step(
     "a view that gains the caveat with the same value stops fetching",
     async () => {
