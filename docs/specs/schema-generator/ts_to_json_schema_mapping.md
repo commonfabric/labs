@@ -1123,9 +1123,11 @@ Mechanics:
   origins: same-typed writers remain distinct below `$ref` boundaries. Plain
   generics without authored query arguments retain their type-based analysis.
   An indexed access or conditional member over bound parameters can leave a
-  writer policy's instantiated carrier without readable binding syntax. That
-  authored read reports `cfc-write-authorized-by:unread` and explains the
-  unsupported operator; compilation cannot silently discard its restriction.
+  writer policy's instantiated carrier without readable binding syntax. In a
+  schema that defines a document, that read reports
+  `cfc-write-authorized-by:unread` and explains the unsupported operator, so
+  compilation cannot silently discard its restriction; a view reads the policy
+  whole or not at all, as for any writer no syntax names (below).
   See `packages/ts-transformers/test/generic-writer-policy.test.ts` for both
   pattern schemas and `packages/runner/test/generic-writer-policy.test.ts` for
   authorized and refused writes, including stored reloads.
@@ -1353,9 +1355,12 @@ Mechanics:
   `normalizeWriterIdentityFile`). The transformer also handles the direct-root
   `toSchema<WriteAuthorizedBy<T, typeof b>>` form specially so the wrapper's
   value schema remains the root while the same identity marker is attached:
-  it mints the claim and hands the generator the payload's node, and the
-  generator's report that it cannot read the root writer at that node is the
-  transformer's to answer.
+  it mints the claim and hands the generator the payload's node with
+  `rootWriterSupplied` (§14). The generator counts that writer as read at the
+  root: it reports no root writer, nullable payloads included, whose policy
+  the checker reduces to a type with no alias name, and keeps the principal
+  claims beside it. A second writer policy the root's type carries is still
+  reported.
   The writer identity is update-volatile in the piece compat checker in two
   ways, and `assertPatternSchemasBackwardCompatible` normalizes both out of the
   `ifc` comparison. The content-addressed hash (`moduleIdentity`, and the
@@ -1454,7 +1459,8 @@ producing alias in this package as of this writing.
 
 Hint shape (`src/interface.ts`): `SchemaHints` is `WeakMap<ts.Node,
 SchemaHint>`, where `SchemaHint` is `{ items?: unknown; cfcUiContract?:
-UiContractHint; narrowedFrom?: NarrowedFrom; spelledBy?: ts.TypeNode }`,
+UiContractHint; narrowedFrom?: NarrowedFrom; spelledBy?: ts.TypeNode;
+definesDocument?: true }`,
 `UiContractHint` is
 `{ helper: "UiAction" | "UiPromptSlot" | "UiDisclosure"; action?; surface?;
 role?; kind?; trustedPattern?; requiredEventIntegrity? }`, and `NarrowedFrom`
@@ -1462,13 +1468,13 @@ is `{ type: ts.Type; typeNode?: ts.TypeNode }`. Every member is read-only: the
 generator only reads hints, and copies the `requiredEventIntegrity` list on the
 way into the emitted schema. A node holds a hint of each kind, recorded apart
 from the others. The producer writes `items` and `cfcUiContract` to the node
-and its original (`cross-stage-state.ts`), and `narrowedFrom` and `spelledBy`
-to the node alone. A `cfcUiContract` lookup tries the node and
+and its original (`cross-stage-state.ts`), and `narrowedFrom`, `spelledBy` and
+`definesDocument` to the node alone. A `cfcUiContract` lookup tries the node and
 `ts.getOriginalNode(node)` (`src/ui-contract.ts`, called from
 `schema-generator.ts` and `object-formatter.ts`); an `items` lookup reads the
 current hint node (`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads
 the node, and the node inside its parentheses (`schema-generator.ts`); a
-`spelledBy` lookup reads the node (`formatChildType` in
+`spelledBy` or `definesDocument` lookup reads the node (`formatChildType` in
 `schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
@@ -1541,6 +1547,11 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
     each written alternative and its policy bindings.
   - Where the annotation spells neither, the node is read as any print is,
     by the type at hand.
+- **`definesDocument`** marks a node whose value is data its schema's
+  document holds itself rather than a view of another document, as a fresh
+  value a pattern's inferred result returns is. The node and everything under
+  it are read as `definesDocument` would read them (§14), whatever the schema
+  around them is.
 
   The node's own hints still apply.
 
@@ -1554,7 +1565,9 @@ declaration file is the default library's (the transformer supplies
 `program.isSourceFileDefaultLibrary`; without it, file names decide —
 `src/typescript/default-library.ts`), `definesDocument` for a schema a
 document's stored policy envelope is made from, in which a writer no syntax
-names is an error (§11), and `widenLiterals`.
+names is an error (§11), `rootWriterSupplied` for a schema whose root policy's
+writer claim the caller supplies, handing the generator only the payload's
+node (§11), and `widenLiterals`.
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);

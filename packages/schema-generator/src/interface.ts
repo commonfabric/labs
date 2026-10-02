@@ -54,6 +54,13 @@ export interface SchemaHint {
    * spells as the structural type of the value it names.
    */
   readonly spelledBy?: ts.TypeNode;
+  /**
+   * Whether the value the node describes is data its schema's document holds
+   * itself rather than a view of another document, as a fresh value a
+   * pattern's inferred result returns is. It is read as defining a document
+   * (`SchemaGenerationOptions.definesDocument`).
+   */
+  readonly definesDocument?: true;
 }
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;
@@ -125,6 +132,16 @@ export interface SchemaGenerationOptions {
    * not follow can lose it, is not reported either way.
    */
   readonly definesDocument?: boolean;
+
+  /**
+   * Whether the caller supplies the writer claim of the policy at the root
+   * of the schema, as the transformer does for a direct-root
+   * `WriteAuthorizedBy` it lowers itself, handing the generator only the
+   * policy's payload. The generator then counts that one writer as read at
+   * the root: it reports no root writer as unread, and keeps the root's
+   * principal claims. A second writer policy at the root is still reported.
+   */
+  readonly rootWriterSupplied?: boolean;
 }
 
 /**
@@ -224,6 +241,12 @@ export interface GenerationContext {
    * (`SchemaGenerationOptions.definesDocument`).
    */
   definesDocument?: boolean;
+
+  /**
+   * The root type node of a schema whose root policy's writer the caller
+   * supplies (`SchemaGenerationOptions.rootWriterSupplied`).
+   */
+  rootWriterSuppliedAt?: ts.TypeNode;
 
   /** Schema hints for overriding default behavior (keyed by TypeNode) */
   schemaHints?: SchemaHints;

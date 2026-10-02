@@ -37,6 +37,14 @@ export type SchemaHint = {
    * names a value binding that the print cannot spell.
    */
   readonly spelledBy?: ts.TypeNode;
+
+  /**
+   * Whether the value the node describes is data its schema's document holds
+   * itself rather than a view of another document, as a fresh value a
+   * pattern's inferred result returns is. Schema generation reads it as
+   * defining a document (`SchemaGenerationOptions.definesDocument`).
+   */
+  readonly definesDocument?: true;
 };
 
 export type ReactiveCapability =

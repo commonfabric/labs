@@ -3583,6 +3583,7 @@ describe("Schema: CFC authoring aliases", () => {
       interface Derived extends Base<WriteAuthorizedBy<string, typeof save>> {}
       type Mirror<T> = { [K in keyof T]: T[K] };
       function save() {}
+      function other() {}
     `;
 
     const generate = async (root: string, definesDocument: boolean) => {
@@ -3766,6 +3767,92 @@ describe("Schema: CFC authoring aliases", () => {
           },
           pooled: { ifc: { ownerPrincipal: "owner" } },
         },
+      });
+    });
+
+    describe("whose root writer the caller supplies", () => {
+      // The caller lowers a direct-root `WriteAuthorizedBy` itself and hands
+      // the generator only the payload's node, with the policy's type.
+
+      const generateFromPayload = async (
+        root: string,
+        options: { definesDocument: boolean; rootWriterSupplied?: boolean },
+      ) => {
+        // The policy is read as written in place, as a cell's type argument
+        // is, rather than through a named alias of its own.
+        const { checker, typeNode } = await getTypeFromCode(
+          `${DECLARATIONS} type SchemaRoot = { root: ${root} };`,
+          "SchemaRoot",
+        );
+        const policy = ((typeNode as ts.TypeLiteralNode)
+          .members[0] as ts.PropertySignature).type as ts.TypeReferenceNode;
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
+        const schema = new SchemaGenerator().generateSchema(
+          checker.getTypeFromTypeNode(policy),
+          checker,
+          policy.typeArguments![0]!,
+          {
+            ...options,
+            onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+          },
+        );
+        return { schema, diagnostics };
+      };
+
+      // An owner policy over a nullable payload, whose alias name the checker
+      // drops: `null & carrier` is `never`.
+      const OWNED_ROOT =
+        `WriteAuthorizedBy<RepresentsCurrentUser<Cfc<string | null, { ownerPrincipal: "owner" }>>, typeof save>`;
+
+      for (const definesDocument of [true, false]) {
+        it(
+          `reports nothing for it, and keeps the principal claims beside it, ${
+            definesDocument ? "in a document" : "in a view"
+          }`,
+          async () => {
+            const { schema, diagnostics } = await generateFromPayload(
+              OWNED_ROOT,
+              { definesDocument, rootWriterSupplied: true },
+            );
+
+            expect(diagnostics).toEqual([]);
+            expect(schema).toMatchObject({
+              ifc: {
+                ownerPrincipal: "owner",
+                addIntegrity: [{ kind: "represents-principal" }],
+              },
+            });
+          },
+        );
+      }
+
+      it("reads the root writer as unread where the caller does not supply it", async () => {
+        const document = await generateFromPayload(OWNED_ROOT, {
+          definesDocument: true,
+        });
+        const view = await generateFromPayload(OWNED_ROOT, {
+          definesDocument: false,
+        });
+
+        expect(reports(document.diagnostics)).toEqual([
+          "error cfc-write-authorized-by:unread",
+        ]);
+        expect(view.diagnostics).toEqual([]);
+        expect((view.schema as { ifc?: unknown }).ifc).toBeUndefined();
+      });
+
+      it("reports a second writer at the root, read from its type", async () => {
+        const { diagnostics } = await generateFromPayload(
+          `WriteAuthorizedBy<
+            NonNullable<WriteAuthorizedBy<string, typeof other> | undefined> | null,
+            typeof save
+          >`,
+          { definesDocument: true, rootWriterSupplied: true },
+        );
+
+        expect(reports(diagnostics)).toEqual([
+          "error cfc-write-authorized-by:unread",
+        ]);
       });
     });
 

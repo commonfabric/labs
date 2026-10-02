@@ -113,16 +113,6 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         const generationOptions: SchemaGenerationOptions = {
           ...(widenLiterals !== undefined ? { widenLiterals } : {}),
           onDiagnostic: (diagnostic) => {
-            // The root policy's writer, which this stage mints the claim for,
-            // is one the generator, handed the payload's node at the root,
-            // cannot read there. Its report at that node is answered here.
-            if (
-              writeAuthorizedByIdentity &&
-              diagnostic.type === "cfc-write-authorized-by:unread" &&
-              diagnostic.node === schemaTypeArg
-            ) {
-              return;
-            }
             const original = diagnostic.node &&
               ts.getOriginalNode(diagnostic.node);
             const useRange = recoverAuthoredPosition(node) ??
@@ -149,6 +139,10 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
           // writer it cannot read (`SchemaGenerationOptions.definesDocument`).
           ...(context.state.isDocumentSchemaCall(node) &&
             { definesDocument: true }),
+          // This stage mints the root policy's claim itself, below, and hands
+          // the generator only the payload's node, where that writer cannot be
+          // read (`SchemaGenerationOptions.rootWriterSupplied`).
+          ...(writeAuthorizedByIdentity && { rootWriterSupplied: true }),
           // The schema-generator owns the general/nested CFC alias path. Give
           // it the same spelling and stamp source used by the direct
           // WriteAuthorizedBy special case below, including for bindings
