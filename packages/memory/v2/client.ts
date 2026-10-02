@@ -191,7 +191,7 @@ export type SessionOpenAuthFactory = (
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
 
-/** A signed `connection.auth`: the invocation and the signature over it. */
+/** Signed direct invocation/authorization, or a routed binary statement transport. */
 export type ConnectionAuth = {
   invocation: FabricPlainObject;
   authorization: FabricValue;
@@ -205,7 +205,8 @@ export type ConnectionAuthFactory = (
 /**
  * The key a session acts as, and how that key signs. Against a server
  * advertising `connectionAuth` the key signs once per connection, whatever
- * the number of sessions mounted as it; against any other server it signs
+ * the number of sessions mounted as it. Routed challenges require fresh signing
+ * for renewal on that connection; against any other server it signs
  * each `session.open`.
  */
 export type SessionPrincipal = {
@@ -1002,7 +1003,7 @@ export class Client {
         protocol: MEMORY_PROTOCOL,
         flags: {
           ...expectedFlags,
-          routedAuthV1: true,
+          routedAuthV1: this.#transport.setRoutedMessagesEnabled !== undefined,
           messageCompressionV1: expectedFlags.messageCompressionV1 &&
             this.#transport.supportsMessageCompression === true,
         },
@@ -1048,6 +1049,15 @@ export class Client {
 
     if (this.#helloPending !== null) {
       const helloOk = parseHelloOk(message);
+      if (
+        helloOk?.flags.routedAuthV1 === true &&
+        this.#transport.setRoutedMessagesEnabled === undefined
+      ) {
+        this.#helloPending.reject(
+          new Error("Routed transport codec unavailable"),
+        );
+        return;
+      }
       if (helloOk !== null) {
         const expectedFlags = getMemoryProtocolFlags();
         if (!helloOk.flags.stableExpressionResultIds) {

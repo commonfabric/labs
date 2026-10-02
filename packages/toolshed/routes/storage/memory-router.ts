@@ -81,7 +81,8 @@ function load(path: string): RouterConfig {
 /** Directory snapshot shared with the placement broker; no request supplies an address. */
 export class MemoryRouterPolicy {
   readonly config: RouterConfig;
-  #stamp: number | undefined;
+  #source: string | undefined;
+  #available = true;
   #owners = new Map<string, number>();
 
   /** Loads the private endpoint's allowlist and validates the first directory snapshot. */
@@ -91,10 +92,10 @@ export class MemoryRouterPolicy {
   }
 
   #refresh(): void {
-    const stamp = Deno.statSync(this.config.directory).mtime?.getTime();
-    if (stamp !== undefined && stamp === this.#stamp) return;
+    const source = Deno.readTextFileSync(this.config.directory);
+    if (source === this.#source) return;
     const directory = routedObject(
-      parseRoutedJson(Deno.readTextFileSync(this.config.directory)),
+      parseRoutedJson(source),
     );
     requireRouted(
       directory.version === 1 &&
@@ -126,7 +127,21 @@ export class MemoryRouterPolicy {
       }
     }
     this.#owners = owners;
-    this.#stamp = stamp;
+    this.#source = source;
+    if (!this.#available) {
+      console.error(
+        JSON.stringify({
+          event: "memory-directory-available",
+          deployment: this.config.deployment,
+        }),
+      );
+    }
+    this.#available = true;
+  }
+
+  /** Separates an unavailable authoritative snapshot from a known unowned DID. */
+  get available(): boolean {
+    return this.#available;
   }
 
   /** Synchronously fences an engine turn against the current owning epoch. */
@@ -136,7 +151,16 @@ export class MemoryRouterPolicy {
       return this.#owners.get(space);
     } catch {
       this.#owners.clear();
-      this.#stamp = undefined;
+      this.#source = undefined;
+      if (this.#available) {
+        console.error(
+          JSON.stringify({
+            event: "memory-directory-unavailable",
+            deployment: this.config.deployment,
+          }),
+        );
+      }
+      this.#available = false;
       return undefined;
     }
   }

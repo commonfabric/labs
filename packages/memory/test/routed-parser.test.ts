@@ -102,6 +102,17 @@ describe("routed untrusted parsers", () => {
       ]
     ) expect(() => routedFlags(invalid)).toThrow();
   });
+  it("refuses an expanded payload when its raw fallback cannot fit the wire bound", () => {
+    const payload = `fvj1:${
+      JSON.stringify({
+        type: "transact",
+        requestId: "large",
+        space,
+        value: "a".repeat(9 * 1024 * 1024),
+      })
+    }`;
+    expect(() => encodeRoutedFrame(payload)).toThrow();
+  });
   it("mutation exercises binary and JSON parsers without parser panics", () => {
     const seed = envelope(
       `fvj1:${

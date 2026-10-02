@@ -719,4 +719,4 @@ ws selection is independent and remains in its lock.
 chunk. Routed Memory also validates the exact expanded length, CRC/ISIZE,
 minimal header, single-member rule and space hint. These parser pins must be
 reviewed and their adversarial fixtures rerun when updating them. The
-`@node/https` alias is Deno's Node TLS listener builtin.
+`node:https` specifier is Deno's Node TLS listener builtin.

@@ -4,6 +4,7 @@
  */
 
 import { sha256 } from "@commonfabric/content-hash";
+import { decodeHex, encodeHex } from "@std/encoding/hex";
 import {
   isCanonicalEd25519DID,
   VerifierIdentity,
@@ -288,9 +289,7 @@ export function readRoutedBase64(value: unknown): Uint8Array {
 
 /** Canonical lowercase hex for context, epoch, ticket and challenge identifiers. */
 export function routedHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  return encodeHex(bytes);
 }
 
 /** Reads one fixed-size lowercase hex identifier. */
@@ -299,5 +298,5 @@ export function readRoutedHex(value: unknown, size: number): Uint8Array {
     typeof value === "string" && value.length === size * 2 &&
       /^[0-9a-f]+$/.test(value),
   );
-  return Uint8Array.from(value.match(/../g)!, (part) => parseInt(part, 16));
+  return decodeHex(value);
 }

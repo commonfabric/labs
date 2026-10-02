@@ -213,6 +213,7 @@ export class RoutedMemoryHost {
       for (const principal of context.grants.keys()) {
         this.#options.epochs.release(
           link.router,
+          this.#options.deployment,
           routedHex(link.epoch),
           routedHex(context.id),
           principal,
@@ -470,7 +471,7 @@ export class RoutedMemoryHost {
       requireRouted(
         ticket !== undefined && ticket.link === link &&
           !ticket.context.closed &&
-          (ticket.redeemed || ticket.expires > this.#now()),
+          !ticket.redeemed && ticket.expires > this.#now(),
       );
       const context = ticket.context;
       await this.#admitProof(link, context, proof);
@@ -489,6 +490,7 @@ export class RoutedMemoryHost {
       try {
         this.#options.epochs.release(
           link.router,
+          this.#options.deployment,
           routedHex(link.epoch),
           routedHex(context.id),
           principal,
@@ -628,6 +630,7 @@ export class RoutedMemoryHost {
         principal: string;
         watches: Set<string>;
         holdings: number;
+        views: number;
       }
     >();
     const opens = new Map<
@@ -695,10 +698,11 @@ export class RoutedMemoryHost {
             ...open,
             watches: prior?.watches ?? new Set(),
             holdings: open.holdings,
+            views: prior?.views ?? 0,
           });
           ticket!.context.watches.set(key, {
             principal: open.principal,
-            count: prior?.watches.size ?? 0,
+            count: (prior?.watches.size ?? 0) + (prior?.views ?? 0),
             holdings: open.holdings,
           });
         }
@@ -891,7 +895,7 @@ export class RoutedMemoryHost {
             : priorKey!;
           ticket.context.watches.set(reservation, {
             principal: body.principal,
-            count: prior?.watches.size ?? 0,
+            count: (prior?.watches.size ?? 0) + (prior?.views ?? 0),
             holdings,
           });
           this.#quota(ticket.link, ticket.context);
@@ -951,7 +955,7 @@ export class RoutedMemoryHost {
               ? session.holdings
               : (body.holdings as unknown[]).length;
             const views = body.views === undefined
-              ? 0
+              ? session.views
               : (body.views as unknown[]).length;
             requireRouted(views <= 64);
             ticket.context.watches.set(key, {
@@ -962,6 +966,7 @@ export class RoutedMemoryHost {
             this.#quota(ticket.link, ticket.context);
             session.watches = watches;
             session.holdings = holdings;
+            session.views = views;
           }
         }
         // Retain the frame's queue budget until its protected Memory turn ends.

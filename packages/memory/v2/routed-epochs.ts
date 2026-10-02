@@ -208,7 +208,7 @@ export class RoutedEpochStore {
     }
   }
   #append(record: unknown[], now = Math.floor(Date.now() / 1000)): void {
-    requireRouted(!this.#closed);
+    requireRouted(!this.#closed && this.#healthy);
     try {
       if (this.#file.statSync().size > MAX_BYTES / 2) this.#compact(now);
       this.#write(this.#file, record);
@@ -221,8 +221,15 @@ export class RoutedEpochStore {
   /** Permanently consumes each link epoch before acknowledging its handshake. */
   consume(router: string, epoch: string): void {
     requireRouted(!this.revoked(router));
-    this.#remember(router, epoch);
+    const held = this.#epochs.get(router);
+    requireRouted(
+      !held?.has(epoch) && (held?.size ?? 0) < 1024 &&
+        (held !== undefined || this.#epochs.size < 16),
+    );
+    // Compaction must see only previously persisted epochs. A pending epoch
+    // enters memory after its append/fsync, so it is serialized exactly once.
     this.#append(["epoch", router, epoch]);
+    this.#remember(router, epoch);
   }
   /** Claims exact client bytes for one context; re-attestation cannot move them. */
   claim(input: Omit<Claim, "released">, now: number): void {
@@ -247,6 +254,7 @@ export class RoutedEpochStore {
   /** Release tombstones every accepted challenge for this principal/context. */
   release(
     router: string,
+    deployment: string,
     epoch: string,
     context: string,
     principal: string,
@@ -254,7 +262,8 @@ export class RoutedEpochStore {
   ): void {
     for (const claim of this.#claims.values()) {
       if (
-        claim.router === router && claim.epoch === epoch &&
+        claim.router === router && claim.deployment === deployment &&
+        claim.epoch === epoch &&
         claim.context === context && claim.principal === principal &&
         !claim.released && claim.exp > now
       ) {

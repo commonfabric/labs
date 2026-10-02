@@ -242,12 +242,12 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#closeReceiver = receiver;
   }
 
-  /** @inheritDoc */
   /** Selects the router frame codec after a pinned routed hello. */
   setRoutedMessagesEnabled(enabled: boolean): void {
     this.#routedMessages = enabled;
   }
 
+  /** @inheritDoc */
   setMessageCompressionEnabled(enabled: boolean): void {
     this.#compressionNegotiated = enabled;
     this.#receiveCompressionEnabled = enabled;

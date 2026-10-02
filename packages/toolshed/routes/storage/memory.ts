@@ -131,7 +131,16 @@ export const memory = {
   async close(): Promise<
     { ok: Record<PropertyKey, never> } | { error: unknown }
   > {
-    await routedListener?.close();
+    try {
+      await routedListener?.close();
+    } catch (error) {
+      try {
+        await memoryServer.close();
+      } catch (cleanup) {
+        throw new AggregateError([error, cleanup], "Memory cleanup failed");
+      }
+      throw error;
+    }
     await memoryServer.close();
     return { ok: {} };
   },

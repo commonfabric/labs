@@ -36,6 +36,12 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     const policy = new MemoryRouterPolicy(path);
     assertEquals(policy.ownership(space.did()), 1);
     assertEquals(policy.ownership(router.did()), undefined);
+    const stamp = Deno.statSync(directory).mtime!;
+    const moved = JSON.parse(Deno.readTextFileSync(directory));
+    moved.spaces[space.did()].epoch = 2;
+    Deno.writeTextFileSync(directory, JSON.stringify(moved));
+    Deno.utimeSync(directory, stamp, stamp);
+    assertEquals(policy.ownership(space.did()), 2);
     for (
       const hostname of [
         "0.0.0.0",
@@ -55,6 +61,7 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     }
     Deno.removeSync(directory);
     assertEquals(policy.ownership(space.did()), undefined);
+    assertEquals(policy.available, false);
     assert(policy.config.routers.has(router.did()));
   } finally {
     Deno.removeSync(root, { recursive: true });

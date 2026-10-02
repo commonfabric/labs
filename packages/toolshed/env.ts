@@ -226,9 +226,9 @@ export const EnvSchema = z.object({
   // `observe` evaluates ordinary access and counts/logs would-denies; invalid
   // ACL state and fresh-space genesis violations still block. `enforce` also
   // denies access shortfalls. See packages/memory/v2/server.ts.
+  MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
   // A tracked private Mode A policy file. Empty leaves the endpoint disabled.
   MEMORY_ROUTER_CONFIG_FILE: z.string().default(""),
-  MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
 
   // Bounds for each space's decoded-document cache on the memory v2 server
   // (packages/memory/v2/engine.ts, DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES): a

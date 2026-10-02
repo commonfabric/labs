@@ -153,11 +153,15 @@ export class SessionRegistry {
     ownerConnectionId = "session-registry",
     principal?: string,
     actingPrincipal?: string,
+    routed = false,
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
     const key = sessionKey(space, sessionId);
     const existing = this.#sessions.get(key);
+    if (existing?.routedAuthority !== undefined && !routed) {
+      throw authorizationError("A routed session requires a routed connection");
+    }
     if (
       existing?.principal !== undefined &&
       principal !== existing.principal
@@ -216,6 +220,7 @@ export class SessionRegistry {
         : {}),
       expiresAt: null,
       ownerConnectionId,
+      routedAuthority: existing?.routedAuthority,
       principal: existing?.principal ?? principal,
       // Fresh per open (never inherited), like the binding below: a
       // resuming client re-declares its ceiling, and an open declaring none

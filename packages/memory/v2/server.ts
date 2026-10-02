@@ -4253,6 +4253,7 @@ export class Server {
         connection.id,
         principal,
         actingPrincipal,
+        connection.routed,
       );
       if (connection.routed) {
         if (priorOwner !== connection.id) {

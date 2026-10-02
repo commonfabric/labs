@@ -304,9 +304,13 @@ export function encodeRoutedFrame(
 ): string | Uint8Array<ArrayBuffer> {
   const parsed = parseRoutedText(payload);
   const bytes = encoder.encode(payload);
+  const raw = () => {
+    requireRouted(bytes.length <= ROUTED_RAW_LIMIT);
+    return payload;
+  };
   if (bytes.length < 1024) return payload;
   const gzip = gzipSync(bytes);
-  if (bytes.length > gzip.length * 32) return payload;
+  if (bytes.length > gzip.length * 32) return raw();
   const hint = encoder.encode(parsed.space ?? "");
   const result = new Uint8Array(11 + hint.length + gzip.length);
   result.set(encoder.encode("mcmp\x02"));
@@ -314,7 +318,9 @@ export function encodeRoutedFrame(
   new DataView(result.buffer).setUint16(9, hint.length);
   result.set(hint, 11);
   result.set(gzip, 11 + hint.length);
-  return result.length < bytes.length ? result : payload;
+  return result.length <= ROUTED_RAW_LIMIT && result.length < bytes.length
+    ? result
+    : raw();
 }
 
 /** The gzip trailer checksum (RFC 1952), separate from identity/content hashes. */
