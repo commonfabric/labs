@@ -322,16 +322,55 @@ describe("cfc-policy-manifest-shared-install", () => {
       expect(failures).toEqual([]);
     });
 
-    it("reports a start refused over the piece's own documents without running it again", async () => {
-      await setUpByFirstParticipant();
+    it("preserves new arguments after a stale read of the piece's own documents", async () => {
+      const pieceA = await setUpByFirstParticipant();
       const failures = observeStartFailures();
-      const attempts = refuseStarts(() => staleReadOf("of:not-a-manifest"));
-
-      await runShared(rtB, "b-piece secret");
-      await rtB.idle();
-
-      expect(attempts.count).toBe(1);
-      expect(failures).toHaveLength(1);
+      let attempts = 0;
+      const starts = new WeakSet<object>();
+      rtB.runner.accessForTestingOnly.deferredStartCommitter = (
+        tx,
+        _cell,
+        commit,
+      ) => {
+        attempts++;
+        starts.add(tx.tx);
+        return commit();
+      };
+      const replica = storageB.open(space).replica as unknown as {
+        commitNative: (...args: unknown[]) => unknown;
+      };
+      const original = replica.commitNative;
+      let refused = false;
+      replica.commitNative = function (...args: unknown[]) {
+        const candidate = args[1] as { tx?: object };
+        if (
+          !refused &&
+          (starts.has(candidate) || starts.has(candidate.tx ?? candidate))
+        ) {
+          refused = true;
+          return Promise.resolve({
+            error: staleReadOf(
+              pieceA.getAsNormalizedFullLink().id,
+              () => Promise.resolve(),
+            ),
+          });
+        }
+        return Reflect.apply(original, this, args);
+      };
+      try {
+        await runShared(rtB, "b-piece secret");
+        await rtB.idle();
+        expect(attempts).toBeGreaterThanOrEqual(2);
+        expect(
+          await serverValue(pieceA.getAsNormalizedFullLink().id, {
+            type: "object",
+            properties: { brief: { type: "string" } },
+          }),
+        ).toEqual({ brief: "b-piece secret" });
+        expect(failures).toEqual([]);
+      } finally {
+        replica.commitNative = original;
+      }
     });
 
     it("reports a start still refused over the manifest once its retries are spent", async () => {

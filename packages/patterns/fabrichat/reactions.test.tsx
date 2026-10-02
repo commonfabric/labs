@@ -1,263 +1,113 @@
-/**
- * Reactions in a FabriChat room: what a reaction stores, that adding or
- * removing one is idempotent rather than a toggle, which reactions are
- * refused, how a message tallies its own, and that deleting a message takes
- * its reactions with it.
- */
+/** Exercises explicit, idempotent emoji add and remove requests. */
 import {
   action,
   type AddIntegrity,
   assert,
+  type Cell,
+  FabricEpochNsec,
   pattern,
   TESTS,
   Writable,
 } from "commonfabric";
-import { FabriChatMessageRow, type ReactionTally } from "./message-row.tsx";
 import {
-  type ActivityCounters,
-  type ComposerState,
-  type MessageRecord,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
-import { FabriChatRoomCore } from "./room.tsx";
-import {
-  CHAT_DELETE_ACTION,
-  CHAT_DELETE_SURFACE,
-  CHAT_REACT_ACTION,
-  CHAT_REACT_SURFACE,
-  CHAT_SEND_ACTION,
-  CHAT_SEND_SURFACE,
-  CHAT_UNREACT_ACTION,
-  type ChatProfile,
-  type ChatReaction,
-} from "./schemas.tsx";
-
-type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
-type RowArg = Parameters<typeof FabriChatMessageRow>[0];
-
-// A labeled stand-in for a viewer's `#profile`.
-type TestProfile = AddIntegrity<
+  FabriChatRoom,
+  type StoredMemory,
+  type StoredMessage,
+} from "./room.tsx";
+import { CHAT_POLICY } from "./records.ts";
+import type {
+  ChatMessage,
   ChatProfile,
-  readonly ["fabrichat-test-profile"]
->;
-
-const sendGesture = {
-  surface: CHAT_SEND_SURFACE,
-  action: CHAT_SEND_ACTION,
-};
-const deleteGesture = {
-  surface: CHAT_DELETE_SURFACE,
-  action: CHAT_DELETE_ACTION,
-};
-const unreactGesture = {
-  surface: CHAT_REACT_SURFACE,
-  action: CHAT_UNREACT_ACTION,
-};
-const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
-
-const typed = (text: string) => ({ type: "click", target: { value: text } });
-
-// A row's tallies, as `emoji count` with a `*` on the viewer's own, so that an
-// assertion's failure shows the whole row.
-const talliesText = (tallies: readonly ReactionTally[]): string =>
-  tallies.map((tally) =>
-    `${tally.emoji} ${tally.count}${tally.mine ? "*" : ""}`
-  ).join(", ");
-
-const reactionsOn = (
-  messages: Writable<MessagesValue>,
-  index: number,
-): ChatReaction[] => {
-  const message = (messages.get() as MessageRecord[])[index];
-  return (message?.reactions?.get() ?? []) as ChatReaction[];
-};
-
-// How many reactions a held reaction list holds.
-const heldCount = (
-  holder: Writable<{ list?: Writable<ReactionList> }>,
-): number => ((holder.get()?.list?.get() ?? []) as unknown[]).length;
+  ChatRoomAbout,
+  ChatRoomPolicy,
+} from "./schemas.ts";
 
 export default pattern(() => {
-  const messages = Writable.of<MessagesValue>([] as MessagesValue);
-  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
-  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
-  const reactionLists = Writable.of<ReactionList[]>([] as ReactionList[]);
-  // The first message's reaction list, held apart from the message, whose link
-  // to it a deletion drops.
-  const firstReactions = Writable.of<{ list?: Writable<ReactionList> }>({});
-  const action_hold_first_reactions = action(() =>
-    firstReactions.key("list").set(
-      messages.key(0).key("reactions").resolveAsCell(),
-    )
+  const profile = new Writable<AddIntegrity<ChatProfile, ["chat-test"]>>({
+    name: "Alice",
+  });
+  const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
+    CHAT_POLICY,
   );
-  const records = {
-    about: { kind: "group" as const },
-    messages,
-    reactionLists,
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
-  };
-  const alice = FabriChatRoomCore(
-    { myProfile: aliceProfile, ...records } as RoomArg,
-  );
-  // The same room with a request memory of its own, empty: it has forgotten
-  // every request, as the room does once a request's memo expires.
-  const aliceForgetful = FabriChatRoomCore(
-    {
-      myProfile: aliceProfile,
-      ...records,
-      requests: Writable.of<RequestMemo[]>([]),
-    } as RoomArg,
-  );
-  const rowRecords = {
-    inThread: false,
-    kind: "group" as const,
-    composer: Writable.of<ComposerState>({}),
-    ...records,
-  };
-  const aliceOnFirst = FabriChatMessageRow({
-    message: messages.key(0),
-    myProfile: aliceProfile,
-    ...rowRecords,
-  } as RowArg);
-  const bobOnFirst = FabriChatMessageRow({
-    message: messages.key(0),
-    myProfile: bobProfile,
-    ...rowRecords,
-  } as RowArg);
-  const aliceOnSecond = FabriChatMessageRow({
-    message: messages.key(1),
-    myProfile: aliceProfile,
-    ...rowRecords,
-  } as RowArg);
-
+  const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
+  const records = new Writable<StoredMessage[]>([]);
+  const memory = new Writable<StoredMemory>();
+  const version = new Writable({
+    body: "Emoji",
+    sentAt: new FabricEpochNsec(0n),
+  });
+  const initialize = action(() => {
+    about.set({ kind: "group", createdAt: new FabricEpochNsec(0n), policy });
+    version.key("sentAt").set(
+      new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+    );
+  });
+  const room = FabriChatRoom({ about, records, memory, myProfile: profile });
+  const message: Cell<ChatMessage> = records.key(0);
+  const gesture = { surface: "ChatReactSurface", action: "ChatReact" };
   return {
     [TESTS]: [
+      { action: initialize },
       {
-        action: alice.sendMessage,
-        event: typed("First"),
-        trustedUi: sendGesture,
+        action: room.sendMessage,
+        event: { requestId: "message", version },
+        trustedUi: { surface: "ChatSendSurface", action: "ChatSend" },
       },
       {
-        action: alice.sendMessage,
-        event: typed("Second"),
-        trustedUi: sendGesture,
-      },
-      // Any single emoji is a reaction; text, and two emoji together, are not.
-      {
-        action: aliceOnFirst.sendReaction,
-        event: { requestId: "a1", emoji: "👍🏽" },
-        trustedUi: reactGesture,
+        action: room.sendReaction,
+        event: { requestId: "add", message, emoji: "👩🏽‍💻" },
+        trustedUi: gesture,
       },
       {
-        action: aliceOnFirst.sendReaction,
-        event: { requestId: "a2", emoji: "cat" },
-        trustedUi: reactGesture,
-      },
-      {
-        action: aliceOnFirst.sendReaction,
-        event: { requestId: "a3", emoji: "😺😺" },
-        trustedUi: reactGesture,
-      },
-      {
-        action: bobOnFirst.sendReaction,
-        event: { requestId: "b1", emoji: "👍🏽" },
-        trustedUi: reactGesture,
-      },
-      {
-        action: bobOnFirst.sendReaction,
-        event: { requestId: "b2", emoji: "🎉" },
-        trustedUi: reactGesture,
+        action: room.sendReaction,
+        event: { requestId: "same", message, emoji: "👩🏽‍💻" },
+        trustedUi: gesture,
       },
       {
         assertion: assert(() =>
-          talliesText(aliceOnFirst.tallies) === "👍🏽 2*, 🎉 1"
+          message.get().reactions.length === 1 &&
+          message.get().reactions[0].emoji === "👩🏽‍💻"
         ),
+      },
+      {
+        action: room.sendReaction,
+        event: { requestId: "invalid", message, emoji: "😺😺" },
+        trustedUi: gesture,
+      },
+      { assertion: assert(() => message.get().reactions.length === 1) },
+      {
+        action: room.sendReaction,
+        event: { requestId: "second", message, emoji: "😺" },
+        trustedUi: gesture,
+      },
+      { assertion: assert(() => message.get().reactions.length === 2) },
+      {
+        action: room.deleteReaction,
+        event: { requestId: "remove", message, emoji: "👩🏽‍💻" },
+        trustedUi: gesture,
+      },
+      {
+        action: room.deleteReaction,
+        event: { requestId: "remove-again", message, emoji: "👩🏽‍💻" },
+        trustedUi: gesture,
       },
       {
         assertion: assert(() =>
-          talliesText(bobOnFirst.tallies) === "👍🏽 2*, 🎉 1*"
+          message.get().reactions.length === 1 &&
+          message.get().reactions[0].emoji === "😺"
         ),
       },
-      // Adding one already there changes nothing, even under a new request.
       {
-        action: bobOnFirst.sendReaction,
-        event: { requestId: "b3", emoji: "🎉" },
-        trustedUi: reactGesture,
-      },
-      { assertion: assert(() => reactionsOn(messages, 0).length === 3) },
-      // Removing is never a toggle: removing twice leaves it removed.
-      {
-        action: bobOnFirst.deleteReaction,
-        event: { requestId: "b4", emoji: "🎉" },
-        trustedUi: unreactGesture,
+        action: room.deleteMessage,
+        event: { requestId: "delete", message },
+        trustedUi: { surface: "ChatDeleteSurface", action: "ChatDelete" },
       },
       {
-        action: bobOnFirst.deleteReaction,
-        event: { requestId: "b5", emoji: "🎉" },
-        trustedUi: unreactGesture,
+        action: room.sendReaction,
+        event: { requestId: "deleted", message, emoji: "😺" },
+        trustedUi: gesture,
       },
-      {
-        assertion: assert(() => talliesText(bobOnFirst.tallies) === "👍🏽 2*"),
-      },
-      // A reaction on one message leaves the other's alone.
-      {
-        action: aliceOnSecond.sendReaction,
-        event: { requestId: "a4", emoji: "😂" },
-        trustedUi: reactGesture,
-      },
-      {
-        assertion: assert(() =>
-          reactionsOn(messages, 1).length === 1 &&
-          reactionsOn(messages, 0).length === 2
-        ),
-      },
-      // A send arriving again after its memo has expired changes nothing.
-      {
-        action: alice.sendMessage,
-        event: { requestId: "again", target: { value: "Again" } },
-        trustedUi: sendGesture,
-      },
-      {
-        action: aliceForgetful.sendMessage,
-        event: { requestId: "again", target: { value: "Changed" } },
-        trustedUi: sendGesture,
-      },
-      {
-        assertion: assert(() =>
-          (messages.get() as MessageRecord[]).length === 3 &&
-          (messages.get() as MessageRecord[])[2]?.body === "Again"
-        ),
-      },
-      // Deleting a message clears its reactions and takes them out of the
-      // room's record, and the deleted message takes no new ones.
-      { action: action_hold_first_reactions },
-      {
-        assertion: assert(() => heldCount(firstReactions) === 2),
-      },
-      {
-        action: aliceOnFirst.deleteMessage,
-        event: {},
-        trustedUi: deleteGesture,
-      },
-      {
-        action: bobOnFirst.sendReaction,
-        event: { requestId: "b6", emoji: "😢" },
-        trustedUi: reactGesture,
-      },
-      {
-        assertion: assert(() =>
-          reactionsOn(messages, 0).length === 0 &&
-          heldCount(firstReactions) === 0 &&
-          aliceOnFirst.tallies.length === 0
-        ),
-      },
+      { assertion: assert(() => message.get().reactions.length === 0) },
     ],
   };
 });

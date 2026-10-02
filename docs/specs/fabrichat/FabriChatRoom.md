@@ -14,8 +14,8 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 
 - The contract's own records: `about`, its messages, and `recentActivity` with
   its next `seq` and `recentActivityExpiredThrough`. The messages are a list
-  ordered by `sentAt`. Each message's reactions are a keyed collection,
-  projected as a list in the contract.
+  ordered by `sentAt`. Each message links a separately protected reaction list,
+  whose entries retain their own cell identities.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
 - The times the room has used, so it can make each new one unique, each kept
@@ -40,7 +40,8 @@ twice should.
 
 ## Writers
 
-Every write goes through one handler per stream:
+Every protocol write goes through its stream's handler. The room's UI binds
+separate reviewed handlers that share the same mutation helpers:
 
 | Handler | Stream | Reviewed surface |
 | --- | --- | --- |
@@ -95,15 +96,12 @@ the opposite of what the person meant. `commitSendReaction` and
 `commitDeleteReaction` each change nothing when the reaction is already as
 asked.
 
-`commitSendReaction` keeps each reaction at an address within its message
-derived from its reactor's profile and its emoji. One person's one reaction to
-one message has a single address in every session, which is how the room meets
-[`ChatReaction`](ChatReaction.md#uniqueness)'s uniqueness rule without reading
-the list. The reactions are a separately authorized part of the message:
-`commitSend` and `commitEdit` can't write them, and the reaction handlers can
-write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
-the runtime's write policies can split one document this way is a prerequisite
-to check.
+`commitSendReaction` checks the message's reaction list for the same profile
+and emoji in the transaction that appends a new reaction. Concurrent changes
+conflict and retry, enforcing [`ChatReaction`](ChatReaction.md#uniqueness)'s
+uniqueness rule. Each reaction has its own stored identity and writer policy.
+The message links the reaction list; its writers and the reaction writers have
+separate authority (see [`ChatMessage`](ChatMessage.md#who-wrote-what)).
 
 `about.record` is stored as `AuthoredByCurrentUser`, written once by the handler
 that creates the room, so it is labeled with its creator, and `about` links it.
@@ -159,14 +157,13 @@ the room is created from the same settings the handlers read.
   design provides across a `Cell` boundary (see [scoped cell
   instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
   the instance belonging to the session that sent the event, including when the
-  handler runs somewhere other than that session's client. Whether the runtime
-  does that today is still to check.
-- **A write policy split within one document.** A message's reactions are
-  written only by the reaction handlers (and obliteration), and the rest of the
-  message only by the message handlers (see
-  [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
-  policies can be split between writers this way is still to check. If not,
-  reactions move to a record of their own, keyed by message.
+  handler runs somewhere other than that session's client. The runtime carries
+  the originating session through stream execution; integration tests exercise
+  both client and server execution.
+- **Separate reaction authority.** The message links a reaction list, and its
+  reactions are documents with their own writer policies. Reaction handlers
+  can change those records without gaining authority over the message body
+  (see [`ChatMessage`](ChatMessage.md#who-wrote-what)).
 - **Redelivery ends.** Two things can make an event arrive, or run, more than
   once. A client runtime re-submits an event when it can't tell whether its
   append committed, and the memory ignores a re-submission by its event id, but
@@ -176,4 +173,7 @@ the room is created from the same settings the handlers read.
   long as it lasts (see [writers](#writers)). So the room relies on every event
   being run to completion, or dropped, within the memory, including one queued
   while its client was offline and appended much later. Whether the runtime
-  guarantees this is still to check.
+  guarantees such a finite bound is unresolved. The implementation therefore
+  retains request identities and used times for the room's lifetime, deferring
+  the expiry step above (see [implementation
+  status](README.md#records-and-delivery)).

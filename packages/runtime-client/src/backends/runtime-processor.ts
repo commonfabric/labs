@@ -63,6 +63,7 @@ import {
   ContextualFlowControl,
   convertCellsToLinks,
   encodeSqliteParams,
+  ensurePieceRunningVerdict,
   entityIdFrom,
   type EventIntentOutcome,
   getCellOrThrow,
@@ -95,6 +96,7 @@ import {
   SlugResolutionError,
   SpaceHostValidationError,
 } from "@commonfabric/runner";
+import { NestedRenderReferenceSchema } from "@commonfabric/runner/component-read-contract";
 import {
   cfcLabelViewForResolvedCell,
   type CfcModulePolicySource,
@@ -121,6 +123,7 @@ import {
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { asPatternIdentityRef } from "@commonfabric/runner/meta-seam";
 import {
   NameSchema,
   rendererVDOMSchema,
@@ -3788,6 +3791,7 @@ export class RuntimeProcessor {
     let active = true;
     let cancelRender: (() => void) | undefined;
     let cancelView: (() => void) | undefined;
+    let cancelProducer: (() => void) | undefined;
     const mount = {
       reconciler,
       client,
@@ -3795,6 +3799,7 @@ export class RuntimeProcessor {
         active = false;
         cancelRender?.();
         cancelView?.();
+        cancelProducer?.();
       },
     };
     this.#vdomMounts.set(key, mount);
@@ -3802,7 +3807,81 @@ export class RuntimeProcessor {
       if (active) cancelRender = reconciler.mount(cell);
       return { rootId: reconciler.getRootNodeId() };
     };
-    if (!this.#runtime.viewScopedReplicationRequested) return render();
+    if (!this.#runtime.viewScopedReplicationRequested) {
+      // A nested render can reach a persisted output whose local producer has
+      // never run. Follow only its reference here; the reconciler retains the
+      // original cell and decides which of its contents may reach the page.
+      const reference = rawCell.asSchema<Cell<unknown>>(
+        NestedRenderReferenceSchema,
+      );
+      let target: Cell<unknown> | undefined;
+      let starting: AbortController | undefined;
+      let cancelMetadata: Cancel | undefined;
+      const clearMetadata = () => {
+        cancelMetadata?.();
+        cancelMetadata = undefined;
+      };
+      const unsubscribe = reference.sink((next) => {
+        if (!active) return;
+        const resolved = isCell(next) ? next.resolveAsCell() : undefined;
+        if (resolved?.equals(target) || !resolved && !target) return;
+        starting?.abort();
+        clearMetadata();
+        target = resolved;
+        if (!resolved) return;
+        const attempt = new AbortController();
+        starting = attempt;
+        const current = () =>
+          active && starting === attempt && !attempt.signal.aborted;
+        const start = () => {
+          void ensurePieceRunningVerdict(
+            this.#runtime,
+            resolved.getAsNormalizedFullLink(),
+            { signal: attempt.signal, propagateErrors: true },
+          ).then((verdict) => {
+            if (!current() || verdict.started) return;
+            if (verdict.reason !== "no-pattern-meta" || !verdict.root) {
+              throw new Error(`Cannot start rendered piece: ${verdict.reason}`);
+            }
+            // A render can precede the commit that installs its producer.
+            // Metadata arriving on the observed root re-arms the same target.
+            const root = this.#runtime.getCellFromLink({
+              ...verdict.root,
+              path: [],
+            });
+            let queued = false;
+            const changed = () => {
+              if (queued || !current()) return;
+              queued = true;
+              queueMicrotask(() => {
+                if (!current()) return;
+                clearMetadata();
+                start();
+              });
+            };
+            const cancelPattern = root.sinkMeta("patternIdentity", (value) => {
+              if (asPatternIdentityRef(value)) changed();
+            });
+            const cancelResult = root.sinkMeta("result", (value) => {
+              if (parseLink(value, root)) changed();
+            });
+            cancelMetadata = () => {
+              cancelPattern();
+              cancelResult();
+            };
+          }).catch((error) => {
+            if (current()) mountErrorSink(client)(error);
+          });
+        };
+        start();
+      });
+      cancelProducer = () => {
+        starting?.abort();
+        clearMetadata();
+        unsubscribe();
+      };
+      return render();
+    }
     return this.#runtime.viewReplication.mount(
       rawCell,
       key,

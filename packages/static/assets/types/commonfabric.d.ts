@@ -4271,6 +4271,18 @@ export declare function principalOf(
  */
 export declare function eventKey(): string;
 
+/**
+ * Returns the demanding viewer in a reactive computation, or `undefined` when
+ * there is no viewer. Narrows derived state to user scope and records the
+ * viewer's User confidentiality label. Throws in handlers and pattern bodies.
+ */
+export declare function viewerPrincipal(): DID | undefined;
+
+/** Reads the current space's authoritative access list, or no list when unavailable. */
+export declare function spaceMembers(
+  target?: Cell<unknown>,
+): Readonly<Record<string, "READ" | "WRITE" | "OWNER" | undefined>> | undefined;
+
 export type WishParams = {
   query: WishTag | string;
   path?: string[];

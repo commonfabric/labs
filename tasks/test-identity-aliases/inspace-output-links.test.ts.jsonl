@@ -1,0 +1,1 @@
+{"date": "2026-10-01", "from": {"k": "unit", "s": "runner", "n": "inspace-output-links > keeps a child output passed to another child inside their shared space"}, "to": {"k": "unit", "s": "runner", "n": "inspace-output-links > stores, in the second child's argument, a link into the space both children are in"}}

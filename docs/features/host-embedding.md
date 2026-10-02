@@ -89,6 +89,19 @@ the real export, so a rename fails the docs check.)
 
 **Test.** `packages/ui/src/v2/runtime-context.test.ts`.
 
+Mounting a persisted piece's VDOM through `cf-render` activates its producer
+graph, including when a link reaches another space. This supplies the viewer's
+session computations as well as the stored rendering. The mount observes the
+link and starts the new target when it changes. If the piece's creation metadata
+arrives after the mount, that arrival activates its producer. Unmounting releases
+that observation and cancels pending startup; a graph already shared with other
+consumers keeps running. Ordinary VNode cells without a producing pattern
+render as data. The renderer applies its normal access and CFC checks to the
+original mounted reference. View-scoped replication supplies producers through
+its demand lifecycle; other mounts start the graph in the viewer's runtime.
+
+**Test.** `packages/runtime-client/test/backends/render-producer-start.test.ts`.
+
 ---
 
 ## 3. Event contracts
@@ -507,3 +520,24 @@ non-public labels. Pin through `addPiece` (owner-gated,
 headless-friendly); create through the trusted `ProfileCreate` surface
 (gesture-gated). Every one of those sentences is a tested seam above —
 if one breaks, a labs CI job is what tells you.
+
+## Native reviewed controls
+
+An in-process native host can import `bindNativeUiControl` from
+`@commonfabric/runner/native-ui`. It binds one room writer cell to a fixed
+reviewed surface and action and returns the function that the native control
+calls with its displayed request. Registration captures the descriptor;
+subsequent changes to that object do not change the admitted action. The event
+carries native provenance and the runtime's host mark. The ordinary writer,
+actor, surface, and ACL checks still apply, including when a served runtime
+executes the event.
+
+This function is a host capability. Keep it outside pattern compartments,
+loaded web content, automation, agent interfaces, generic IPC, URL handlers,
+and restored-state processing. Only the actual user-input path for that
+control may call it, with exactly the values shown when the user acted. A host
+unable to maintain that boundary must render the room's reviewed VDOM surface
+for writes. Generic `cell:send` does not issue a host mark.
+
+`packages/runner/test/native-ui.test.ts` covers descriptor capture, exact
+payload forwarding, matching policy, mismatched action, and an unmarked copy.

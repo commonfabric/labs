@@ -114,6 +114,12 @@ leaves out `[UI]`, still renders its `[UI]`. Through a stored `false` or
 a stored `unknown`, a render gets the entry's answer from the list above,
 selecting nothing or holding a reference.
 
+Event preflight traverses each declared handler input under the handler's
+reader schema. Readable cell inputs include their selected contents in the
+dependency read; opaque inputs retain reference semantics. Redirects contribute
+their pointer dependencies while the declared schema continues across them, so
+preflight requests the same fields as the handler's reads.
+
 A link into another space carries its stored schema across the boundary
 recomposed into a self-contained form, its `cid:` closure loaded from the
 space that holds the link

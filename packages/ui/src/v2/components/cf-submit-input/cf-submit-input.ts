@@ -40,6 +40,8 @@ import "../cf-button/cf-button.ts";
  * @attr {string} button-text - Text for the submit button (default: "Submit")
  * @attr {string} input-id - id forwarded to the inner <input> so callers/tests
  *   can target the field directly
+ * @attr {boolean} clear-on-submit - Clear locally after submit (default: true);
+ *   set false when a caller controls `value` and clears it after acceptance
  * @attr {boolean} disabled - Whether the field and button are disabled
  * @attr {string} initial-value - Optional one-time seed copied into `value` on
  *   first render; the field is uncontrolled after that
@@ -91,12 +93,20 @@ export class CFSubmitInput extends BaseElement {
     disabled: { type: Boolean, reflect: true },
     initialValue: { type: String, attribute: "initial-value" },
     value: { type: String },
+    clearOnSubmit: {
+      type: Boolean,
+      attribute: "clear-on-submit",
+      converter: { fromAttribute: (value: string | null) => value !== "false" },
+    },
   };
 
   declare placeholder: string;
   declare buttonText: string;
   declare inputId: string;
   declare disabled: boolean;
+
+  /** Whether this control clears its own text after a submitted gesture. */
+  declare clearOnSubmit: boolean;
 
   /**
    * Optional one-time seed for the field text, copied into `value` on first
@@ -116,6 +126,7 @@ export class CFSubmitInput extends BaseElement {
     this.buttonText = "Submit";
     this.inputId = "";
     this.disabled = false;
+    this.clearOnSubmit = true;
     this.initialValue = "";
     this.value = "";
   }
@@ -123,13 +134,12 @@ export class CFSubmitInput extends BaseElement {
   private _seeded = false;
 
   /**
-   * Whether a submit is in flight, between the click and the deferred
-   * field-clear. A second submit that arrives in that window — whether a button
-   * click or an Enter keypress — is a duplicate (the field still holds the
-   * submitted text), so its propagation to the host is stopped to suppress a
-   * second create. The flag is reset when the clear runs, including the case
-   * where the clear is skipped because the value changed, so a later submit is
-   * never blocked.
+   * Whether a submit is in flight, until its deferred completion. A second
+   * submit that arrives in that window, from a button click or an Enter
+   * keypress, is a duplicate (the field still holds the submitted text), so
+   * its propagation to the host is stopped to suppress a
+   * second create. Completion resets the flag even when clearing is disabled
+   * or the value changed, so a later submit can retry an unchanged draft.
    */
   private _submitting = false;
 
@@ -209,7 +219,7 @@ export class CFSubmitInput extends BaseElement {
     // whether or not the clear runs, so a later submit is never blocked.
     setTimeout(() => {
       this._submitting = false;
-      if (this.value !== submitted) return;
+      if (!this.clearOnSubmit || this.value !== submitted) return;
       this.value = "";
       const input = this._input;
       if (input) input.value = "";

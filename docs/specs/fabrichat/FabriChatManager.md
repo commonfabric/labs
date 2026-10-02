@@ -33,10 +33,12 @@ counterpart after crossing creations.
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
 create a space for the conversation, with the room as its chat, in four steps:
 
-1. Create the conversation's space, with only this user granted (OWNER), and
-   instantiate `FabriChatRoom` there with its `about`. The space's root, its
-   default pattern, comes from its host the first time someone opens it.
-2. Grant each other member WRITE on the room's space, by principal.
+1. Create the conversation's space, granting this user OWNER, and instantiate
+   `FabriChatRoom` there with its `about`. The space's root, its default pattern,
+   comes from its host the first time someone opens it.
+2. Grant each other member WRITE on the room's space, by principal. A group
+   explicitly made joinable by its link also grants `"*"` WRITE. These grants
+   may be included in the space's genesis, before any room link is published.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
    deliver.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
@@ -46,8 +48,8 @@ Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of
 creating another room. A pending `openDirect` is also recorded under its
 `counterpart`, which is how a second `openDirect` for the same person finds it
-and resumes it. Step 1 writes the room's `about` from this user's handler, which
-is what labels it `authored-by` this user.
+and resumes it. Step 1 writes the room's `about.record` from this user's
+handler, which is what labels it `authored-by` this user.
 
 ## Prerequisites
 

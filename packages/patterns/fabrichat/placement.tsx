@@ -1,197 +1,96 @@
 /**
- * `FabriChatPlacement`: one room placed in a container, a space that shows
- * chats among other things (`docs/specs/fabrichat/FabriChatPlacement.md`).
- *
- * It holds a link to its room and nothing read from it, and it has no
- * rendering. Everything it offers is read through the link when it is read,
- * under the viewer's own access, and offered as the `chat` group of its
- * `[VIEWS]`. `FabriChatAdapter` renders it.
+ * Places one conversation in a container using a room link. The placement
+ * offers the room's data face and sends every writer directly to the room.
  */
+
 import {
   type Cell,
   computed,
-  equals,
+  type Default,
   NAME,
   pattern,
+  type PerSpace,
   spaceAccess,
+  spaceMembers,
   VIEWS,
-  wish,
 } from "commonfabric";
-import {
-  type ChatReaction,
-  type ChatReactionTally,
-  type ChatRoomAbout,
-  type ChatRoomActivity,
-  type ProfileCell,
-  reactionTalliesOf,
-} from "./schemas.tsx";
+import type {
+  ChatMessageList,
+  ChatProfile,
+  ChatReactionTallies,
+  ChatRoomAbout,
+  ChatRoomActivity,
+  ChatRoomOutput,
+} from "./schemas.ts";
 
-/** One message's reaction tallies. */
-export interface PlacedTallies {
-  /** The message. */
-  message: Cell<unknown>;
-
-  /** Its reactions, by emoji, in the order each was first used. */
-  tallies: ChatReactionTally[];
+/** The facts exposed by a placed conversation. */
+export interface ChatPlacementView {
+  state: "member" | "not-member" | "unavailable";
+  messages?: Cell<ChatMessageList>;
+  canSend?: Cell<boolean>;
+  about?: Cell<ChatRoomAbout>;
+  recentActivity?: Cell<ChatRoomActivity[]>;
+  participants?: Cell<Cell<ChatProfile>[]>;
+  reactionTallies?: Cell<ChatReactionTallies[]>;
 }
 
-/** A message as a placement reads it: only its reactions. */
-interface PlacedMessage {
-  /** Everyone's reactions to the message. */
-  reactions?: ChatReaction[];
+/** One immutable room reference in a container. */
+export interface ChatPlacementOutput {
+  [NAME]: Default<string, "Chat">;
+  room: PerSpace<Cell<ChatRoomOutput>>;
+  [VIEWS]: { chat: ChatPlacementView };
 }
 
-/** A room's message list as a placement reads it. */
-export interface PlacedMessageList {
-  /** How many messages the room holds. */
-  count?: number;
-
-  /** The newest messages of the main conversation. */
-  latest?: { messages?: Cell<PlacedMessage>[]; hasOlder?: boolean };
-
-  /** The reading session's windows. */
-  windows?: Record<string, { messages?: Cell<PlacedMessage>[] }>;
-}
-
-/**
- * A room as a placement reads it through its link: only the part of
- * `ChatRoomOutput` it offers.
- */
-export interface PlacedRoom {
-  /** What the room says about itself. */
-  about?: ChatRoomAbout;
-
-  /** What the room recorded recently. */
-  recentActivity?: ChatRoomActivity[];
-
-  /** The room's participants. */
-  participants?: ProfileCell[];
-
-  /** The room's messages. */
-  messages?: PlacedMessageList;
-
-  /** Whether the reader can send. */
-  canSend?: boolean;
-}
-
-/** Whether the viewer can read a placed room. */
-export type PlacementState = "member" | "not-member" | "unavailable";
-
-/**
- * A placement's data face: what a placed chat holds, and what the viewer may
- * see.
- */
-export interface FabriChatPlacementView {
-  /** Whether the viewer can read the room. */
-  state: PlacementState;
-
-  /** What the room says about itself; absent unless `state` is `"member"`. */
-  about?: ChatRoomAbout;
-
-  /** The room's messages; absent unless `state` is `"member"`. */
-  messages?: PlacedMessageList;
-
-  /** Whether the viewer can send. */
-  canSend: boolean;
-
-  /** What the room recorded recently. */
-  recentActivity: ChatRoomActivity[];
-
-  /** The room's participants. */
-  participants: ProfileCell[];
-
-  /** Reactions on the newest messages and on the session's windows. */
-  reactionTallies: PlacedTallies[];
-}
-
-/** What a placement holds. */
-export interface FabriChatPlacementInput {
-  /** The room, set when the placement is created. */
-  room: Cell<PlacedRoom>;
-}
-
-/** What a placement offers. */
-export interface FabriChatPlacementOutput {
-  /**
-   * The placed room's title, for lists of pieces: `"Chat"` for a room with no
-   * title, and `"Chat (unavailable)"` for a room the viewer can't read.
-   */
-  [NAME]: string;
-
-  /** The room, so a client can reach its own streams. */
-  room: Cell<PlacedRoom>;
-
-  /** The placement's data face. */
-  [VIEWS]: { chat: FabriChatPlacementView };
-}
-
-/**
- * A room placed in a container. The viewer's own access decides what it
- * offers: a viewer who can't read the room sees that there is one, and
- * nothing of it.
- */
-const FabriChatPlacement = pattern<
-  FabriChatPlacementInput,
-  FabriChatPlacementOutput
+/** A placement that retains room data behind its original cross-space links. */
+export const FabriChatPlacement = pattern<
+  { room: PerSpace<Cell<ChatRoomOutput>> },
+  ChatPlacementOutput
 >(({ room }) => {
-  // Wished for as a cell, which the tallies compare reactors against; the
-  // placement never tests it for absence, which a cell's handle would defeat.
-  const profileWish = wish<ProfileCell>({ query: "#profile" });
-  const viewer = profileWish.result;
-  const about = computed(() => room.get()?.about);
-  // The viewer's access to the room's space decides: `"none"` is not a
-  // member, and `undefined`, not known yet, is unavailable, as is a room a
-  // member can't read yet.
-  const state = computed((): PlacementState => {
-    const level = spaceAccess(room);
-    return level === "none"
-      ? "not-member"
-      : level === undefined || about?.kind === undefined
-      ? "unavailable"
-      : "member";
+  const state = computed(() => {
+    const access = spaceAccess(room);
+    if (access === undefined) return "unavailable";
+    if (access === "none") return "not-member";
+    const about = room.key("about").get();
+    if (!about) return "unavailable";
+    if (about.kind === "direct") {
+      const container = spaceMembers();
+      const members = spaceMembers(room);
+      if (!container || !members) return "unavailable";
+      if (
+        Object.keys(members).length !== 2 || members["*"] || container["*"] ||
+        Object.keys(container).some((principal) => !members[principal])
+      ) {
+        return "unavailable";
+      }
+    }
+    return "member";
   });
-  const isMember = computed(() => state === "member");
-  const messages = computed(() => isMember ? room.get()?.messages : undefined);
-  const reactionTallies = computed((): PlacedTallies[] => {
-    const list = isMember ? room.get()?.messages : undefined;
-    const shown = [
-      ...(list?.latest?.messages ?? []),
-      ...Object.values(list?.windows ?? {}).flatMap((window) =>
-        window?.messages ?? []
-      ),
-    ];
-    const distinct = shown.reduce<Cell<PlacedMessage>[]>(
-      (found, message) =>
-        found.some((known) => equals(known, message))
-          ? found
-          : [...found, message],
-      [],
-    );
-    return distinct.map((message) => ({
-      message,
-      tallies: reactionTalliesOf(message.get()?.reactions ?? [], viewer),
-    }));
-  });
-  const chat = {
-    state,
-    about: computed(() => (isMember ? about : undefined)),
-    messages,
-    canSend: computed(() => isMember && room.get()?.canSend === true),
-    recentActivity: computed(() =>
-      isMember ? [...(room.get()?.recentActivity ?? [])] : []
-    ),
-    participants: computed(() =>
-      isMember ? [...(room.get()?.participants ?? [])] : []
-    ),
-    reactionTallies,
-  };
-
   return {
-    [NAME]: computed(() =>
-      isMember ? about?.title ?? "Chat" : "Chat (unavailable)"
-    ),
+    [NAME]: "Chat",
     room,
-    [VIEWS]: { chat },
+    [VIEWS]: {
+      chat: {
+        state,
+        messages: computed(() =>
+          state === "member" ? room.key("messages") : undefined
+        ),
+        canSend: computed(() =>
+          state === "member" ? room.key("canSend") : undefined
+        ),
+        about: computed(() =>
+          state === "member" ? room.key("about") : undefined
+        ),
+        recentActivity: computed(() =>
+          state === "member" ? room.key("recentActivity") : undefined
+        ),
+        participants: computed(() =>
+          state === "member" ? room.key("participants") : undefined
+        ),
+        reactionTallies: computed(() =>
+          state === "member" ? room.key("reactionTallies") : undefined
+        ),
+      },
+    },
   };
 });
 

@@ -83,6 +83,146 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    pattern: "fabrichat/adapter.tsx",
+    baselines: ["20261002T164437Z-2PzF8f6WgNbffWBh"],
+    paths: ["argument.placement", "result.$VIEWS.chat.canSend"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/manager.tsx",
+    baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
+    paths: ["argument.direct"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/placement.tsx",
+    baselines: ["20261002T164437Z-YHxasJyb9fC8x4pe"],
+    paths: ["argument.room", "result.$VIEWS.chat.canSend"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/room.tsx",
+    baselines: ["20261002T164437Z-1xU0r9QuhxWHgK6y"],
+    paths: ["argument.about", "result.$NAME"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    "pattern": "fabrichat/adapter.tsx",
+    "baselines": [
+      "20260930T023438Z-_SkOTm6m5M7lOfTT",
+      "20260930T194946Z-EvahrQYPJhsPhmYO",
+    ],
+    "paths": [
+      "argument.placement.$VIEWS.chat.recentActivity[].what",
+      "result.placement.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/main.tsx",
+    "baselines": [
+      "20260930T023438Z-88tuD6LmNbIOvJVX",
+      "20260930T194946Z-KEI7keFejPNhIeF0",
+    ],
+    "paths": [
+      "result.$VIEWS.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20260930T023438Z-Y-613Y51HslhC28m",
+    ],
+    "paths": [
+      "result.$VIEWS.chats.direct.*.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/placement.tsx",
+    "baselines": [
+      "20260930T023438Z-7rYdOFuObWLMJLfB",
+      "20260930T194947Z-ssl1VJkx_ZuvRVEj",
+    ],
+    "paths": [
+      "argument.room.$VIEWS.room.recentActivity[].what",
+      "result.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20260930T023438Z-nmyAM6alfm9vz1sp",
+      "20260930T194947Z-9hxxaZZOi7aQ8lgV",
+      "20260930T204159Z-9_2YGyVaYQeqpr9d",
+    ],
+    "paths": [
+      "argument.activity[]",
+      "result.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+  },
+  {
+    "pattern": "system/home.tsx",
+    "baselines": [
+      "20260930T023439Z-1pBKUK1T-dKGS4kd",
+      "20260930T194947Z-dvn-cmHzFRd8Igu0",
+    ],
+    "paths": [
+      "result.chatManager.$VIEWS.chats.direct.*.room.add",
+    ],
+    "reason":
+      "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
+    "record": "docs/history/fabrichat-system-membership-2026-09-30.md",
+    "requiredPatternOverride": {
+      "rulingBy": "Dan (@danfuzz)",
+      "on": "2026-09-30",
+      "reason":
+        "Directed PR 8235 to adopt the revised scope in PR 8330: shared-space group management is a system facility. This applies to Home through its new chatManager field; the two affected Home baselines were recorded only in this unmerged PR.",
+    },
+  },
+  {
+    pattern: "fabrichat/main.tsx",
+    baselines: [
+      "20260924T175254Z-lVPuvyO2neYxy2fr",
+      "20260924T182554Z-N3p-f7YPbqOkTZYM",
+      "20260924T225103Z-YjE9_Hki8UCUTFpT",
+      "20260924T230240Z-uI7tdMbhqscACz7z",
+      "20260924T232405Z-TEJvpSwlmDpuRRiN",
+      "20260924T234624Z-jlyRd4GdKsxMivd8",
+      "20260925T003944Z-G5oUMsfWQHE_IsdJ",
+      "20260925T010354Z-I1gvu92zRWpwqeGC",
+      "20260925T024902Z-cnnWs44Auqp7mCiB",
+      "20260925T153146Z-TdaJ74eecwaKd76W",
+      "20260925T155413Z-A_iQ8cehCGOyaBlJ",
+      "20260925T161227Z-Q_coiTXjbDNnn1pD",
+    ],
+    paths: ["argument", "result.messages"],
+    reason:
+      "replace the FabriChat example with the requested room/manager protocol; old message storage is not migrated",
+    record: "docs/history/fabrichat-protocol-replacement-2026-09-29.md",
+  },
+  {
     // The profile gained its owner-protected share inbox pointer (`inbox`,
     // optional, undefaulted). The picker consumes a stored profile, and the
     // proof compares the new property's `ifc` label against a baseline that

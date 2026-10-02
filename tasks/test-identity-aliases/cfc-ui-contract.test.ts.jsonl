@@ -1,0 +1,1 @@
+{"date": "2026-10-01", "from": {"k": "unit", "s": "runner", "n": "CFC UI contract matching > terminates across interned recursive schema views"}, "to": {"k": "unit", "s": "runner", "n": "CFC UI contract matching > terminates on a recursive schema whose resolved views were interned before it"}}

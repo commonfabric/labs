@@ -117,7 +117,10 @@ They part in two places.
   visible to pattern code, so reading one in a computed needs a label saying who
   may see it.
 
-Until both are settled, a pattern shows the viewer by resolving `#profile`, as
+`viewerPrincipal()` supplies this separate computation-only capability with
+user scope and `User(viewer)` confidentiality; see
+[pattern space membership](pattern-space-membership.md#reading-identity-and-access).
+For presentation, resolve `#profile`, as
 [multi-user patterns](../common/patterns/multi-user-patterns.md) describes.
 
 ## Tests

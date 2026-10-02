@@ -144,6 +144,9 @@ a line for each new document to the index below.
   operation: what a plan row means, what each write proves first, what a stop
   leaves behind, and what a resume may claim
 
+- [`pattern-space-membership.md`](pattern-space-membership.md) — authenticated
+  pattern identity, private allocation, and authoritative access reads
+
 ## Observability and testing
 
 - [`logger-internals.md`](logger-internals.md) — the TypeScript side of the

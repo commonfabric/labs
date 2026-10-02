@@ -1,823 +1,836 @@
-/**
- * `FabriChatManager`: a user's index of the rooms they belong to, an
- * implementation of `ChatManagerOutput` (`docs/specs/fabrichat/`). It lives in
- * the user's home space, where `#chatManager` finds it, so everything it holds
- * is private to its user.
- *
- * It creates each room in a space of its own with `inSpace()`, which grants its
- * creator OWNER and each other member named at creation WRITE, and no one
- * else, except that a group made joinable by its link grants everyone WRITE
- * as well. After that, who is in the space is the space's business, changed
- * through the space's own tools and never through the manager or the room.
- */
+/** Keeps one user's conversation index and resumable private-room creations. */
 import {
-  type Cell,
+  action,
+  type AuthoredByCurrentUser,
+  Cell,
   computed,
   currentPrincipal,
-  debugStr,
-  type Default,
-  type DID,
   equals,
   eventKey,
+  FabricEpochNsec,
   handler,
-  type InSpaceGrants,
   isWellFormedDID,
   NAME,
+  type OpaqueCell,
   pattern,
   principalOf,
-  spaceAccess,
-  Stream,
+  spaceMembers,
+  type Stream,
+  toSchema,
+  type TrustedActionWrite,
   UI,
+  viewerPrincipal,
   VIEWS,
   type VNode,
   wish,
   Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
 } from "commonfabric";
-import FabriChatRoom from "./room.tsx";
-import {
-  type AboutRecord,
-  CHAT_START_ACTION,
-  CHAT_START_SURFACE,
-  type ChatIndexEntry,
-  type ChatManagerNotice,
-  type ChatProfile,
-  type ChatRequestOutcome,
-  type ChatRoomKind,
-  type ChatRoomLink,
-  epochNsecFromMsec,
-  nsecOf,
-  type ProfileCell,
-} from "./schemas.tsx";
+import { FabriChatRoom, type StoredMemory } from "./room.tsx";
+import type { SpaceChat, SpaceChatRoom } from "./space.ts";
+import { CHAT_POLICY } from "./records.ts";
+import type {
+  ChatIndexEntry,
+  ChatManagerOutput,
+  ChatProfile,
+  ChatRequestOutcome,
+  ChatRoomAbout,
+  ChatRoomLink,
+  ChatRoomOutput,
+  ChatRoomPolicy,
+  ChatRoomRecord,
+  ManagerStreamEvent,
+} from "./schemas.ts";
 
-/** The manager's rooms, in the order it recorded them. */
-export type RoomsCell = Writable<ChatIndexEntry[] | Default<[]>>;
-
-/** The direct room shared with each counterpart, by principal. */
-export type DirectCell = Writable<
-  Record<string, ChatIndexEntry> | Default<Record<PropertyKey, never>>
->;
-
-/** Each request's outcome, by its `requestId`. */
-export type RequestsCell = Writable<
-  Record<string, ChatRequestOutcome> | Default<Record<PropertyKey, never>>
->;
-
-/** Notices waiting for a client to deliver them. */
-export type NoticesCell = Writable<ChatManagerNotice[] | Default<[]>>;
-
-/** Every act `commitManager` performs, each bound to one of its streams. */
-export type ManagerAct =
-  | "openDirect"
-  | "createGroup"
-  | "accept"
-  | "forget"
-  | "delivered";
-
-/** Whether `act` starts a chat. */
-const isStart = (act: ManagerAct): boolean =>
-  act === "openDirect" || act === "createGroup";
-
-/**
- * An event on one of the manager's streams. Each stream's event carries the
- * fields its act needs. A rendered control sends the text it holds as
- * `target.value`, and no request id, which the manager then mints.
- */
-export interface ManagerStreamEvent {
-  /** Chosen by the sender; the outcome is recorded under it. */
-  requestId?: string;
-
-  /** The DID of a direct room's other member. */
+/** A creation's immutable user choices, retained across interruptions. */
+interface CreationIntent {
+  creator: string;
+  kind: "direct" | "group";
   counterpart?: string;
-
-  /** The DIDs of a new group room's other members. */
-  members?: string[];
-
-  /** A new group room's title. */
   title?: string;
-
-  /**
-   * Whether a new group room admits anyone who has its link; absent for a room
-   * admitting its members alone.
-   */
+  members: string[];
   joinableByLink?: boolean;
-
-  /** A room to accept or forget. */
-  room?: Cell<ChatRoomLink>;
-
-  /** The id of a notice delivered. */
-  id?: string;
-
-  /** A rendered control's text. */
-  readonly target?: { readonly value?: string };
+  createdAt: FabricEpochNsec;
+  target?: Cell<CreationTarget>;
 }
 
-/** A group room being composed in the manager's own rendering. */
-export interface GroupDraft {
-  /** The room's title. */
-  title: string;
-
-  /** The other members' DIDs, one per line or separated by spaces. */
-  members: string;
-
-  /** Whether the room admits anyone who has its link. */
-  joinableByLink: boolean;
+/** The private provisioning record, separate from the room's public surface. */
+interface CreationTarget {
+  room: SpaceChatRoom;
+  registration: "missing" | "registered" | "occupied";
+  register: Stream<
+    { requestId: string; resume: Stream<{ requestId: string }> }
+  >;
 }
 
-/** An empty group draft. */
-const EMPTY_DRAFT = {
-  title: "",
-  members: "",
-  joinableByLink: false,
-} satisfies GroupDraft;
-
-/** The manager's records, and a rendered control's bindings. */
-export interface ManagerActState {
-  /** The act this binding performs. */
-  act: ManagerAct;
-
-  /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
-
-  /** The rooms this user belongs to. */
-  rooms: RoomsCell;
-
-  /** The direct room shared with each counterpart. */
-  direct: DirectCell;
-
-  /** Each request's outcome. */
-  requests: RequestsCell;
-
-  /** Notices waiting for a client to deliver them. */
-  outgoingNotices: NoticesCell;
-
-  /** The session's group draft, which a rendered create reads. */
-  draft: Writable<GroupDraft>;
-
-  /**
-   * Why the session's latest start was refused, which the rendering shows;
-   * empty when it wasn't refused.
-   */
-  startRefusal: Writable<string>;
-
-  /** Whether this binding creates a group from `draft`. */
-  fromDraft?: boolean;
-
-  /** A rendered control's room. */
-  room?: Cell<ChatRoomLink>;
-
-  /** A rendered control's notice id. */
-  id?: string;
+/** Manager storage; every room reference stays in its original space. */
+interface ManagerState {
+  rooms: Writable<ChatIndexEntry[]>;
+  direct: Writable<Record<string, ChatIndexEntry>>;
+  requests: Writable<Record<string, ChatRequestOutcome>>;
+  intents: Writable<Record<string, CreationIntent>>;
+  pendingDirect: Writable<Record<string, string>>;
+  waiters: Writable<Record<string, string[]>>;
+  outgoingNotices: Writable<
+    { id: string; room: Cell<ChatRoomOutput>; recipient: string }[]
+  >;
 }
 
-/** A `did:key` whose key is base58btc multibase, as every principal's is. */
-const DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
-
-/**
- * Whether `value` is a DID a principal can have: well formed, and, for a
- * `did:key`, a base58btc key, so that a key a period or other punctuation
- * follows is refused.
- */
-const isPrincipalDID = (value: unknown): value is DID =>
-  isWellFormedDID(value) &&
-  (!value.startsWith("did:key:") || DID_KEY.test(value));
-
-/** The DIDs in `text`, separated by spaces, commas, or lines. */
-const principalsIn = (text: string): string[] =>
-  text.split(/[\s,]+/).filter((part) => part !== "");
-
-/** `members`, without duplicates, `self`, or anything but a DID. */
-const otherMembers = (
-  members: readonly unknown[],
-  self: string,
-): DID[] =>
-  members.reduce<DID[]>(
-    (found, member) =>
-      isPrincipalDID(member) && member !== self && !found.includes(member)
-        ? [...found, member]
-        : found,
-    [],
-  );
-
-/**
- * Records a request's outcome. A `done` or `refused` outcome is kept for as
- * long as the manager exists. A start's outcome also replaces what the
- * session's rendering says about its latest start: `shown` or the reason for
- * a refusal, and nothing for a start that is done.
- */
-const recordOutcome = (
-  state: ManagerActState,
-  requestId: string,
-  outcome: ChatRequestOutcome,
-  shown?: string,
-): void => {
-  state.requests.key(requestId).set(outcome);
-  if (isStart(state.act)) {
-    state.startRefusal.set(
-      outcome.status === "refused" ? shown ?? outcome.reason : "",
-    );
-  }
+/** The room remains a full output when a handler stores its reference. */
+type ManagerHandlerEvent = Omit<ManagerStreamEvent, "room"> & {
+  room?: Cell<ChatRoomOutput>;
 };
 
-/** Whether `rooms` already lists `room`. */
-const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
-  ((rooms.get() ?? []) as ChatIndexEntry[]).some((entry) =>
-    equals(entry.room, room)
-  );
-
-/**
- * A room's result, as the link an index entry holds. The room is created
- * where the link can't be typed as a cell, and stored as a link to it.
- */
-function roomLinkOf(room: unknown): Cell<ChatRoomLink>;
-function roomLinkOf(room: unknown): unknown {
-  return room;
-}
-
-/**
- * The record a room's creator wrote, which the room's `about` links, as a
- * cell: what `principalOf()` reads the creator from, and what reads without
- * the room running. It holds nothing for a space's own chat.
- */
-function aboutRecordOf(room: Cell<ChatRoomLink>): Cell<AboutRecord>;
-function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
-  return room.key("about").key("record");
-}
-
-/** How a room `createRoom()` makes differs by its kind. */
-interface RoomOptions {
-  /** A group room's title. */
-  title?: string;
-
-  /** A direct room's other member. */
-  counterpart?: string;
-
-  /**
-   * Whether the room's space admits anyone with its link, with WRITE: its
-   * address is then all that keeps it private.
-   */
-  joinableByLink?: boolean;
-}
-
-/**
- * Creates a room in a space of its own, and its notices, and records its
- * entry, all in one transaction: the space's grants are part of creating it,
- * so nothing has to commit apart. A notice for each other member is queued for
- * a client to deliver.
- */
-const createRoom = (
-  state: ManagerActState,
-  requestId: string,
-  kind: ChatRoomKind,
-  members: readonly DID[],
-  { title, counterpart, joinableByLink = false }: RoomOptions = {},
-): ChatIndexEntry => {
-  const createdAt = epochNsecFromMsec(Date.now());
-  // The room's space grants this user OWNER, each other member WRITE, and,
-  // for a room joinable by its link, everyone WRITE.
-  const grants = Object.fromEntries([
-    ...members.map((member) => [member, "WRITE"]),
-    ...(joinableByLink ? [["*", "WRITE"]] : []),
-  ]) as InSpaceGrants;
-  const room = roomLinkOf(
-    FabriChatRoom.inSpace(undefined, { grants })({
-      about: {
-        kind,
-        createdAt,
-        ...(title === undefined ? {} : { title }),
-      },
-    }),
-  );
-  members.forEach((recipient) => {
-    state.outgoingNotices.push({
-      id: JSON.stringify([recipient, requestId]),
-      room,
-      recipient,
-    });
-  });
-  const entry: ChatIndexEntry = {
-    room,
-    kind,
-    ...(counterpart === undefined ? {} : { counterpart }),
-    since: createdAt,
-  };
-  state.rooms.push(entry);
-  return entry;
+/** Resolving an event's room reads only metadata shared with its members. */
+type ManagerReadEvent = Omit<ManagerStreamEvent, "room"> & {
+  room?: Cell<Pick<ChatRoomLink, "about">>;
 };
 
-/**
- * Performs one manager act: finding or creating a direct room, creating a
- * group room, accepting a room, forgetting one, or reporting a notice
- * delivered. Each act's outcome is recorded under its `requestId`, and a
- * request already decided changes nothing.
- */
-export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
-  (event, state) => {
-    const { act, rooms, direct, requests, outgoingNotices } = state;
-    const requestId = event?.requestId ?? eventKey();
-    const earlier = requests.key(requestId).get();
-    if (earlier !== undefined && earlier.status !== "pending") return;
-    const typed = event?.target?.value?.trim();
+/** Index updates compare room references without reading their contents. */
+type ManagerIndexRead = Omit<ChatIndexEntry, "room"> & {
+  room: OpaqueCell<unknown>;
+};
 
-    // A chat is started by someone who can take part in it, and taking part
-    // needs a profile.
-    if (
-      isStart(act) &&
-      state.myProfile?.get() === undefined
-    ) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "Starting a chat needs a profile.",
-      });
-      return;
-    }
-
-    if (act === "delivered") {
-      const id = event?.id ?? state.id;
-      if (typeof id !== "string") return;
-      outgoingNotices.set(
-        ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
-          notice,
-        ) => notice.id !== id),
-      );
-      return;
-    }
-
-    // A start needs to know who this user is, to leave them out of the
-    // room's other members.
-    const self = currentPrincipal();
-    if (isStart(act) && self === undefined) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "Starting a chat needs a signed-in user.",
-      });
-      return;
-    }
-
-    if (act === "openDirect") {
-      const counterpart = event?.counterpart ?? typed;
-      if (!isPrincipalDID(counterpart)) {
-        const reason = "The counterpart is not a principal.";
-        // The session is shown the text it sent, which says what is wrong
-        // with it. The recorded reason is kept for as long as the manager
-        // exists, so it holds no text a person typed.
-        recordOutcome(
-          state,
-          requestId,
-          { status: "refused", reason },
-          counterpart === undefined || counterpart === ""
-            ? undefined
-            : debugStr`${reason} Received: $long${counterpart}`,
-        );
-        return;
-      }
-      if (counterpart === self) {
-        recordOutcome(state, requestId, {
-          status: "refused",
-          reason: "The counterpart is this user.",
-        });
-        return;
-      }
-      const known = direct.key(counterpart).get();
-      if (known !== undefined) {
-        if (!lists(rooms, known.room)) {
-          rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), known]);
+/** Shared metadata suffices for every manager handler's room dependencies. */
+type ManagerReadState =
+  & Omit<
+    ManagerState,
+    "rooms" | "direct" | "requests" | "intents" | "outgoingNotices"
+  >
+  & {
+    rooms: Writable<ManagerIndexRead[]>;
+    direct: Writable<Record<string, ManagerIndexRead>>;
+    requests: Writable<
+      Record<
+        string,
+        | { status: "pending" }
+        | { status: "done"; entry?: ManagerIndexRead }
+        | { status: "refused"; reason: string }
+      >
+    >;
+    intents: Writable<
+      Record<
+        string,
+        Omit<CreationIntent, "target"> & {
+          target?: Cell<
+            Omit<CreationTarget, "room"> & { room: Pick<ChatRoomLink, "about"> }
+          >;
         }
-        recordOutcome(state, requestId, { status: "done", entry: known });
-        return;
-      }
-      const entry = createRoom(state, requestId, "direct", [counterpart], {
-        counterpart,
-      });
-      direct.key(counterpart).set(entry);
-      recordOutcome(state, requestId, { status: "done", entry });
-      return;
-    }
+      >
+    >;
+    outgoingNotices: Writable<
+      { id: string; room: OpaqueCell<unknown>; recipient: string }[]
+    >;
+  };
 
-    if (act === "createGroup") {
-      const draft = state.fromDraft === true ? state.draft.get() : undefined;
-      const title = (event?.title ?? draft?.title ?? "").trim();
-      if (title === "") {
-        recordOutcome(state, requestId, {
-          status: "refused",
-          reason: "A group room needs a title.",
-        });
-        return;
-      }
-      const listed = event?.members ?? principalsIn(draft?.members ?? "");
-      const notPrincipals = listed.filter((member) => !isPrincipalDID(member));
-      if (notPrincipals.length > 0) {
-        const reason = "A group's members must be principals.";
-        // As for a direct room, the session is shown what it sent that isn't
-        // one, and the recorded reason holds no text a person typed.
-        recordOutcome(
-          state,
-          requestId,
-          { status: "refused", reason },
-          debugStr`${reason} Received: $long${notPrincipals}`,
-        );
-        return;
-      }
-      const members = otherMembers(listed, self ?? "");
-      const joinableByLink = event?.joinableByLink ??
-        draft?.joinableByLink ?? false;
-      const entry = createRoom(state, requestId, "group", members, {
-        title,
-        joinableByLink,
-      });
-      if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
-      recordOutcome(state, requestId, { status: "done", entry });
-      return;
-    }
+/** Creation handlers queue a continuation after their first durable step. */
+interface StartState extends ManagerState {
+  profile: Cell<ChatProfile | undefined>;
+  resume: Stream<{ requestId: string }>;
+  uiTitle?: Writable<string>;
+  uiJoinableByLink?: Writable<boolean>;
+  uiMembers?: Writable<string>;
+  latestStart?: Writable<{ requestId: string; input: string }>;
+}
 
-    const room = event?.room ?? state.room;
-    if (room === undefined) return;
+/** Creation adds its profile and continuation to the shared-only state view. */
+type StartReadState = ManagerReadState & Omit<StartState, keyof ManagerState>;
 
-    if (act === "forget") {
-      rooms.set(
-        ((rooms.get() ?? []) as ChatIndexEntry[]).filter((entry) =>
-          !equals(entry.room, room)
-        ),
-      );
-      recordOutcome(state, requestId, { status: "done" });
-      return;
+/** Continues only an intent already admitted for this authenticated creator. */
+const resumeCreation = handler<{ requestId: string }, ManagerState>(
+  toSchema<{ requestId: string }>(),
+  toSchema<ManagerReadState>(),
+  (event, state) => {
+    if (state.requests.key(event.requestId).get()?.status === "pending") {
+      advance(event.requestId, state, resumeCreation(state));
     }
-
-    // `accept`. The kind comes from the record the room's creator wrote,
-    // which reads without the room running, as its own view needs; a space's
-    // own chat has none, and its view says what it is.
-    const record = aboutRecordOf(room);
-    const kind = record.key("kind").get() ?? room.key("about").get()?.kind;
-    if (
-      currentPrincipal() === undefined || spaceAccess(room) === "none" ||
-      (kind !== "direct" && kind !== "group")
-    ) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "The room can't be read by this user.",
-      });
-      return;
-    }
-    // A direct room's counterpart is its creator, as its `about` is labeled,
-    // whatever the event claims. A room this user created is found again with
-    // `openDirect`, and its label names no one else.
-    const creator = kind === "direct"
-      ? principalOf(record, "authored-by")
-      : undefined;
-    const refusal = kind !== "direct"
-      ? undefined
-      : creator === undefined
-      ? "The room's creator can't be verified."
-      : creator === currentPrincipal()
-      ? "The room was created by this user."
-      : event?.counterpart !== undefined && event.counterpart !== creator
-      ? "The counterpart is not the room's creator."
-      : undefined;
-    if (refusal !== undefined) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: refusal,
-      });
-      return;
-    }
-    const counterpart = creator;
-    const entry: ChatIndexEntry = {
-      room,
-      kind,
-      ...(kind === "direct" ? { counterpart } : {}),
-      since: epochNsecFromMsec(Date.now()),
-    };
-    if (!lists(rooms, room)) {
-      rooms.set([...((rooms.get() ?? []) as ChatIndexEntry[]), entry]);
-    }
-    if (
-      kind === "direct" && counterpart !== undefined &&
-      direct.key(counterpart).get() === undefined
-    ) {
-      direct.key(counterpart).set(entry);
-    }
-    recordOutcome(state, requestId, { status: "done", entry });
   },
 );
 
-/** What a manager stores. Every field has a default. */
-export interface FabriChatManagerInput {
-  /** The rooms this user belongs to. */
-  rooms?: RoomsCell;
-
-  /** The direct room shared with each counterpart. */
-  direct?: DirectCell;
-
-  /** Each request's outcome. */
-  requests?: RequestsCell;
-
-  /** Notices waiting for a client to deliver them. */
-  outgoingNotices?: NoticesCell;
+/** Whether a request is new or has an unfinished creation to resume. */
+function canRequest(requestId: string, state: ManagerState): boolean {
+  if (typeof requestId !== "string" || !requestId.trim()) return false;
+  const outcome = state.requests.key(requestId).get();
+  return outcome === undefined || outcome.status === "pending";
 }
 
-/** What a manager offers: `ChatManagerOutput`. */
-export interface FabriChatManagerOutput {
-  /** The manager's name, for lists of pieces. */
-  [NAME]: string;
-
-  /** The manager's rendering. */
-  [UI]: VNode;
-
-  /** Every room this user belongs to and hasn't forgotten, newest first. */
-  rooms: ChatIndexEntry[];
-
-  /** The direct room this user shares with each counterpart, by principal. */
-  direct: Record<string, ChatIndexEntry>;
-
-  /** The outcome of each request, by the `requestId` its caller chose. */
-  requests: Record<string, ChatRequestOutcome>;
-
-  /** Notices this user's requests have produced that no one has delivered. */
-  outgoingNotices: ChatManagerNotice[];
-
-  /** Finds or creates the direct room with a person. */
-  openDirect: Stream<ManagerStreamEvent>;
-
-  /** Creates a group room. */
-  createGroup: Stream<ManagerStreamEvent>;
-
-  /** Records a room this user has been admitted to. */
-  accept: Stream<ManagerStreamEvent>;
-
-  /** Removes a room from this user's list. */
-  forget: Stream<ManagerStreamEvent>;
-
-  /** Reports a notice delivered. */
-  delivered: Stream<ManagerStreamEvent>;
-
-  /** The manager's data face, as one group. */
-  [VIEWS]: { chats: FabriChatManagerView };
+/** Resumes the original choices before considering any redelivered payload. */
+function resumePending(requestId: string, state: StartState): boolean {
+  if (state.requests.key(requestId).get()?.status !== "pending") return false;
+  const creationId = state.intents.key(requestId).get()
+    ? requestId
+    : Object.entries(state.waiters.get()).find(([, ids]) =>
+      ids.includes(requestId)
+    )?.[0];
+  if (creationId) {
+    advance(creationId, state, state.resume);
+    state.resume.send({ requestId: creationId });
+  }
+  return true;
 }
 
-/** A manager's data face, for hosts that draw it natively. */
-export type FabriChatManagerView = Omit<
-  FabriChatManagerOutput,
-  typeof NAME | typeof UI | typeof VIEWS
+/** Records a terminal refusal without exposing it to the shared room. */
+function refuse(requestId: string, reason: string, state: ManagerState): void {
+  state.requests.key(requestId).set({ status: "refused", reason });
+  for (const waiting of state.waiters.key(requestId).get() ?? []) {
+    state.requests.key(waiting).set({ status: "refused", reason });
+  }
+}
+
+/** Prepends an entry once, retaining its room's entity identity. */
+function remember(entry: ChatIndexEntry, state: ManagerState): void {
+  if (!state.rooms.get().some((known) => equals(known.room, entry.room))) {
+    const stored = new Writable<Managed<ChatIndexEntry>>();
+    stored.set(entry);
+    state.rooms.set([stored, ...state.rooms.get()]);
+  }
+}
+
+/** Advances a creation using only the choices recorded by its first request. */
+function advance(
+  requestId: string,
+  state: ManagerState,
+  resume: Stream<{ requestId: string }>,
+): void {
+  const actor = currentPrincipal();
+  if (!actor) return;
+  const intentCell = state.intents.key(requestId);
+  const intent = intentCell.get();
+  if (!intent || intent.creator !== actor) return;
+  if (!intent.target) {
+    const allocation = `fabrichat:${requestId}`;
+    const grants = Object.fromEntries(
+      intent.members.map((member) => [member, "WRITE" as const]),
+    );
+    if (intent.kind === "group" && intent.joinableByLink === true) {
+      grants["*"] = "WRITE";
+    }
+    const record = RoomRecord.inSpace(allocation, { grants })({
+      value: {
+        kind: intent.kind,
+        title: intent.title,
+        createdAt: intent.createdAt,
+      },
+    });
+    const policy = RoomPolicy.inSpace(allocation)({
+      value: CHAT_POLICY,
+    });
+    const target = PrivateRoom.inSpace(allocation)({
+      about: {
+        kind: intent.kind,
+        title: intent.title,
+        createdAt: intent.createdAt,
+        policy: policy.value,
+        record: record.value,
+      },
+    });
+    intentCell.key("target").set(target);
+    return;
+  }
+  const target = intent.target;
+  const room = target.key("room").resolveAsCell();
+  const registration = target.key("registration").get();
+  if (registration === "occupied") {
+    refuse(requestId, "That space already has a conversation.", state);
+    return;
+  }
+  if (registration !== "registered") {
+    target.key("register").send({ requestId, resume });
+    return;
+  }
+  const entry: ChatIndexEntry = {
+    room,
+    kind: intent.kind,
+    since: intent.createdAt,
+    ...(intent.counterpart ? { counterpart: intent.counterpart } : {}),
+  };
+  remember(entry, state);
+  if (intent.counterpart) state.direct.key(intent.counterpart).set(entry);
+  for (const recipient of intent.members) {
+    const id = JSON.stringify([requestId, recipient]);
+    if (!state.outgoingNotices.get().some((notice) => notice.id === id)) {
+      const notice = new Writable<
+        Managed<{
+          id: string;
+          room: Cell<ChatRoomOutput>;
+          recipient: string;
+        }>
+      >();
+      notice.set({ id, room, recipient });
+      state.outgoingNotices.addUnique(notice);
+    }
+  }
+  state.requests.key(requestId).set({ status: "done", entry });
+  for (const waiting of state.waiters.key(requestId).get() ?? []) {
+    state.requests.key(waiting).set({ status: "done", entry });
+  }
+}
+
+/** Finds the existing direct room, or resumes its single pending creation. */
+function writeOpenDirect(
+  event: { requestId: string; counterpart: string },
+  state: StartState,
+): void {
+  if (!canRequest(event.requestId, state)) return;
+  if (resumePending(event.requestId, state)) return;
+  if (!state.profile.get()) {
+    refuse(
+      event.requestId,
+      "Create a profile before starting a conversation.",
+      state,
+    );
+    return;
+  }
+  const actor = currentPrincipal();
+  if (
+    !actor || !isWellFormedDID(event.counterpart) ||
+    event.counterpart === actor
+  ) {
+    refuse(event.requestId, "Choose another person's principal.", state);
+    return;
+  }
+  const existing = state.direct.key(event.counterpart).get();
+  if (existing) {
+    remember(existing, state);
+    state.requests.key(event.requestId).set({
+      status: "done",
+      entry: existing,
+    });
+    return;
+  }
+  const creationId = state.pendingDirect.key(event.counterpart).get() ??
+    event.requestId;
+  if (!state.intents.key(creationId).get()) {
+    state.intents.key(creationId).set({
+      creator: actor,
+      kind: "direct",
+      counterpart: event.counterpart,
+      members: [event.counterpart],
+      createdAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+    });
+    state.pendingDirect.key(event.counterpart).set(creationId);
+  }
+  state.requests.key(event.requestId).set({ status: "pending" });
+  const waiting = state.waiters.key(creationId);
+  if (!(waiting.get() ?? []).includes(event.requestId)) {
+    waiting.set([...(waiting.get() ?? []), event.requestId]);
+  }
+  advance(creationId, state, state.resume);
+  state.resume.send({ requestId: creationId });
+  const outcome = state.requests.key(creationId).get();
+  if (outcome && outcome.status !== "pending") {
+    state.requests.key(event.requestId).set(outcome);
+  }
+}
+
+/** Admits the protocol request from its reviewed creation surface. */
+export const openDirect = handler<ManagerHandlerEvent, StartState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    const counterpart = event.counterpart ??
+      event.target?.dataset?.chatCounterpart ?? event.target?.value?.trim() ??
+      "";
+    state.latestStart?.set({ requestId, input: counterpart });
+    writeOpenDirect({ requestId, counterpart }, state);
+  },
+);
+
+/** Starts a direct room for the principal entered in the reviewed control. */
+const openDirectFromUi = handler<{ target?: { value?: string } }, StartState>(
+  toSchema<{ target?: { value?: string } }>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    const requestId = eventKey();
+    const counterpart = event.target?.value?.trim() ?? "";
+    state.latestStart?.set({ requestId, input: counterpart });
+    writeOpenDirect({ requestId, counterpart }, state);
+  },
+);
+
+/** Creates a distinct group for a new request and resumes that group on redelivery. */
+function writeCreateGroup(
+  event: {
+    requestId: string;
+    members: string[];
+    title: string;
+    joinableByLink?: boolean;
+  },
+  state: StartState,
+): void {
+  if (!canRequest(event.requestId, state)) return;
+  if (resumePending(event.requestId, state)) return;
+  if (!state.profile.get()) {
+    refuse(
+      event.requestId,
+      "Create a profile before starting a conversation.",
+      state,
+    );
+    return;
+  }
+  const actor = currentPrincipal();
+  if (
+    !actor || typeof event.title !== "string" || !event.title.trim() ||
+    !Array.isArray(event.members) ||
+    event.members.some((member) => !isWellFormedDID(member))
+  ) {
+    refuse(
+      event.requestId,
+      "A group requires a title and valid member principals.",
+      state,
+    );
+    return;
+  }
+  if (!state.intents.key(event.requestId).get()) {
+    state.intents.key(event.requestId).set({
+      creator: actor,
+      kind: "group",
+      title: event.title,
+      joinableByLink: event.joinableByLink === true,
+      members: [...new Set(event.members)].filter((member) => member !== actor),
+      createdAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+    });
+  }
+  state.requests.key(event.requestId).set({ status: "pending" });
+  advance(event.requestId, state, state.resume);
+  state.resume.send({ requestId: event.requestId });
+}
+
+/** Admits the group protocol request from its reviewed creation surface. */
+export const createGroup = handler<ManagerHandlerEvent, StartState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    writeCreateGroup({
+      requestId: event.requestId ?? eventKey(),
+      members: event.members ?? [],
+      title: event.title?.trim() ?? "",
+      joinableByLink: event.joinableByLink,
+    }, state);
+  },
+);
+
+/** Captures a group title and the principals shown in its start control. */
+const createGroupFromUi = handler<{ target?: { value?: string } }, StartState>(
+  toSchema<{ target?: { value?: string } }>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    const requestId = eventKey();
+    const input = state.uiMembers?.get() ?? event.target?.value ?? "";
+    state.latestStart?.set({ requestId, input });
+    writeCreateGroup({
+      requestId,
+      title: state.uiTitle?.get() ?? "",
+      members: input.split(/[\s,]+/u).filter(Boolean),
+      joinableByLink: state.uiJoinableByLink?.get() === true,
+    }, state);
+  },
+);
+
+/** Accepts an admitted room and verifies a direct room's attested creator. */
+export const accept = handler<ManagerHandlerEvent, ManagerState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<ManagerReadState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    if (!canRequest(requestId, state)) return;
+    if (!event.room) {
+      refuse(requestId, "Choose a conversation to add.", state);
+      return;
+    }
+    const actor = currentPrincipal();
+    const acl = spaceMembers(event.room);
+    const about = event.room.key("about").get();
+    const counterpart = about?.kind === "direct"
+      ? principalOf(about.record, "authored-by")
+      : undefined;
+    if (
+      !actor || !(acl?.[actor] ?? acl?.["*"]) || !about ||
+      (about.kind === "direct" &&
+        (!counterpart || !acl[counterpart] || counterpart === actor ||
+          (event.counterpart !== undefined &&
+            event.counterpart !== counterpart)))
+    ) {
+      refuse(
+        requestId,
+        "This user is not admitted to that conversation.",
+        state,
+      );
+      return;
+    }
+    const entry: ChatIndexEntry = {
+      room: event.room,
+      kind: about.kind,
+      since: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+      ...(about.kind === "direct" ? { counterpart } : {}),
+    };
+    remember(entry, state);
+    if (entry.counterpart && !state.direct.key(entry.counterpart).get()) {
+      state.direct.key(entry.counterpart).set(entry);
+    }
+    state.requests.key(requestId).set({ status: "done", entry });
+  },
+);
+
+/** The index fields needed to hide an entry without reading any room data. */
+interface ForgetState {
+  rooms: Writable<
+    (Omit<ChatIndexEntry, "room"> & { room: OpaqueCell<unknown> })[]
+  >;
+  requests: Writable<
+    Record<string, { status: "pending" | "done" | "refused"; reason?: string }>
+  >;
+}
+
+/** Hides a room by link identity even after its contents become inaccessible. */
+export const forget = handler<ManagerHandlerEvent, ForgetState>(
+  toSchema<Omit<ManagerStreamEvent, "room"> & { room?: OpaqueCell<unknown> }>(),
+  toSchema<ForgetState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    if (!requestId.trim()) return;
+    const prior = state.requests.key(requestId).get();
+    if (prior && prior.status !== "pending") return;
+    if (!event.room) {
+      state.requests.key(requestId).set({
+        status: "refused",
+        reason: "Choose a conversation to forget.",
+      });
+      return;
+    }
+    state.rooms.set(
+      state.rooms.get().filter((entry) =>
+        !Cell.equalLinks(entry.room, event.room) &&
+        !equals(entry.room, event.room)
+      ),
+    );
+    state.requests.key(requestId).set({ status: "done" });
+  },
+);
+
+/** Retires a notice after its client confirms delivery. */
+export const delivered = handler<ManagerHandlerEvent, ManagerState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<ManagerReadState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    if (!canRequest(requestId, state)) return;
+    if (!event.id?.trim()) {
+      refuse(requestId, "Choose a notice to mark delivered.", state);
+      return;
+    }
+    state.outgoingNotices.set(
+      state.outgoingNotices.get().filter((notice) => notice.id !== event.id),
+    );
+  },
+);
+
+/** Creation data can be written only by the manager's reviewed start handlers. */
+type Created<T> = AuthoredByCurrentUser<
+  WritePolicyAnyOf<T, [
+    TrustedActionWrite<
+      unknown,
+      typeof openDirectFromUi,
+      "ChatStart",
+      "ChatStartSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof createGroupFromUi,
+      "ChatStart",
+      "ChatStartSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof openDirect,
+      "ChatStart",
+      "ChatStartSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof createGroup,
+      "ChatStart",
+      "ChatStartSurface"
+    >,
+  ]>
 >;
 
-/** Shows `room` in the manager's own rendering. */
-const selectRoom = handler<
-  unknown,
-  {
-    selected: Writable<{ room?: Cell<ChatRoomLink> }>;
-    room: Cell<ChatRoomLink>;
-  }
->((_event, { selected, room }) => {
-  selected.set({ room });
+/** Stores the creator's attestation separately from the room's public view. */
+const RoomRecord = pattern<
+  { value: Cell<Created<ChatRoomRecord>> },
+  { value: Cell<ChatRoomRecord> }
+>(({ value }) => ({ value }));
+
+/** Stores policy in a separate document within the conversation's space. */
+const RoomPolicy = pattern<
+  { value: Cell<Created<ChatRoomPolicy>> },
+  { value: Cell<ChatRoomPolicy> }
+>(({ value }) => ({ value }));
+
+/** Claims the conversation in its own space before continuing the home index. */
+const registerRoom = handler<{
+  requestId: string;
+  resume: Stream<{ requestId: string }>;
+}, {
+  space: Writable<SpaceChat | undefined>;
+  room: Cell<SpaceChatRoom>;
+  registration: Writable<"missing" | "registered" | "occupied">;
+}>(
+  (event, { space, room, registration }) => {
+    const registered = space.get()?.chat;
+    if (registered && !equals(registered, room)) {
+      registration.set("occupied");
+    } else {
+      if (!registered) {
+        space.key("chat").set(room);
+      }
+      registration.set("registered");
+    }
+    event.resume.send({ requestId: event.requestId });
+  },
+);
+
+/** The private room's initialization belongs to its creator's reviewed request. */
+const PrivateRoom = pattern<{
+  about: Cell<
+    Created<
+      Omit<ChatRoomAbout, "policy"> & { policy: Cell<Created<ChatRoomPolicy>> }
+    >
+  >;
+}, CreationTarget>(({ about }) => {
+  const room = FabriChatRoom({
+    about,
+    memory: new Writable<StoredMemory>({
+      requests: {},
+      authors: {},
+      usedTimes: {},
+      nextSeq: 1,
+      expiredThrough: 0,
+    }),
+  });
+  const space = wish<Writable<SpaceChat>>({ query: "/" });
+  const registration = new Writable<"missing" | "registered" | "occupied">(
+    "missing",
+  );
+  return {
+    room,
+    registration,
+    register: registerRoom({ space: space.result!, room, registration }),
+  };
 });
 
-/** A room in the manager's own rendering. */
-interface ShownEntry {
-  /** The room. */
+/** The handlers permitted to update the private index and request memory. */
+type Managed<T> = WritePolicyAnyOf<T, [
+  WriteAuthorizedBy<unknown, typeof resumeCreation>,
+  TrustedActionWrite<
+    unknown,
+    typeof openDirectFromUi,
+    "ChatStart",
+    "ChatStartSurface"
+  >,
+  TrustedActionWrite<
+    unknown,
+    typeof createGroupFromUi,
+    "ChatStart",
+    "ChatStartSurface"
+  >,
+  TrustedActionWrite<
+    unknown,
+    typeof openDirect,
+    "ChatStart",
+    "ChatStartSurface"
+  >,
+  TrustedActionWrite<
+    unknown,
+    typeof createGroup,
+    "ChatStart",
+    "ChatStartSurface"
+  >,
+  WriteAuthorizedBy<unknown, typeof accept>,
+  WriteAuthorizedBy<unknown, typeof forget>,
+  WriteAuthorizedBy<unknown, typeof delivered>,
+]>;
+
+/** The manager's protocol and its rendered page. */
+export type FabriChatManagerOutput = ChatManagerOutput & {
+  [UI]: VNode;
+  [NAME]: string;
+};
+
+/** Selects a room by reference without reading its session-local state. */
+const selectRoom = handler<unknown, {
+  selected: Writable<{ room?: Cell<ChatRoomLink> }>;
   room: Cell<ChatRoomLink>;
+}>(
+  toSchema<unknown>(),
+  toSchema<{
+    selected: Writable<unknown>;
+    room: OpaqueCell<unknown>;
+  }>(),
+  (_event, { selected, room }) => selected.set({ room }),
+);
 
-  /** How the entry is labeled. */
-  label: string;
-}
-
-/** What a manager's core needs: what it stores, and whose it is. */
-export interface FabriChatManagerCoreInput
-  extends Required<FabriChatManagerInput> {
-  /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
-}
-
-/**
- * A person's rooms, those they belong to, and the way to start new ones,
- * given the person's profile.
- */
+/** Owns the user's protected index, with their profile supplied by its host. */
 export const FabriChatManagerCore = pattern<
-  FabriChatManagerCoreInput,
+  { myProfile: Cell<ChatProfile | undefined> },
   FabriChatManagerOutput
->(
-  ({ myProfile, rooms, direct, requests, outgoingNotices }) => {
-    const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
-    const startRefusal = new Writable.perSession<string>("");
-    const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
-      {},
-    );
-    const records = {
-      myProfile,
-      rooms,
-      direct,
-      requests,
-      outgoingNotices,
-      draft,
-      startRefusal,
-    };
-    const newestFirst = computed(() =>
-      [...((rooms.get() ?? []) as ChatIndexEntry[])].sort((a, b) =>
-        nsecOf(b.since) < nsecOf(a.since)
-          ? -1
-          : nsecOf(b.since) > nsecOf(a.since)
-          ? 1
-          : 0
-      )
-    );
-    const shown = computed((): ShownEntry[] =>
-      newestFirst.map((entry) => ({
-        room: entry.room,
-        label: entry.kind === "direct"
-          ? `With ${entry.counterpart ?? "someone"}`
-          : entry.room.key("about").get()?.title ?? "Group chat",
-      }))
-    );
-    const hasSelection = computed(() => selected.get()?.room !== undefined);
-    const selectedRoom = computed(() => selected.get()?.room);
-    // The chosen room differs by session, so both parts are always rendered
-    // and one is hidden by a prop: a tree built differently per session is
-    // stored once for every session, and runtimes that built it differently
-    // overwrite each other without end.
-    const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
-    const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
-    // A refusal is the session's too, and is hidden by a prop for the same
-    // reason.
-    const refusalDisplay = computed(() =>
-      startRefusal.get() === "" ? "none" : "block"
-    );
-    const noticeList = computed(
-      () => [...((outgoingNotices.get() ?? []) as ChatManagerNotice[])],
-    );
-    const cannotStart = computed(() => myProfile?.get() === undefined);
-    // The principal this user's profile attests, which someone starting a
-    // chat with them needs; empty when the profile attests none.
-    const myAddress = computed(() =>
-      principalOf(myProfile, "represents-principal") ?? ""
-    );
-    const addressDisplay = computed(
-      () => (myAddress === "" ? "none" : "block"),
-    );
-    const streams = {
-      openDirect: commitManager({ act: "openDirect", ...records }),
-      createGroup: commitManager({ act: "createGroup", ...records }),
-      accept: commitManager({ act: "accept", ...records }),
-      forget: commitManager({ act: "forget", ...records }),
-      delivered: commitManager({ act: "delivered", ...records }),
-    };
-    const view = {
-      rooms: newestFirst,
-      direct,
-      requests,
-      outgoingNotices: noticeList,
-      ...streams,
-    };
-
-    return {
-      [NAME]: "Chats",
-      [UI]: (
-        <cf-vstack gap="3" style={{ padding: "1rem" }}>
-          <cf-heading level={3}>Chats</cf-heading>
-          <cf-vstack id="fabrichat-rooms" gap="1">
-            {shown.map((entry) => (
-              <cf-hstack gap="2" align="center">
+>(({ myProfile }) => {
+  const state: ManagerState = {
+    rooms: new Writable<Managed<ChatIndexEntry[]>>([]),
+    direct: new Writable<Managed<Record<string, ChatIndexEntry>>>({}),
+    requests: new Writable<Managed<Record<string, ChatRequestOutcome>>>({}),
+    intents: new Writable<Managed<Record<string, CreationIntent>>>({}),
+    pendingDirect: new Writable<Managed<Record<string, string>>>({}),
+    waiters: new Writable<Managed<Record<string, string[]>>>({}),
+    outgoingNotices: new Writable<
+      Managed<{ id: string; room: Cell<ChatRoomOutput>; recipient: string }[]>
+    >([]),
+  };
+  const latestStart = new Writable.perSession({ requestId: "", input: "" });
+  const starts = {
+    ...state,
+    profile: myProfile,
+    latestStart,
+    resume: resumeCreation(state),
+  };
+  const facts = {
+    rooms: state.rooms,
+    direct: state.direct,
+    requests: state.requests,
+    outgoingNotices: state.outgoingNotices,
+    openDirect: openDirect(starts),
+    createGroup: createGroup(starts),
+    accept: accept(state),
+    forget: forget(state),
+    delivered: delivered(state),
+  };
+  const title = new Writable.perSession("");
+  const joinableByLink = new Writable.perSession(false);
+  const members = new Writable.perSession("");
+  const myAddress = computed(() => viewerPrincipal() ?? "");
+  const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>({});
+  const entries = computed(() => state.rooms.get());
+  const latestOutcome = computed(() =>
+    state.requests.key(latestStart.get().requestId).get()
+  );
+  return {
+    ...facts,
+    [NAME]: "Conversations",
+    [UI]: (
+      <cf-screen>
+        <cf-heading slot="header" level={2}>Conversations</cf-heading>
+        <cf-vstack padding="4" gap="4">
+          <cf-hstack id="fabrichat-my-address" gap="2">
+            <cf-text>Your chat address: {myAddress}</cf-text>
+            <cf-copy-button text={myAddress} />
+          </cf-hstack>
+          <details id="fabrichat-start-controls">
+            <summary>Start a conversation</summary>
+            <cf-vstack
+              gap="3"
+              data-ui-pattern="ChatStartSurface"
+              data-ui-event-integrity="ChatStartSurface"
+            >
+              <cf-submit-input
+                inputId="fabrichat-start-direct"
+                placeholder="Person's principal"
+                buttonText="Start direct conversation"
+                data-ui-action="ChatStart"
+                onClick={openDirectFromUi(starts)}
+              />
+              <cf-input
+                id="fabrichat-group-title"
+                $value={title}
+                placeholder="Group title"
+              />
+              <cf-checkbox $checked={joinableByLink}>
+                Anyone with its link can join
+              </cf-checkbox>
+              <cf-textarea
+                id="fabrichat-group-members"
+                $value={members}
+                placeholder="Member principals, separated by commas"
+              />
+              <cf-button
+                data-ui-action="ChatStart"
+                onClick={createGroupFromUi({
+                  ...starts,
+                  uiTitle: title,
+                  uiMembers: members,
+                  uiJoinableByLink: joinableByLink,
+                })}
+              >
+                Create group
+              </cf-button>
+            </cf-vstack>
+          </details>
+          <cf-text id="fabrichat-start-refusal">
+            {latestOutcome?.status === "pending"
+              ? "Creating conversation…"
+              : latestOutcome?.status === "refused"
+              ? `${latestOutcome.reason} ${latestStart.get().input}`
+              : ""}
+          </cf-text>
+          <cf-vstack id="fabrichat-rooms" gap="2">
+            {entries.map((entry) => (
+              <cf-hstack gap="2">
                 <cf-button
-                  size="sm"
                   variant="ghost"
                   onClick={selectRoom({ selected, room: entry.room })}
                 >
-                  {entry.label}
+                  {entry.room.get()?.about?.title || (entry.kind === "direct"
+                    ? `With ${entry.counterpart ?? "someone"}`
+                    : "Group conversation")}
                 </cf-button>
                 <cf-cell-link $cell={entry.room} label="Open" />
                 <cf-button
-                  size="sm"
                   variant="ghost"
-                  onClick={commitManager({
-                    act: "forget",
-                    ...records,
-                    room: entry.room,
-                  })}
+                  onClick={action(() =>
+                    facts.forget.send({
+                      requestId: eventKey(),
+                      room: entry.room,
+                    })
+                  )}
                 >
                   Forget
                 </cf-button>
               </cf-hstack>
             ))}
           </cf-vstack>
-          <div id="fabrichat-selected" style={{ display: selectedDisplay }}>
-            <cf-render $cell={selectedRoom} />
+          <cf-vstack id="fabrichat-outgoing-notices" gap="2">
+            {state.outgoingNotices.get().map((notice) => (
+              <cf-hstack gap="2">
+                <cf-text>Send to {notice.recipient}</cf-text>
+                <cf-cell-link $cell={notice.room} label="Open conversation" />
+                <cf-button
+                  onClick={action(() =>
+                    facts.delivered.send({
+                      requestId: eventKey(),
+                      id: notice.id,
+                    })
+                  )}
+                >
+                  Delivered
+                </cf-button>
+              </cf-hstack>
+            ))}
+          </cf-vstack>
+          <div id="fabrichat-selected">
+            {selected.get().room !== undefined
+              ? <cf-render $cell={selected.get().room} />
+              : <cf-text>Select a conversation or start one.</cf-text>}
           </div>
-          <div
-            id="fabrichat-unselected"
-            style={{ display: unselectedDisplay }}
-          >
-            <cf-empty-state message="Choose a chat, or start one." />
-          </div>
-          <div id="fabrichat-my-address" style={{ display: addressDisplay }}>
-            <cf-hstack gap="2" align="center">
-              <cf-text variant="caption">
-                Your chat address: {myAddress}
-              </cf-text>
-              <cf-copy-button text={myAddress} size="sm" icon-only />
-            </cf-hstack>
-          </div>
-          <div
-            data-ui-pattern={CHAT_START_SURFACE}
-            data-ui-event-integrity={CHAT_START_SURFACE}
-          >
-            <cf-vstack gap="2">
-              <cf-submit-input
-                data-ui-action={CHAT_START_ACTION}
-                inputId="fabrichat-start-direct"
-                placeholder="Their chat address (did:key:…)"
-                buttonText="Chat"
-                disabled={cannotStart}
-                onClick={streams.openDirect}
-              />
-              <cf-input
-                id="fabrichat-group-title"
-                $value={draft.key("title")}
-                placeholder="New group's title"
-              />
-              <cf-textarea
-                $value={draft.key("members")}
-                placeholder="Members' chat addresses, one per line"
-              />
-              <cf-checkbox $checked={draft.key("joinableByLink")}>
-                Anyone with its link can join
-              </cf-checkbox>
-              <cf-button
-                data-ui-action={CHAT_START_ACTION}
-                disabled={cannotStart}
-                onClick={commitManager({
-                  act: "createGroup",
-                  ...records,
-                  fromDraft: true,
-                })}
-              >
-                Create group
-              </cf-button>
-              <div
-                id="fabrichat-start-refusal"
-                style={{ display: refusalDisplay }}
-              >
-                <cf-alert status="error">{startRefusal}</cf-alert>
-              </div>
-            </cf-vstack>
-          </div>
-          {noticeList.map((notice) => (
-            <cf-hstack gap="2" align="center">
-              <cf-text variant="caption">
-                {notice.recipient}{" "}
-                may not know of this chat yet. Open it, and send them its
-                address:
-              </cf-text>
-              <cf-cell-link $cell={notice.room} />
-              <cf-button
-                size="sm"
-                variant="ghost"
-                onClick={commitManager({
-                  act: "delivered",
-                  ...records,
-                  id: notice.id,
-                })}
-              >
-                Done
-              </cf-button>
-            </cf-hstack>
-          ))}
         </cf-vstack>
-      ),
-      [VIEWS]: { chats: view },
-      ...view,
-    };
-  },
-);
-
-/**
- * A person's chat manager, whose person is the one looking at it: what
- * `#chatManager` resolves to.
- */
-const FabriChatManager = pattern<
-  FabriChatManagerInput,
-  FabriChatManagerOutput
->((input) => {
-  const profileWish = wish<ChatProfile>({ query: "#profile" });
-  const core = FabriChatManagerCore(
-    {
-      myProfile: profileWish.result,
-      rooms: input.rooms,
-      direct: input.direct,
-      requests: input.requests,
-      outgoingNotices: input.outgoingNotices,
-    },
-  );
-  return {
-    [NAME]: core[NAME],
-    [UI]: core[UI],
-    [VIEWS]: core[VIEWS],
-    rooms: core.rooms,
-    direct: core.direct,
-    requests: core.requests,
-    outgoingNotices: core.outgoingNotices,
-    openDirect: core.openDirect,
-    createGroup: core.createGroup,
-    accept: core.accept,
-    forget: core.forget,
-    delivered: core.delivered,
+      </cf-screen>
+    ),
+    [VIEWS]: { chats: facts },
   };
 });
 
-export default FabriChatManager;
+/** Resolves the home user's profile for their single chat manager. */
+export default pattern<Record<string, never>, FabriChatManagerOutput>(() => {
+  const profile = wish<ChatProfile>({ query: "#profile" });
+  return FabriChatManagerCore({ myProfile: profile.result });
+});

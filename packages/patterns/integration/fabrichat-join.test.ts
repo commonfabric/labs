@@ -8,8 +8,9 @@
  * rendered in their manager, and follows the link their notice shows to the
  * room's page. The second opens that page, adds the room to their chats, and
  * sends a message, which the first sees in the room their manager renders;
- * the second's manager then lists the room too. Last, the first opens their
- * manager again, creates a group from the group controls of that new page,
+ * the second's manager then lists the room too. The first forgets that room
+ * and restores it from its participant's Chat control. Last,
+ * the first opens their manager again, creates a group from that new page,
  * and starts another chat, which the newest-first list puts on top, and the
  * top row's link opens the new room.
  */
@@ -38,16 +39,10 @@ import { clickCellLink } from "./topics-navigation-helpers.ts";
 const { API_URL, FRONTEND_URL } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
-// chat start and message write (`fabrichat/schemas.tsx`).
+// chat start and message write (`fabrichat/room.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
 const START_ACTION = "ChatStart";
 const SEND_ACTION = "ChatSend";
-
-// What a direct room calls itself, which is also what a link to it shows.
-const DIRECT_ROOM_NAME = "Direct chat";
-
-// What a room with no messages shows in place of them.
-const EMPTY_ROOM_TEXT = "No messages yet";
 
 describe("fabrichat-join", () => {
   const firstShell = new ShellIntegration();
@@ -88,21 +83,21 @@ describe("fabrichat-join", () => {
     await clickTrustedAction(first, START_ACTION);
     await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
     await clickButtonWithText(first, `With ${address}`);
-    await waitForSettledText(first, "#fabrichat-selected", DIRECT_ROOM_NAME);
-    await waitForSettledText(first, "#fabrichat-selected", EMPTY_ROOM_TEXT);
+    await waitForSettledText(first, "#fabrichat-selected", "Conversation");
+    await waitForRoomComposer(first);
 
     // The notice for the second person links to the room, and following it
     // opens the room's page.
-    const roomId = await clickCellLink(first, DIRECT_ROOM_NAME);
+    const roomId = await clickCellLink(first, "Open conversation");
     const roomView = await waitForPieceSelected(first, roomId);
     expect(roomView.spaceDid).not.toBe(firstIdentity.did());
-    await waitForSettledText(first, "#fabrichat-messages", EMPTY_ROOM_TEXT);
+    await waitForRoomComposer(first);
 
     // The first person goes back to the room in their manager, to watch for
     // the second person's message there.
     await openChatManager(firstShell, firstIdentity);
     await clickButtonWithText(first, `With ${address}`);
-    await waitForSettledText(first, "#fabrichat-selected", EMPTY_ROOM_TEXT);
+    await waitForRoomComposer(first);
 
     // The second person opens the room's page, which their manager does not
     // list yet, adds it to their chats, and the offer to do so goes away.
@@ -111,9 +106,10 @@ describe("fabrichat-join", () => {
       view: roomView,
       identity: secondIdentity,
     });
-    await waitForSettledText(second, "#fabrichat-messages", EMPTY_ROOM_TEXT);
+    await waitForRoomComposer(second);
     await clickButtonWithExactText(second, "Add to my chats");
     await waitForUnrendered(second, "#fabrichat-add-to-chats");
+    await waitForRoomComposer(second);
 
     // Both people are now looking at the room. What each runtime does while
     // nothing more happens says whether their views of it fight.
@@ -136,8 +132,28 @@ describe("fabrichat-join", () => {
       `With ${firstIdentity.did()}`,
     );
 
-    // The first person starts a second chat, whose row the list puts above
-    // the first one's, and that row's link opens the new room rather than
+    // Forgetting removes the index entry, while the selected room stays
+    // open. The participant's own Chat control must pass its real gesture
+    // straight to the manager's protected start stream and restore that room.
+    await clickButtonWithExactText(first, "Forget");
+    await waitForCondition(
+      first,
+      (probe, address: string) =>
+        probe.collect("#fabrichat-rooms").some((element) =>
+          !probe.deepText(element).includes(`With ${address}`)
+        ),
+      { args: [address] },
+    );
+    await clickButtonWithExactText(first, "Chat");
+    await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+    const restartedId = await clickCellLink(first, "Open");
+    const restartedView = await waitForPieceSelected(first, restartedId);
+    expect(restartedView.spaceDid).toBe(roomView.spaceDid);
+    expect(restartedView.pieceId).toBe(roomView.pieceId);
+    await waitForRoomComposer(first);
+
+    // The first person starts another chat, whose row the list puts above
+    // the existing one's, and that row's link opens the new room rather than
     // the one the row held before. A freshly opened manager has no room
     // chosen, so the start control is the only one on the page, where a
     // chosen room would offer a chat with each of its participants as well.
@@ -202,6 +218,10 @@ async function openChatManager(
     view: { spaceDid: identity.did(), pieceId, piecePath: ["chatManager"] },
     identity,
   });
+  await clickCfButton(
+    shell.page(),
+    "#fabrichat-start-controls:not([open]) > summary",
+  );
 }
 
 /** Creates the viewer's profile from their home's Profile tab. */
@@ -211,6 +231,18 @@ async function createProfileAtHome(page: Page, name: string): Promise<void> {
   await clickTrustedAction(page, PROFILE_CREATE_ACTION);
   await waitForRuntimeIdle(page);
   await waitForText(page, "#home-profile-summary", name);
+}
+
+/** Waits for the room's own composer to admit a send from this viewer. */
+async function waitForRoomComposer(page: Page): Promise<void> {
+  await waitForRuntimeIdle(page);
+  await waitForCondition(
+    page,
+    (probe) =>
+      probe.collect("#fabrichat-message").some((element) =>
+        probe.isRendered(element) && !probe.isDisabled(element)
+      ),
+  );
 }
 
 /** Waits for the manager to show the viewer's chat address, and reads it. */

@@ -372,6 +372,9 @@ export type Frame = {
    */
   pendingSpaceNames?: Map<string, InSpaceGrants | undefined>;
 
+  /** ACL reads whose initial replica load must finish before this action commits. */
+  pendingMembershipSpaces?: Set<MemorySpace>;
+
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;
 

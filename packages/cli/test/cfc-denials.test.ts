@@ -183,7 +183,7 @@ describe("cfc-denials", () => {
       const hint =
         "    Run again with `--cfc-denials` to see what CFC denied, and why.";
 
-      it("prints the setup denial's reason with the flag", async () => {
+      it("prints the unapproved writer's denial reason with the flag", async () => {
         const { code, stdout } = await cf(
           `test "${setupFixture}" --cfc-denials`,
         );
@@ -211,7 +211,7 @@ describe("cfc-denials", () => {
       expect(code).toBe(1);
       expect(
         stdout.filter((line) =>
-          line === "  ✗ 1 console warning(s) during test:"
+          line === "  ✗ 2 console warning(s) during test:"
         ),
       ).toHaveLength(2);
     });

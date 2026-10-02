@@ -15,6 +15,7 @@ import { defer } from "@commonfabric/utils/defer";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
+import { spaceMembers } from "../../src/builder/space-members.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -540,13 +541,14 @@ describe("spaceAccess()", () => {
      * Runs, in `user`'s home space, a pattern whose computation `level`
      * returns `user`'s level in the space of a cell in `space`, and returns
      * the result cell; `unknown` stands in for `undefined`. The computation
-     * takes the cell as a cell, or with `byValue` as the value it holds. A
-     * second computation, `derived`, reads `level`'s value and nothing else.
+     * takes the cell as a cell, or with `byValue` as the value it holds.
+     * With `membership`, the level comes from the authoritative member list.
+     * A second computation, `derived`, reads `level`'s value and nothing else.
      */
     async function levelCell(
       runtime: Runtime,
       user: Identity,
-      options: { byValue?: boolean } = {},
+      options: { byValue?: boolean; membership?: boolean } = {},
     ): Promise<Cell<{ level?: string; derived?: string }>> {
       const argumentSchema = {
         type: "object",
@@ -559,7 +561,10 @@ describe("spaceAccess()", () => {
       const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
       const level = lift(
         (input: { target?: unknown }) =>
-          spaceAccess(input.target as Cell<unknown>) ?? "unknown",
+          options.membership
+            ? spaceMembers(input.target as Cell<unknown>)?.[user.did()] ??
+              "unknown"
+            : spaceAccess(input.target as Cell<unknown>) ?? "unknown",
         argumentSchema,
         { type: "string" },
       );
@@ -737,6 +742,32 @@ describe("spaceAccess()", () => {
           .toBeUndefined();
         await waitForCellValue(runtime, level, (v) => v === "READ", {
           stuckLabel: "dave's level to follow the retry to `READ`",
+        });
+      });
+
+      it("loads authoritative membership after the host retries a refused space", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+        const membership =
+          (await levelCell(runtime, dave, { membership: true }))
+            .key("level");
+        await waitForCellValue(runtime, membership, (v) => v === "unknown");
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect(runtime.storageManager.spaceAccessError?.(space)?.name).toBe(
+          "AuthorizationError",
+        );
+
+        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        await runtime.idle();
+        expect(membership.get()).toBe("unknown");
+        expect(runtime.storageManager.spaceAccessError?.(space)?.name).toBe(
+          "AuthorizationError",
+        );
+        await runtime.retrySpaceAccess(space);
+        await waitForCellValue(runtime, membership, (v) => v === "READ", {
+          stuckLabel: "membership to load after the host retries the space",
         });
       });
 

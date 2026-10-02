@@ -45,6 +45,7 @@ import {
   pushFrameFromCause,
 } from "./builder/pattern.ts";
 import { commitSpaceAccessChanges } from "./builder/space-access-change.ts";
+import { loadSpaceMembership } from "./builder/space-members.ts";
 import {
   type CellScope,
   type FabricExecValue,
@@ -80,7 +81,10 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
+import {
+  recordNewDocumentProtectedDefaults,
+  recordNewProtectedDefaults,
+} from "./cfc/default-initialization.ts";
 import {
   CFC_POLICY_MANIFEST_DOC_SCHEMA,
   CFC_POLICY_MANIFEST_ID_PREFIX,
@@ -228,6 +232,7 @@ import {
   validateSchemaValue,
 } from "./cfc/schema-sanitization.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type ImplementationIdentity,
@@ -256,7 +261,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope, scopeRank } from "./scope.ts";
+import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -914,12 +919,22 @@ function describeSkippedSubPatternNode(
   };
 }
 
+/**
+ * Records a structural-provenance marker for each write redirect `projection`
+ * stages into `resultCell`, at the position the redirect takes. A redirect to
+ * one of `ownCells`, the documents the setup creates for its piece, is the
+ * setup's own initialization of that cell and records a setup projection. Any
+ * other redirect names a cell the piece was handed, through its argument or
+ * through the code setting it up, and records a binding projection, which
+ * covers the slot alone.
+ */
 const recordSetupProjectionPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>,
   resultSchema: JSONSchema | undefined,
   projection: unknown,
+  ownCells: readonly NormalizedFullLink[],
   schemaPath: readonly string[] = [],
 ): void => {
   if (resultSchema === undefined) {
@@ -939,12 +954,17 @@ const recordSetupProjectionPolicyInputs = (
   // still-deferred binding of an embedded pattern) is inert there. The
   // prepare gate agrees: marker verification requires the stored value to be
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
-  // marker for an alias would wrongly widen
+  // setup-projection marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to.
+  // a path nothing redirects to. A binding-projection marker grants that
+  // exemption nothing; one for an alias would name a slot no check accepts.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
     const source = parseLink(projection, target);
+    const own = ownCells.some((cell) =>
+      cell.space === source.space && cell.id === source.id &&
+      normalizeCellScope(cell.scope) === normalizeCellScope(source.scope)
+    );
     tx.recordCfcWritePolicyInput({
       kind: "structural-provenance",
       target: {
@@ -953,7 +973,9 @@ const recordSetupProjectionPolicyInputs = (
         scope: target.scope,
         path: [...target.path, ...schemaPath],
       },
-      claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+      claim: own
+        ? CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION
+        : CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
       sources: [{
         space: source.space,
         id: source.id,
@@ -972,6 +994,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        ownCells,
         [...schemaPath, String(index)],
       )
     );
@@ -1001,6 +1024,7 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
+        ownCells,
         [...schemaPath, key],
       );
     }
@@ -2923,17 +2947,20 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a setup-projection marker, and
-    // a marker exempts writes at-or-below its target from `writeAuthorizedBy`
-    // for the rest of the transaction (`writeIsPatternSetupInitialization` in
+    // slots in. Each redirect it finds records a binding-projection marker,
+    // which exempts the slot holding it from `writeAuthorizedBy` while the slot
+    // holds the cell the marker names (`setupProjectionSourceMatchesValue` in
     // cfc/prepare.ts), so the redirects it walks are the ones this setup
-    // establishes rather than the ones the document already held.
+    // establishes rather than the ones the document already held. The cell a
+    // redirect names receives no exemption: it is the caller's, and this setup
+    // writes none of it, so no cell counts as the setup's own.
     recordSetupProjectionPolicyInputs(
       tx,
       this.#runtime,
       argumentCell,
       argumentSchema,
       projection,
+      [],
     );
     diffAndUpdate(
       this.#runtime,
@@ -3112,12 +3139,20 @@ export class Runner {
       options,
     );
     if (changed) {
+      // A result field the setup projects to one of the piece's internal
+      // cells is the setup's own initialization of that cell. Those cells are
+      // minted from the result cell's cause, so no one else names them; a
+      // field naming any other cell, the piece's argument or a cell the code
+      // setting it up closed over, covers the field alone.
       recordSetupProjectionPolicyInputs(
         tx,
         this.#runtime,
         resultCell,
         pattern.resultSchema,
         result,
+        (pattern.derivedInternalCells ?? []).map((descriptor) =>
+          getDerivedInternalCellLink(resultCell, descriptor)
+        ),
       );
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)
@@ -3264,9 +3299,23 @@ export class Runner {
             meta: ignoreReadForScheduling,
           });
           if (currentValue === undefined) {
-            derivedCell.setRawUntyped(
-              fabricFromConvertibleJsValue(schemaDefault),
-            );
+            const seed = fabricFromConvertibleJsValue(schemaDefault);
+            derivedCell.setRawUntyped(seed);
+            // The cell is the pattern's own and absent until now, so its
+            // default is an initialization whether or not anything projects
+            // it: a result field, a sub-pattern's argument, or nothing.
+            const seeded = derivedCell.getAsNormalizedFullLink();
+            tx.recordCfcWritePolicyInput({
+              kind: "initialization",
+              mode: "seed",
+              target: {
+                space: seeded.space,
+                id: seeded.id,
+                scope: seeded.scope,
+                path: [...seeded.path],
+              },
+              value: seed,
+            }, runtimeWritePolicyAuthorization);
           }
         }
       }
@@ -3370,6 +3419,20 @@ export class Runner {
       argumentLink = newArgumentCell.getAsNormalizedFullLink();
       if (argumentLink === undefined) {
         throw new Error("Invalid argument link in updateArgument");
+      }
+      // The argument document is new, so a protected field the caller leaves
+      // out, and setup fills with its default, is the setup's initialization,
+      // whatever later reads or projects the field. A field the caller
+      // supplies is the caller's write, even where it equals the default.
+      if (nextArgument !== undefined) {
+        recordNewDocumentProtectedDefaults(
+          tx,
+          argumentLink,
+          pattern.argumentSchema,
+          defaults,
+          argument,
+          nextArgument,
+        );
       }
     } else if (!restageStoredArgument) {
       // Same stored setup over an argument document that already exists. The
@@ -6809,10 +6872,11 @@ export class Runner {
    * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
    * other retrying writer: wait for the refusal's catch-up, then prepare the
    * run from the start, where the install reads the manifest as present.
-   * Every other refusal stays terminal, a stale read over the piece's own
-   * documents included: whether a re-commit converges against a serving
-   * side's derived writes is a different question, which
-   * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
+   * A client-executed piece can also lose a read of its ordinary documents
+   * to another participant. It follows this same fresh-transaction path so
+   * intentional argument changes survive. Under server execution, stale reads
+   * instead use `#catchUpAndStartOnStaleRead()` without recommitting setup.
+   * Refusals outside these two conflict classes stay terminal.
    *
    * The refused install is torn down only while it is still the key's current
    * registration, and the ownership token goes back to pending for the wait,
@@ -6833,7 +6897,9 @@ export class Runner {
     // and a newer lifecycle epoch.
     const key = this.#getDocKey(resultCell);
     if (
-      !refusalNamesPolicyManifest(error) ||
+      !(refusalNamesPolicyManifest(error) ||
+        (!this.#runtime.experimental.serverExecution &&
+          isStaleReadConflict(error))) ||
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
     ) {
@@ -6844,8 +6910,8 @@ export class Runner {
     this.#registerPendingDeferredStart(key, ownership);
     logger.info(
       "piece-start-commit-retrying",
-      "piece-run start lost a policy manifest install to another " +
-        "participant; running it again once storage has caught up",
+      "piece-run start lost its read basis to another participant; " +
+        "running it again once storage has caught up",
       resultCell.getAsNormalizedFullLink().id,
       error,
     );
@@ -9873,27 +9939,22 @@ export class Runner {
     // For event preflight, writable-input links are narrower than traversing
     // captured argument objects and avoid treating broad closures as demand.
     for (const read of reads) {
-      let target = read;
-      if (read.overwrite === "redirect") {
-        try {
-          const { overwrite: _overwrite, ...resolved } = resolveLink(
-            this.#runtime,
-            depTx,
-            read,
-            "writeRedirect",
-          );
-          target = {
-            ...resolved,
-            schema: resolved.schema ?? read.schema,
-          };
-        } catch (error) {
-          logger.debug("scheduler-read-redirect", () => [
-            "Unable to resolve scheduler read redirect",
-            { read, error },
-          ]);
-        }
-      }
-      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get();
+      // A property traversal follows readable handles while leaving opaque
+      // references intact. Its reader schema governs every redirect crossing.
+      const readerSchema = read.schema ?? true;
+      const inputSchema = cfcSchemaWithInheritedDefs(
+        { type: "object", properties: { input: readerSchema } },
+        isObjectNotArray(readerSchema)
+          ? resolveExternalRootRefForStructure(readerSchema).$defs
+          : undefined,
+      );
+      const input = this.#runtime.getImmutableCell(
+        read.space,
+        { input: this.#runtime.getCellFromLink(read).getAsLink() },
+        inputSchema,
+        depTx,
+      );
+      input.get({ traverseCells: true });
     }
   }
 
@@ -10803,7 +10864,8 @@ export class Runner {
    * throws {@link RetryImmediately} so the scheduler re-runs the handler or
    * action. On the re-run each name resolves synchronously (see the pattern
    * builder's resolveInSpaceTargetSpace), and the run records the allocation
-   * in the same commit as the writes that refer to it.
+   * in the same commit as the writes that refer to it. Membership reads whose
+   * initial replica load is pending also complete before the retry.
    *
    * Each space created for a name is owned by the owner
    * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
@@ -10820,19 +10882,26 @@ export class Runner {
     if (space === undefined) {
       throw new Error("An inSpace target was named outside any space");
     }
-    const owner = this.#runtime.actingPrincipalFor(tx);
-    if (owner === undefined) {
-      throw new Error(
-        "A served run resolves an inSpace() target only on behalf of an " +
-          "acting user, and this run has none",
+    if (pending.length > 0) {
+      const owner = this.#runtime.actingPrincipalFor(tx);
+      if (owner === undefined) {
+        throw new Error(
+          "A served run resolves an inSpace() target only on behalf of an " +
+            "acting user, and this run has none",
+        );
+      }
+      await Promise.all(
+        pending.map(([name, grants]) =>
+          this.#runtime.resolveInSpaceName(space, name, {
+            owner,
+            ...(grants !== undefined ? { grants } : {}),
+          })
+        ),
       );
     }
     await Promise.all(
-      pending.map(([name, grants]) =>
-        this.#runtime.resolveInSpaceName(space, name, {
-          owner,
-          ...(grants !== undefined ? { grants } : {}),
-        })
+      [...(frame.pendingMembershipSpaces ?? [])].map((space) =>
+        loadSpaceMembership(this.#runtime, space)
       ),
     );
     throw new RetryImmediately(
@@ -11237,7 +11306,10 @@ export class Runner {
         const postRun = (result: any) => {
           logger.timeStart("stream", "postRun");
           try {
-            if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
+            if (
+              ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+                (frame.pendingMembershipSpaces?.size ?? 0) > 0)
+            ) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const handleResult = () => {
@@ -11279,7 +11351,8 @@ export class Runner {
         // pending names and retry instead of surfacing the error.
         if (
           !(error instanceof RetryImmediately) &&
-          frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
+          ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+            (frame.pendingMembershipSpaces?.size ?? 0) > 0)
         ) {
           popFrameAfterReturn = false;
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
@@ -11597,7 +11670,10 @@ export class Runner {
               );
               result = undefined;
             }
-            if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
+            if (
+              ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+                (frame.pendingMembershipSpaces?.size ?? 0) > 0)
+            ) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
@@ -11666,7 +11742,8 @@ export class Runner {
         // instead of surfacing the error.
         if (
           !(error instanceof RetryImmediately) &&
-          frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
+          ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+            (frame.pendingMembershipSpaces?.size ?? 0) > 0)
         ) {
           popFrameAfterReturn = false;
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
@@ -12201,6 +12278,7 @@ export class Runner {
     }
 
     const builtinIdentity = resolveBuiltinImplementationIdentity(module);
+    const enclosingIdentity = tx.getCfcState().implementationIdentity;
     if (builtinIdentity) {
       setCfcImplementationIdentity(tx, builtinIdentity);
     }
@@ -12276,6 +12354,11 @@ export class Runner {
       );
     } finally {
       if (builtinFrame) popFrame(builtinFrame);
+      if (builtinIdentity) {
+        // Synchronous initialization shares its caller's transaction. Writes
+        // after this invocation belong to that caller again.
+        setCfcImplementationIdentity(tx, enclosingIdentity);
+      }
     }
 
     // Handle both legacy (just Action) and new (RawBuiltinResult) return formats

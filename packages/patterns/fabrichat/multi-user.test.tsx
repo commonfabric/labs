@@ -1,213 +1,131 @@
-/**
- * A FabriChat room shared by two people, each in a runtime of their own with
- * an identity of their own: each one's message, and each one's reaction,
- * reaches the other, and each one's windows stay their own session's.
- */
+/** Verifies that independent viewers render the same authored messages. */
 import {
+  action,
   type AddIntegrity,
   assert,
+  FabricEpochNsec,
   multiUserTest,
   pattern,
+  type Stream,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
-import { FabriChatMessageRow } from "./message-row.tsx";
-import {
-  type ActivityCounters,
-  type MessageRecord,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
-import FabriChatRoom, {
-  type ChatRoomOutput,
-  FabriChatRoomCore,
-} from "./room.tsx";
-import {
-  CHAT_REACT_ACTION,
-  CHAT_REACT_SURFACE,
-  CHAT_SEND_ACTION,
-  CHAT_SEND_SURFACE,
-  type ChatProfile,
-  type ChatReaction,
-} from "./schemas.tsx";
-
-type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
-type RowArg = Parameters<typeof FabriChatMessageRow>[0];
-
-// A labeled stand-in for a viewer's `#profile`.
-type TestProfile = AddIntegrity<
+import { FabriChatRoom, type StoredMemory } from "./room.tsx";
+import { CHAT_POLICY } from "./records.ts";
+import type {
   ChatProfile,
-  readonly ["fabrichat-test-profile"]
->;
+  ChatRoomAbout,
+  ChatRoomOutput,
+  ChatRoomPolicy,
+} from "./schemas.ts";
+import { clickButton, hasText } from "../test/vnode-helpers.ts";
 
-const sendGesture = {
-  surface: CHAT_SEND_SURFACE,
-  action: CHAT_SEND_ACTION,
-};
-const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
-
-const typed = (text: string) => ({ type: "click", target: { value: text } });
-
-/** The room's stored records, shared by everyone in the space. */
-interface Records {
-  messages: Writable<MessagesValue>;
-  reactionLists: Writable<ReactionList[]>;
-  requests: Writable<RequestMemo[]>;
-  usedTimes: Writable<UsedTime[]>;
-  activity: Writable<SentActivity[]>;
-  counters: Writable<ActivityCounters[]>;
-}
-
-/** What every session receives from the setup. */
 interface Setup {
-  shared: ChatRoomOutput;
-  records: Records;
+  room: ChatRoomOutput;
+  initialize: Stream<void>;
+  initializeProfile: Stream<void>;
 }
 
-// The messages' bodies, in the order they were recorded.
-const bodies = (messages: Writable<MessagesValue>): string =>
-  ((messages.get() ?? []) as MessageRecord[]).map((message) =>
-    typeof message?.body === "string" ? message.body : "<gone>"
-  ).join(" | ");
-
-const reactionsOnFirst = (messages: Writable<MessagesValue>): number => {
-  const first = ((messages.get() ?? []) as MessageRecord[])[0];
-  return ((first?.reactions?.get() ?? []) as ChatReaction[]).length;
-};
-
-// The ids of a session's windows, as the room's output offers them.
-const windowIds = (windows: unknown): string[] => {
-  const cell = windows as { get?: () => unknown } | undefined;
-  const value = typeof cell?.get === "function" ? cell.get() : windows;
-  return Object.keys((value ?? {}) as Record<string, unknown>);
-};
-
-// One room instance both sessions share, for the windows: its default export
-// resolves no profile here, and opening a window needs none.
-export const setup = pattern(() => ({
-  shared: FabriChatRoom({}),
-  records: {
-    messages: Writable.of<MessagesValue>([] as MessagesValue),
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
-  },
-}));
+export const setup = pattern<Record<string, never>, Setup>(() => {
+  const profile = new Writable.perUser<
+    AddIntegrity<ChatProfile, ["chat-test"]>
+  >({ name: "Reader" });
+  const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
+    CHAT_POLICY,
+  );
+  const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
+  const initialize = action(() =>
+    about.set({
+      kind: "group",
+      title: "Shared room",
+      createdAt: new FabricEpochNsec(0n),
+      policy,
+    })
+  );
+  const memory = new Writable<StoredMemory>();
+  return {
+    initialize,
+    initializeProfile: action(() => profile.set({ name: "Reader" })),
+    room: FabriChatRoom({ about, memory, myProfile: profile }),
+  };
+});
 
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
-  const profile = Writable.of<TestProfile>({ name: "Alice" });
-  const room = FabriChatRoomCore({
-    myProfile: profile,
-    about: { kind: "group" as const },
-    messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
-    activity: setup.records.activity,
-    counters: setup.records.counters,
-  } as RoomArg);
-
+  const version = new Writable({
+    body: "Hello from Alice",
+    sentAt: new FabricEpochNsec(0n),
+  });
   return {
     [TESTS]: [
+      { action: setup.initialize },
       {
-        action: room.composerSend,
-        event: typed("Hello from Alice"),
-        trustedUi: sendGesture,
-      },
-      // A window Alice's session opens is hers alone.
-      {
-        action: setup.shared.messages.openWindow,
-        event: {
-          requestId: "alice-w",
-          windowId: "alice-w",
-          from: { before: "end" },
-          count: 10,
-        },
-      },
-      {
-        assertion: assert(() =>
-          windowIds(setup.shared.messages.windows).includes("alice-w")
+        action: action(() =>
+          version.key("sentAt").set(
+            new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+          )
         ),
       },
+      {
+        action: setup.room.sendMessage,
+        event: { requestId: "alice-message", version },
+        trustedUi: { surface: "ChatSendSurface", action: "ChatSend" },
+      },
+      { render: setup.room[UI] },
+      { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },
+      { assertion: assert(() => hasText(setup.room[UI], "Edit")) },
+      { assertion: assert(() => setup.room.canSend) },
       { label: "alice-sent" },
-      { await: "bob-reacted" },
+      { await: "bob-read" },
+      { await: "reader-read" },
+      { render: setup.room[UI] },
       {
         assertion: assert(() =>
-          bodies(setup.records.messages) ===
-            "Hello from Alice | Hi Alice, Bob here"
+          !hasText(setup.room[UI], "Replying to a message")
         ),
-      },
-      {
-        assertion: assert(() => reactionsOnFirst(setup.records.messages) === 1),
       },
     ],
   };
 });
 
-export const bob = pattern<{ setup: Setup }>(({ setup }) => {
-  const profile = Writable.of<TestProfile>({ name: "Bob" });
-  const room = FabriChatRoomCore({
-    myProfile: profile,
-    about: { kind: "group" as const },
-    messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
-    activity: setup.records.activity,
-    counters: setup.records.counters,
-  } as RoomArg);
-  const onFirst = FabriChatMessageRow({
-    message: setup.records.messages.key(0),
-    myProfile: profile,
-    inThread: false,
-    kind: "group" as const,
-    composer: Writable.of({}),
-    messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
-    activity: setup.records.activity,
-    counters: setup.records.counters,
-  } as RowArg);
+export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { action: setup.initializeProfile },
+    { await: "alice-sent" },
+    { assertion: assert(() => setup.room.messages.count === 1) },
+    { render: setup.room[UI] },
+    { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },
+    { assertion: assert(() => !hasText(setup.room[UI], "Edit")) },
+    { assertion: assert(() => setup.room.canSend) },
+    { action: action(() => clickButton(setup.room[UI], "Reply")) },
+    { render: setup.room[UI] },
+    {
+      assertion: assert(() => hasText(setup.room[UI], "Replying to a message")),
+    },
+    { label: "bob-read" },
+  ],
+}));
 
-  return {
-    [TESTS]: [
-      { await: "alice-sent" },
-      {
-        assertion: assert(() =>
-          !windowIds(setup.shared.messages.windows).includes("alice-w")
-        ),
-      },
-      {
-        assertion: assert(() =>
-          bodies(setup.records.messages) === "Hello from Alice"
-        ),
-      },
-      {
-        action: room.composerSend,
-        event: typed("Hi Alice, Bob here"),
-        trustedUi: sendGesture,
-      },
-      {
-        action: onFirst.sendReaction,
-        event: { requestId: "bob-1", emoji: "👍" },
-        trustedUi: reactGesture,
-      },
-      {
-        assertion: assert(() =>
-          bodies(setup.records.messages) ===
-            "Hello from Alice | Hi Alice, Bob here" &&
-          reactionsOnFirst(setup.records.messages) === 1
-        ),
-      },
-      { label: "bob-reacted" },
-    ],
-  };
+export const reader = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { action: setup.initializeProfile },
+    { await: "alice-sent" },
+    { render: setup.room[UI] },
+    { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },
+    { assertion: assert(() => !setup.room.canSend) },
+    {
+      assertion: assert(() =>
+        hasText(
+          setup.room[UI],
+          "A profile and write access are required to send.",
+        )
+      ),
+    },
+    { label: "reader-read" },
+  ],
+}));
+
+export default multiUserTest({
+  setup,
+  participants: { alice, bob, reader: { pattern: reader, access: "READ" } },
 });
-
-export default multiUserTest({ setup, participants: { alice, bob } });

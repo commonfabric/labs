@@ -184,21 +184,15 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Prerequisite: a sanctioned issuing path
+### Sanctioned native issuing path
 
-A native client needs a sanctioned way to hand the runtime a gesture it vouches
-for. The host embedding record already names this as the right posture: "a
-sanctioned headless issuance path, **not** a weakening of the in-runtime
-surface-origin defense". No such path exists yet. The runtime client's generic
-`cell:send` doesn't mark an event, and the in-repository precedents that do mark
-one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
-`trustedUi` steps) are not for embedding hosts. The path this design needs:
-
-- It is available only to the host, never to pattern code that the runtime runs.
-- It takes the surface and action with the event, and the runtime checks them
-  against the write's policy as it checks a rendered gesture's provenance.
-- It carries the mark to wherever the handler runs, as `rendererTrusted` already
-  does between runtimes.
+`bindNativeUiControl` from `@commonfabric/runner/native-ui` binds a host's
+reviewed surface and action to a room stream. The host calls the returned
+function only from that control's genuine user-input path, with the values the
+person saw. Keep that function inaccessible to patterns, loaded content,
+automation, and generic IPC. The runtime checks the writer identity, surface,
+action, actor, and space access; the trusted mark follows normal event transport.
+A generic `cell:send` cannot issue that mark.
 
 ## Delivering notices
 

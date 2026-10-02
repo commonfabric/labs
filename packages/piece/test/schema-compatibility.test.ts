@@ -6069,6 +6069,131 @@ describe("verb event required-field transitions", () => {
     ).not.toThrow();
   });
 
+  it("accepts a widened event union through a referenced stream", () => {
+    const event = (value: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: { canSend: value },
+        },
+      },
+      required: ["payload"],
+    });
+    const previous = verbInResult(event({ type: "boolean" }));
+    const candidate = verbInResult(event({ type: ["boolean", "undefined"] }));
+    expect(() => assertPatternSchemasBackwardCompatible(previous, candidate))
+      .not.toThrow();
+    expect(() => assertPatternSchemasBackwardCompatible(candidate, previous))
+      .toThrow(/payload.canSend/);
+  });
+
+  it("accepts wider scalar event constraints and refuses narrower ones", () => {
+    const result = (maxLength: number): Pattern =>
+      pattern({}, {
+        type: "object",
+        properties: {
+          rename: {
+            type: "object",
+            asCell: ["stream"],
+            properties: { label: { type: "string", maxLength } },
+          },
+        },
+      });
+    expect(() => assertPatternSchemasBackwardCompatible(result(8), result(16)))
+      .not.toThrow();
+    expect(() => assertPatternSchemasBackwardCompatible(result(16), result(8)))
+      .toThrow(/label: maxLength/);
+  });
+
+  it("reverses variance again for a caller-supplied callback stream", () => {
+    const result = (callbackValue: JSONSchema): Pattern =>
+      pattern({}, {
+        type: "object",
+        properties: { start: { $ref: "#/$defs/Start", asCell: ["stream"] } },
+        $defs: {
+          Start: {
+            type: "object",
+            properties: {
+              callback: { $ref: "#/$defs/Callback", asCell: ["stream"] },
+            },
+            required: ["callback"],
+          },
+          Callback: callbackValue,
+        },
+      });
+    const narrow = result({ type: "number" });
+    const wide = result({ type: ["number", "string"] });
+    expect(() => assertPatternSchemasBackwardCompatible(narrow, wide))
+      .toThrow(/callback/);
+    expect(() => assertPatternSchemasBackwardCompatible(wide, narrow))
+      .not.toThrow();
+  });
+
+  it("keeps ordinary cell output unions covariant", () => {
+    const result = (value: JSONSchema): Pattern =>
+      pattern({}, {
+        type: "object",
+        properties: { status: { ...value as object, asCell: ["cell"] } },
+      });
+    const narrow = result({ type: "boolean" });
+    const wide = result({ type: ["boolean", "undefined"] });
+    expect(() => assertPatternSchemasBackwardCompatible(narrow, wide))
+      .toThrow(/result.status/);
+    expect(() => assertPatternSchemasBackwardCompatible(wide, narrow))
+      .not.toThrow();
+  });
+
+  it("counts consecutive stream wrappers when determining event variance", () => {
+    const result = (wrappers: number, value: JSONSchema): Pattern =>
+      pattern({}, {
+        type: "object",
+        properties: {
+          send: {
+            $ref: "#/$defs/Payload",
+            asCell: Array.from({ length: wrappers }, () => "stream" as const),
+          },
+        },
+        $defs: { Payload: value },
+      });
+    for (const wrappers of [1, 2, 3, 4]) {
+      const narrow = result(wrappers, { type: "number" });
+      const wide = result(wrappers, { type: ["number", "string"] });
+      const [previous, candidate] = wrappers % 2 === 1
+        ? [narrow, wide]
+        : [wide, narrow];
+      expect(() => assertPatternSchemasBackwardCompatible(previous, candidate))
+        .not.toThrow();
+      expect(() => assertPatternSchemasBackwardCompatible(candidate, previous))
+        .toThrow(/result.send/);
+    }
+  });
+
+  it("keeps durable stream link proofs in their source-to-target direction", () => {
+    const narrow: JSONSchema = { type: "boolean", asCell: ["stream"] };
+    const wide: JSONSchema = {
+      type: ["boolean", "undefined"],
+      asCell: ["stream"],
+    };
+    expect(() => assertSchemaSubset(narrow, wide)).not.toThrow();
+    expect(() => assertSchemaSubset(wide, narrow)).toThrow();
+  });
+
+  it("retains event semantic-extension checks when its union widens", () => {
+    const before = verbInResult({
+      type: "object",
+      properties: { value: { type: "boolean", readOnly: true } },
+    });
+    const after = verbInResult({
+      type: "object",
+      properties: {
+        value: { type: ["boolean", "undefined"], readOnly: false },
+      },
+    });
+    expect(() => assertPatternSchemasBackwardCompatible(before, after))
+      .toThrow(/readOnly changed/);
+  });
+
   it("still refuses an ordinary result field that stops being required", () => {
     const result = (required: string[]): Pattern =>
       pattern({ type: "object", properties: {} }, {

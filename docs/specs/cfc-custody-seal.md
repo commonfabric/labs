@@ -366,8 +366,8 @@ writing:
   same pattern the member sealed and published alone, whose answer the room
   then shows as its own, or terms whose slot is empty. A writer claim does not
   close this in general either. Write authority is keyed by code, not by piece
-  (normative CFC §8.15.8), so a member's own instance of the room's pattern,
-  bound beneath the room's cells, runs an authorized writer; and a source
+  (normative CFC §8.15.8), so a successfully initialized instance of the room's
+  pattern runs an authorized writer; and a source
   update registers its successor as the predecessor's delegate
   ([SC-45](cfc-spec-changes.md)), so the successor's writer satisfies the
   claim.
@@ -382,8 +382,10 @@ nothing more. A writer claim on `T | null` sits on the `T` branch alone and
 does not refuse a write of `null`, so the room's terms are absent until
 proposed rather than `null`. The pattern's integration test,
 `packages/patterns/integration/cfc-custody-projector.test.ts`, pins a link
-written into the room's result document, and the room's own pattern bound
-beneath its terms, as known residuals.
+written into the room's result document as a known residual. It also verifies
+that setup cannot initialize protected cells through a binding beneath the
+room's existing terms: setup authority covers the new binding slot, not the
+cell it names.
 
 Holding which instance a room shows against its members needs a binding they
 cannot rewrite: a write-once or create-only primitive for it, or write
