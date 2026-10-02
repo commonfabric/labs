@@ -10,7 +10,12 @@
  *   - explainTriggerTrace(options?)
  */
 
-import { $conn, CellHandle, RequestType } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  CellHandle,
+  CellReadRefusedError,
+  RequestType,
+} from "@commonfabric/runtime-client";
 import type {
   CellRef,
   RuntimeClient,
@@ -460,6 +465,11 @@ export function createDebugUtils(
         cell: ref,
         meta: options.meta,
       });
+      // A refused read says so, as `CellHandle.sync()` does below, rather
+      // than return as a cell that holds nothing.
+      if ("refused" in response) {
+        throw new CellReadRefusedError(response.refused);
+      }
       value = CellHandle.deserialize(
         new CellHandle(rt, ref),
         response.value,

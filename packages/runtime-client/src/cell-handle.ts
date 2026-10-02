@@ -32,7 +32,11 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { InitializedRuntimeConnection } from "./client/connection.ts";
 import {
+  type CellGetRequest,
+  type CellPullRequest,
+  type CellReadRefusal,
   type CellRef,
+  type CellValueResponse,
   type CfcLabelView,
   JSONValue,
   RequestType,
@@ -59,6 +63,42 @@ const operationQueues = new WeakMap<
 >();
 
 export const $onCellUpdate = Symbol("$onCellUpdate");
+
+/**
+ * Delivers to a handle a subscription update the worker refused, which
+ * carries the refusal and nothing of the cell.
+ */
+export const $onCellRefused = Symbol("$onCellRefused");
+
+/**
+ * What a handle holds of its cell: the value its last read returned, which is
+ * `undefined` for a cell that holds nothing, or the refusal that stands in
+ * its place when the worker refused that read.
+ */
+export type CellHandleRead<T> =
+  | { readonly value: Readonly<T> | undefined }
+  | { readonly refused: CellReadRefusal };
+
+/**
+ * Thrown by a read of a handle whose read the worker refused, and the
+ * rejection of `sync()`, `pull()` and `initialize()` when the worker refuses
+ * the read they make: a read the host could not make never returns as a cell
+ * that holds nothing.
+ */
+export class CellReadRefusedError extends Error {
+  readonly #refusal: CellReadRefusal;
+
+  constructor(refusal: CellReadRefusal) {
+    super(`The worker refused this read of a cell (${refusal.refusedBy}).`);
+    this.name = "CellReadRefusedError";
+    this.#refusal = refusal;
+  }
+
+  /** What refused the read. */
+  get refusal(): CellReadRefusal {
+    return this.#refusal;
+  }
+}
 
 /**
  * A cell's value as the _client_ holds it: what a cell holds, with a
@@ -90,6 +130,9 @@ export class CellHandle<T = unknown> {
   #value: T | undefined;
   #cfcLabel: CfcLabelView | undefined;
 
+  /** The refusal of this handle's last read, while it stands. */
+  #refusal: CellReadRefusal | undefined;
+
   /**
    * Whether any subscriber asked for the CFC label. Sticky: once a label-aware
    * subscription exists on this handle, label changes also fire its callbacks.
@@ -98,7 +141,10 @@ export class CellHandle<T = unknown> {
 
   #callbacks = new Map<
     number,
-    (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void
+    {
+      onValue: (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void;
+      onRefused?: (refusal: CellReadRefusal) => void;
+    }
   >();
   #nextCallbackId = 0;
   #schemaWarned = false;
@@ -165,10 +211,38 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * The refusal of this handle's last read, while it stands: the handle then
+   * holds nothing of its cell, and {@link get} throws. `undefined` while the
+   * handle holds a value, holds nothing because its cell holds nothing, or
+   * has not been read.
+   */
+  get refusal(): CellReadRefusal | undefined {
+    return this.#refusal;
+  }
+
+  /**
+   * What the handle holds of its cell: the value, or the refusal that stands
+   * in its place. Unlike {@link get}, it does not throw for a refusal, so a
+   * caller that shows the cell can show its placeholder instead.
+   */
+  lastRead(): CellHandleRead<T> {
+    return this.#refusal === undefined
+      ? { value: this.#value }
+      : { refused: this.#refusal };
+  }
+
+  /**
    * Get the current cached value.
+   *
+   * @throws {CellReadRefusedError} While the worker's refusal of the
+   *   handle's last read stands, since the handle then holds nothing of its
+   *   cell, which is not the same as a cell that holds nothing.
    */
   get(): Readonly<T> | undefined {
     this.#requireSchema("get");
+    if (this.#refusal !== undefined) {
+      throw new CellReadRefusedError(this.#refusal);
+    }
     return this.#value !== undefined ? this.#value as Readonly<T> : undefined;
   }
 
@@ -239,6 +313,10 @@ export class CellHandle<T = unknown> {
    * returns the value selected by that transaction. A readable schema fallback
    * does not count as stored. Concurrent initializers converge on one winner
    * instead of replacing it with a blind write.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses the read of the
+   *   value that storage already held, which then stands as the handle's
+   *   refusal.
    */
   async initialize(value: T): Promise<Readonly<T>> {
     this.#requireSchema("initialize");
@@ -248,7 +326,7 @@ export class CellHandle<T = unknown> {
     const serialized = this.#serializeWrite(value);
     const writeGeneration = ++this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
-    const { current, authoritative } = await this.#enqueueOperation(
+    const { read, authoritative } = await this.#enqueueOperation(
       async (queue) => {
         const authoritativeGeneration = queue.authoritativeGeneration;
         const response = await this.#conn.request<RequestType.CellInitialize>({
@@ -256,23 +334,24 @@ export class CellHandle<T = unknown> {
           cell: this.ref(),
           value: serialized,
         });
-        const current = CellHandle.deserialize<T>(this, response.value) as T;
+        const read = this.#readOf(response);
         const authoritative = updateGeneration === this.#updateGeneration &&
           authoritativeGeneration === queue.authoritativeGeneration;
-        if (authoritative) {
-          queue.value = current;
-          queue.hasValue = true;
-        }
-        return { current, authoritative };
+        if (authoritative) this.#recordInQueue(queue, read);
+        return { read, authoritative };
       },
     );
-    if (
-      writeGeneration === this.#writeGeneration &&
+    const latest = writeGeneration === this.#writeGeneration &&
       updateGeneration === this.#updateGeneration &&
-      authoritative
-    ) {
-      this.#publishValue(current);
+      authoritative;
+    if ("refused" in read) {
+      if (latest) this.#refuse(read.refused);
+      throw new CellReadRefusedError(read.refused);
     }
+    // What an initialization stores, and what it finds stored, are both
+    // defined.
+    const current = read.value as T;
+    if (latest) this.#publishValue(current);
     return current as Readonly<T>;
   }
 
@@ -368,13 +447,29 @@ export class CellHandle<T = unknown> {
 
   #publishValue(value: T): void {
     this.#value = value;
-    for (const callback of this.#callbacks.values()) {
+    // The handle now holds the value the host wrote, whatever the worker
+    // refused before.
+    this.#refusal = undefined;
+    for (const { onValue } of this.#callbacks.values()) {
       try {
         // A local update does not change the label; carry the current one.
-        callback(value as Readonly<T>, this.#cfcLabel);
+        onValue(value as Readonly<T>, this.#cfcLabel);
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
+    }
+  }
+
+  /**
+   * Drops what the handle holds of its cell for `refusal`, and tells each
+   * subscriber that listens for refusals.
+   */
+  #refuse(refusal: CellReadRefusal): void {
+    this.#value = undefined;
+    this.#cfcLabel = undefined;
+    this.#refusal = refusal;
+    for (const { onRefused } of this.#callbacks.values()) {
+      onRefused?.(refusal);
     }
   }
 
@@ -567,7 +662,17 @@ export class CellHandle<T = unknown> {
       value: T | undefined,
       cfcLabel?: CfcLabelView | undefined,
     ) => Cancel | undefined | void,
-    options: { includeCfcLabel?: boolean } = {},
+    options: {
+      includeCfcLabel?: boolean;
+
+      /**
+       * Hears each refusal of the handle's read, which `callback` does not:
+       * a refusal carries nothing of the cell, so it is never handed to
+       * `callback` as a value. It runs at once when the handle's last read
+       * was refused, as `callback` does for a value.
+       */
+      onRefused?: (refusal: CellReadRefusal) => void;
+    } = {},
   ): Cancel {
     this.#requireSchema("subscribe");
     // If a label-aware subscription is added AFTER a value-only one already
@@ -603,7 +708,19 @@ export class CellHandle<T = unknown> {
       }
     };
 
-    this.#callbacks.set(callbackId, wrappedCallback);
+    const onRefused = options.onRefused;
+    this.#callbacks.set(callbackId, {
+      onValue: wrappedCallback,
+      ...(onRefused === undefined ? {} : {
+        onRefused: (refusal: CellReadRefusal) => {
+          try {
+            onRefused(refusal);
+          } catch (error) {
+            console.error("[CellHandle] Callback error:", error);
+          }
+        },
+      }),
+    });
     if (upgradeToCfcLabel) {
       // Tear down the label-less backend sub, then re-open it label-aware.
       void this.#conn.unsubscribe(this).finally(() => {
@@ -613,9 +730,13 @@ export class CellHandle<T = unknown> {
       this.#conn.subscribe(this);
     }
 
-    // Always call callback immediately with current value
-    // This matches Cell behavior - callback is always called, even if value is undefined
-    wrappedCallback(this.#value, this.#cfcLabel);
+    // Call immediately with what the handle holds, as Cell does: the value,
+    // even when it is undefined, or the refusal standing in its place.
+    if (this.#refusal === undefined) {
+      wrappedCallback(this.#value, this.#cfcLabel);
+    } else {
+      this.#callbacks.get(callbackId)?.onRefused?.(this.#refusal);
+    }
 
     return () => {
       if (typeof cleanup === "function") {
@@ -637,34 +758,7 @@ export class CellHandle<T = unknown> {
    * If the value is itself a link, follows it to get the actual value.
    */
   async sync(): Promise<Readonly<T> | undefined> {
-    const writeGeneration = this.#writeGeneration;
-    const updateGeneration = this.#updateGeneration;
-    const { value, authoritative } = await this.#enqueueOperation(
-      async (queue) => {
-        const authoritativeGeneration = queue.authoritativeGeneration;
-        const response = await this.#conn.request<RequestType.CellGet>({
-          type: RequestType.CellGet,
-          cell: this.ref(),
-        });
-        const value = CellHandle.deserialize<T>(this, response.value) as T;
-        const authoritative = updateGeneration === this.#updateGeneration &&
-          authoritativeGeneration === queue.authoritativeGeneration;
-        if (authoritative) {
-          queue.value = value;
-          queue.hasValue = true;
-        }
-        return { value, authoritative };
-      },
-    );
-
-    if (
-      writeGeneration === this.#writeGeneration &&
-      updateGeneration === this.#updateGeneration &&
-      authoritative
-    ) {
-      this.#value = value;
-    }
-    return value;
+    return await this.#read({ type: RequestType.CellGet, cell: this.ref() });
   }
 
   /**
@@ -673,41 +767,78 @@ export class CellHandle<T = unknown> {
    * `awaitDurability: false` to read reactive state while writes remain
    * unconfirmed; a cell with no value yet still waits, since the write that
    * creates it may be in flight.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses the read, as
+   *   {@link sync} does.
    */
   async pull(
     options: { awaitDurability?: boolean } = {},
   ): Promise<Readonly<T> | undefined> {
+    return await this.#read({
+      type: RequestType.CellPull,
+      cell: this.ref(),
+      ...(options.awaitDurability === undefined
+        ? {}
+        : { awaitDurability: options.awaitDurability }),
+    });
+  }
+
+  /**
+   * Helper for {@link sync} and {@link pull}, which asks the worker for the
+   * cell's value with `request` and caches the answer, unless a write or an
+   * update this handle took meanwhile is newer. A refused read caches the
+   * refusal and rejects.
+   */
+  async #read(
+    request: CellGetRequest | CellPullRequest,
+  ): Promise<Readonly<T> | undefined> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
-    const { value, authoritative } = await this.#enqueueOperation(
+    const { read, authoritative } = await this.#enqueueOperation(
       async (queue) => {
         const authoritativeGeneration = queue.authoritativeGeneration;
-        const response = await this.#conn.request<RequestType.CellPull>({
-          type: RequestType.CellPull,
-          cell: this.ref(),
-          ...(options.awaitDurability === undefined
-            ? {}
-            : { awaitDurability: options.awaitDurability }),
-        });
-        const value = CellHandle.deserialize<T>(this, response.value) as T;
+        const response = await this.#conn.request<
+          RequestType.CellGet | RequestType.CellPull
+        >(request);
+        const read = this.#readOf(response);
         const authoritative = updateGeneration === this.#updateGeneration &&
           authoritativeGeneration === queue.authoritativeGeneration;
-        if (authoritative) {
-          queue.value = value;
-          queue.hasValue = true;
-        }
-        return { value, authoritative };
+        if (authoritative) this.#recordInQueue(queue, read);
+        return { read, authoritative };
       },
     );
-
-    if (
-      writeGeneration === this.#writeGeneration &&
+    const latest = writeGeneration === this.#writeGeneration &&
       updateGeneration === this.#updateGeneration &&
-      authoritative
-    ) {
-      this.#value = value;
+      authoritative;
+    if ("refused" in read) {
+      if (latest) {
+        this.#value = undefined;
+        this.#cfcLabel = undefined;
+        this.#refusal = read.refused;
+      }
+      throw new CellReadRefusedError(read.refused);
     }
-    return value;
+    if (latest) {
+      this.#value = read.value as T | undefined;
+      this.#refusal = undefined;
+    }
+    return read.value;
+  }
+
+  /** What `response`, a read's answer, holds: the value, or the refusal. */
+  #readOf(response: CellValueResponse): CellHandleRead<T> {
+    return "refused" in response
+      ? { refused: response.refused }
+      : { value: CellHandle.deserialize<T>(this, response.value) as T };
+  }
+
+  /**
+   * Records `read` as the base the queue's later appends start from: a value,
+   * or none for a refusal, which holds nothing of the cell.
+   */
+  #recordInQueue(queue: CellOperationQueue, read: CellHandleRead<T>): void {
+    queue.value = "refused" in read ? undefined : read.value;
+    queue.hasValue = !("refused" in read);
   }
 
   /**
@@ -879,6 +1010,7 @@ export class CellHandle<T = unknown> {
     labelUpdate?: { cfcLabel: CfcLabelView | undefined },
   ): void {
     this.#updateGeneration++;
+    this.#refusal = undefined;
     const applied = applyValue(
       value,
       this.#value,
@@ -904,9 +1036,28 @@ export class CellHandle<T = unknown> {
 
     if (valueChanged) this.#value = applied;
     if (labelUpdate !== undefined) this.#cfcLabel = labelUpdate.cfcLabel;
-    for (const callback of this.#callbacks.values()) {
-      callback(this.#value as Readonly<T>, this.#cfcLabel);
+    for (const { onValue } of this.#callbacks.values()) {
+      onValue(this.#value as Readonly<T>, this.#cfcLabel);
     }
+  }
+
+  /**
+   * Handles a subscription update the worker refused. Each refusal reaches
+   * the subscribers that listen for one, since each stands for a change to
+   * what the read found, while what the handle holds, nothing of the cell,
+   * stays the same.
+   */
+  [$onCellRefused](refusal: CellReadRefusal): void {
+    this.#updateGeneration++;
+    const queue = operationQueues.get(this.#rt)?.get(
+      cellRefToIdentityKey(this.#ref),
+    );
+    if (queue) {
+      queue.authoritativeGeneration++;
+      queue.value = undefined;
+      queue.hasValue = false;
+    }
+    this.#refuse(refusal);
   }
 
   /**

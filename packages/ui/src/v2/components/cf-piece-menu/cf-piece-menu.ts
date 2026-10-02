@@ -16,6 +16,7 @@ import { type JSONSchema, parseFabricRef } from "@commonfabric/runner/shared";
 import {
   $conn,
   CellHandle,
+  CellReadRefusedError,
   isCellHandle,
   RequestType,
 } from "@commonfabric/runtime-client";
@@ -1753,6 +1754,11 @@ export class CFPieceMenu extends BaseElement {
         includeRef: true,
       });
       if (!fresh()) return;
+      // A refused read is a failure to read the argument, which the panel
+      // reports as one rather than show as an argument that holds nothing.
+      if ("refused" in response) {
+        throw new CellReadRefusedError(response.refused);
+      }
       if (response.cell) {
         // The argument's own schema-bearing ref: its schema carries the
         // stream declarations for argument-side handlers, and the handle
