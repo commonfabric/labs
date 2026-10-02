@@ -283,3 +283,27 @@ Deno.test("retirement, revocation and live claims survive compaction and reload"
     Deno.removeSync(directory, { recursive: true });
   }
 });
+
+Deno.test("an epoch left live by a crash is retired once and keeps that time", async () => {
+  const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+  const router = (await Identity.fromRaw(new Uint8Array(32).fill(94))).did();
+  const epoch = "ab".repeat(16);
+  let store = new RoutedEpochStore(path);
+  try {
+    store.consume(router, epoch);
+    store.close();
+    const retires = () =>
+      Deno.readTextFileSync(path).split("\n").filter((line) =>
+        line.startsWith('["retire"')
+      );
+    for (let i = 0; i < 3; i++) {
+      store = new RoutedEpochStore(path);
+      store.close();
+      assertEquals(retires().length, 1);
+    }
+    store = new RoutedEpochStore(path);
+  } finally {
+    store.close();
+    Deno.removeSync(directory, { recursive: true });
+  }
+});
