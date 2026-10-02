@@ -706,6 +706,35 @@ Deno.test("sqlite session store loads a session row without a handle table and p
   }
 });
 
+Deno.test("sqlite session store refuses a session whose stored handle table is not JSON, naming the column", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const store = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(path),
+  });
+  try {
+    const session = createHarnessChatSessionStatus({
+      sessionId: "session-with-damaged-table",
+      createdAt: "2026-05-27T00:00:00.000Z",
+      workspace: { hostPath: "/workspace" },
+    });
+    store.saveSession({
+      session,
+      transcript: [],
+      handleTable: createHarnessHandleTable("run-earlier"),
+    });
+    store.database.prepare(`
+      UPDATE chat_session SET handle_table = '{"type":' WHERE session_id = :id
+    `).run({ id: session.sessionId });
+
+    expect(() => store.getSession(session.sessionId)).toThrow(
+      "failed to parse chat_session.handle_table",
+    );
+  } finally {
+    store.close();
+    await Deno.remove(path);
+  }
+});
+
 Deno.test("sqlite session store persists turn session event mutations atomically", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const store = await openSqliteHarnessChatSessionStore({
