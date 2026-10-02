@@ -27,19 +27,22 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
   text lacks the prefix, `not-json` when what follows the prefix is not JSON,
   and `malformed` for any other form the format does not allow. The spec settles
   all three alike, so a decoder need only refuse; the kind says why.
-- `divergence`: present where this package does not do what the spec says. The
-  `encode` and `decode` beside it are then the spec's outcomes, and
-  `divergence.encode` and `divergence.decode` are this package's, given only
-  where they differ. `divergence.note` says what the spec requires.
-- `unspecified`: present where the spec does not decide the case. The outcome
-  recorded is this package's, and the note says what is open.
+- `divergence`: present where the spec says outright that this package falls
+  short of it. The `encode` and `decode` beside it are then the spec's outcomes,
+  computed by the generator rather than written by hand, and `divergence.encode`
+  and `divergence.decode` are this package's, given only where they differ.
+  `divergence.note` says what the spec requires.
+- `unspecified`: present where the spec does not settle the case. The outcome
+  recorded is this package's, and the note says what is open. An implementation
+  may differ from it without failing to conform.
 
 An entry has `encode`, `decode`, or both. A value whose text decodes back to it
 has both, with the same value and text. A text that is not the canonical form of
 the value it decodes to has an `encode` giving that canonical form.
 
-Refusals assume a strict decoder. A lenient one returns a `Problematic` value in
-place of raising, at the point of the malformation.
+A refusal is recorded only where the codec refused; a fault in the codec fails
+generation instead. Refusals assume a strict decoder. A lenient one returns a
+`Problematic` value in place of raising, at the point of the malformation.
 
 ## Exact text
 
@@ -56,7 +59,13 @@ taking the bytes WTF-8 gives it.
 
 A `value` is a descriptor: JSON that says everything about a value the format
 carries, and nothing about how the format carries it. Two descriptors describe
-the same value exactly when they are equal as JSON.
+the same value exactly when they are equal as JSON read this way: a number is an
+IEEE 754 double, so `1` and `1.0` are equal, and an integer past 2^53 is written
+in the shortest form that reads back as its double and must be read as that
+double, not as an exact integer; a string is equal to another with the same code
+points, compared without normalization; an array is equal to another of equal
+elements in the same order; and an object is equal to another with the same keys
+holding equal values.
 
 `null`, `true`, `false`, and a finite number other than negative zero describe
 themselves. A string describes itself when it holds no lone surrogate. Every
@@ -69,7 +78,7 @@ other descriptor is an object with one key, naming the kind of value:
 | `{"undefined": null}`                            | `undefined`.                                                                                   |
 | `{"bigint": "-129"}`                             | A bigint, in decimal.                                                                          |
 | `{"symbol": "key"}`                              | The symbol registered under a key, which is a string descriptor.                               |
-| `{"unregisteredSymbol": "local"}`                | A symbol with no registry key, under its description.                                          |
+| `{"unregisteredSymbol": "local"}`                | A symbol with no registry key, under its description, or `null` for none.                      |
 | `{"array": [1, {"hole": 3}, 2]}`                 | An array. A `hole` entry stands for that many absent elements, in runs as long as possible.    |
 | `{"record": [["a", 1], ["b", 2]]}`               | A plain object, as key and value pairs in UTF-8 order of key. A key is a string descriptor.    |
 | `{"Bytes": "0102"}`                              | Bytes, in lowercase hexadecimal.                                                               |
@@ -89,3 +98,20 @@ Strings inside the class descriptors are string descriptors. `name` in an
 `Error` is the error's name even where the wire writes `null` for a name equal
 to the type, and an `Unavailable` holds an `errorMessage` only where one is
 stored, a kind's default message not being one.
+
+## Open questions
+
+The cases marked `unspecified` are questions for the owner of the format, each
+recorded with this package's current answer:
+
+1. Whether the JSON number `-0` decodes to negative zero.
+2. What a JSON number past the largest double decodes to.
+3. What a decoder does with a record that names one key twice.
+4. Whether `{"/Undefined@1":{}}` is accepted, section 5 accepting `{}` for a
+   stateless type where section 3 and its rule against reading a state no
+   encoder writes give `Undefined@1` the state `null` alone.
+5. Whether a non-minimal bigint state, such as `AAA`, is refused.
+6. Whether a base64url state holding whitespace is refused.
+7. Whether a base64url state with nonzero bits after its last whole byte, such
+   as `AR`, is refused.
+8. How `Map@1` and `Set@1` are written, their codecs being stubs under rework.
