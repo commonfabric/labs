@@ -15,7 +15,11 @@ import { rootRenderPolicyFor } from "@commonfabric/html/worker";
 import { Identity } from "@commonfabric/identity";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import { type Cell, KeepAsCell, NAME, Runtime } from "@commonfabric/runner";
-import { nameSchema, stringSchema } from "@commonfabric/runner/schemas";
+import {
+  nameSchema,
+  rendererVDOMSchema,
+  stringSchema,
+} from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
@@ -30,7 +34,6 @@ import {
   renderModulePolicySourceFor,
 } from "@/backends/runtime-processor.ts";
 import { createCellRef } from "@/backends/utils.ts";
-import { FIELD_SHAPE_SCHEMA } from "@/piece-exports.ts";
 import type { CellUpdateNotification } from "@/protocol/mod.ts";
 
 const owner = await Identity.fromPassphrase("host read gate owner");
@@ -166,6 +169,15 @@ async function shelf() {
     [[], [ownerOnly]],
     [["auth", "token"], [cfcAtom.resource("CredentialSecret")]],
   ]);
+  // The owner's piece holding a credential in a field of its own document,
+  // which the default ceiling shows no one.
+  const credentialPiece = await write("credential-piece", {
+    [NAME]: "Importer",
+    auth: { token: CREDENTIAL },
+  }, [
+    [[], [ownerOnly]],
+    [["auth", "token"], [cfcAtom.resource("CredentialSecret")]],
+  ]);
   await runtime.idle();
 
   return {
@@ -174,6 +186,7 @@ async function shelf() {
     credential,
     importer,
     inlineImporter,
+    credentialPiece,
     sealedEntry,
     piece,
     nestedPiece,
@@ -292,6 +305,64 @@ describe("HostReadGate", () => {
       expect(answer).toEqual({ value: { [NAME]: "Shared piece" } });
     });
 
+    // A read is decided on the labels of its cell's own node, which cover
+    // its ancestors, and on everything it consumed below that node, so a
+    // narrow read is not refused for a field it stops short of.
+    it("returns the owner the `[NAME]` of their piece holding a credential in a field of its own document", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const read = gate.read(docs.credentialPiece.asSchema(nameSchema));
+      const { updates, cancel } = subscribe(
+        gate,
+        docs.credentialPiece.asSchema(nameSchema),
+      );
+      cancel();
+
+      expect(read).toEqual({ value: { [NAME]: "Importer" } });
+      expect(updates).toEqual([
+        expect.objectContaining({ value: { [NAME]: "Importer" } }),
+      ]);
+    });
+
+    it("refuses the owner a read of the same piece that reaches the credential", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const toToken = {
+        type: "object",
+        properties: {
+          auth: { type: "object", properties: { token: { type: "string" } } },
+        },
+      } as const;
+
+      for (const schema of [true, toToken] as const) {
+        const answer = gate.read(docs.credentialPiece.asSchema(schema));
+        expect(holds(answer, CREDENTIAL)).toBe(false);
+        expect("refused" in answer).toBe(true);
+      }
+    });
+
+    it("returns a visitor the `[NAME]` of a piece one of whose fields only its owner may see, and refuses the field", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, visitor);
+
+      expect(gate.read(docs.notedPiece.asSchema(nameSchema))).toEqual({
+        value: { [NAME]: "Noted piece" },
+      });
+      const note = gate.read(docs.notedPiece.asSchema(true));
+      expect(holds(note, OWNER_ONLY_NOTE)).toBe(false);
+      expect("refused" in note).toBe(true);
+    });
+
+    it("refuses a visitor a read that stops at a link to a sealed entry, on the entry's own label", async () => {
+      await using docs = await shelf();
+      const answer = gateFor(docs.runtime, visitor).read(
+        docs.piece.key("entry").asSchema({ asCell: ["cell"] }),
+      );
+
+      expect(holds(answer, SEALED_ENTRY)).toBe(false);
+      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+    });
+
     it("returns a visitor the whole of a piece anyone may see", async () => {
       await using docs = await shelf();
       const answer = gateFor(docs.runtime, visitor).read(
@@ -356,6 +427,20 @@ describe("HostReadGate", () => {
   });
 
   describe("what a piece exports, as the shell asks it", () => {
+    // The shell asks a piece whether it exports an `openPath` stream, and
+    // for its sidebar, by reading the piece's root for that one field. Each
+    // read is decided on the piece's own node and on what it reads, so a
+    // credential elsewhere in the piece does not refuse it.
+    const openPathRead = {
+      type: "object",
+      properties: { openPath: { asCell: ["stream"] } },
+    } as const;
+    const sidebarRead = {
+      type: "object",
+      properties: { sidebarUI: { $ref: "#/$defs/vdomNode" } },
+      $defs: { ...rendererVDOMSchema.$defs },
+    } as const;
+
     for (const piece of ["importer", "inlineImporter"] as const) {
       const where = piece === "importer"
         ? "a document of its own"
@@ -371,20 +456,20 @@ describe("HostReadGate", () => {
         expect("refused" in answer).toBe(true);
       });
 
-      it(`returns the owner the \`openPath\` stream and \`sidebarUI\` beside a credential in ${where}, read at each field`, async () => {
+      it(`returns the owner the \`openPath\` stream and \`sidebarUI\` beside a credential in ${where}, each read from the root for that field`, async () => {
         await using docs = await shelf();
         const gate = gateFor(docs.runtime, owner);
-        const openPath = gate.read(
-          docs[piece].key("openPath").asSchema(FIELD_SHAPE_SCHEMA),
-        );
-        const sidebar = gate.read(
-          docs[piece].key("sidebarUI").asSchema(FIELD_SHAPE_SCHEMA),
-        );
+        const openPath = gate.read(docs[piece].asSchema(openPathRead));
+        const sidebar = gate.read(docs[piece].asSchema(sidebarRead));
 
         expect(openPath).toEqual({
-          value: expect.objectContaining({ "/": expect.anything() }),
+          value: {
+            openPath: expect.objectContaining({ "/": expect.anything() }),
+          },
         });
-        expect(sidebar).toEqual({ value: {} });
+        expect(sidebar).toEqual({
+          value: { sidebarUI: expect.objectContaining({ name: "div" }) },
+        });
         expect(holds([openPath, sidebar], CREDENTIAL)).toBe(false);
       });
     }
@@ -418,10 +503,10 @@ describe("HostReadGate", () => {
       await using docs = await shelf();
       const gate = gateFor(docs.runtime, visitor);
 
-      for (const field of ["openPath", "sidebarUI"]) {
-        expect(
-          gate.read(docs.importer.key(field).asSchema(FIELD_SHAPE_SCHEMA)),
-        ).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      for (const schema of [openPathRead, sidebarRead]) {
+        expect(gate.read(docs.importer.asSchema(schema))).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
       }
     });
   });

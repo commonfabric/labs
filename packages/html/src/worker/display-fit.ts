@@ -56,10 +56,10 @@ const logger = getLogger("display-fit", { enabled: false, level: "debug" });
  * What a display decision consults beyond the labels it fits: the resolver
  * that rewrites a label through the display boundary's exchange rules before
  * the fit, and the sources whose changes can change the decision, which a
- * {@link MembershipWatch} subscribes to. A source left out is one the
- * decision does without: no resolver fits labels by exact match, and no
- * provider leaves a decision unrevisited when what it would watch changes,
- * which still decides soundly on what has synced.
+ * {@link FitWatch} subscribes to. A source left out is one the decision does
+ * without: no resolver fits labels by exact match, and no provider leaves a
+ * decision unrevisited when what it would watch changes, which still decides
+ * soundly on what has synced.
  */
 export type DisplayFitSources = {
   readonly resolveConfidentiality?: RenderConfidentialityResolver;
@@ -79,11 +79,15 @@ export type RenderLabelSummary = {
 };
 
 /**
- * How a decision watches the membership and the module policies its labels
- * name: the documents already watched, the cancel group the watches join, and
- * what to run when one changes.
+ * How a decision that is made again watches what it consulted: each label it
+ * fits names documents its outcome depends on, such as a space's membership
+ * or a module policy's manifest, and the watch subscribes to each, once, so
+ * that the decision is made again when one changes. It holds the documents
+ * already watched, the cancel group the watches join, and what to run when
+ * one changes. Every entry point of the fit takes one, and watches what that
+ * entry point fits; a decision made once and not again is given none.
  */
-export type MembershipWatch = {
+export type FitWatch = {
   readonly watched: Set<string>;
   readonly addCancel: (cancel: Cancel) => void;
   reeval: () => void;
@@ -116,20 +120,22 @@ export function admitsEverything(policy: RenderPolicy): boolean {
 /**
  * The label that keeps `policy` from admitting what `reads` of `cell` show,
  * or undefined when the policy admits it. The policy has to admit both the
- * cell's labels, as {@link cellLabelRefusal} fits them, and the labels the
- * reads consumed, which reach every document a read passed through,
- * including one behind a link crossed part way along the path. A read that
- * reports no consumed labels counts as consuming the marker no policy admits,
- * and reads that consumed none are fitted by the cell's schema. Watches the
- * membership all of those labels name through `watch`, when given; a
- * decision made once and not again is given none.
+ * labels the reads consumed, which reach every document a read passed
+ * through, including one behind a link crossed part way along the path, and
+ * the labels at `cell`'s own node, as {@link cellLabelRefusal} fits them,
+ * which include those its ancestors' labels cover (see {@link atNode}). What
+ * lies below `cell` is fitted as the reads consumed it, so a read that stops
+ * short of a labeled field is not refused for that field, and one that
+ * reaches it is. A read that reports no consumed labels counts as consuming
+ * the marker no policy admits, and reads that consumed none are fitted by the
+ * cell's schema.
  */
 export function readRefusal(
   cell: Cell<unknown>,
   reads: readonly (SinkConsumedLabel | undefined)[],
   policy: RenderPolicy,
   sources: DisplayFitSources,
-  watch?: MembershipWatch,
+  watch?: FitWatch,
 ): RenderLabelSummary | undefined {
   if (admitsEverything(policy)) return undefined;
   const confidentiality = reads.flatMap((read) =>
@@ -139,19 +145,6 @@ export function readRefusal(
   const spaces = reads.flatMap((read) =>
     [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
   );
-  const labelSources = cellLabelSources(cell);
-  if (watch !== undefined) {
-    for (const source of labelSources ?? []) {
-      if (source.view === undefined) continue;
-      watchLabelMembership(
-        confidentialityLabels(source.view),
-        source.spaces,
-        watch,
-        sources,
-      );
-    }
-    watchLabelMembership(confidentiality, spaces, watch, sources);
-  }
   const admitted = confidentiality.length === 0
     ? confidentialityLabelsFromCellSchema(cell).every((atom) =>
       atomRenderableUnderPolicy(atom, policy)
@@ -162,10 +155,35 @@ export function readRefusal(
       () => spaces,
       policy,
       sources,
+      watch,
     );
   return admitted
-    ? cellLabelRefusal(cell, labelSources, policy, sources)
+    ? cellLabelRefusal(
+      cell,
+      cellLabelSources(cell)?.map(atNode),
+      policy,
+      sources,
+      watch,
+    )
     : { labelSource: "consumed", confidentiality, integrity };
+}
+
+/**
+ * `source`, with its view narrowed to the entries at the node it was read
+ * at. A cell's label view holds an entry for each labeled path at or below
+ * the cell, and folds what its ancestors' labels cover into the entries at
+ * the node itself, so these are the labels of the node and of every
+ * ancestor, and none of what lies below it.
+ */
+function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
+  if (source.view === undefined) return source;
+  const entries = source.view.entries.filter((entry) =>
+    entry.path.length === 0
+  );
+  return {
+    ...source,
+    view: entries.length === 0 ? undefined : { ...source.view, entries },
+  };
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */
@@ -173,9 +191,10 @@ export function canRenderCellUnderPolicy(
   cell: Cell<unknown>,
   policy: RenderPolicy,
   sources: DisplayFitSources,
+  watch?: FitWatch,
 ): boolean {
   return admitsEverything(policy) ||
-    cellLabelRefusal(cell, cellLabelSources(cell), policy, sources) ===
+    cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch) ===
       undefined;
 }
 
@@ -193,6 +212,7 @@ export function cellLabelRefusal(
   labelSources: readonly CfcLabelViewSource[] | undefined,
   policy: RenderPolicy,
   sources: DisplayFitSources,
+  watch?: FitWatch,
 ): RenderLabelSummary | undefined {
   if (
     labelSources === undefined ||
@@ -223,6 +243,7 @@ export function cellLabelRefusal(
         () => spaces,
         policy,
         sources,
+        watch,
       )
     ) {
       return { labelSource: "stored", confidentiality, integrity };
@@ -259,7 +280,9 @@ export function cellLabelSources(
  * Whether a label may render under `policy`, resolved through the
  * display-boundary exchange rules when a resolver is among `sources` and a
  * ceiling is in force, and fitted atom by atom otherwise. `spaces` names where
- * a module policy the label selects has its manifest.
+ * a module policy the label selects has its manifest. Watches, through
+ * `watch` when given, the membership and the manifests the label names, so
+ * that the decision is made again when one changes.
  */
 export function canRenderLabelUnderPolicy(
   confidentiality: readonly CfcConfClause[],
@@ -267,7 +290,11 @@ export function canRenderLabelUnderPolicy(
   spaces: () => readonly string[],
   policy: RenderPolicy,
   sources: DisplayFitSources,
+  watch?: FitWatch,
 ): boolean {
+  if (watch !== undefined) {
+    watchLabelSources(confidentiality, spaces(), watch, sources);
+  }
   // With a resolver and a ceiling in force, the label is exchange-resolved
   // before the fit, which is where `Space(...)`-via-`HasRole` principal forms
   // become admissible. Without a resolver, or on a declassify-only boundary,
@@ -400,10 +427,10 @@ export function confidentialityLabelsFromCellSchema(
  * document via `watch.watched`. A subscription that throws leaves that
  * document unwatched, and the fit itself stays fail-closed independently.
  */
-function watchLabelMembership(
+function watchLabelSources(
   confidentiality: readonly CfcConfClause[],
   spaces: readonly string[],
-  { watched, addCancel, reeval }: MembershipWatch,
+  { watched, addCancel, reeval }: FitWatch,
   sources: DisplayFitSources,
 ): void {
   const watchDocument = (key: string, subscribe: () => Cancel) => {

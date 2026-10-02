@@ -22,7 +22,7 @@ import {
   cellLabelRefusal,
   cellLabelSources,
   type DisplayFitSources,
-  type MembershipWatch,
+  type FitWatch,
   readRefusal,
   type RenderLabelSummary,
   type RenderPolicy,
@@ -289,7 +289,7 @@ export class HostReadGate {
           : refusedUpdate(refusal),
       );
     };
-    const watch: MembershipWatch = {
+    const watch: FitWatch = {
       watched: new Set<string>(),
       addCancel,
       reeval: decide,

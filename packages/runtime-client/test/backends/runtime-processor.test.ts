@@ -4787,6 +4787,62 @@ describe("runtime-processor", () => {
       })).rejects.toThrow("initialize failed");
     });
 
+    it("returns the value its own transaction found, not one written after it commits", async () => {
+      /** A runtime that writes `late` once each edit has committed. */
+      class LateWriter extends Runtime {
+        late: (() => Promise<void>) | undefined;
+        override async editWithRetry<T = void>(
+          fn: (tx: IExtendedStorageTransaction) => T,
+          maxRetries?: number,
+          options?: Parameters<Runtime["editWithRetry"]>[2],
+        ) {
+          const result = await super.editWithRetry(fn, maxRetries, options);
+          await this.late?.();
+          return result;
+        }
+      }
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new LateWriter({
+        apiUrl: new URL("http://localhost/"),
+        storageManager,
+      });
+      try {
+        const schema = {
+          type: "object",
+          properties: { winner: { type: "string" } },
+          required: ["winner"],
+        } as const;
+        const cell = runtime.getCell<{ winner: string }>(
+          cfcSigner.did(),
+          "initialize-then-written",
+          schema,
+        );
+        const seed = runtime.edit();
+        cell.withTx(seed).set({ winner: "stored" });
+        expect((await seed.commit()).error).toBeUndefined();
+        runtime.late = async () => {
+          runtime.late = undefined;
+          const later = runtime.edit();
+          cell.withTx(later).set({ winner: "written after" });
+          expect((await later.commit()).error).toBeUndefined();
+        };
+        const processor = buildProcessor({ runtime });
+
+        const selected = admitted(
+          await processor.handleCellInitialize({
+            type: RequestType.CellInitialize,
+            cell: createCellRef(cell),
+            value: { winner: "default" },
+          }),
+        );
+
+        expect(selected.value).toEqual({ winner: "stored" });
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
     it("loads an existing scoped value before choosing an initializer", async () => {
       const signer = await Identity.fromPassphrase(
         `direct-scoped-cell-initialize-${crypto.randomUUID()}`,
