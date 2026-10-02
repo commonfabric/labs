@@ -113,7 +113,8 @@ floor on the strength of an earlier writer's stamp.
 Commit preparation decides a document's stamps once: which schema branches the
 written values take, and which atoms the write's author may mint. The floor
 check and the stored `minted` entries are both read from that decision, so a
-floor is never credited by a stamp that is not stored.
+floor is never credited by a stamp the decision does not name at its path, nor
+by one the write's author may not mint.
 
 In a union, the floor applies whichever branch the written value takes, and a
 branch's stamp lands only on a value that takes the branch. So a stamp credits

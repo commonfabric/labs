@@ -9775,8 +9775,9 @@ const verifyWriteFloor = function* (
     linkWriteInputs: readonly LinkWritePolicyInput[];
     linkLabels: LinkLabelDeriver;
     flowIntegrity: readonly CfcAtom[];
-    // The stamp decision persistence consumes too (`ValueStamp`), so that a
-    // floor is credited by what is stored and by nothing else.
+    // The stamp decision persistence consumes too (`ValueStamp`): a floor
+    // is credited only by a stamp the decision names at its path, with the
+    // atoms the write's author may mint.
     valueStamps: readonly ValueStamp[];
   },
 ): Generator<void, string[]> {
