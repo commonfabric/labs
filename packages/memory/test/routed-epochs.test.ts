@@ -1,5 +1,5 @@
 /** Durable proof custody: a router cannot move or revive client authorization. */
-import { assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { stub } from "@std/testing/mock";
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
@@ -216,6 +216,68 @@ Deno.test("a ledger from before retirement records retires its epochs at load", 
     const loaded = Math.floor(Date.now() / 1000);
     assertThrows(() => store.consume(router, epoch(1024), loaded));
     store.consume(router, epoch(1024), loaded + 3600 + 60 + 120 + 1);
+  } finally {
+    store.close();
+    Deno.removeSync(directory, { recursive: true });
+  }
+});
+
+Deno.test("retirement, revocation and live claims survive compaction and reload", async () => {
+  const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+  const [router, revoked, principal] = await Promise.all(
+    [91, 92, 93].map(async (seed) =>
+      (await Identity.fromRaw(new Uint8Array(32).fill(seed))).did()
+    ),
+  );
+  const now = Math.floor(Date.now() / 1000);
+  const retention = 3600 + 60 + 120;
+  const epoch = (i: number) => i.toString(16).padStart(32, "0");
+  const claim = {
+    router,
+    principal,
+    deployment: "test",
+    challenge: "22".repeat(32),
+    digest: "33".repeat(32),
+    epoch: epoch(1),
+    context: "44".repeat(16),
+    exp: now + 3000,
+  };
+  let store = new RoutedEpochStore(path);
+  try {
+    store.consume(router, epoch(1), now);
+    store.claim(claim, now);
+    store.consume(router, epoch(2), now);
+    store.retire(router, epoch(2), now);
+    // Retiring again, or an unknown epoch, records nothing.
+    store.retire(router, epoch(2), now + 5);
+    store.retire(router, epoch(99), now);
+    store.consume(revoked, epoch(3), now);
+    store.revoke(revoked);
+    // A forgotten epoch consumed again leaves a repeated line until compaction.
+    store.consume(router, epoch(4), now - 2 * retention);
+    store.retire(router, epoch(4), now - 2 * retention);
+    store.consume(router, epoch(4), now);
+    store.close();
+    store = new RoutedEpochStore(path);
+    assertThrows(() => store.consume(router, epoch(4), now));
+    // Force compaction, then check every kind of record survived it.
+    const record = Deno.readTextFileSync(path).split("\n")[0] + "\n";
+    Deno.writeTextFileSync(
+      path,
+      record.repeat(Math.ceil(17 * 1024 * 1024 / record.length)),
+      { append: true },
+    );
+    store.consume(router, epoch(5), now);
+    assert(Deno.statSync(path).size < 1024 * 1024);
+    store.close();
+    store = new RoutedEpochStore(path);
+    store.claim(claim, now);
+    assertThrows(() =>
+      store.claim({ ...claim, context: "55".repeat(16) }, now)
+    );
+    assertThrows(() => store.consume(router, epoch(2), now + retention - 1));
+    store.consume(router, epoch(2), now + retention);
+    assertThrows(() => store.consume(revoked, epoch(6), now));
   } finally {
     store.close();
     Deno.removeSync(directory, { recursive: true });
