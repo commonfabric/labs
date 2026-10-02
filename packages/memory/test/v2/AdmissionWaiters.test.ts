@@ -65,6 +65,18 @@ describe("AdmissionWaiters", () => {
           { connectionId: "one", principal: GUEST },
         ]);
       });
+
+      it("drops the only entry of a connection with a limit of one, keeping the new one removable", () => {
+        const waiters = new AdmissionWaiters(1);
+        waiters.add("one", SPACE, GUEST);
+        waiters.add("one", OTHER_SPACE, GUEST);
+
+        expect(waiters.take(SPACE, everyone)).toEqual([]);
+        expect(waiters.take(OTHER_SPACE, everyone)).toEqual([
+          { connectionId: "one", principal: GUEST },
+        ]);
+        expect(waiters.take(OTHER_SPACE, everyone)).toEqual([]);
+      });
     });
 
     describe("remove()", () => {

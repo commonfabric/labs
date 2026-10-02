@@ -29,16 +29,19 @@ export class AdmissionWaiters {
 
   /** Records that `principal` was refused `space` on `connectionId`. */
   add(connectionId: string, space: string, principal: string): void {
+    const key = entryKey(space, principal);
+    const held = this.#byConnection.get(connectionId);
+    if (held?.has(key)) return;
+    if (held !== undefined && held.size >= this.#limit) {
+      const [oldestSpace, oldestPrincipal] = held.values().next().value!;
+      this.remove(connectionId, oldestSpace, oldestPrincipal);
+    }
+    // The eviction above may have emptied the connection's map, and with it
+    // its registration, so the map is looked up again.
     let entries = this.#byConnection.get(connectionId);
     if (entries === undefined) {
       entries = new Map();
       this.#byConnection.set(connectionId, entries);
-    }
-    const key = entryKey(space, principal);
-    if (entries.has(key)) return;
-    if (entries.size >= this.#limit) {
-      const [oldestSpace, oldestPrincipal] = entries.values().next().value!;
-      this.remove(connectionId, oldestSpace, oldestPrincipal);
     }
     entries.set(key, [space, principal]);
     let byConnection = this.#bySpace.get(space);

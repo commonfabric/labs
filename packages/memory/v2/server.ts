@@ -1043,7 +1043,6 @@ class Connection {
 
   /** Tells the peer that `principal` would now be admitted to `space`. */
   sendAdmissible(space: string, principal: string): void {
-    if (this.#closed) return;
     this.#send({ type: "session/admissible", space, principal });
   }
 
@@ -2963,6 +2962,12 @@ export class Server {
    * an access-list change admitting it tells that connection
    * (`#noticeAdmissions()`). A routed connection records nothing, and
    * neither does one whose peer did not advertise `admissionNotice`.
+   *
+   * The callers in this file record nothing for a session opened
+   * `actingAs: "space-owner"`. Only a co-hosted serving runtime opens one,
+   * and it already hears of every access-list commit in process
+   * (`noteSpaceAclChanged()`), after which its next load of the space opens
+   * the session again through ordinary admission.
    */
   #awaitAdmission(
     connectionId: string | null,

@@ -167,15 +167,17 @@ Two properties follow from terminating rather than looping:
   pass through, opens the session again through the same admission. If it is
   admitted, it repeats the loads the refusal failed; if it is refused, the
   refusal is recorded where the first one was. The memory server supplies one
-  such event itself. When an access-list change gives `READ` to a principal it
-  refused a space on a connection, it sends that connection `session/admissible`
-  ([`04-protocol.md`](../specs/memory-v2/04-protocol.md) §4.2.2), and the
-  storage manager answers a notice naming its own principal with that retry. The
-  notice reaches a connection that is still open: a shared connection, or the
-  connection of a session the change revoked. A connection-per-space client
-  closes the connection its first refusal of a space arrived on, so for a space
-  it was never admitted to, the event has to come from the host. Retrying a
-  denied reopen on a schedule until an administrator acts is the retry-loop the
+  such event itself, on a connection where both peers advertise
+  `admissionNotice`. When an access-list change gives `READ` to a principal it
+  refused a space on such a connection, it sends that connection
+  `session/admissible` ([`04-protocol.md`](../specs/memory-v2/04-protocol.md)
+  §4.2.2), and the storage manager answers a notice naming its own principal
+  with that retry, which the server may still refuse. The notice reaches a
+  connection that is still open: a shared connection, or the connection of a
+  session the change revoked. A connection-per-space client closes the
+  connection its first refusal of a space arrived on, so for a space it was
+  never admitted to, the event has to come from the host. Retrying a denied
+  reopen on a schedule until an administrator acts is the retry-loop the
   engineering principles forbid; the CLI reports the error and exits. A
   genuinely transient or recoverable condition — a token-refresh window, a
   challenge race, a transport blip — can heal on a fresh connection when the

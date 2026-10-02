@@ -681,7 +681,10 @@ of the principal. A connection holds at most 1024 records, and the oldest is
 dropped past that; its principal then learns of a grant only by opening the
 session again. A connection whose peer did not advertise `admissionNotice`
 records nothing, and neither does a routed connection
-([`routed-mode-a.md`](routed-mode-a.md)).
+([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
+does a session opened `actingAs: "space-owner"`: only a co-hosted serving
+runtime opens one, and it hears of every access-list commit in process, after
+which its next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 

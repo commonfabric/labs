@@ -1245,9 +1245,10 @@ export type MemoryProtocolFlags = {
   /**
    * The peer takes part in `session/admissible` (04-protocol.md §4.2.2). A
    * client advertising it may be sent the notice; a server advertising it
-   * sends one to such a client. Build-inherent, so a peer of this version
-   * always advertises it. Absent (an older peer) parses to false, and the
-   * server then sends that connection none.
+   * sends one to such a client, on any connection but a routed one.
+   * Build-inherent, so a peer of this version always advertises it. Absent
+   * (an older peer) parses to false, and the server then sends that
+   * connection none.
    */
   admissionNotice?: boolean;
 
@@ -2394,7 +2395,8 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   connectionAuth: true,
   // Build-inherent: this build's server tells a connection it refused a
   // space once a grant admits the refused principal, and its client acts on
-  // the notice.
+  // the notice. A routed connection records no refusal, so it is told
+  // nothing whatever both peers advertise.
   admissionNotice: true,
   routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),

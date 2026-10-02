@@ -180,42 +180,68 @@ describe("storage admission notice", () => {
   });
 
   describe("over a shared connection", () => {
-    it("retries a space it was refused, once a grant admits its principal, and is readmitted", async () => {
+    let ownerSession: SpaceSession;
+    let factory: RemoteSessionFactory;
+    let memoryHost: URL;
+
+    beforeEach(async () => {
       const server = StandaloneMemoryServer.start({
         acl: { mode: "enforce" },
         connectionAuth: true,
       });
       cleanups.push(() => server.close());
+      memoryHost = server.url;
       const ownerFactory = new RemoteSessionFactory(
         createStorageAddressResolver(server.url),
         owner,
       );
       cleanups.push(() => ownerFactory.close());
-      const ownerConnection = await ownerFactory.create(space);
-      await writeAcl(ownerConnection.session, 1, {});
-      const factory = new RemoteSessionFactory(
+      ownerSession = (await ownerFactory.create(space)).session;
+      await writeAcl(ownerSession, 1, {});
+      factory = new RemoteSessionFactory(
         createStorageAddressResolver(server.url),
         guest,
       );
       factory.setSharedConnections(true);
+    });
+
+    /**
+     * Opens a guest manager on the factory, has the space refuse it and then
+     * grant it `READ`, and returns the manager once a later round trip on the
+     * same socket has arrived, which the notice is ordered before.
+     */
+    const refuseThenGrant = async (): Promise<RecordingStorageManager> => {
       const manager = new RecordingStorageManager({
         as: guest,
-        memoryHost: server.url,
+        memoryHost,
       }, factory);
       cleanups.push(() => manager.close());
       const refused = await manager.open(space).sync(`of:${space}`);
       expect(refused.error?.name).toBe("AuthorizationError");
 
-      await writeAcl(ownerConnection.session, 2, { [guest.did()]: "READ" });
-      // The guest's own space opens over the socket the refusal was sent on,
-      // after the grant, so its answer arrives after the notice.
+      await writeAcl(ownerSession, 2, { [guest.did()]: "READ" });
       const home = await manager.open(guest.did()).sync(`of:${guest.did()}`);
       expect(home.error).toBeUndefined();
+      return manager;
+    };
+
+    it("retries a space it was refused, once a grant admits its principal, and is readmitted", async () => {
+      const manager = await refuseThenGrant();
       expect(manager.retries.map((retry) => retry.space)).toEqual([space]);
       await manager.retries[0].done;
       expect(manager.spaceAccessError(space)).toBeUndefined();
       expect((await manager.open(space).sync(`of:${space}`)).error)
         .toBeUndefined();
+    });
+
+    it("retries when an observer subscribed before the manager throws", async () => {
+      factory.subscribeAdmissible(() => {
+        throw new Error("observer failure");
+      });
+      const manager = await refuseThenGrant();
+      expect(manager.retries.map((retry) => retry.space)).toEqual([space]);
+      await manager.retries[0].done;
+      expect(manager.spaceAccessError(space)).toBeUndefined();
     });
   });
 });

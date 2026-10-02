@@ -765,7 +765,11 @@ export class RemoteSessionFactory implements SessionFactory {
   #relayAdmissible(client: MemoryClient.Client): void {
     client.subscribeAdmissible((space, principal) => {
       for (const observer of [...this.#admissibleObservers]) {
-        observer(space as MemorySpace, principal);
+        try {
+          observer(space as MemorySpace, principal);
+        } catch (cause) {
+          console.error("session-admissible subscriber threw:", cause);
+        }
       }
     });
   }

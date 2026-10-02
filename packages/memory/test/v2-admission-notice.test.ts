@@ -10,6 +10,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { Identity } from "@commonfabric/identity";
+
+import {
+  createInviteCredentials,
+  inviteCodeVerifier,
+} from "../space-invites.ts";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -176,6 +182,88 @@ describe("session/admissible", () => {
     await setAcl({ [GUEST]: "READ", [CAROL]: "READ" });
     await guest.client.delivered();
     expect(guest.notices).toEqual([{ space: SPACE, principal: GUEST }]);
+  });
+
+  it("reaches every observer after one that throws, and none that unsubscribed", async () => {
+    const guest = await connectRecording();
+    const thrower = Promise.withResolvers<void>();
+    guest.client.subscribeAdmissible(() => {
+      thrower.resolve();
+      throw new Error("observer failure");
+    });
+    const after: Notice[] = [];
+    guest.client.subscribeAdmissible((space, principal) =>
+      after.push({ space, principal })
+    );
+    const gone: Notice[] = [];
+    const unsubscribe = guest.client.subscribeAdmissible((space, principal) =>
+      gone.push({ space, principal })
+    );
+    unsubscribe();
+    await expectRefused(guest.client, GUEST);
+
+    await setAcl({ [GUEST]: "READ" });
+    await guest.client.delivered();
+    await thrower.promise;
+    expect(guest.notices).toEqual([{ space: SPACE, principal: GUEST }]);
+    expect(after).toEqual([{ space: SPACE, principal: GUEST }]);
+    expect(gone).toEqual([]);
+  });
+
+  it("reaches a connection refused the space once its principal redeems an invitation", async () => {
+    // An invitation names a space and principals by their real DIDs.
+    const inviter = (await Identity.generate()).did();
+    const invitee = (await Identity.generate()).did();
+    const ownerClient = await connectRecording();
+    const inviterSession = await ownerClient.client.mount(
+      inviter,
+      {},
+      authAs(inviter),
+    );
+    await inviterSession.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: `of:${inviter}`,
+        value: { value: { [inviter]: "OWNER" } },
+      }],
+    });
+    const guest = await connectRecording();
+    await expect(guest.client.mount(inviter, {}, authAs(invitee))).rejects
+      .toMatchObject({ name: "AuthorizationError" });
+    const host = "https://invites.example";
+    const now = Date.now();
+    const { inviteId, code } = createInviteCredentials();
+    await server.invite({
+      operation: "create",
+      body: {
+        inviteId,
+        codeVerifier: inviteCodeVerifier({
+          host,
+          space: inviter,
+          inviteId,
+          code,
+        }),
+        access: "READ",
+        ttlSeconds: 60,
+      },
+      host,
+      space: inviter,
+      principal: inviter,
+      now,
+    });
+
+    await server.invite({
+      operation: "redeem",
+      body: { inviteId, code },
+      host,
+      space: inviter,
+      principal: invitee,
+      now,
+    });
+    await guest.client.delivered();
+    expect(guest.notices).toEqual([{ space: inviter, principal: invitee }]);
   });
 
   it("is not sent to a connection that did not advertise `admissionNotice`", async () => {
