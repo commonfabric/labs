@@ -78,7 +78,7 @@ import {
   confidentialityLabelsFromCellSchema,
   type DisplayFitSources,
   integrityLabels,
-  type MembershipWatch,
+  type FitWatch,
   normalizeAtomBound,
   readRefusal,
   type RenderLabelSummary,
@@ -515,7 +515,7 @@ export class WorkerReconciler {
       // value when an ACL changes.
       let lastRootValue: unknown;
       let rootConsumed: SinkConsumedLabel | undefined;
-      const rootWatch: MembershipWatch = {
+      const rootWatch: FitWatch = {
         watched: new Set<string>(),
         addCancel,
         reeval: () => renderRoot(lastRootValue),
@@ -1133,7 +1133,7 @@ export class WorkerReconciler {
     shown: boolean | undefined,
     changed: boolean,
     show: () => void,
-    watch: MembershipWatch,
+    watch: FitWatch,
     value: unknown = UNKNOWN_PROP_VALUE,
   ): boolean {
     const policy = state.renderPolicy;
@@ -1252,7 +1252,7 @@ export class WorkerReconciler {
     source: Cell<unknown>,
     reads: readonly (SinkConsumedLabel | undefined)[],
     policy: RenderPolicy,
-    watch: MembershipWatch,
+    watch: FitWatch,
   ): RemoteLoadRefusal | undefined {
     if (policy.remoteLoadsBlocked) return { byView: true };
     if (!this.#mayCarryRemoteRefusedCaveat(source, reads)) return undefined;
@@ -4311,7 +4311,7 @@ export class WorkerReconciler {
     // re-evaluation with the last resolved value, which emits only a change
     // in the decision.
     let consumed: SinkConsumedLabel | undefined;
-    const watch: MembershipWatch = {
+    const watch: FitWatch = {
       watched: new Set<string>(),
       addCancel,
       reeval: () => renderResolved(childState.currentValue),

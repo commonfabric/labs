@@ -7,21 +7,38 @@ import { BaseView } from "./BaseView.ts";
 
 import "../components/OmniLayout.ts";
 
+import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
+import type { JSONSchema } from "@commonfabric/runner/shared";
 import {
   CellHandle,
+  CellReadRefusedError,
   PieceHandle,
   RuntimeErrorCode,
-  sidebarOf,
+  VNode,
 } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
 import { navigate } from "@commonfabric/navigation";
 import { openPieceMenu } from "@commonfabric/ui";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+type SubPages = {
+  sidebarUI?: VNode;
+};
+
 export type LoadError = {
   kind: "space" | "piece";
   error: unknown;
 };
+
+const SubPagesSchema = {
+  type: "object",
+  properties: {
+    sidebarUI: { $ref: "#/$defs/vdomNode" },
+  },
+  $defs: {
+    ...rendererVDOMSchema.$defs,
+  },
+} as const satisfies JSONSchema;
 
 export class XBodyView extends BaseView {
   static override styles = css`
@@ -170,11 +187,9 @@ export class XBodyView extends BaseView {
           sidebarUI: undefined,
         };
       }
-      // Asked of the `sidebarUI` field alone, so that what else the piece
-      // holds, which the display ceiling may keep from the shell, neither
-      // withholds the sidebar nor is read for it.
-      const cell = this.activeCell;
-      const sidebarUI = cell === undefined ? undefined : await sidebarOf(cell);
+      const sidebarUI = await getSidebarCell(
+        this.activeCell as CellHandle<SubPages> | undefined,
+      );
       return {
         sidebarUI,
       };
@@ -352,3 +367,33 @@ function loadErrorMessage(error: unknown): string {
 }
 
 globalThis.customElements.define("x-body-view", XBodyView);
+
+/**
+ * The handle a sidebar is rendered from, when the piece `cell` holds shows
+ * one: its `sidebarUI`, read as a render tree. The piece is read for that
+ * field alone, so the read is decided on what it reads, not on what else
+ * the piece holds. `undefined` when it shows none, or when the display
+ * ceiling keeps the sidebar from the shell.
+ */
+async function getSidebarCell(
+  cell: CellHandle<SubPages> | undefined,
+): Promise<CellHandle<VNode> | undefined> {
+  if (!cell) return undefined;
+  const typedCell = cell.asSchema<SubPages>(SubPagesSchema);
+  try {
+    let value = typedCell.get();
+    if (!value) {
+      await typedCell.sync();
+      value = typedCell.get();
+      if (!value) {
+        return;
+      }
+    }
+    if (value.sidebarUI) {
+      return typedCell.key("sidebarUI").asSchema<VNode>(rendererVDOMSchema);
+    }
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
+  }
+}
