@@ -64,15 +64,16 @@ each slot holding a link the read followed, which a dereference retains
   inline in a view built outside a cell sends a cell it holds as a link, not as
   the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
-  the bound cell, under the cell's schema; a nested render root is decided on
+  the bound cell, under the cell's schema, measured on the value as the
+  worker hands it to a host, so that a field the schema leaves untyped is
+  read as the host's reads take it in; a nested render root is decided on
   the read its component makes instead, as the nested-render paragraph below
   describes. The worker keeps reading the bound cell and removes the binding
   when a write leaves that read consuming a label the ceiling refuses. The
-  binding hands the host a live
-  handle, and the worker answers the host's reads through it without the
-  ceiling: a read that follows a link the worker's read did not, and the
-  host's own subscription to the cell, which can deliver the write that causes
-  a removal before the removal arrives.
+  binding hands the host a live handle, and the worker decides every read the
+  host makes through it, and every update of its subscription, under the
+  same ceiling (the host-read gate in `packages/runtime-client`), so a write
+  that causes a removal reaches the host as a refusal, not as a value.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a
@@ -133,7 +134,9 @@ The exceptions, all of them about `cf-render`:
   the nested render keeps what a caveated view inside the piece would load
   from loading, as opening the piece does.
 - The component's own reads through the bound handle, such as the piece menu's
-  Data panel, are answered without the ceiling, as for every binding.
+  Data panel, are decided under the root ceiling, as for every binding. The
+  Data panel reads a refused piece field by field, showing what the ceiling
+  admits and marking each field it refuses.
 
 Other components that render through `cf-render`, such as `cf-picker`, are not
 nested render roots in the registry, and their bindings are decided like any

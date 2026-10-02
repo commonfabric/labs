@@ -483,13 +483,12 @@ of it.
   unchanged would close both; it is a runtime change to how a no-op write is
   labeled.
 - **Cell-valued properties and bindings.** A confidentiality ceiling gates
-  what a render shows as text, but not a cell a pattern passes to an element
-  as a property or a `$` binding, and the worker answers a host's read of or
-  subscription to a cell without one. A member's own pattern that takes the
-  room as input can so show `choice`, or a rating read from the box, through
-  a property. This predates the answer slot and reaches every policy-labeled
-  value, not only custody; gating those paths belongs to the renderer and
-  the worker, not to this operation.
+  what a render shows as text, and the worker decides a binding, and every
+  read or subscription a host makes of a cell, under the same ceiling, on
+  everything the read takes in. A member's own pattern that takes the room as
+  input therefore shows `choice`, or a rating read from the box, to a viewer
+  only as that viewer's ceiling admits it. Gating those paths belongs to the
+  renderer and the worker, not to this operation.
 - **A squatted answer slot.** A slot other code wrote first blocks the
   instance's publication, as a squatted box or anchor blocks sealing. It
   shows nothing, since a host reads only a slot the seal stamped.

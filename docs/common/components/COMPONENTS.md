@@ -53,6 +53,13 @@ For when to use handlers vs binding — and the standard `equals()` idiom for
 removing array items by identity — see
 [two-way-binding](../patterns/two-way-binding.md).
 
+The worker decides a bound cell's reads under the display ceiling. A control
+whose cell the ceiling refuses shows its empty value, or the policy
+placeholder, and writes nothing to it until a read is admitted again: a value
+made from what it could not see would replace one the viewer was never shown.
+A component that subscribes to a cell itself passes `onRefused` and shows
+nothing of the cell, or the placeholder, while it is refused.
+
 ### Testing note: Playwright `fill()`
 
 Playwright's `fill()` does not work on `cf-input` hosts (they are custom
@@ -597,10 +604,12 @@ incompatible historical source. Its confirmation remains bound to the exact
 candidate that produced the warning.
 
 **Data** shows the piece's argument and result values (both stay live while
-the menu is open; linked cells appear as `{"@cell": …}` stubs), and
-**Actions** lists the handler streams the piece's declared argument and
-result schemas carry and dispatches an event to one, with an optional JSON
-payload. A handler only appears if the stream is declared in the pattern's
+the menu is open; linked cells appear as `{"@cell": …}` stubs). Where the
+display ceiling refuses one whole, as it does a piece holding a credential,
+it shows each field the schema declares on its own, with `[hidden by policy]`
+at each field the ceiling refuses. **Actions** lists the handler streams the
+piece's declared argument and result schemas carry and dispatches an event to
+one, with an optional JSON payload. A handler only appears if the stream is declared in the pattern's
 output (or argument) type — the schema'd read is closed-world, so a handler
 returned at runtime behind an index signature is invisible to it. Dispatches
 from the menu are accepted-for-delivery acknowledgments (the commit is

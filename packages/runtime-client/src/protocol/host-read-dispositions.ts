@@ -29,12 +29,13 @@ import {
  * - `rendered`: what it carries is a render, which the reconciler decides
  *   under the same ceiling.
  * - `no-cell-value`: it carries nothing of a cell's contents.
- * - `reference`: it carries a cell's reference, whose label view comes with
- *   it; that view is a label read, which the gate does not decide.
+ * - `reference`: it carries a cell's reference. A ref carries a label view
+ *   only where `HostReadGate.ref()` gave it one, joined at its root where
+ *   the ceiling refuses the cell; a ref minted anywhere else carries none.
  * - `trusted-operation`: a worker operation decides what it returns, as the
  *   operation's own rules say.
- * - `ungated`: it returns what it reads, and nothing decides it under the
- *   display ceiling. `why` names what it carries.
+ * - `ungated`: nothing decides it under the display ceiling. `why` names
+ *   what it carries, and why the ceiling is not what governs it.
  */
 export type HostReadDisposition =
   | { readonly kind: "decided" }
@@ -59,7 +60,7 @@ const setting = {
 } as const;
 const reference = {
   kind: "reference",
-  why: "a cell ref, with the label view a ref carries",
+  why: "a cell ref, with the label view the host-read gate gives it",
 } as const;
 
 /** Every request's disposition. */
@@ -189,15 +190,16 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.PieceUpdateSource]: DECIDED,
   [RequestType.SpaceGetAcl]: {
     kind: "ungated",
-    why: "a space's access list",
+    why: "a space's access list: who may read and write the space, which " +
+      "the space's own access rules govern rather than a cell's labels",
   },
   [RequestType.SpaceSetAclEntry]: {
     kind: "ungated",
-    why: "a space's access list after a change",
+    why: "a space's access list after a change its access rules allowed",
   },
   [RequestType.SpaceRemoveAclEntry]: {
     kind: "ungated",
-    why: "a space's access list after a change",
+    why: "a space's access list after a change its access rules allowed",
   },
   [RequestType.VDomMount]: { kind: "rendered" },
   [RequestType.VDomUnmount]: { kind: "rendered" },

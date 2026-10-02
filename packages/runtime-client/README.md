@@ -29,19 +29,50 @@ host could not make never reads as a cell that holds nothing.
 
 A handle holds a refusal in place of a value. `refusal` and `lastRead()` report
 it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()` and `initialize()`
-reject with it. A subscriber hears each refusal through the `onRefused` option
-of `subscribe()`, which runs at once for a handle already refused, and its value
-callback never receives one. The next admitted value, or a value the host
-writes, ends the refusal.
+reject with it. Every subscriber passes `onRefused` to `subscribe()`, and hears
+each refusal there, at once for a handle already refused; its value callback
+never receives one. A write through a refused handle is refused: `set()` and
+`push()` log it, and the strict variants reject with it. The next admitted value
+ends the refusal.
 
-The worker builds its gate with no display ceiling, so it refuses no read.
+The worker builds its gate from the display ceiling it renders with
+(`renderConfidentialityCeiling` in its initialization data), with the resolver
+and the providers every render is given, so a host's read is decided under the
+same root policy, by the same fit, as a render of the same cell. With no
+ceiling, the gate refuses nothing.
+
+The gate also decides what crosses beside a value:
+
+- **Label views.** A label read, and the view a ref or a link inside a value
+  carries, is joined at its root where the ceiling refuses the cell, since the
+  paths its entries sit at name the document's fields. A ref carries a view only
+  where the gate gave it one.
+- **Metadata.** A piece's slug and source are decided as metadata, on every
+  label its document stores. A refused source is neither read nor changed
+  through the host, and a refused slug is not offered.
+- **Reads the gate cannot measure.** A SQLite query, a collaborative field's
+  query, operation and each update are decided on the target cell's labels.
+- **Diagnostics.** Telemetry `cell.update` markers, the trigger trace, and
+  `DetectNonIdempotent` name a document the ceiling refuses alone, with the
+  placeholder in place of its values and paths.
+- **Console and errors.** A pattern's `console` arguments, and a runtime error's
+  message and stack, are decided on the labels of everything the action that
+  made them had read; where those are refused, the placeholder stands in their
+  place.
 
 Every request and notification the worker sends is classified in
 `REQUEST_DISPOSITIONS` and `NOTIFICATION_DISPOSITIONS`: decided by the gate,
 rendered, carrying no cell value, a reference, a trusted operation, or ungated.
 The answers of the channels marked as decided carry a mark only the gate gives
 them, and a type-level check holds the tables to it, so a new channel fails to
-type-check until it says how it stands.
+type-check until it says how it stands. The only ungated channels are a space's
+access list, which the space's own access rules govern.
+
+Two things fall outside the tables:
+
+- A failed request's message, which a handler raises and which names the failure
+  rather than a cell's contents.
+- The worker's own console, which runs in the runtime's own context.
 
 ## Diagnosing pending writes
 
