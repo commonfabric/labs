@@ -110,6 +110,13 @@ part of that. They credit the floor whichever schema declares it, the writer's
 or the document's stored one. A writer that stamps nothing does not pass a
 floor on the strength of an earlier writer's stamp.
 
+Commit preparation selects the applicable schema branches and applies the
+runtime-minted gate once per document. Floor enforcement and stamp persistence
+consume that same decision. A floor applies structurally to a written position,
+while a union branch supplies stamps only when the written value takes that
+branch. A number branch's stamp therefore cannot satisfy a floor on a string
+written at the same position.
+
 ## A stamp held in a declared entry
 
 An envelope can hold a stamp's atoms in a `declared` entry. Nothing tells such
