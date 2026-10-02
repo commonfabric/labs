@@ -207,6 +207,34 @@ describe("ifc-labels", () => {
       ).toBe(reference);
     });
 
+    it("returns the value member beside a reference to a nullish definition", () => {
+      expect(
+        labeledValueMember({ anyOf: [{ $ref: "#/$defs/Nothing" }, value] }, {
+          Nothing: { type: "null" },
+        }),
+      ).toBe(value);
+      expect(
+        labeledValueMember({ anyOf: [{ $ref: "#/$defs/Gone" }, value] }, {
+          Gone: { $ref: "#/$defs/Nothing" },
+          Nothing: { type: ["null", "undefined"] },
+        }),
+      ).toBe(value);
+    });
+
+    it("counts a reference it cannot resolve to a nullish definition as a value member", () => {
+      const unresolved: Record<string, MutableJSONSchemaObj>[] = [
+        {},
+        { Nothing: { type: "null", description: "none" } },
+      ];
+      for (const definitions of unresolved) {
+        expect(
+          labeledValueMember({
+            anyOf: [{ $ref: "#/$defs/Nothing" }, value, { type: "null" }],
+          }, definitions),
+        ).toBeUndefined();
+      }
+    });
+
     it("returns `undefined` for a union that declares labels, holds no nullish member, or whose member declares none", () => {
       expect(labeledValueMember({
         anyOf: [{ type: "undefined" }, value],
@@ -220,6 +248,10 @@ describe("ifc-labels", () => {
         }, {}),
       ).toBeUndefined();
       expect(labeledValueMember(value, {})).toBeUndefined();
+      // `true` accepts any value, so it is a value member beside `value`.
+      expect(
+        labeledValueMember({ anyOf: [true, { type: "null" }, value] }, {}),
+      ).toBeUndefined();
     });
   });
 

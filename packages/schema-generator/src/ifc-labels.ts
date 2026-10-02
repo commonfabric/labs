@@ -185,12 +185,23 @@ export const declaredIfcLabels = (
   return labels;
 };
 
-/** Whether `schema` accepts only `null`, `undefined`, or both. */
-const isNullishSchema = (schema: MutableJSONSchema): boolean =>
-  isObjectOrArray(schema) && Object.keys(schema).length === 1 &&
-  (Array.isArray(schema.type) ? schema.type : [schema.type]).every((type) =>
-    type === "null" || type === "undefined"
-  );
+/**
+ * Whether `schema` accepts only `null`, `undefined`, or both: written so, or a
+ * bare local reference whose definition in `definitions`, through any further
+ * bare references, is.
+ */
+const isNullishSchema = (
+  schema: MutableJSONSchema,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): boolean => {
+  if (!isObjectOrArray(schema)) return false;
+  const chain = referenceChain(schema, definitions);
+  const last = chain[chain.length - 1]!;
+  return chain.every((link) => Object.keys(link).length === 1) &&
+    (Array.isArray(last.type) ? last.type : [last.type]).every((type) =>
+      type === "null" || type === "undefined"
+    );
+};
 
 /**
  * The value member of `position`, a union of one value with `null` or
@@ -209,7 +220,9 @@ export const labeledValueMember = (
   ) {
     return undefined;
   }
-  const values = position.anyOf.filter((member) => !isNullishSchema(member));
+  const values = position.anyOf.filter((member) =>
+    !isNullishSchema(member, definitions)
+  );
   const [member] = values;
   return values.length === 1 && values.length < position.anyOf.length &&
       isObjectOrArray(member) &&
