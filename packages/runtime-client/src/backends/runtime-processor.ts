@@ -1565,7 +1565,7 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
-    let storedWon = false;
+    let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
       // Initialization materializes the same backing value a whole-cell write
@@ -1575,29 +1575,29 @@ export class RuntimeProcessor {
       // child write with no durable parent and can replace the visible default.
       // Follow a final write redirect only for this existence check, while
       // retaining the view schema because its scope cap controls whether that
-      // redirect is reachable. When storage already won, the host is sent a
-      // read of the cell, made once the transaction has committed, as every
-      // host read is made.
-      const stored = cell.getRaw({
+      // redirect is reachable. When storage already won, the host is sent
+      // the value this transaction found, read as every host read is, and
+      // read here, before the transaction ends, so that a write landing after
+      // it commits is not mistaken for what it selected. The transaction
+      // wrote nothing, so a read of the runtime's state sees what it saw.
+      const backing = cell.getRaw({
         lastNode: "writeRedirect",
       });
-      if (stored !== undefined) {
+      if (backing !== undefined) {
         if (cell.get() === undefined) {
           throw new TypeError(
             "Cell backing value is incompatible with its schema.",
           );
         }
-        storedWon = true;
+        stored = this.#hostReadGate.read(getCell(this.#runtime, request.cell));
         return undefined;
       }
-      storedWon = false;
+      stored = undefined;
       cell.set(initial);
       return hostValueOf(initial);
     });
     if (result.error) throw new Error(result.error.message);
-    return storedWon
-      ? this.#hostReadGate.read(getCell(this.#runtime, request.cell))
-      : this.#hostReadGate.sentByHost(result.ok);
+    return stored ?? this.#hostReadGate.sentByHost(result.ok);
   }
 
   /**
