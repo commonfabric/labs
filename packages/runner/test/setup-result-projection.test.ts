@@ -420,4 +420,77 @@ describe("setup-result-projection", () => {
       expect(afresh).toEqual(["a"]);
     });
   });
+
+  describe("a computed that is not the list's writer", () => {
+    for (const protection of ["writer", "owner"] as const) {
+      it(`keeps the list protected by its ${protection} from one that composes a pattern passing the list through to its result and writes the list`, async () => {
+        const compiled = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: `/// <cts-enable />
+              import {
+                Cfc,
+                computed,
+                CurrentPrincipal,
+                handler,
+                pattern,
+                RepresentsCurrentUser,
+                Writable,
+                WriteAuthorizedBy,
+              } from "commonfabric";
+              const edit = handler<{ add?: string }, { items: Writable<string[]> }>(
+                (event, { items }) => {
+                  items.set([...items.get(), event.add ?? ""]);
+                },
+              );
+              type Items = ${protections[protection]};
+              const Pass = pattern<
+                { list: Writable<Items> },
+                { list: Writable<Items> }
+              >(({ list }) => ({ list }));
+              export default pattern<Record<string, never>>(() => {
+                const items = new Writable<Items>([]).for("items");
+                const sink = computed(() => {
+                  const inner = Pass({ list: items });
+                  try {
+                    items.set(["forged"]);
+                  } catch (_error) {
+                    // A refused write may throw inside the computation.
+                  }
+                  return inner;
+                });
+                return { items, add: edit({ items }), sink };
+              });
+            `,
+          }],
+        });
+        const tx = runtime.edit();
+        const result = runtime.run(
+          tx,
+          compiled,
+          {},
+          runtime.getCell<{ items: string[] }>(
+            space,
+            "computed-output",
+            compiled.resultSchema,
+            tx,
+          ),
+        );
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).error).toBeUndefined();
+        const cancel = result.sink(() => {});
+        await runtime.idle();
+        result.key("add").send({ add: "a" });
+        await runtime.idle();
+        await manager.synced();
+        const after = await result.key("items").pull();
+        cancel();
+
+        // The owner's own write, through the list's writer, landed; the
+        // computation's did not.
+        expect(after).toEqual(["a"]);
+      });
+    }
+  });
 });
