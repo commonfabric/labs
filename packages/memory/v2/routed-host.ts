@@ -221,9 +221,7 @@ export class RoutedMemoryHost {
       }
     } catch {
       this.#closed = true;
-      for (const other of this.#links.values()) {
-        if (other !== link) this.#closeLink(other);
-      }
+      for (const other of [...this.#links.values()]) this.#closeLink(other);
     }
     context.backend?.close();
     if (context.socket !== undefined) safeClose(context.socket);

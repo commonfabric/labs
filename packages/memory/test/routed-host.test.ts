@@ -1,7 +1,7 @@
 /** Host-control regression tests use real client/router signatures and durable custody. */
 // @ts-types="@types/ws"
 import type WebSocket from "ws";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { getMemoryProtocolFlags } from "../v2.ts";
@@ -179,6 +179,34 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
       1,
     );
     assert(independent.socket.readyState === 1);
+    // Losing durable custody must close every context on the affected link,
+    // including a different context from the one triggering the failed write.
+    const contexts = [new Uint8Array(16).fill(31), new Uint8Array(16).fill(32)];
+    for (const ctx of contexts) {
+      const challenge = new Uint8Array(32).fill(ctx[0]);
+      const statement = await routedStatementPayload({
+        principal: client.did(),
+        router: other.did(),
+        deployment: "fixture",
+        challenge,
+        iat: now,
+        exp: now + 600,
+      }).sign(client);
+      const issuance = await new RoutedWriter("mrc1").text("fixture").text(
+        other.did(),
+      )
+        .fixed(new Uint8Array(16).fill(8)).fixed(ctx).fixed(challenge).time(now)
+        .time(now + 60).sign(other);
+      const receipt = await new RoutedWriter("mrr1").fixed(sha256(issuance))
+        .text(client.did()).fixed(sha256(statement)).time(now).sign(other);
+      const proof =
+        new RoutedWriter("mrp1").blob(statement).blob(issuance).blob(receipt)
+          .bytes;
+      assertEquals((await independent.request(6, admit(ctx, proof))).status, 0);
+    }
+    store.close();
+    await assertRejects(() => independent.request(3, contexts[0]));
+    assertEquals(independent.socket.readyState, 3);
   } finally {
     host.close();
     await server.close();

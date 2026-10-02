@@ -332,6 +332,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#compressionNegotiated = false;
     this.#receiveCompressionEnabled = false;
     this.#sendCompressionEnabled = false;
+    this.#routedMessages = false;
     this.#rejectCompressionRequests(error);
     return socket;
   }
@@ -353,6 +354,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
       this.#compressionNegotiated = false;
       this.#receiveCompressionEnabled = false;
       this.#sendCompressionEnabled = false;
+      this.#routedMessages = false;
       let opened = false;
       socket.addEventListener("open", () => {
         opened = true;
