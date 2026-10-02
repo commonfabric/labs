@@ -20,7 +20,7 @@ import type { Cell } from "../src/cell.ts";
 import { type CfcConfClause, clauseAlternatives } from "../src/cfc/clause.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
-import { collectConsumedLabel } from "../src/cfc/prepare.ts";
+import { collectConsumedLabel, deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -915,6 +915,26 @@ describe("condition-builtin-reads", () => {
           );
         });
       }
+
+      it("returns the condition from `unless`, which a read typed by the condition's schema finds `undefined`", async () => {
+        // `unless` hands its condition on when the condition's root is truthy,
+        // and a reader of the output applies its own schema to it, exactly as
+        // it would reading the condition itself.
+        const [{ stored, schema }] = failingBelowRoot;
+        const result = await runPattern(
+          "unless-below",
+          ({ flag }) => ({ shown: builder.unless(flag, "fallback") }),
+          { flag: await plainDoc("below-record", stored) },
+          { type: "object", properties: { flag: schema } },
+        );
+
+        const shown = result.key("shown");
+        expect({
+          fallback: shown.get() === "fallback",
+          n: shown.key("box").key("n").get(),
+          typed: shown.asSchema(schema).get(),
+        }).toEqual({ fallback: false, n: "bad", typed: undefined });
+      });
     });
   });
 
@@ -1178,6 +1198,54 @@ describe("condition-builtin-reads", () => {
       expect(await readBothWays(cases)).toEqual(
         cases.map(({ name, eager, probe }) => ({ name, eager, probe })),
       );
+    });
+
+    it("consumes the label covering a record's root, and none held below it, where the eager read consumes both", async () => {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { title: { type: "string" }, secret: { type: "string" } },
+      };
+      const records = [{
+        name: "a record sealed at its root",
+        doc: await sealedDoc("sealed-root-record", { title: "plain" }),
+      }, {
+        name: "a record sealed only at `secret`",
+        doc: await seededDoc("sealed-below-record", {
+          title: "plain",
+          secret: "sealed content",
+        }, [{
+          path: ["secret"],
+          label: { confidentiality: [sealedClause] },
+        }]),
+      }];
+
+      const observed = [];
+      for (const { name, doc } of records) {
+        /** Whether the flow join of a transaction that made `read` alone holds the sealed clause. */
+        const joinHoldsSeal = (
+          read: (cell: Cell<unknown>, tx: IExtendedStorageTransaction) => void,
+        ): boolean => {
+          const tx = runtime.edit();
+          try {
+            read(doc.asSchema(schema).withTx(tx), tx);
+            return holdsSealedClause(deriveFlowJoin(tx).confidentiality);
+          } finally {
+            tx.abort();
+          }
+        };
+        observed.push({
+          name,
+          probe: joinHoldsSeal((cell, tx) =>
+            readsTruthyAtRoot(runtime, tx, cell.getAsNormalizedFullLink())
+          ),
+          eager: joinHoldsSeal((cell) => cell.get()),
+        });
+      }
+
+      expect(observed).toEqual([
+        { name: records[0].name, probe: true, eager: true },
+        { name: records[1].name, probe: false, eager: true },
+      ]);
     });
 
     it("leaves the transaction cfc-relevant for a record whose schema carries `ifc` or whose document carries labels, as the eager read does", async () => {
