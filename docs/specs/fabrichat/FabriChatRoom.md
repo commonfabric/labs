@@ -8,26 +8,19 @@ Its records and surfaces are named for the contract rather than for the
 implementation, because they are part of the contract: `ChatMessage`,
 `ChatReaction`, and the surfaces the table under [writers](#writers) names.
 
-## Space hookup
-
-The space record's `chat` field holds the canonical room link. The `/` wish
-reaches that record even before a host installs its `defaultPattern`. The
-manager registers a newly allocated room there before publishing it. The
-standalone entry point claims an empty slot in the same transaction that
-initializes the room, so competing starts converge on one link. The default
-app's Chat link opens this entry point and reuses the registered conversation.
-The slot, like the rest of the space record, is governed by the space ACL.
-
 ## State
 
 The room keeps these `PerSpace` values, shared by everyone the space admits:
 
 - The contract's own records: `about`, its messages, and `recentActivity` with
-  its next `seq` and `recentActivityExpiredThrough`. Messages and reactions are separate authored documents, linked from the
-  room and projected in recorded-time order.
+  its next `seq` and `recentActivityExpiredThrough`. The messages are a list
+  ordered by `sentAt`. Each message links a separately protected reaction list,
+  whose entries retain their own cell identities.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
-- The times the room has used, so it can make each new one unique.
+- The times the room has used, so it can make each new one unique, each kept
+  as long as a request is remembered: no new time is chosen from before the
+  proposed-time window, which that span covers.
 
 `participants` is computed from the participants the space's default pattern
 lists (`wish({ query: "#default" })`) and the messages' authors, keyed by
@@ -47,7 +40,8 @@ twice should.
 
 ## Writers
 
-Every write goes through one handler per stream:
+Every protocol write goes through its stream's handler. The room's UI binds
+separate reviewed handlers that share the same mutation helpers:
 
 | Handler | Stream | Reviewed surface |
 | --- | --- | --- |
@@ -58,18 +52,23 @@ Every write goes through one handler per stream:
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 
-Messages and reactions are separate `AuthoredByCurrentUser` documents with
-`WritePolicyAnyOf` branches for their permitted reviewed writers. The runtime
-labels each document with its writer and rejects a write without the required
-gesture. The composer captures exact submitted text and uses the gesture's
-handler clock as the proposed time.
+`commitSend` and `commitSendReaction` store a value typed
+`AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
+its writer and refuses it without a trusted gesture from the named surface. The
+room's own composer builds a send's `{ version: { body, sentAt }, replyTo? }`
+from the text the person submitted, which its handler reads as `target.value`,
+and the composer event's time as the proposed `sentAt`.
 
 Every handler first checks its event's sender and `requestId` against a keyed
 collection of the requests the room has acted on, and does nothing for one it
 finds. It records the request there in the same transaction as its effect, and
-retains the request for the room's lifetime. The runtime does not establish
-a finite maximum event redelivery delay, so finite retention would allow an old
-request to recreate removed content. Request memory retains no message body.
+the collection drops a request once it was recorded longer ago than the greater
+of `proposedTimeMaxAgeNsec` plus `proposedTimeMaxLeadNsec`, and
+`recentActivityWindowNsec`. The collection keeps a request even after its
+message is obliterated: it says only that the sender made a request, not what,
+and without it a late redelivery of the original send would send the message
+again. The two bounds of its window for proposed times are constants of the
+pattern, documented beside it.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
 `commitEdit` moves the current version into `earlierVersions` before recording
@@ -92,17 +91,22 @@ times](ChatMessage.md#unique-times)). A room keeps the times it has used in a
 keyed collection, so the check doesn't scan every message, and two records made
 at once conflict and retry rather than share a time.
 
-`commitSendReaction` and `commitDeleteReaction` are explicit idempotent
-operations. Each reaction is a separate authored document referenced from the
-message's reaction collection. A transaction reads that collection to find the
-reactor/profile and emoji pair before adding or removing it; concurrent changes
-conflict and rerun against the accepted collection. Message creation and editing
-do not receive the reaction documents' writer authority. Deletion and
-obliteration may clear them.
+A reaction is never toggled, since a repeated or delayed toggle can turn into
+the opposite of what the person meant. `commitSendReaction` and
+`commitDeleteReaction` each change nothing when the reaction is already as
+asked.
 
-`about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
-handler that creates the room, so it is labeled with its creator. `canSend` is
-computed for each viewer from their access and whether their profile resolves.
+`commitSendReaction` checks the message's reaction list for the same profile
+and emoji in the transaction that appends a new reaction. Concurrent changes
+conflict and retry, enforcing [`ChatReaction`](ChatReaction.md#uniqueness)'s
+uniqueness rule. Each reaction has its own stored identity and writer policy.
+The message links the reaction list; its writers and the reaction writers have
+separate authority (see [`ChatMessage`](ChatMessage.md#who-wrote-what)).
+
+`about.record` is stored as `AuthoredByCurrentUser`, written once by the handler
+that creates the room, so it is labeled with its creator, and `about` links it.
+`canSend` is computed for each viewer from their access and whether their
+profile resolves.
 
 Every handler that changes the room's own record appends its `recentActivity`
 entry in the same transaction as the change, so the log never disagrees with the
@@ -139,19 +143,37 @@ differ from them. A room states its settings in `about.policy`
 ([`ChatRoomPolicy`](ChatRoomPolicy.md)), with every key present, written when
 the room is created from the same settings the handlers read.
 
-## Runtime support
+## Prerequisites
 
-- **Private allocation.** The first factory call using a named `inSpace()`
-  allocation supplies its genesis grants. The manager creates its policy there
-  first, granting the creator OWNER and intended other members WRITE.
-- **System participants.** The host creates the space's default pattern when
-  someone opens the space. The room reads its participants through `#default`.
-  Before that, the room's participants are only its message authors.
-- **Session windows.** Handler event scope selects the sending session's
-  `PerSession` window collection across the message-list cell boundary.
-- **Separate writer authority.** Messages and reactions occupy separate
-  documents with their own reviewed-writer policies.
-- **Lifetime deduplication.** Request memory lasts for the room's lifetime;
-  no finite delivery-delay guarantee is assumed.
-- **Activity expiry.** An interval clock updates the visible activity window
-  even without a write. The next activity write prunes expired stored entries.
+- **A private space, created from a pattern.** The manager's
+  `FabriChatRoom.inSpace()` creates a space with a random DID whose genesis
+  document names its creator as the only OWNER, plus the grants it names
+  ([random space identities](../random-space-identities.md)).
+- **The space's participants.** The room reads them from its space's default
+  pattern, which a host creates the first time someone opens the space. Until
+  then, the room's participants are only its authors.
+- **Per-session state written by a handler.** `windows` is a `PerSession` cell
+  linked from the room's `PerSpace` message list, a nesting the scoped-cell
+  design provides across a `Cell` boundary (see [scoped cell
+  instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
+  the instance belonging to the session that sent the event, including when the
+  handler runs somewhere other than that session's client. The runtime carries
+  the originating session through stream execution; integration tests exercise
+  both client and server execution.
+- **Separate reaction authority.** The message links a reaction list, and its
+  reactions are documents with their own writer policies. Reaction handlers
+  can change those records without gaining authority over the message body
+  (see [`ChatMessage`](ChatMessage.md#who-wrote-what)).
+- **Redelivery ends.** Two things can make an event arrive, or run, more than
+  once. A client runtime re-submits an event when it can't tell whether its
+  append committed, and the memory ignores a re-submission by its event id, but
+  only while the client's append queue remembers the event, which lasts as long
+  as the client's process. And a served handler runs an event again until its
+  run is recorded as complete. The room's request memory covers both only as
+  long as it lasts (see [writers](#writers)). So the room relies on every event
+  being run to completion, or dropped, within the memory, including one queued
+  while its client was offline and appended much later. Whether the runtime
+  guarantees such a finite bound is unresolved. The implementation therefore
+  retains request identities and used times for the room's lifetime, deferring
+  the expiry step above (see [implementation
+  status](README.md#records-and-delivery)).

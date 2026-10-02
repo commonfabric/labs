@@ -7,6 +7,7 @@ import type {
   Cell,
   FabricDurationNsec,
   FabricEpochNsec,
+  NAME,
   PerSession,
   Stream,
   UI,
@@ -62,12 +63,20 @@ export interface ChatRoomPolicy {
   maxOpenWindows: number;
 }
 
+/** The immutable facts attested by a manager-created room's creator. */
+export interface ChatRoomRecord {
+  kind: "direct" | "group";
+  title?: string;
+  createdAt: FabricEpochNsec;
+}
+
 /** Immutable room description, with independently labeled policy. */
 export interface ChatRoomAbout {
   kind: "direct" | "group";
   title?: string;
   createdAt: FabricEpochNsec;
   policy: Cell<ChatRoomPolicy>;
+  record?: Cell<ChatRoomRecord>;
 }
 
 /** An attested pointer to a change, numbered in commit order. */
@@ -156,8 +165,23 @@ export interface ChatRoomFacts {
 
 /** A room's protocol and its own reviewed rendering. */
 export interface ChatRoomOutput extends ChatRoomFacts {
+  [NAME]?: string;
   [UI]: VNode;
   [VIEWS]: { room: ChatRoomFacts };
+}
+
+/**
+ * The shared room metadata a manager reads through a room reference. Accepting
+ * a reference does not subscribe to the room's viewer-specific UI or windows.
+ * A linked space's own chat may omit its creation time and creation record.
+ */
+export interface ChatRoomLink {
+  about?: Omit<ChatRoomAbout, "createdAt" | "record"> & {
+    createdAt?: FabricEpochNsec;
+    record?: Cell<
+      Omit<ChatRoomRecord, "createdAt"> & { createdAt?: FabricEpochNsec }
+    >;
+  };
 }
 
 /** A user's link to a conversation. */
@@ -174,6 +198,25 @@ export type ChatRequestOutcome =
   | { status: "done"; entry?: ChatIndexEntry }
   | { status: "refused"; reason: string };
 
+/**
+ * The manager's public event envelope. Each operation validates the fields it
+ * uses; fields belonging to another operation are ignored. A caller may omit
+ * requestId to use the identity of the dispatch as its deduplication key.
+ */
+export interface ManagerStreamEvent {
+  requestId?: string;
+  counterpart?: string;
+  members?: string[];
+  title?: string;
+  joinableByLink?: boolean;
+  room?: Cell<ChatRoomLink>;
+  id?: string;
+  readonly target?: {
+    readonly value?: string;
+    readonly dataset?: { readonly chatCounterpart?: string };
+  };
+}
+
 /** The user's private room index and room-creation requests. */
 export interface ChatManagerFacts {
   rooms: ChatIndexEntry[];
@@ -184,15 +227,11 @@ export interface ChatManagerFacts {
     room: Cell<ChatRoomOutput>;
     recipient: string;
   }[];
-  openDirect: Stream<{ requestId: string; counterpart: string }>;
-  createGroup: Stream<{ requestId: string; members: string[]; title: string }>;
-  accept: Stream<{
-    requestId: string;
-    room: Cell<ChatRoomOutput>;
-    counterpart?: string;
-  }>;
-  forget: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
-  delivered: Stream<{ requestId: string; id: string }>;
+  openDirect: Stream<ManagerStreamEvent>;
+  createGroup: Stream<ManagerStreamEvent>;
+  accept: Stream<ManagerStreamEvent>;
+  forget: Stream<ManagerStreamEvent>;
+  delivered: Stream<ManagerStreamEvent>;
 }
 
 /** The home chat manager's public contract. */

@@ -6,6 +6,8 @@
 import {
   type Cell,
   computed,
+  type Default,
+  NAME,
   pattern,
   type PerSpace,
   spaceAccess,
@@ -34,6 +36,7 @@ export interface ChatPlacementView {
 
 /** One immutable room reference in a container. */
 export interface ChatPlacementOutput {
+  [NAME]: Default<string, "Chat">;
   room: PerSpace<Cell<ChatRoomOutput>>;
   [VIEWS]: { chat: ChatPlacementView };
 }
@@ -63,6 +66,7 @@ export const FabriChatPlacement = pattern<
     return "member";
   });
   return {
+    [NAME]: "Chat",
     room,
     [VIEWS]: {
       chat: {

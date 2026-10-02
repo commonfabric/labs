@@ -1,8 +1,9 @@
 # FabriChat
 
-Status: normative reference for the implementation in
-`packages/patterns/fabrichat/`. Rooms, managers, placements, and adapters expose
-the contracts below. Space administration belongs to the system facilities.
+This directory describes the four patterns FabriChat is made of, and what they
+require of the runtime and of the programs that use them. [Implementation
+status](#implementation-status) says where they are built, and where the build
+departs from this design.
 
 ## Quick links
 
@@ -195,9 +196,10 @@ for a container, which decides who could see a room placed there. A space
 offers two halves of that:
 
 - **Its access list** says who can read and write. A pattern reads its own
-  principal's level (`spaceAccess()`), and the space's own tools change it.
-  `spaceMembers()` reads the authoritative list for admission and placement
-  checks; it does not manage the space.
+  principal's level (`spaceAccess()`) and the admitted principals and levels
+  (`spaceMembers()`); the space's own tools change it. Both observations also
+  accept a cell in another space and use the viewer's access to that space
+  ([pattern space membership](../../features/pattern-space-membership.md)).
 - **Its participants**, the profiles its default pattern lists
   (`participants`, through `wish({ query: "#default" })`), name people, but
   each entry is a claim: any participant can add any profile, by joining the
@@ -208,11 +210,13 @@ access list admits, plus any admitted principal with no entry, would combine
 the two. It is a property of the space, the same for every pattern in it. Until
 a space offers one, a reader shows the participants as claims.
 
-A client or pattern can resolve a participant profile's principal with
-`principalOf(profile, "represents-principal")` and check that principal against
-`spaceMembers()`. Container admission checks compare the authoritative access
-lists directly, including wildcard grants, before placing a direct room there
-(see [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
+With a member set:
+
+- Starting a conversation from a shared space's members yields principals
+  directly (see [`FabriChatManager.md`](FabriChatManager.md#prerequisites)).
+- A client can tell whether a container admits anyone besides a direct room's
+  two members, which it must know before placing that room there (see
+  [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
 ## Known quirks, accepted for now
 
@@ -231,25 +235,93 @@ lists directly, including wildcard grants, before placing a direct room there
   be surprising. A direct room is never placed that way (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
-## Runtime capabilities and remaining client work
+## Prerequisites
 
-The implementation uses `Factory.inSpace()` with intended creation grants,
-`currentPrincipal()` for handler actors, confidential per-user
-`viewerPrincipal()` for message ownership, `eventKey()` for stable UI request
-identity, and `spaceAccess()` and `spaceMembers()` for access checks. See
-[pattern space membership](../../features/pattern-space-membership.md).
+The design uses these runtime capabilities. Remaining delivery and member-set
+work is identified below:
 
-The space's default pattern owns its participant roster. These profiles are
-claims, not evidence of access. Message and reaction documents carry separate
-write policies, and session-scoped windows and message cards preserve each
-viewer's local state. Native clients use
-[`bindNativeUiControl`](../../features/host-embedding.md#native-reviewed-controls)
-for reviewed controls. Notice delivery remains the client's responsibility
-through the manager's `outgoingNotices` and `delivered` contract.
+- **A member set for a shared space**, readable by the space's members and by
+  patterns running there (see [Shared spaces](#shared-spaces)).
+- **Creating a private space from a pattern.** `Factory.inSpace()` creates a
+  space with a random DID whose genesis document grants only its creator
+  (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
+  as well ([random space identities](../random-space-identities.md)).
+- **Delivering a notice.** A room is to be offered to its recipient through
+  their profile share inbox, but no offer names a room yet and the manager
+  reads none, so nothing delivers a notice to a principal who shares no space
+  with the sender end to end (see
+  [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
+- **Scoped state and separate write policies.** Handlers write the originating
+  session's windows. Messages link separate reaction documents with their own
+  writer policies (see [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
+- **Host-issued trusted gestures.** A native host binds an installed pattern
+  control through `bindNativeUiControl`, under the [host embedding policy
+  record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
+  and the requirements in [`clients.md`](clients.md).
 
-Nothing in this repository delivers a notice end to end to a principal who
-shares no space with the sender. The manager keeps notices queued for a client
-to deliver (see [first contact](FabriChatManager.md#first-contact)).
+## Implementation status
+
+The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
+`manager.tsx`, `placement.tsx`, and `adapter.tsx`. Their public types are in
+`schemas.ts`; `records.ts` and `window.ts` hold record and selection helpers.
+`main.tsx` opens the single conversation registered on a space. The home pattern
+holds the manager, and `#chatManager` resolves to it, but Home adds no tab. Its
+page opens at the `chatManager` path in Home's result. It shows rooms, a selected
+conversation, reviewed start controls, the session's latest start outcome,
+the user's chat address, and queued notice links.
+
+### Access and principals
+
+- Membership belongs to the space. Manager-created rooms grant their creator
+  OWNER and named members WRITE at creation; an explicitly link-joinable group
+  also grants `"*"` WRITE. Direct rooms never receive that wildcard. The space's
+  tools manage subsequent access, and its default pattern supplies participant
+  profiles, augmented by the room's message authors.
+- The manager retains immutable creation choices, coalesces pending direct
+  requests, and resumes interrupted work. Allocation, room registration, and
+  home-index publication use separate transactions. It publishes notices and
+  the completed index entry only after registration succeeds.
+- A manager-created room's immutable `about.record` carries its creator's
+  `authored-by` label. Direct acceptance derives that principal, checks its
+  membership, and refuses a supplied mismatch. A space's own conversation has
+  no creator record. Participant Chat controls use profile attestations and
+  send the original reviewed event directly to the manager's stream.
+- Clients must validate a container before storing a room link. Placements
+  additionally check the authoritative ACLs reactively and hide a direct room
+  when a container admits anyone beyond its two principals.
+
+### Writers and labels
+
+- Reviewed writer policies protect messages, reactions, creation intents,
+  room metadata, and manager records. Starts require `ChatStartSurface` and
+  `ChatStart`; continuation handlers can act only on a previously admitted
+  intent. Non-start manager operations have their own permitted writers.
+- Messages, reactions, activity, and creator records retain their own cell
+  identities and authorship labels. A message links a separate reaction list;
+  deletion and obliteration clear that list through explicitly authorized
+  writers.
+- Native hosts can bind reviewed controls through `bindNativeUiControl` from
+  `@commonfabric/runner/native-ui`, under the restrictions in
+  [`clients.md`](clients.md).
+
+### Records and delivery
+
+- Session windows retain live message links. Their older/newer flags are derived
+  from the current conversation. Placements share the room's session composer;
+  a refused send retains the draft and allows another gesture with unchanged
+  text.
+- Activity expires from the public view with the reactive clock; writers prune
+  expired stored entries on the next write. Request identities and used times
+  remain for the room's lifetime. This exceeds the design's minimum retention
+  span and defers its storage-expiry step: the runtime defines no finite event
+  redelivery bound, so expiration must not permit a delayed mutation replay.
+- Notices remain client-delivered through `outgoingNotices`. Their IDs encode
+  `[requestId, recipient]` as JSON. The manager exposes a room link and delivery
+  acknowledgment; the room offers Add to my chats. Profile-inbox offers do not
+  yet deliver rooms end to end.
+- There is no automatic storage migration from other FabriChat storage layouts.
+  Creation may leave an unindexed allocated space if interrupted before its
+  initialization commits; its genesis grants still reflect the admitted intent.
 
 ## Identity and presentation
 

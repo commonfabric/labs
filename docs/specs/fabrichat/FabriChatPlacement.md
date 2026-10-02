@@ -38,12 +38,6 @@ the room's two members. Even an unreadable link to it tells the container's
 other members that the conversation exists. A client learns whom a container
 admits from its member set (see [shared spaces](README.md#shared-spaces)). A
 client that can't learn it MUST treat the container as admitting others.
-The client checks this before storing the room link in the container. The
-placement's reactive access guard can suppress its view after membership
-changes, but it cannot undo disclosure of a link already stored there. The
-reference placement also suppresses direct rooms whose current access list has
-more or fewer than two principals, or whose room or container admits `"*"`.
-
 
 ## Outputs
 

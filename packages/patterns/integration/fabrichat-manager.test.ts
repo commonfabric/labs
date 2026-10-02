@@ -26,6 +26,17 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/v2";
 
+/** Reads index membership without demanding the linked room's reactive views. */
+const ROOM_INDEX_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      room: { type: "unknown", asCell: ["cell"] },
+    },
+  },
+} as const;
+
 /** Supplies the explicit principal expected by the in-process loopback server. */
 function testPrincipalSessionOpenAuthFactory(
   signer?: Signer,
@@ -134,11 +145,13 @@ describe("FabriChat manager", () => {
         status: string,
         requestId = "create-1",
         members: string[] = [member, member],
+        joinableByLink?: boolean,
       ) => {
         const event = {
           requestId,
           title: "A private group",
           members,
+          ...(joinableByLink === undefined ? {} : { joinableByLink }),
           provenance: {
             origin: "dom",
             trusted: true,
@@ -211,15 +224,22 @@ describe("FabriChat manager", () => {
       expect(runtime.getSpaceCell(roomSpace).key("defaultPattern").getRaw())
         .toBeUndefined();
       const about = room.key("about").resolveAsCell();
+      const creationRecord = about.key("record").resolveAsCell();
       const policy = about.key("policy").resolveAsCell();
+      expect(creationRecord.getAsNormalizedFullLink().space).toBe(roomSpace);
+      expect(creationRecord.get()).toEqual({
+        kind: "group",
+        title: "A private group",
+        createdAt: about.key("createdAt").get(),
+      });
       expect(policy.getAsNormalizedFullLink().space).toBe(roomSpace);
       expect(policy.getAsNormalizedFullLink().id).not.toBe(
-        about.getAsNormalizedFullLink().id,
+        creationRecord.getAsNormalizedFullLink().id,
       );
       const maxAge = policy.key("proposedTimeMaxAgeNsec").get();
       expect(maxAge.schemaType).toBe("FabricDurationNsec");
       expect(maxAge.value).toBe(600_000_000_000n);
-      for (const record of [about, policy]) {
+      for (const record of [creationRecord, policy]) {
         const label = cfcLabelViewForCell(record);
         expect(label?.entries.flatMap((entry) => entry.label.integrity ?? []))
           .toContainEqual({ kind: "authored-by", subject: creator.did() });
@@ -280,6 +300,10 @@ describe("FabriChat manager", () => {
       const direct = result.key("direct").key(member).key("room")
         .resolveAsCell();
       const directLink = direct.getAsNormalizedFullLink();
+      expect(await new ACLManager(runtime, directLink.space).get()).toEqual({
+        [creator.did()]: "OWNER",
+        [member]: "WRITE",
+      });
       for (const id of ["direct-1", "direct-2"]) {
         expect(
           result.key("requests").key(id).key("entry").key("room")
@@ -296,6 +320,47 @@ describe("FabriChat manager", () => {
         result.key("requests").key("accept-false-creator").key("status"),
         (value) => value === "refused",
       );
+      await result.key("accept").send({
+        requestId: "accept-self-creator",
+        room: direct,
+      });
+      await waitForCellValue(
+        runtime,
+        result.key("requests").key("accept-self-creator").key("status"),
+        (value) => value === "refused",
+      );
+      const fixtureTx = runtime.edit();
+      const unsignedRecord = runtime.getCell(
+        directLink.space,
+        "unsigned-creator-record",
+        undefined,
+        fixtureTx,
+      );
+      const createdAt = direct.key("about").key("createdAt").get();
+      unsignedRecord.set({ kind: "direct", createdAt });
+      const invalidRooms = [
+        ["missing-creator-record", undefined],
+        ["unsigned-creator-record", unsignedRecord],
+      ] as const;
+      const invalidRoomLinks = invalidRooms.map(([id, record]) => {
+        const invalidRoom = runtime.getCell(
+          directLink.space,
+          `room-${id}`,
+          undefined,
+          fixtureTx,
+        );
+        invalidRoom.set({
+          about: {
+            kind: "direct",
+            createdAt,
+            policy: direct.key("about").key("policy").resolveAsCell(),
+            ...(record === undefined ? {} : { record }),
+          },
+        });
+        return { id, link: invalidRoom.getAsNormalizedFullLink() };
+      });
+      runtime.prepareTxForCommit(fixtureTx);
+      expect((await fixtureTx.commit()).error).toBeUndefined();
       const recipientStorage = new PrivateStorageManager(
         server,
         memberIdentity,
@@ -320,6 +385,45 @@ describe("FabriChat manager", () => {
           {},
         );
         const recipientRoom = recipientRuntime.getCellFromLink(directLink);
+        for (const { id, link } of invalidRoomLinks) {
+          await recipientManager.key("accept").send({
+            requestId: id,
+            room: recipientRuntime.getCellFromLink(link),
+          });
+          await waitForCellValue(
+            recipientRuntime,
+            recipientManager.key("requests").key(id).key("status"),
+            (value) => value === "refused",
+          );
+        }
+        await recipientManager.key("accept").send({
+          requestId: "accept-mismatched-counterpart",
+          room: recipientRoom,
+          counterpart: (await Identity.fromPassphrase("wrong-counterpart"))
+            .did(),
+        });
+        await waitForCellValue(
+          recipientRuntime,
+          recipientManager.key("requests").key("accept-mismatched-counterpart")
+            .key("status"),
+          (value) => value === "refused",
+        );
+        expect(recipientManager.key("rooms").get()).toHaveLength(0);
+        expect(recipientManager.key("direct").get()).toEqual({});
+        await recipientManager.key("accept").send({
+          requestId: "accept-derived-counterpart",
+          room: recipientRoom,
+        });
+        await waitForCellValue(
+          recipientRuntime,
+          recipientManager.key("requests").key("accept-derived-counterpart")
+            .key("status"),
+          (value) => value === "done",
+        );
+        expect(
+          recipientManager.key("requests").key("accept-derived-counterpart")
+            .key("entry").key("counterpart").get(),
+        ).toBe(creator.did());
         await recipientManager.key("accept").send({
           requestId: "accept-attested-creator",
           room: recipientRoom,
@@ -335,6 +439,10 @@ describe("FabriChat manager", () => {
           recipientManager.key("direct").key(creator.did()).key("room")
             .resolveAsCell().equals(recipientRoom),
         ).toBe(true);
+        const recipientRooms = recipientManager.key("rooms").asSchema(
+          ROOM_INDEX_SCHEMA,
+        );
+        expect(await recipientRooms.pull()).toHaveLength(1);
       } finally {
         await recipientRuntime.dispose();
         await recipientStorage.close();
@@ -421,22 +529,14 @@ describe("FabriChat manager", () => {
           reopened.key("direct").key(member).key("room").resolveAsCell()
             .getAsNormalizedFullLink(),
         ).toEqual(directLink);
-        const reopenedRooms = reopened.key("rooms").asSchema({
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              room: { type: "unknown", asCell: ["cell"] },
-            },
-          },
-        });
+        const reopenedRooms = reopened.key("rooms").asSchema(ROOM_INDEX_SCHEMA);
         await reopenedRooms.pull();
         expect(reopenedRooms.get()).toHaveLength(2);
       } finally {
         await reopenedRuntime.dispose();
         await reopenedStorage.close();
       }
-      expect(room.key("participants").get()).toEqual([]);
+      expect(await room.key("participants").pull()).toEqual([]);
       for (
         const key of [
           "roster",
@@ -525,6 +625,8 @@ describe("FabriChat manager", () => {
       ).toBe(true);
       expect(firstChat.key("room").key("about").key("title").get())
         .toBeUndefined();
+      expect(firstChat.key("room").key("about").key("record").get())
+        .toBeUndefined();
 
       const unmaterializedSpace = await manager.createSpace({
         [creator.did()]: "OWNER",
@@ -598,6 +700,32 @@ describe("FabriChat manager", () => {
         result.key("rooms"),
         (value) => value?.length === 1,
       );
+      for (const joinableByLink of [false, true]) {
+        const requestId = `sharing-${joinableByLink}`;
+        await send("done", requestId, [member], joinableByLink);
+        const sharedRoom = result.key("requests").key(requestId).key("entry")
+          .key("room").resolveAsCell();
+        const sharedSpace = sharedRoom.getAsNormalizedFullLink().space;
+        const expectedAcl = {
+          [creator.did()]: "OWNER",
+          [member]: "WRITE",
+          ...(joinableByLink ? { "*": "WRITE" } : {}),
+        };
+        expect(await new ACLManager(runtime, sharedSpace).get())
+          .toEqual(expectedAcl);
+        const indexedRooms = result.key("rooms").asSchema(ROOM_INDEX_SCHEMA);
+        const roomsBeforeReplay = await indexedRooms.pull();
+        await send("done", requestId, [], !joinableByLink);
+        expect(
+          result.key("requests").key(requestId).key("entry").key("room")
+            .resolveAsCell().equals(sharedRoom),
+        ).toBe(true);
+        expect(await indexedRooms.pull()).toHaveLength(
+          roomsBeforeReplay.length,
+        );
+        expect(await new ACLManager(runtime, sharedSpace).get())
+          .toEqual(expectedAcl);
+      }
     } finally {
       await runtime.dispose();
       await manager.close();

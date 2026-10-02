@@ -3,17 +3,20 @@
 FabriChat separates a conversation from the places that show it. `room.tsx` owns
 messages, reactions, and the reviewed writer surfaces. `manager.tsx` keeps the
 user's private conversation index in their home space, exposed through
-`wish({ query: "#chatManager" })` and Home's Conversations tab. `placement.tsx`
-links a room into a container; `adapter.tsx` embeds that room's UI.
+`wish({ query: "#chatManager" })`. Its page opens at `chatManager` in Home's
+result; Home adds no tab for it. `placement.tsx` links a room into a container;
+`adapter.tsx` embeds that room's UI.
 
 `main.tsx` opens the conversation registered on its enclosing space. Its
 reviewed Start conversation control claims an empty `chat` slot and records the
-creator and policy in one transaction. Repeated starts reuse the same room. The
-default app exposes it through its Chat link. The space's access list governs
-that conversation. Direct rooms and separate group rooms created by the manager
-use random spaces with the intended grants at creation. The host installs the
-normal default pattern as their root. Rooms read that root's participants
-through `#default` and combine them with message authors.
+policy in one transaction. A space conversation has no creator record. Repeated
+starts reuse the same room. The default app exposes it through its Chat link.
+The space's access list governs that conversation. Direct rooms and separate
+group rooms created by the manager use random spaces with the intended grants at
+creation. A group can explicitly opt into WRITE access for anyone with its link;
+direct rooms remain private. The host installs the normal default pattern as
+their root. Rooms read that root's participants through `#default` and combine
+them with message authors.
 
 ## Room behavior
 
@@ -54,7 +57,10 @@ inaccessible link.
 The manager exposes outgoing notices for delivery by a client. A notice contains
 a room link and recipient, never conversation contents. The client acknowledges
 a delivered notice through `delivered`. Receiving a notice grants no access;
-`accept` checks actual admission before indexing a room.
+`accept` checks actual admission before indexing a room. For direct rooms it
+reads the creator from the immutable `about.record` attestation and verifies any
+counterpart supplied by a client. The room offers Add to my chats, and each
+attested participant has a reviewed control for starting a direct conversation.
 
 ## Validation
 

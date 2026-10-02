@@ -21,6 +21,8 @@ import {
   pattern,
   type PerSession,
   type PerSpace,
+  principalOf,
+  SELF,
   spaceAccess,
   type TrustedActionWrite,
   UI,
@@ -43,6 +45,7 @@ import {
   threadRoot,
 } from "./records.ts";
 import type {
+  ChatManagerFacts,
   ChatMessage,
   ChatMessageWindow,
   ChatProfile,
@@ -1115,17 +1118,31 @@ const MessageCard = pattern<{
   };
 });
 
+/** Selects a supplied profile or the room viewer's profile by reference. */
+const selectProfile = lift(({
+  supplied,
+  resolved,
+}: { supplied?: Cell<ChatProfile>; resolved?: Cell<ChatProfile> }) =>
+  supplied?.get() === undefined ? resolved : supplied
+);
+
 /** A room's record and its direct protocol surface. */
 export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
   (
     {
-      myProfile,
+      myProfile: suppliedProfile,
       about,
       records,
       memory,
       activity,
+      [SELF]: self,
     },
   ) => {
+    const profile = wish<ChatProfile>({ query: "#profile" });
+    const myProfile = selectProfile({
+      supplied: suppliedProfile,
+      resolved: profile.result,
+    });
     const state = {
       myProfile,
       about,
@@ -1133,6 +1150,31 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       memory,
       activity,
     } as RoomWriterState;
+    const manager = wish<
+      Pick<ChatManagerFacts, "accept" | "openDirect"> & {
+        rooms: { room: Cell<unknown> }[];
+      }
+    >({
+      query: "#chatManager",
+    });
+    const creator = computed(() =>
+      principalOf(about.get()?.record, "authored-by")
+    );
+    const canList = computed(() =>
+      manager.result !== undefined &&
+      !manager.result.rooms.some((entry) => equals(entry.room, self)) &&
+      (about.get()?.kind !== "direct" ||
+        (creator !== undefined && creator !== viewerPrincipal()))
+    );
+    const addToChats = action(() => {
+      const counterpart = principalOf(about.get()?.record, "authored-by");
+      if (about.get()?.kind === "direct" && !counterpart) return;
+      manager.result?.accept.send({
+        requestId: eventKey(),
+        room: self,
+        ...(about.get()?.kind === "direct" ? { counterpart } : {}),
+      });
+    });
     const reply = new Writable.perSession<ChatReply | null>(null);
     const draft = new Writable.perSession("");
     const thread = new Writable.perSession<
@@ -1336,9 +1378,51 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
             </cf-hstack>
             <cf-vstack id="fabrichat-messages" gap="3" padding="4">
               <cf-hstack gap="2" wrap>
-                {participants.map((profile) => (
-                  <cf-profile-badge $profile={profile} variant="chip" />
-                ))}
+                {participants.map((profile) => {
+                  const counterpart = computed(() => {
+                    const access = spaceAccess(profile);
+                    return access === "READ" || access === "WRITE" ||
+                        access === "OWNER"
+                      ? principalOf(profile, "represents-principal")
+                      : undefined;
+                  });
+                  return (
+                    <cf-hstack gap="1" align="center">
+                      <cf-profile-badge $profile={profile} variant="chip" />
+                      <div
+                        data-ui-pattern="ChatStartSurface"
+                        data-ui-event-integrity="ChatStartSurface"
+                        style={{
+                          display: manager.result !== undefined &&
+                              counterpart !== undefined &&
+                              counterpart !== viewerPrincipal()
+                            ? "block"
+                            : "none",
+                        }}
+                      >
+                        <cf-button
+                          data-ui-action="ChatStart"
+                          data-chat-counterpart={counterpart}
+                          onClick={manager.result?.openDirect}
+                        >
+                          Chat
+                        </cf-button>
+                      </div>
+                    </cf-hstack>
+                  );
+                })}
+              </cf-hstack>
+              <cf-hstack
+                id="fabrichat-add-to-chats"
+                gap="2"
+                style={{ display: canList ? "flex" : "none" }}
+              >
+                <cf-text>
+                  {about.get()?.kind === "direct"
+                    ? `Created by ${creator ?? ""}`
+                    : "Add this conversation to your private index."}
+                </cf-text>
+                <cf-button onClick={addToChats}>Add to my chats</cf-button>
               </cf-hstack>
               {thread.get().root?.get() !== undefined
                 ? (

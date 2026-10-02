@@ -84,6 +84,9 @@ interface CompatibilityContext {
    * must not read as a contract break.
    */
   verbEvent?: boolean;
+
+  /** Evolution beneath a result Stream, where each nested Stream reverses flow. */
+  resultVerbEvolution?: boolean;
 }
 
 export interface SchemaSubsetOptions {
@@ -566,7 +569,10 @@ const comparableIfc = (ifc: unknown): unknown => {
  * Reject a piece update unless its argument and result schemas preserve the
  * contracts of the currently running pattern.
  *
- * Arguments are contravariant and results are covariant. An object is open
+ * Arguments are contravariant and results are covariant. A result's Stream
+ * event is supplied by its caller, so its payload is contravariant too. This
+ * includes optional fields, unions, and scalar constraints, while ordinary
+ * Cell results retain their covariant read contract. An object is open
  * when its `additionalProperties` admits any value: absent, `true`, `{}`, or
  * `{ type: "unknown" }`, the last being what an index signature over `unknown`
  * records. A result object that is open may gain any named field, since its
@@ -829,21 +835,44 @@ function schemaSubsetIssue(
   ) {
     return `${path}: cannot resolve a local schema reference`;
   }
-  const source = sourceResolution.schema;
-  const target = targetResolution.schema;
+  let source = sourceResolution.schema;
+  let target = targetResolution.schema;
   // The stream marker rides the REFERENCING node (`{$ref, asCell:["stream"]}`),
   // so test the pre-resolution inputs as well as the resolved schemas. Both
   // contracts must agree the node is a verb: a one-sided marker is a shape
   // change the ordinary rules judge, not an exemption.
-  const entersVerbEvent = !context.verbEvent &&
-    (declaresVerbStream(sourceInput) || declaresVerbStream(source)) &&
-    (declaresVerbStream(targetInput) || declaresVerbStream(target));
+  const sourceStreamWrappers = streamWrapperCount(sourceInput) ||
+    streamWrapperCount(source);
+  const targetStreamWrappers = streamWrapperCount(targetInput) ||
+    streamWrapperCount(target);
+  const isVerbNode = sourceStreamWrappers > 0 && targetStreamWrappers > 0;
   context = {
     ...context,
     sourceRoot: sourceResolution.root,
     targetRoot: targetResolution.root,
-    ...(entersVerbEvent ? { verbEvent: true } : {}),
+    ...(isVerbNode ? { verbEvent: true } : {}),
   };
+  if (
+    isVerbNode && context.defaultComparison === "evolution" &&
+    (context.role === "result" || context.resultVerbEvolution)
+  ) {
+    // Result values flow from the candidate to existing readers. Events flow
+    // from existing callers to the candidate, so compare their whole schema
+    // as an argument rather than reversing selected object-field rules.
+    // Consecutive wrappers can occupy one asCell array; two Streams reverse
+    // the direction twice, just as a Stream nested inside an event does.
+    const reverses = sourceStreamWrappers % 2 === 1;
+    if (reverses) [source, target] = [target, source];
+    context = {
+      ...context,
+      sourceRoot: reverses ? context.targetRoot : context.sourceRoot,
+      targetRoot: reverses ? context.sourceRoot : context.targetRoot,
+      role: reverses
+        ? context.role === "result" ? "argument" : "result"
+        : context.role,
+      resultVerbEvolution: true,
+    };
+  }
   if (
     context.defaultComparison === "target" &&
     schemaHasUnsafeMaterializedDefault(target, context.targetRoot)
@@ -1186,7 +1215,9 @@ function objectSubsetIssue(
           context.targetRoot,
         )
       ) {
-        return `${path}.${property}: newly required argument field has no default`;
+        return `${path}.${property}: newly required ${
+          context.verbEvent ? "verb event" : "argument"
+        } field has no default`;
       }
       // Link materialization inserts the default into a record, but a
       // `FabricPrimitive` is frozen, so one the source admits without the
@@ -1240,51 +1271,17 @@ function objectSubsetIssue(
       if (issue) return issue;
     }
   } else {
-    // Not below a verb node, where the same reasoning runs the other way. A
-    // result field that stops being required withdraws a guarantee its
-    // readers were given. An EVENT field that stops being required widens
-    // what the verb accepts: every call already written still sent it, so
-    // every one of them still validates. The argument side permits exactly
-    // this relaxation, and a verb's event is an argument in every respect but
-    // where it is declared.
-    if (!context.verbEvent) {
-      for (const property of targetRequired) {
-        if (!sourceRequired.has(property)) {
-          return `${path}.${property}: result field is no longer required`;
-        }
+    // At a result polarity the candidate supplies the value, including one
+    // sent to a callback Stream supplied by a caller in an outer event.
+    for (const property of targetRequired) {
+      if (!sourceRequired.has(property)) {
+        return `${path}.${property}: result field is no longer required`;
       }
     }
     // The candidate pattern produces its result. A newly required field does
     // not need a migration default: the new graph materializes that output when
     // it runs. Existing required-result guarantees above still cannot weaken,
     // and existing field types remain checked covariantly below.
-    //
-    // A verb's event is the exception, and it is one of location rather than of
-    // principle. The node sits in the result, so this covariant comparison
-    // reaches it — but the pattern does not produce the event, the CALLER
-    // supplies it. Requiring a field the previous event did not adds a demand
-    // on callers. Below a verb node the rule is the argument side's, stated in
-    // this comparison's direction: `source` is the candidate here, where
-    // `target` is the candidate there.
-    // A valid default on the candidate field rescues the new requirement,
-    // whether that default is retained, introduced, or changed. The stream
-    // marker permits default insertion, and dispatch fills missing fields in
-    // a present event object from defaults. Other ancestor constraints still
-    // apply their own default-stability checks.
-    if (context.verbEvent) {
-      for (const property of sourceRequired) {
-        if (
-          !targetRequired.has(property) &&
-          !schemaProvidesValidDefault(
-            sourceProperties[property],
-            context.sourceRoot,
-          )
-        ) {
-          return `${path}.${property}: newly required verb event field has no default`;
-        }
-      }
-    }
-
     const previousAdditional = additionalPropertiesOf(target);
     for (const property of Object.keys(candidateProperties)) {
       const matchedPatterns = matchingPatternPropertySchemas(
@@ -1504,10 +1501,12 @@ function matchingPatternPropertySchemas(
   return matches;
 }
 
-function declaresVerbStream(schema: JSONSchema): boolean {
-  if (!isObjectOrArray(schema)) return false;
+function streamWrapperCount(schema: JSONSchema): number {
+  if (!isObjectOrArray(schema)) return 0;
   const asCell = (schema as SchemaObject).asCell;
-  return Array.isArray(asCell) && asCell.includes("stream");
+  return Array.isArray(asCell)
+    ? asCell.filter((wrapper) => wrapper === "stream").length
+    : 0;
 }
 
 function additionalPropertiesSubsetIssue(

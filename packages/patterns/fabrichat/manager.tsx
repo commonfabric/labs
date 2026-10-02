@@ -19,6 +19,7 @@ import {
   toSchema,
   type TrustedActionWrite,
   UI,
+  viewerPrincipal,
   VIEWS,
   type VNode,
   wish,
@@ -35,8 +36,11 @@ import type {
   ChatProfile,
   ChatRequestOutcome,
   ChatRoomAbout,
+  ChatRoomLink,
   ChatRoomOutput,
   ChatRoomPolicy,
+  ChatRoomRecord,
+  ManagerStreamEvent,
 } from "./schemas.ts";
 
 /** A creation's immutable user choices, retained across interruptions. */
@@ -46,6 +50,7 @@ interface CreationIntent {
   counterpart?: string;
   title?: string;
   members: string[];
+  joinableByLink?: boolean;
   createdAt: FabricEpochNsec;
   target?: Cell<CreationTarget>;
 }
@@ -72,15 +77,70 @@ interface ManagerState {
   >;
 }
 
+/** The room remains a full output when a handler stores its reference. */
+type ManagerHandlerEvent = Omit<ManagerStreamEvent, "room"> & {
+  room?: Cell<ChatRoomOutput>;
+};
+
+/** Resolving an event's room reads only metadata shared with its members. */
+type ManagerReadEvent = Omit<ManagerStreamEvent, "room"> & {
+  room?: Cell<Pick<ChatRoomLink, "about">>;
+};
+
+/** Index updates compare room references without reading their contents. */
+type ManagerIndexRead = Omit<ChatIndexEntry, "room"> & {
+  room: OpaqueCell<unknown>;
+};
+
+/** Shared metadata suffices for every manager handler's room dependencies. */
+type ManagerReadState =
+  & Omit<
+    ManagerState,
+    "rooms" | "direct" | "requests" | "intents" | "outgoingNotices"
+  >
+  & {
+    rooms: Writable<ManagerIndexRead[]>;
+    direct: Writable<Record<string, ManagerIndexRead>>;
+    requests: Writable<
+      Record<
+        string,
+        | { status: "pending" }
+        | { status: "done"; entry?: ManagerIndexRead }
+        | { status: "refused"; reason: string }
+      >
+    >;
+    intents: Writable<
+      Record<
+        string,
+        Omit<CreationIntent, "target"> & {
+          target?: Cell<
+            Omit<CreationTarget, "room"> & { room: Pick<ChatRoomLink, "about"> }
+          >;
+        }
+      >
+    >;
+    outgoingNotices: Writable<
+      { id: string; room: OpaqueCell<unknown>; recipient: string }[]
+    >;
+  };
+
 /** Creation handlers queue a continuation after their first durable step. */
 interface StartState extends ManagerState {
   profile: Cell<ChatProfile | undefined>;
   resume: Stream<{ requestId: string }>;
   uiTitle?: Writable<string>;
+  uiJoinableByLink?: Writable<boolean>;
+  uiMembers?: Writable<string>;
+  latestStart?: Writable<{ requestId: string; input: string }>;
 }
+
+/** Creation adds its profile and continuation to the shared-only state view. */
+type StartReadState = ManagerReadState & Omit<StartState, keyof ManagerState>;
 
 /** Continues only an intent already admitted for this authenticated creator. */
 const resumeCreation = handler<{ requestId: string }, ManagerState>(
+  toSchema<{ requestId: string }>(),
+  toSchema<ManagerReadState>(),
   (event, state) => {
     if (state.requests.key(event.requestId).get()?.status === "pending") {
       advance(event.requestId, state, resumeCreation(state));
@@ -143,7 +203,17 @@ function advance(
     const grants = Object.fromEntries(
       intent.members.map((member) => [member, "WRITE" as const]),
     );
-    const policy = RoomPolicy.inSpace(allocation, { grants })({
+    if (intent.kind === "group" && intent.joinableByLink === true) {
+      grants["*"] = "WRITE";
+    }
+    const record = RoomRecord.inSpace(allocation, { grants })({
+      value: {
+        kind: intent.kind,
+        title: intent.title,
+        createdAt: intent.createdAt,
+      },
+    });
+    const policy = RoomPolicy.inSpace(allocation)({
       value: CHAT_POLICY,
     });
     const target = PrivateRoom.inSpace(allocation)({
@@ -152,6 +222,7 @@ function advance(
         title: intent.title,
         createdAt: intent.createdAt,
         policy: policy.value,
+        record: record.value,
       },
     });
     intentCell.key("target").set(target);
@@ -254,25 +325,39 @@ function writeOpenDirect(
 }
 
 /** Admits the protocol request from its reviewed creation surface. */
-export const openDirect = handler<
-  { requestId: string; counterpart: string },
-  StartState
->((event, state) => writeOpenDirect(event, state));
+export const openDirect = handler<ManagerHandlerEvent, StartState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    const counterpart = event.counterpart ??
+      event.target?.dataset?.chatCounterpart ?? event.target?.value?.trim() ??
+      "";
+    state.latestStart?.set({ requestId, input: counterpart });
+    writeOpenDirect({ requestId, counterpart }, state);
+  },
+);
 
 /** Starts a direct room for the principal entered in the reviewed control. */
-const openDirectFromUi = handler<{ target?: { value?: string } }, StartState>((
-  event,
-  state,
-) =>
-  writeOpenDirect({
-    requestId: eventKey(),
-    counterpart: event.target?.value?.trim() ?? "",
-  }, state)
+const openDirectFromUi = handler<{ target?: { value?: string } }, StartState>(
+  toSchema<{ target?: { value?: string } }>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    const requestId = eventKey();
+    const counterpart = event.target?.value?.trim() ?? "";
+    state.latestStart?.set({ requestId, input: counterpart });
+    writeOpenDirect({ requestId, counterpart }, state);
+  },
 );
 
 /** Creates a distinct group for a new request and resumes that group on redelivery. */
 function writeCreateGroup(
-  event: { requestId: string; members: string[]; title: string },
+  event: {
+    requestId: string;
+    members: string[];
+    title: string;
+    joinableByLink?: boolean;
+  },
   state: StartState,
 ): void {
   if (!canRequest(event.requestId, state)) return;
@@ -303,6 +388,7 @@ function writeCreateGroup(
       creator: actor,
       kind: "group",
       title: event.title,
+      joinableByLink: event.joinableByLink === true,
       members: [...new Set(event.members)].filter((member) => member !== actor),
       createdAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
     });
@@ -313,59 +399,80 @@ function writeCreateGroup(
 }
 
 /** Admits the group protocol request from its reviewed creation surface. */
-export const createGroup = handler<
-  { requestId: string; members: string[]; title: string },
-  StartState
->((event, state) => writeCreateGroup(event, state));
+export const createGroup = handler<ManagerHandlerEvent, StartState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    writeCreateGroup({
+      requestId: event.requestId ?? eventKey(),
+      members: event.members ?? [],
+      title: event.title?.trim() ?? "",
+      joinableByLink: event.joinableByLink,
+    }, state);
+  },
+);
 
 /** Captures a group title and the principals shown in its start control. */
-const createGroupFromUi = handler<{ target?: { value?: string } }, StartState>((
-  event,
-  state,
-) =>
-  writeCreateGroup({
-    requestId: eventKey(),
-    title: state.uiTitle?.get() ?? "",
-    members: (event.target?.value ?? "").split(/[\s,]+/u).filter(Boolean),
-  }, state)
+const createGroupFromUi = handler<{ target?: { value?: string } }, StartState>(
+  toSchema<{ target?: { value?: string } }>(),
+  toSchema<StartReadState>(),
+  (event, state) => {
+    const requestId = eventKey();
+    const input = state.uiMembers?.get() ?? event.target?.value ?? "";
+    state.latestStart?.set({ requestId, input });
+    writeCreateGroup({
+      requestId,
+      title: state.uiTitle?.get() ?? "",
+      members: input.split(/[\s,]+/u).filter(Boolean),
+      joinableByLink: state.uiJoinableByLink?.get() === true,
+    }, state);
+  },
 );
 
 /** Accepts an admitted room and verifies a direct room's attested creator. */
-export const accept = handler<
-  { requestId: string; room: Cell<ChatRoomOutput>; counterpart?: string },
-  ManagerState
->((event, state) => {
-  if (!canRequest(event.requestId, state)) return;
-  const actor = currentPrincipal();
-  const acl = spaceMembers(event.room);
-  const about = event.room.key("about").get();
-  if (
-    !actor || !(acl?.[actor] ?? acl?.["*"]) || !about ||
-    (about.kind === "direct" &&
-      (!event.counterpart || !acl[event.counterpart] ||
-        event.counterpart === actor ||
-        principalOf(event.room.key("about"), "authored-by") !==
-          event.counterpart))
-  ) {
-    refuse(
-      event.requestId,
-      "This user is not admitted to that conversation.",
-      state,
-    );
-    return;
-  }
-  const entry: ChatIndexEntry = {
-    room: event.room,
-    kind: about.kind,
-    since: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
-    ...(about.kind === "direct" ? { counterpart: event.counterpart } : {}),
-  };
-  remember(entry, state);
-  if (entry.counterpart && !state.direct.key(entry.counterpart).get()) {
-    state.direct.key(entry.counterpart).set(entry);
-  }
-  state.requests.key(event.requestId).set({ status: "done", entry });
-});
+export const accept = handler<ManagerHandlerEvent, ManagerState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<ManagerReadState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    if (!canRequest(requestId, state)) return;
+    if (!event.room) {
+      refuse(requestId, "Choose a conversation to add.", state);
+      return;
+    }
+    const actor = currentPrincipal();
+    const acl = spaceMembers(event.room);
+    const about = event.room.key("about").get();
+    const counterpart = about?.kind === "direct"
+      ? principalOf(about.record, "authored-by")
+      : undefined;
+    if (
+      !actor || !(acl?.[actor] ?? acl?.["*"]) || !about ||
+      (about.kind === "direct" &&
+        (!counterpart || !acl[counterpart] || counterpart === actor ||
+          (event.counterpart !== undefined &&
+            event.counterpart !== counterpart)))
+    ) {
+      refuse(
+        requestId,
+        "This user is not admitted to that conversation.",
+        state,
+      );
+      return;
+    }
+    const entry: ChatIndexEntry = {
+      room: event.room,
+      kind: about.kind,
+      since: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+      ...(about.kind === "direct" ? { counterpart } : {}),
+    };
+    remember(entry, state);
+    if (entry.counterpart && !state.direct.key(entry.counterpart).get()) {
+      state.direct.key(entry.counterpart).set(entry);
+    }
+    state.requests.key(requestId).set({ status: "done", entry });
+  },
+);
 
 /** The index fields needed to hide an entry without reading any room data. */
 interface ForgetState {
@@ -373,41 +480,52 @@ interface ForgetState {
     (Omit<ChatIndexEntry, "room"> & { room: OpaqueCell<unknown> })[]
   >;
   requests: Writable<
-    Record<string, { status: "pending" | "done" | "refused" }>
+    Record<string, { status: "pending" | "done" | "refused"; reason?: string }>
   >;
 }
 
 /** Hides a room by link identity even after its contents become inaccessible. */
-export const forget = handler<
-  { requestId: string; room: Cell<ChatRoomOutput> },
-  ForgetState
->(
-  toSchema<{ requestId: string; room: OpaqueCell<unknown> }>(),
+export const forget = handler<ManagerHandlerEvent, ForgetState>(
+  toSchema<Omit<ManagerStreamEvent, "room"> & { room?: OpaqueCell<unknown> }>(),
   toSchema<ForgetState>(),
   (event, state) => {
-    if (!event.requestId.trim()) return;
-    const prior = state.requests.key(event.requestId).get();
+    const requestId = event.requestId ?? eventKey();
+    if (!requestId.trim()) return;
+    const prior = state.requests.key(requestId).get();
     if (prior && prior.status !== "pending") return;
+    if (!event.room) {
+      state.requests.key(requestId).set({
+        status: "refused",
+        reason: "Choose a conversation to forget.",
+      });
+      return;
+    }
     state.rooms.set(
       state.rooms.get().filter((entry) =>
         !Cell.equalLinks(entry.room, event.room) &&
         !equals(entry.room, event.room)
       ),
     );
-    state.requests.key(event.requestId).set({ status: "done" });
+    state.requests.key(requestId).set({ status: "done" });
   },
 );
 
 /** Retires a notice after its client confirms delivery. */
-export const delivered = handler<
-  { requestId: string; id: string },
-  ManagerState
->((event, state) => {
-  if (!canRequest(event.requestId, state)) return;
-  state.outgoingNotices.set(
-    state.outgoingNotices.get().filter((notice) => notice.id !== event.id),
-  );
-});
+export const delivered = handler<ManagerHandlerEvent, ManagerState>(
+  toSchema<ManagerReadEvent>(),
+  toSchema<ManagerReadState>(),
+  (event, state) => {
+    const requestId = event.requestId ?? eventKey();
+    if (!canRequest(requestId, state)) return;
+    if (!event.id?.trim()) {
+      refuse(requestId, "Choose a notice to mark delivered.", state);
+      return;
+    }
+    state.outgoingNotices.set(
+      state.outgoingNotices.get().filter((notice) => notice.id !== event.id),
+    );
+  },
+);
 
 /** Creation data can be written only by the manager's reviewed start handlers. */
 type Created<T> = AuthoredByCurrentUser<
@@ -438,6 +556,12 @@ type Created<T> = AuthoredByCurrentUser<
     >,
   ]>
 >;
+
+/** Stores the creator's attestation separately from the room's public view. */
+const RoomRecord = pattern<
+  { value: Cell<Created<ChatRoomRecord>> },
+  { value: Cell<ChatRoomRecord> }
+>(({ value }) => ({ value }));
 
 /** Stores policy in a separate document within the conversation's space. */
 const RoomPolicy = pattern<
@@ -476,10 +600,8 @@ const PrivateRoom = pattern<{
     >
   >;
 }, CreationTarget>(({ about }) => {
-  const profile = wish<ChatProfile>({ query: "#profile" });
   const room = FabriChatRoom({
     about,
-    myProfile: profile.result,
     memory: new Writable<StoredMemory>({
       requests: {},
       authors: {},
@@ -531,11 +653,17 @@ type Managed<T> = WritePolicyAnyOf<T, [
   WriteAuthorizedBy<unknown, typeof delivered>,
 ]>;
 
-/** The user's single chat manager, instantiated by the home pattern. */
-export default pattern<
-  Record<string, never>,
-  ChatManagerOutput & { [UI]: VNode; [NAME]: string }
->(() => {
+/** The manager's protocol and its rendered page. */
+export type FabriChatManagerOutput = ChatManagerOutput & {
+  [UI]: VNode;
+  [NAME]: string;
+};
+
+/** Owns the user's protected index, with their profile supplied by its host. */
+export const FabriChatManagerCore = pattern<
+  { myProfile: Cell<ChatProfile | undefined> },
+  FabriChatManagerOutput
+>(({ myProfile }) => {
   const state: ManagerState = {
     rooms: new Writable<Managed<ChatIndexEntry[]>>([]),
     direct: new Writable<Managed<Record<string, ChatIndexEntry>>>({}),
@@ -547,10 +675,11 @@ export default pattern<
       Managed<{ id: string; room: Cell<ChatRoomOutput>; recipient: string }[]>
     >([]),
   };
-  const profile = wish<ChatProfile>({ query: "#profile" });
+  const latestStart = new Writable.perSession({ requestId: "", input: "" });
   const starts = {
     ...state,
-    profile: profile.result,
+    profile: myProfile,
+    latestStart,
     resume: resumeCreation(state),
   };
   const facts = {
@@ -565,12 +694,13 @@ export default pattern<
     delivered: delivered(state),
   };
   const title = new Writable.perSession("");
+  const joinableByLink = new Writable.perSession(false);
+  const members = new Writable.perSession("");
+  const myAddress = computed(() => viewerPrincipal() ?? "");
   const selected = new Writable.perSession<{ room?: Cell<ChatRoomOutput> }>({});
   const entries = computed(() => state.rooms.get());
-  const outcomes = computed(() =>
-    Object.entries(state.requests.get()).filter(([, outcome]) =>
-      outcome.status !== "done"
-    ).map(([id, outcome]) => ({ id, ...outcome }))
+  const latestOutcome = computed(() =>
+    state.requests.key(latestStart.get().requestId).get()
   );
   return {
     ...facts,
@@ -579,7 +709,11 @@ export default pattern<
       <cf-screen>
         <cf-heading slot="header" level={2}>Conversations</cf-heading>
         <cf-vstack padding="4" gap="4">
-          <details>
+          <cf-hstack id="fabrichat-my-address" gap="2">
+            <cf-text>Your chat address: {myAddress}</cf-text>
+            <cf-copy-button text={myAddress} />
+          </cf-hstack>
+          <details id="fabrichat-start-controls">
             <summary>Start a conversation</summary>
             <cf-vstack
               gap="3"
@@ -587,58 +721,103 @@ export default pattern<
               data-ui-event-integrity="ChatStartSurface"
             >
               <cf-submit-input
+                inputId="fabrichat-start-direct"
                 placeholder="Person's principal"
                 buttonText="Start direct conversation"
                 data-ui-action="ChatStart"
                 onClick={openDirectFromUi(starts)}
               />
-              <cf-input $value={title} placeholder="Group title" />
-              <cf-submit-input
-                placeholder="Member principals, separated by commas"
-                buttonText="Create group"
-                data-ui-action="ChatStart"
-                onClick={createGroupFromUi({ ...starts, uiTitle: title })}
+              <cf-input
+                id="fabrichat-group-title"
+                $value={title}
+                placeholder="Group title"
               />
+              <cf-checkbox $checked={joinableByLink}>
+                Anyone with its link can join
+              </cf-checkbox>
+              <cf-textarea
+                id="fabrichat-group-members"
+                $value={members}
+                placeholder="Member principals, separated by commas"
+              />
+              <cf-button
+                data-ui-action="ChatStart"
+                onClick={createGroupFromUi({
+                  ...starts,
+                  uiTitle: title,
+                  uiMembers: members,
+                  uiJoinableByLink: joinableByLink,
+                })}
+              >
+                Create group
+              </cf-button>
             </cf-vstack>
           </details>
-          {outcomes.map((outcome) => (
-            <cf-text>
-              {outcome.status === "pending"
-                ? "Creating conversation…"
-                : outcome.status === "refused"
-                ? outcome.reason
-                : ""}
-            </cf-text>
-          ))}
-          {entries.map((entry) => (
-            <cf-hstack gap="2">
-              <cf-button
-                variant="ghost"
-                onClick={action(() => selected.set({ room: entry.room }))}
-              >
-                {entry.room.get()?.about?.title || (entry.kind === "direct"
-                  ? "Direct conversation"
-                  : "Group conversation")}
-              </cf-button>
-              <cf-button
-                variant="ghost"
-                onClick={action(() =>
-                  facts.forget.send({
-                    requestId: eventKey(),
-                    room: entry.room,
-                  })
-                )}
-              >
-                Forget
-              </cf-button>
-            </cf-hstack>
-          ))}
-          {selected.get().room?.get() !== undefined
-            ? <cf-render $cell={selected.get().room} />
-            : <cf-text>Select a conversation or start one.</cf-text>}
+          <cf-text id="fabrichat-start-refusal">
+            {latestOutcome?.status === "pending"
+              ? "Creating conversation…"
+              : latestOutcome?.status === "refused"
+              ? `${latestOutcome.reason} ${latestStart.get().input}`
+              : ""}
+          </cf-text>
+          <cf-vstack id="fabrichat-rooms" gap="2">
+            {entries.map((entry) => (
+              <cf-hstack gap="2">
+                <cf-button
+                  variant="ghost"
+                  onClick={action(() => selected.set({ room: entry.room }))}
+                >
+                  {entry.room.get()?.about?.title || (entry.kind === "direct"
+                    ? `With ${entry.counterpart ?? "someone"}`
+                    : "Group conversation")}
+                </cf-button>
+                <cf-cell-link $cell={entry.room} label="Open" />
+                <cf-button
+                  variant="ghost"
+                  onClick={action(() =>
+                    facts.forget.send({
+                      requestId: eventKey(),
+                      room: entry.room,
+                    })
+                  )}
+                >
+                  Forget
+                </cf-button>
+              </cf-hstack>
+            ))}
+          </cf-vstack>
+          <cf-vstack id="fabrichat-outgoing-notices" gap="2">
+            {state.outgoingNotices.get().map((notice) => (
+              <cf-hstack gap="2">
+                <cf-text>Send to {notice.recipient}</cf-text>
+                <cf-cell-link $cell={notice.room} label="Open conversation" />
+                <cf-button
+                  onClick={action(() =>
+                    facts.delivered.send({
+                      requestId: eventKey(),
+                      id: notice.id,
+                    })
+                  )}
+                >
+                  Delivered
+                </cf-button>
+              </cf-hstack>
+            ))}
+          </cf-vstack>
+          <div id="fabrichat-selected">
+            {selected.get().room !== undefined
+              ? <cf-render $cell={selected.get().room} />
+              : <cf-text>Select a conversation or start one.</cf-text>}
+          </div>
         </cf-vstack>
       </cf-screen>
     ),
     [VIEWS]: { chats: facts },
   };
+});
+
+/** Resolves the home user's profile for their single chat manager. */
+export default pattern<Record<string, never>, FabriChatManagerOutput>(() => {
+  const profile = wish<ChatProfile>({ query: "#profile" });
+  return FabriChatManagerCore({ myProfile: profile.result });
 });

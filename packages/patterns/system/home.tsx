@@ -17,8 +17,9 @@ import AgentQueue, {
   type AgentQueueOutput,
   withAgentQueueRunLinkSchema,
 } from "./agent-queue.tsx";
-import FabriChatManager from "../fabrichat/manager.tsx";
-import type { ChatManagerOutput } from "../fabrichat/schemas.ts";
+import FabriChatManager, {
+  type FabriChatManagerOutput,
+} from "../fabrichat/manager.tsx";
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
 import {
@@ -90,7 +91,9 @@ export type HomeOutput = {
   // registered runner. `wish({ query: "#agent_queue" })` resolves to it, and
   // the `agent` builtin appends to its `entries`.
   agentQueue: AgentQueueOutput;
-  chatManager: ChatManagerOutput;
+  // The user's chat manager: the index of the FabriChat rooms they belong to.
+  // `wish({ query: "#chatManager" })` resolves to it.
+  chatManager: FabriChatManagerOutput;
   createProfile: Stream<CreateProfileEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
@@ -304,11 +307,7 @@ const Home = pattern(
               <cf-tab value="profile">Profile</cf-tab>
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
-              <cf-tab value="chats">Conversations</cf-tab>
             </cf-tab-list>
-            <cf-tab-panel value="chats" id="home-chats">
-              {chatManager}
-            </cf-tab-panel>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
             </cf-tab-panel>

@@ -75,7 +75,7 @@ export default pattern(() => {
   });
   const profile = wish<ChatProfile>({ query: "#profile" });
   const space = wish<Writable<SpaceChat>>({ query: "/" });
-  const candidate = FabriChatRoom({ about, memory, myProfile: profile.result });
+  const candidate = FabriChatRoom({ about, memory });
   const room = selectRoom({ space: space.result!, candidate });
   const ready = computed(() => space.result?.get()?.chat !== undefined);
   const canCreate = computed(() => {

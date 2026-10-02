@@ -949,16 +949,6 @@ function resolveHomeSpaceTarget(
       }];
     }
 
-    case "#chatManager": {
-      if (!homeSpaceUserDID(ctx)) {
-        throw new WishError("User identity DID not available for #chatManager");
-      }
-      return [{
-        cell: getHomeSpaceCell(ctx),
-        pathPrefix: ["defaultPattern", "chatManager"],
-      }];
-    }
-
     case "#agent_queue": {
       // The user's agent queue: the index of their agent runs and their
       // registered runner. A hashtag search would not find it, since under
@@ -972,6 +962,22 @@ function resolveHomeSpaceTarget(
       return [{
         cell: getHomeSpaceCell(ctx),
         pathPrefix: ["defaultPattern", "agentQueue"],
+      }];
+    }
+
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
 

@@ -83,6 +83,38 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    pattern: "fabrichat/adapter.tsx",
+    baselines: ["20261002T164437Z-2PzF8f6WgNbffWBh"],
+    paths: ["argument.placement", "result.$VIEWS.chat.canSend"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/manager.tsx",
+    baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
+    paths: ["argument.direct"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/placement.tsx",
+    baselines: ["20261002T164437Z-YHxasJyb9fC8x4pe"],
+    paths: ["argument.room", "result.$VIEWS.chat.canSend"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
+    pattern: "fabrichat/room.tsx",
+    baselines: ["20261002T164437Z-1xU0r9QuhxWHgK6y"],
+    paths: ["argument.about", "result.$NAME"],
+    reason:
+      "The authorized FabriChat implementation replacement retains protected internal state and scoped room references while adopting PR 8412's revised specification; its stored contracts are not automatically migrated.",
+    record: "docs/history/fabrichat-revised-spec-2026-10-02.md",
+  },
+  {
     "pattern": "fabrichat/adapter.tsx",
     "baselines": [
       "20260930T023438Z-_SkOTm6m5M7lOfTT",
@@ -115,7 +147,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260930T023438Z-Y-613Y51HslhC28m",
     ],
     "paths": [
-      "result.$VIEWS.chats.accept.room.add",
+      "result.$VIEWS.chats.direct.*.room.add",
     ],
     "reason":
       "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",
@@ -157,7 +189,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260930T194947Z-dvn-cmHzFRd8Igu0",
     ],
     "paths": [
-      "result.chatManager.$VIEWS.chats.accept.room.add",
+      "result.chatManager.$VIEWS.chats.direct.*.room.add",
     ],
     "reason":
       "The revised FabriChat scope assigns membership to system facilities, removing room membership streams and membership activity from the contracts recorded during PR 8235.",

@@ -2647,15 +2647,6 @@ describe("wish built-in", () => {
       expect(resolved?.result).toBeUndefined();
     });
 
-    it("resolves #chatManager to the requesting user's home chat manager", async () => {
-      const resolved = await resolveHomeTarget("chat-manager", "chatManager", {
-        rooms: [],
-        direct: {},
-      }, "#chatManager");
-      expect(resolved?.error).toBeUndefined();
-      expect(resolved?.result).toMatchObject({ rooms: [], direct: {} });
-    });
-
     it("resolves #agent_queue to the home agent queue", async () => {
       const resolved = await resolveHomeTarget(
         "agent-queue",
@@ -2667,6 +2658,38 @@ describe("wish built-in", () => {
       expect((resolved?.result as any)?.agentRunner?.host).toBe(
         "https://local.example",
       );
+    });
+
+    it("reports a missing requesting identity for #chatManager", async () => {
+      runtime.homeSpacePrincipalFor = () => undefined;
+      const wishPattern = pattern(() => ({
+        result: wish({ query: "#chatManager" }),
+      }));
+      const resultCell = runtime.getCell<{
+        result?: { error?: string; result?: unknown };
+      }>(patternSpace.did(), "chat-manager-no-identity", undefined, tx);
+      const result = runtime.run(tx, wishPattern, {}, resultCell);
+      await tx.commit();
+      tx = runtime.edit();
+      await result.pull();
+      const resolved = result.key("result").get();
+
+      expect(resolved?.error).toContain(
+        "User identity DID not available for #chatManager",
+      );
+      expect(resolved?.result).toBeUndefined();
+    });
+
+    it("resolves #chatManager to the home chat manager", async () => {
+      const resolved = await resolveHomeTarget(
+        "chat-manager",
+        "chatManager",
+        { rooms: [], direct: { "did:key:z6MkBob": { kind: "direct" } } },
+        "#chatManager",
+      );
+      expect(resolved?.error).toBeUndefined();
+      expect((resolved?.result as any)?.direct?.["did:key:z6MkBob"]?.kind)
+        .toBe("direct");
     });
 
     it("resolves #learned to the home learned object", async () => {

@@ -13,8 +13,12 @@ one. The home target `#chatManager` resolves to that field. The spelling follows
 the camel case of the other multi-word targets (`#learnedSummary`,
 `#pieceRegistry`, `#profileName`).
 
-The Home pattern instantiates the manager, and the runtime's home-target
-resolver exposes it as `#chatManager`.
+Adding the target takes the same steps `#agent_queue` took: the field and child
+piece in `home.tsx`, a case in `getResolutionKind` and in
+`resolveHomeSpaceTarget` (`packages/runner/src/builtins/wish.ts`), tests beside
+each, and a row in the built-in targets table of
+[`wish`](../../common/conventions/wish.md) and in
+[`HOME_SPACE.md`](../../common/conventions/HOME_SPACE.md).
 
 ## State
 
@@ -27,54 +31,54 @@ counterpart after crossing creations.
 ## Creating a room
 
 `openDirect` (when there is no entry for the counterpart) and `createGroup`
-create a space for the conversation, with the room as its chat:
+create a space for the conversation, with the room as its chat, in four steps:
 
-1. Resolve the sender's profile and persist the immutable creation intent.
-2. Allocate the space with the creator as OWNER and all intended other members
-   as WRITE in its genesis. The first `inSpace()` call creates the policy with
-   those grants; the room uses the same named allocation.
-3. Persist the room reference. A handler in the new space claims its canonical
-   `chat` slot, then queues a continuation in the home space.
-4. Verify registration, then publish the index entry and outgoing notices
-   together and mark the request `done`.
+1. Create the conversation's space, granting this user OWNER, and instantiate
+   `FabriChatRoom` there with its `about`. The space's root, its default pattern,
+   comes from its host the first time someone opens it.
+2. Grant each other member WRITE on the room's space, by principal. A group
+   explicitly made joinable by its link also grants `"*"` WRITE. These grants
+   may be included in the space's genesis, before any room link is published.
+3. Add a notice for each other member to `outgoingNotices`, for a client to
+   deliver.
+4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
+   request `done`.
 
-Each phase is recorded under `requestId`, so repeating a request resumes its
-existing allocation. Pending direct requests coalesce by counterpart. An
-interrupted allocation may leave an unindexed space with the intended members'
-creation grants; no room is published before those grants exist.
-
-The space record holds one `chat` link, separate from `defaultPattern`.
-Registration and home publication use separate transactions because a
-transaction writes one space.
-
-The host installs the normal default app as the space's root when the space is
-opened. That root owns the participant roster. The manager creates no separate
-room roster and supplies no subsequent space-administration handlers.
+Each step is recorded under the request's `requestId` as it completes, which is
+how a repeated request resumes where the last attempt stopped instead of
+creating another room. A pending `openDirect` is also recorded under its
+`counterpart`, which is how a second `openDirect` for the same person finds it
+and resumes it. Step 1 writes the room's `about.record` from this user's
+handler, which is what labels it `authored-by` this user.
 
 ## Prerequisites
 
 - **Creating a private space from a pattern**: the same as the room's (see
-  [`FabriChatRoom.md`](FabriChatRoom.md#runtime-support)).
-- **A principal from a profile.** `principalOf(profile, "represents-principal")`
-  returns the principal attested by a profile. `openDirect` and `createGroup`
-  take principals; a client or pattern starting from a profile resolves its
-  attested principal first and refuses a missing or ambiguous claim. See
-  [principal label reading](../../features/principal-of.md).
+  [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
+- **A principal from a profile.** A client that starts a direct room from a
+  person's profile needs that profile's principal, since `openDirect` and
+  `createGroup` take principals. A profile's value carries a
+  `represents-principal` label, which
+  `principalOf(profile, "represents-principal")` reads
+  ([reading the principal a label attests](../../features/principal-of.md)).
+  A shared space's member set pairs each principal with a profile (see [shared
+  spaces](README.md#shared-spaces)), so starting a conversation with someone
+  found in one needs nothing more.
 
 ### First contact
 
-A notice has to reach a principal who may share no space with the sender.
-Nothing in this repository lets a pattern deliver one today:
-
-- A profile's `inbox` field (`inbox.piece`,
-  `packages/patterns/system/profile-home.tsx`) points at a receiving piece in a
-  space of its own, which a host outside this repository provides. It is the
-  likeliest path for notices: a pattern could send a notice to that piece, if
-  the piece takes one and its space admits the sender. Whether it does is for
-  that host to say.
-- A space's access list can admit any writer, but that is the `"*"` grant a room
-  must not have.
+A notice has to reach a principal who may share no space with the sender. Its
+route is the recipient's profile share inbox: a profile's `inbox` field
+(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
+in a space of its own that any writer may post to and only its owner reads. The
+sender offers the room there, and the recipient's manager reads its offers, is
+readmitted to the room's space, and accepts the room. Nothing delivers one end
+to end today: no offer names a room yet, the manager reads none, and an inbox
+exists only where a host outside this repository creates one. A space's access
+list can admit any writer, but that is the `"*"` grant a room has only when its
+creator makes a group joinable by its link, and then its address, sent some
+other way, is the notice.
 
 That is why step 3 hands notices to a client through `outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once one of
-these is usable from a pattern, the manager can deliver notices itself.
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
+deliver end to end, the manager can deliver notices itself.

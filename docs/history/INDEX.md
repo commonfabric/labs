@@ -5,6 +5,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 ## Audits and reports
 
 - [FabriChat system membership](fabrichat-system-membership-2026-09-30.md) — 2026-09-30; system-owned membership scope revision, removal of room administration contracts, and bounded acceptance of intermediate PR baselines.
+- [FabriChat revised-spec reconciliation](fabrichat-revised-spec-2026-10-02.md) — 2026-10-02. Retaining protected storage while adopting PR 8412's revised contracts, and recording bounded compatibility exceptions.
 
 - [FabriChat protocol replacement](fabrichat-protocol-replacement-2026-09-29.md) — 2026-09-29; deliberate replacement of the example contract, bounded compatibility acceptance, and no automatic migration of old message storage.
 

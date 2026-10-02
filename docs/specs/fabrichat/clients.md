@@ -30,20 +30,14 @@ a room to anyone its space doesn't admit.
   (see [shared spaces](README.md#shared-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
-  client MUST read the principal the room's `about` is labeled `authored-by`
-  (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), as
-  `cf-cfc-authorship` reads a message's label, and pass that principal as
-  `counterpart`, never the notice's claim. The manager verifies that principal
-  again with `principalOf(room.about, "authored-by")`. A client shows who
+  client MUST read the principal the room's `about.record` is labeled
+  `authored-by` (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)),
+  as `cf-cfc-authorship` reads a message's label, and pass that principal as
+  `counterpart`, never the notice's claim. The manager makes the same check, and
+  refuses a `counterpart` that isn't the room's creator. A client shows who
   created the room from the same label. Whether to add the room to their list is
   the person's decision, so a client SHOULD accept only after showing them who
   created the room, and what it is.
-
-When a notice names a space this runtime was previously refused, the host calls
-`retrySpaceAccess(space)` on its `Runtime` or `RuntimeClient` before reading the
-room and offering `accept`. This asks the memory server to check admission again
-and repeats the refused loads; the notice itself grants no access. See
-[space access](../../features/space-access.md).
 
 ## Showing a room
 
@@ -190,15 +184,15 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Sanctioned native controls
+### Sanctioned native issuing path
 
-An embedding host uses `bindNativeUiControl()` from
-`@commonfabric/runner/native-ui` to bind a live reviewed control to its callback.
-The binding validates the control's action and surface and dispatches only
-through the bound stream. It is a host capability, unavailable to pattern code.
-Generic `cell:send` does not establish gesture provenance. The host must still
-connect the callback to a real user gesture; it must not manufacture gestures
-for automation or notice delivery.
+`bindNativeUiControl` from `@commonfabric/runner/native-ui` binds a host's
+reviewed surface and action to a room stream. The host calls the returned
+function only from that control's genuine user-input path, with the values the
+person saw. Keep that function inaccessible to patterns, loaded content,
+automation, and generic IPC. The runtime checks the writer identity, surface,
+action, actor, and space access; the trusted mark follows normal event transport.
+A generic `cell:send` cannot issue that mark.
 
 ## Delivering notices
 

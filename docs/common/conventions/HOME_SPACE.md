@@ -184,6 +184,28 @@ exist, or is a version without the field — ends `refused`.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
 
+## Chat Manager
+
+The home default pattern holds the user's FabriChat manager in
+`defaultPattern.chatManager`, a piece of
+`packages/patterns/fabrichat/manager.tsx`. It is discovered with
+`wish({ query: "#chatManager" })`, a well-known home-space target, and
+satisfies the `ChatManagerOutput` contract
+([FabriChat](../../specs/fabrichat/ChatManagerOutput.md)). Like the agent
+queue, it is not a favorite, so a hashtag search does not find it.
+
+It holds the user's index of chat rooms: `rooms`, every room they belong to and
+haven't forgotten; `direct`, the direct room shared with each counterpart, by
+principal; `requests`, the outcome of each request but a report that a notice
+was delivered, which records none; and `outgoingNotices`, the notices its
+requests produced for a client to deliver. It creates each room in
+a space of its own. Everything it holds is private to the user, as the home
+space is.
+
+Home holds it but renders it nowhere of its own: a page shows it at its path
+in home's result, `chatManager`, with the user's rooms, the room chosen among
+them, and the controls that start a direct or a group chat.
+
 ## Custom Home Pattern
 
 The home space's default pattern is the home experience itself — by default,
@@ -298,12 +320,3 @@ Both the home pattern and the default app pattern follow the same mechanism:
 Runtime internals (ACL initialization, PiecesController home-space detection)
 are
 documented in [docs/features/home-space-internals.md](../../features/home-space-internals.md).
-
-## Conversation manager
-
-The home pattern owns one `chatManager`, resolved by
-`wish({ query: "#chatManager" })`. It keeps the user's conversation index,
-direct-room lookup, creation request outcomes, and outgoing notices. Home's
-Conversations tab renders its controls. The index is private to that user;
-rooms themselves live in their own shared spaces. See
-[FabriChat](../../../packages/patterns/fabrichat/README.md).

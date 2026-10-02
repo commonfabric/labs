@@ -69,7 +69,11 @@ space up. Either way the space's default pattern, not the room, is its root.
 
 When the manager creates a space for a conversation, the creator holds OWNER,
 and each other member WRITE. Its access list MUST NOT contain the `"*"`
-wildcard: a room is not open to principals its space hasn't admitted. A room in
+wildcard, so a room is not open to principals its space hasn't admitted,
+except for a group room its creator makes joinable by its link (see
+[`createGroup`](ChatManagerOutput.md#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean)):
+that one grants `"*"` WRITE, and its address is all that keeps it private. A
+direct room is never joinable by its link. A room in
 an existing space takes the space's access list as it is, and adds nothing to
 it.
 
@@ -204,10 +208,14 @@ These rules hold for every stream:
   again itself: a trusted gesture can't be re-issued from a client's code (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and a
   person who tries again makes a new request.
-- The room remembers a sender's `requestId` for the room's lifetime, including
-  after the associated message is obliterated. The runtime promises no finite
-  maximum delivery delay, so expiring that memory could let a late delivery
-  recreate removed content. Request memory contains no message body.
+- The room remembers a `requestId` for at least `proposedTimeMaxAgeNsec` plus
+  `proposedTimeMaxLeadNsec`, and at least `recentActivityWindowNsec`, measured
+  from when it recorded the request. By then a repeated `sendMessage` or
+  `editMessage` is refused anyway, since its proposal is outside the window. For
+  other streams, a repeat later than that could undo a later request, such as a
+  reaction removed and then restored. So a room relies on its runtime finishing
+  or dropping every event well within that time (see
+  [`FabriChatRoom`](FabriChatRoom.md#prerequisites)).
 
 - A stream that names a reviewed surface admits an event only as a trusted
   gesture on that surface (see
