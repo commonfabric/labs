@@ -7,7 +7,8 @@
  * the link their notice shows to the room's page. The second opens that page,
  * adds the room to their chats, and sends a message, which the first sees in
  * the room their Chats tab renders; the second's Chats tab then lists the
- * room too.
+ * room too. Last, the first starts a second chat, which the newest-first list
+ * puts above the first one, and the top row's link opens the new room.
  */
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
@@ -53,9 +54,13 @@ describe("fabrichat-join", () => {
   let firstIdentity: Identity;
   let secondIdentity: Identity;
 
+  // Someone the first person chats with second, who never opens a page.
+  let thirdIdentity: Identity;
+
   beforeAll(async () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
+    thirdIdentity = await Identity.generate({ implementation: "noble" });
   });
 
   it("lets two people start a direct chat from home, join it from its link, and exchange a message", async () => {
@@ -128,6 +133,23 @@ describe("fabrichat-join", () => {
       "#fabrichat-rooms",
       `With ${firstIdentity.did()}`,
     );
+
+    // The first person starts a second chat, whose row the list puts above
+    // the first one's, and that row's link opens the new room rather than
+    // the one the row held before. A fresh Chats tab has no room chosen, so
+    // the start control is the only one on the page, where a chosen room
+    // would offer a chat with each of its participants as well.
+    await gotoHome(firstShell, firstIdentity);
+    await clickCfButton(first, 'cf-tab[value="chats"]');
+    await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+    const thirdAddress = thirdIdentity.did();
+    await fillCfInput(first, "#fabrichat-start-direct", thirdAddress);
+    await clickTrustedAction(first, START_ACTION);
+    await waitForSettledText(first, "#fabrichat-rooms", `With ${thirdAddress}`);
+    const newRoomId = await clickCellLink(first, "Open");
+    const newRoomView = await waitForPieceSelected(first, newRoomId);
+    expect(newRoomView.spaceDid).not.toBe(roomView.spaceDid);
+    expect(newRoomView.spaceDid).not.toBe(firstIdentity.did());
   });
 });
 
