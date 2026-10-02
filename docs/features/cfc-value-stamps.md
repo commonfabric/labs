@@ -72,6 +72,8 @@ such a position is stored in whichever form says exactly which values carry it:
   topping through a schema that names no stamp.
 - A stamp minted onto one element of a list that already holds unstamped
   elements is stored at that element's index from the start.
+- A `*` entry left matching no value, by a write that empties the list or
+  removes it, is dropped.
 
 A read of one element resolves the entry at its index or the `*` entry, so the
 two forms read the same.

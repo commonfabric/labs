@@ -292,6 +292,18 @@ describe("value stamps (`ifc.addIntegrity`)", () => {
       expect(integrityAt("list-late", LIST_PLAIN, 2)).toEqual([]);
     });
 
+    it("stores no stamp for a list emptied of its stamped elements", async () => {
+      await write(
+        "list-emptied",
+        LIST_REVIEWED,
+        (cell) => cell.set(["a", "b"]),
+      );
+      expect(stampsOf(idOf("list-emptied"))).toEqual(["/*: reviewed"]);
+
+      await write("list-emptied", LIST_PLAIN, (cell) => cell.set([]));
+      expect(stampsOf(idOf("list-emptied"))).toEqual([]);
+    });
+
     it("withdraws every stamp when a plain schema replaces the list", async () => {
       await write(
         "list-replaced",

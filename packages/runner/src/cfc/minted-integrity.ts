@@ -148,17 +148,20 @@ const changeIndexOf = (
 
 /**
  * The positions of `value` that `pattern` matches, limited to those at, above
- * or below `within`. A `*` segment matches each element of an array and each
- * entry of a record. The walk stops at a reference, which it reports as a
- * position only where the pattern ends on it.
+ * or below `within`, and to the first `limit` of them. A `*` segment matches
+ * each element of an array and each entry of a record. The walk stops at a
+ * reference, which it reports as a position only where the pattern ends on
+ * it.
  */
 const matchingPositions = (
   value: FabricValue | undefined,
   pattern: readonly string[],
   within: readonly string[] = [],
+  limit = Infinity,
 ): Position[] => {
   const positions: Position[] = [];
   const walk = (current: unknown, path: readonly string[]): void => {
+    if (positions.length >= limit) return;
     const depth = path.length;
     if (depth === pattern.length) {
       positions.push({ path, reference: isPrimitiveCellLink(current) });
@@ -180,6 +183,7 @@ const matchingPositions = (
       return;
     }
     for (const key of Object.keys(current)) {
+      if (positions.length >= limit) break;
       if (holds(key)) {
         walk((current as Record<string, unknown>)[key], [...path, key]);
       }
@@ -241,9 +245,9 @@ export const mintedEntryReached = (
  * whole. An entry whose position is left holding nothing, or a reference, is
  * dropped.
  *
- * A stored `*` entry survives while every value it matches keeps all of its
- * atoms by that rule. Otherwise it is replaced by an entry at each matched
- * value, holding the atoms that value keeps. Each mint lands at the values
+ * A stored `*` entry survives while it matches a value and every value it
+ * matches keeps all of its atoms by that rule. Otherwise it is replaced by an
+ * entry at each matched value, holding the atoms that value keeps. Each mint lands at the values
  * its path matches that the transaction wrote, references excepted. A mint
  * through a `*` path that leaves every value the path matches carrying
  * exactly its atoms is stored at that path.
@@ -377,6 +381,15 @@ export const reconcileMintedEntries = (
         key,
         position.reference ? [] : surviving(position.path, atoms),
       );
+    }
+    // A change that reached the entry's container and none of the values it
+    // matches may have left it matching nothing: a list emptied, or removed.
+    // The entry then labels no value and is dropped.
+    if (
+      keptAt.size === 0 && mintedEntryReached(entry.path, changedPaths) &&
+      matchingPositions(value(), entry.path, [], 1).length === 0
+    ) {
+      continue;
     }
     if ([...keptAt.values()].every((kept) => kept.length === atoms.length)) {
       const key = encodePointer(entry.path);

@@ -335,6 +335,25 @@ describe("minted-integrity", () => {
         ).toEqual([minted(["rows", "1"], STAMP)]);
       });
 
+      it("is dropped when a change leaves it matching nothing", () => {
+        expect(
+          reconcile({
+            existing,
+            changedPaths: [["list"]],
+            value: { list: [] },
+          }),
+        ).toEqual([]);
+        expect(reconcile({ existing, changedPaths: [["list"]], value: {} }))
+          .toEqual([]);
+        expect(
+          reconcile({
+            existing,
+            changedPaths: [["list", "0"], ["list", "length"]],
+            value: { list: [] },
+          }),
+        ).toEqual([]);
+      });
+
       it("is dropped when the whole list is replaced without the atoms", () => {
         expect(
           reconcile({
