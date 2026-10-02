@@ -389,7 +389,7 @@ export const mergeHarnessHandleTables = (
 ): HarnessHandleTable => {
   if (current.salt !== incoming.salt) {
     throw new Error(
-      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+      `handle tables first salted by different runs cannot merge: ${current.salt} and ${incoming.salt}`,
     );
   }
   const entries = [...current.entries];

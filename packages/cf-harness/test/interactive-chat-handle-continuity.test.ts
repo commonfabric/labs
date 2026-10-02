@@ -18,6 +18,7 @@ import {
   type HarnessResearchHandleValue,
 } from "../src/contracts/research.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
+import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
@@ -338,6 +339,67 @@ describe("interactive chat handle continuity", () => {
       expect(engines[1].handleTable?.salt).toBe(
         engines[0].getRunState().runId,
       );
+    } finally {
+      store.close();
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("restores turn one's table after a restart with its labels, capabilities, and acquisitions intact", async () => {
+    const root = await Deno.makeTempDir();
+    const url = toFileUrl(join(root, "chat.sqlite"));
+    let store = await openSqliteHarnessChatSessionStore({ url });
+    const engines: CfHarnessEngine[] = [];
+    const acquisition = {
+      registryId: "owner/repo/ledger",
+      commitSha: "a".repeat(40),
+      sourceUrl: "https://example.test/owner/repo/ledger/SKILL.md",
+      verification: "git-commit-sha" as const,
+      valueDigest: "sha256:ledger",
+      receivedAt: "2026-10-02T00:00:00.000Z",
+    };
+    let kept: HarnessHandleTable | undefined;
+    let restored: HarnessHandleTable | undefined;
+    let minted: MintedTokens | undefined;
+    let skillToken: string | undefined;
+    try {
+      const first = new HarnessInteractiveChatService({
+        sessionStore: store,
+        createPromptLoop: engineLoop([async (engine) => {
+          minted = await mintHeldResults(engine, "one");
+          skillToken = await engine.mintSkillContextHandle(
+            `${CELL}/skill`,
+            acquisition,
+          );
+          kept = engine.handleTable;
+        }], engines),
+      });
+      await startSession(first);
+      await runTurn(first, "turn-one");
+      store.close();
+
+      store = await openSqliteHarnessChatSessionStore({ url });
+      const restarted = new HarnessInteractiveChatService({
+        sessionStore: store,
+        createPromptLoop: engineLoop([(engine) => {
+          restored = engine.handleTable;
+          return Promise.resolve();
+        }], engines),
+      });
+      await restarted.initializeFromStore();
+      await runTurn(restarted, "turn-two");
+
+      expect(restored).toEqual(kept);
+      const document = restored?.referents?.find((referent) =>
+        referent.token === minted?.json
+      );
+      expect(document?.label).toEqual({ confidentiality: [WORK] });
+      expect(document?.labelSource).toBe("query");
+      const skill = restored?.entries.find((entry) =>
+        entry.token === skillToken
+      );
+      expect(skill?.capability).toBe("skill-context");
+      expect(skill?.acquisition).toEqual(acquisition);
     } finally {
       store.close();
       await Deno.remove(root, { recursive: true });

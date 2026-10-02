@@ -1139,9 +1139,10 @@ The table supports swapping in both directions:
   reference string; a well-formed token the table does not hold is left
   untouched.
 
-The table is per-run state: it is persisted in `run-state.json` alongside the
+The table is run state: it is persisted in `run-state.json` alongside the
 transcript and policy evidence, and a resumed run (`--resume-run`) carries its
-table, so tokens stay stable across resume.
+table, so tokens stay stable across resume. An interactive session also commits
+the table with each checkpoint, and the next turn's run starts from it.
 
 The prompt/tool loop applies the swaps at three seams. Successful tool output
 bound for model context carries tokens, while the persisted tool-output artifact

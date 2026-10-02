@@ -299,7 +299,7 @@ overrides its model does not inherit parent provider controls; explicit run-wide
 compaction disablement is the exception.
 
 The session-local address handle table maps positively identified cell addresses
-to deterministic per-run `cfh:a:` tokens. Model-bound tool output and
+to deterministic `cfh:a:` tokens salted per table. Model-bound tool output and
 model-authored tool arguments pass through the table before policy evaluation
 and dispatch. Bare Fabric IDs are not converted. A delegation explicitly seeds
 the child table with only the parent handles named in its goal or context; child
