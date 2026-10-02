@@ -641,6 +641,81 @@ describe("mergeable array appends", () => {
     }
   });
 
+  describe("a push onto a list set to `undefined`", () => {
+    // Setting a list to `undefined` leaves its slot holding `undefined`. A push
+    // onto that slot commits a list of what it pushed, as a push onto a
+    // missing list does.
+
+    it("commits a list of the pushed element", async () => {
+      const rt1 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage1,
+      });
+      try {
+        // The list has to exist first: setting a missing list to `undefined`
+        // writes nothing, and leaves no slot.
+        const tx0 = rt1.edit();
+        rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["a"]);
+        await tx0.commit({ resolveAt: "verdict" });
+        const tx1 = rt1.edit();
+        rt1.getCell<string[] | undefined>(space, CAUSE, stringListSchema, tx1)
+          .set(undefined);
+        await tx1.commit({ resolveAt: "verdict" });
+        await rt1.storageManager.synced();
+
+        const tx = rt1.edit();
+        rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx).push("b");
+        const result = await tx.commit({ resolveAt: "verdict" });
+        expect(result.error).toBeUndefined();
+        await rt1.storageManager.synced();
+
+        expect(await readDurable(server)).toEqual(["b"]);
+      } finally {
+        await rt1.dispose();
+      }
+    });
+
+    it("commits a list of the pushed element from a session that still sees the old list", async () => {
+      const rt1 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage1,
+      });
+      const rt2 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage2,
+      });
+      try {
+        const tx0 = rt1.edit();
+        rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["a"]);
+        await tx0.commit({ resolveAt: "verdict" });
+        await rt1.storageManager.synced();
+
+        // Session 2 loads `["a"]` and, with fan-out held, keeps seeing it.
+        const cell2 = rt2.getCell<string[]>(space, CAUSE, stringListSchema);
+        await cell2.sync();
+        await cell2.pull();
+        expect(cell2.get()).toEqual(["a"]);
+
+        const tx1 = rt1.edit();
+        rt1.getCell<string[] | undefined>(space, CAUSE, stringListSchema, tx1)
+          .set(undefined);
+        await tx1.commit({ resolveAt: "verdict" });
+        await rt1.storageManager.synced();
+
+        const tx2 = rt2.edit();
+        rt2.getCell<string[]>(space, CAUSE, stringListSchema, tx2).push("b");
+        const result = await tx2.commit({ resolveAt: "verdict" });
+        expect(result.error).toBeUndefined();
+        await rt2.storageManager.synced();
+
+        expect(await readDurable(server)).toEqual(["b"]);
+      } finally {
+        await rt2.dispose();
+        await rt1.dispose();
+      }
+    });
+  });
+
   it("an edit to an existing element survives alongside a push in the same tx", async () => {
     // A single transaction that both edits an existing element and appends must
     // keep the edit: the append op covers only the appended tail, not the

@@ -116,9 +116,11 @@ The same machinery carries three mergeable ops. `append` is described below;
 - **`PatchOp` (`packages/memory/v2.ts`)** — a new `{ op: "append"; path; values }`
   variant. It carries only the array path and the elements to append.
 
-- **`appendAtPath` (`packages/memory/v2/patch.ts`)** — thaws (and creates, if
-  missing) the array at `path` and pushes `values` at the tail; `applyPatch`'s
-  `append` case calls it. This one place covers the server's commit-time
+- **`appendAtPath` (`packages/memory/v2/patch.ts`)** — thaws the array at
+  `path` and pushes `values` at the tail, creating the array where there is no
+  list yet: where the path is missing, and where its slot holds `undefined`,
+  which is what setting a list to `undefined` leaves. Any other value that is
+  not an array is refused. `applyPatch`'s `append` case calls it. This one place covers the server's commit-time
   materialization, a peer client replaying the revision, and the writer's own
   optimistic pending replay. The two engine touched-path maps each gain an
   `append` case that returns the array path, the same as `splice`.
@@ -233,7 +235,7 @@ switch cases — differing only in the op they emit and how it applies:
 
 - **`add-unique`** (`{ op: "add-unique"; path; values }`, `addUniqueAtPath`) —
   appends each value only if no existing element equals it by stored-value
-  content equality (`valueEqual`), creating the array if absent.
+  content equality (`valueEqual`), creating the array where `append` does.
   `Cell.addUnique(...)` does the same dedup locally (against its
   possibly-incomplete view) and records the count it added; the server re-dedups
   against durable state. Suppression is identical to
@@ -296,6 +298,13 @@ first, since the op carries only the delta.
   list from the appended elements. This is the intended robustness against the
   rehydration race, at the cost of "delete then concurrent stale append"
   resurrecting the list rather than the append being rejected.
+
+- **A push onto a list set to `undefined` starts a new list.** `set(undefined)`
+  on a list leaves its slot holding `undefined` rather than removing it. A
+  push onto that slot, from a session that saw the `undefined` or from one
+  still seeing the old list, commits a list of what it pushed, the same as a
+  push onto a missing list. Only the slot the op names is treated this way: a
+  path that goes on through a slot holding `undefined` is refused.
 
 - **Append order is server-arrival order.** Concurrent appends from different
   sessions land in the order the server applies their commits, not a globally

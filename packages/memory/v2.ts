@@ -821,14 +821,16 @@ export type PatchOp =
     add: FabricValue[];
   }
   // A tail-relative append: `values` are inserted at the array's current tail,
-  // with the array (and the path to it) created if absent. Carries no index, so
-  // concurrent appends merge against durable state rather than clobbering via a
-  // position computed from a stale base. `createsKey` — see below.
+  // with the array (and the path to it) created if absent, or if its slot holds
+  // `undefined`. Carries no index, so concurrent appends merge against durable
+  // state rather than clobbering via a position computed from a stale base.
+  // `createsKey` — see below.
   | { op: "append"; path: string; values: FabricValue[]; createsKey?: true }
   // Set-add by identity: each of `values` is appended at the tail only if no
   // existing element of the array equals it (by stored-value equality), with the
-  // array created if absent. Idempotent and commutative, so concurrent adds of
-  // distinct elements merge and a repeated add is a no-op against durable state.
+  // array created where `append` creates it. Idempotent and commutative, so
+  // concurrent adds of distinct elements merge and a repeated add is a no-op
+  // against durable state.
   | { op: "add-unique"; path: string; values: FabricValue[]; createsKey?: true }
   // Remove every element of the array at `path` that equals `value` by
   // stored-value equality. Idempotent (removing an absent value is a no-op) and
