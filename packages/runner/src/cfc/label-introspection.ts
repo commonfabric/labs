@@ -662,17 +662,12 @@ export const inspectStoredConfLabel = (
     // Unobservable target — same constant as missing metadata below.
     return CONF_LABEL_NOT_AVAILABLE;
   }
+  // A target's link path is a payload path, so a target cell at a payload
+  // field named `cfc` names that field, never the envelope's `cfc` member.
   const payloadPath = [
     ...canonicalizeLogicalPath(target.path),
     ...parsed,
   ];
-  if (payloadPath[0] === "cfc") {
-    // The RESOLVED target path lands in the envelope metadata subtree: the
-    // §4.6.4.1 first-layer rule refuses labels-of-labels however addressed —
-    // `parseConfLabelTargetPath` catches the query pointer; this catches a
-    // target cell whose own path collides with the metadata sibling.
-    return CONF_LABEL_NOT_AVAILABLE;
-  }
   const { result, consumedConfidentiality, consumedObservations } =
     evaluateConfLabelQuery(
       metadata,

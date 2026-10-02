@@ -5,11 +5,17 @@ import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
+import { inspectStoredConfLabel } from "../../src/cfc/label-introspection.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../../src/storage/extended-storage-transaction.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("document member paths");
 const space = signer.did();
@@ -139,5 +145,50 @@ describe("document-member-paths", () => {
       { path: ["slug"], root: "document" },
       { path: ["slug"], root: undefined },
     ]);
+  });
+
+  it("introspects the label of a payload field named `cfc` and refuses the `/cfc` pointer", async () => {
+    // The pointer `/cfc/...` names the label-metadata subtree, which no
+    // caller introspects. `/value/cfc`, and a target cell at the payload
+    // field `cfc`, name that field, whose label a caller may inspect.
+
+    const id = runtime.getCell(space, "member-introspected", TARGET_SCHEMA)
+      .getAsNormalizedFullLink().id;
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
+      value: { cfc: "payload" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["cfc"],
+            label: { confidentiality: ["secret"] },
+            origin: "derived",
+          }],
+        },
+      },
+    });
+    expect((await seed.commit()).ok).toBeDefined();
+
+    const tx = runtime.edit();
+    const root = runtime.getCell(space, "member-introspected", undefined, tx)
+      .getAsNormalizedFullLink();
+    const inspect = (link: typeof root, targetPath: string) => {
+      const result = inspectStoredConfLabel(tx, link, targetPath, {});
+      return result.status === "ok"
+        ? result.atoms.map(({ atom }) => atom)
+        : result.status;
+    };
+    const atField = inspect(root, "/value/cfc");
+    const atFieldCell = inspect({ ...root, path: ["cfc"] }, "");
+    const atMetadata = inspect(root, "/cfc");
+    tx.abort();
+
+    expect(atField).toEqual(["secret"]);
+    expect(atFieldCell).toEqual(["secret"]);
+    expect(atMetadata).toBe("notAvailable");
   });
 });

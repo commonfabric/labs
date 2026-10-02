@@ -70,7 +70,8 @@ export const canonicalizeDocumentPath = (
 /**
  * The path a transaction record binds for `path`, which is rooted at the
  * stored document: the payload path {@link canonicalizeDocumentPath} returns,
- * or, for one of the document's own members, a frozen copy of `path` marked
+ * or, for one of the document's own members, `path` itself, frozen as
+ * {@link canonicalizeLogicalPath} freezes a path, and marked
  * `root: "document"`. The record keeps the member's address that way without
  * its being taken for the payload field of the same name.
  */
@@ -80,7 +81,7 @@ export const cfcRecordPath = (
   const payload = canonicalizeDocumentPath(path);
   if (payload !== undefined) return { path: payload };
   return {
-    path: Object.isFrozen(path) ? path : Object.freeze(path.slice()),
+    path: canonicalizeLogicalPath(path as readonly string[]),
     root: "document",
   };
 };
