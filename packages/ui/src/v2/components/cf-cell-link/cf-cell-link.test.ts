@@ -1,9 +1,10 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { CellRef } from "@commonfabric/runtime-client";
+import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
 
 import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
+import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { installMockDocument } from "../../test-utils/mock-document.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import { CFCellLink } from "./index.ts";
@@ -202,6 +203,8 @@ describe("CFCellLink", () => {
     const makeResolvedCell = (cellRef: CellRef) =>
       ({
         ref: () => cellRef,
+        // Each cell here resolves to itself, so it holds no link to follow.
+        equals: (other: { ref(): CellRef }) => other.ref().id === cellRef.id,
         asSchema: () => ({
           subscribe: () => {
             activeSubscriptions.add(cellRef.id);
@@ -250,6 +253,115 @@ describe("CFCellLink", () => {
     expect(unsubscribeCounts.get(refB.id) ?? 0).toBe(0);
     expect(activeSubscriptions.has(refB.id)).toBe(true);
     expect(activeSubscriptions.has(refA.id)).toBe(false);
+  });
+
+  describe("following a link's target", () => {
+    // The `cell` property keeps its identity throughout, as a list row's does
+    // when an entry is prepended above it and the row's link moves to a
+    // different target.
+
+    function roomCell(id: string): CellHandle {
+      return createMockCellHandle({}, {
+        id: id as CellRef["id"],
+        space: "did:key:test-space" as CellRef["space"],
+      }) as CellHandle;
+    }
+
+    /**
+     * A link whose target the test moves with `publish()`, and a promise
+     * settled when something first subscribes to it.
+     */
+    function retargetableLink(initialTarget: CellHandle) {
+      const link = createMockCellHandle({}, {
+        id: "of:fid1:row-holder" as CellRef["id"],
+        space: "did:key:test-space" as CellRef["space"],
+        path: ["rooms", "0", "room"],
+      }) as CellHandle;
+      let currentTarget = initialTarget;
+      const callbacks = new Set<(value: CellHandle) => void>();
+      const subscribed = deferred<void>();
+      (link as unknown as { resolveAsCell(): Promise<CellHandle> })
+        .resolveAsCell = () => Promise.resolve(currentTarget);
+      (link as unknown as {
+        asSchema(): {
+          sync(): Promise<CellHandle>;
+          subscribe(callback: (value: CellHandle) => void): () => void;
+        };
+      }).asSchema = () => ({
+        sync: () => Promise.resolve(currentTarget),
+        subscribe(callback) {
+          callback(currentTarget);
+          callbacks.add(callback);
+          subscribed.resolve();
+          return () => callbacks.delete(callback);
+        },
+      });
+      const publish = (value: CellHandle) => {
+        currentTarget = value;
+        for (const callback of [...callbacks]) callback(value);
+      };
+      return { link, publish, subscribed: subscribed.promise };
+    }
+
+    /** The piece ids navigated to while `act()` runs. */
+    function navigations(act: () => void): string[] {
+      const seen: string[] = [];
+      const listener = (event: Event) =>
+        seen.push((event as CustomEvent).detail.pieceId);
+      globalThis.addEventListener("cf-navigate", listener);
+      try {
+        act();
+      } finally {
+        globalThis.removeEventListener("cf-navigate", listener);
+      }
+      return seen;
+    }
+
+    it("navigates to a link's new target after the link is retargeted", async () => {
+      const { link, publish } = retargetableLink(roomCell("of:fid1:first"));
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = link;
+      await element._resolveCell();
+
+      const seen = navigations(() => {
+        element._handleClick({ stopPropagation() {} });
+        publish(roomCell("of:fid1:second"));
+        element._handleClick({ stopPropagation() {} });
+      });
+      expect(seen).toEqual(["of:fid1:first", "of:fid1:second"]);
+    });
+
+    it("navigates to a target published while its first resolution finishes", async () => {
+      const { link, publish, subscribed } = retargetableLink(
+        roomCell("of:fid1:first"),
+      );
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = link;
+      const resolving = element._resolveCell();
+      await subscribed;
+      publish(roomCell("of:fid1:second"));
+      await resolving;
+
+      const seen = navigations(() =>
+        element._handleClick({ stopPropagation() {} })
+      );
+      expect(seen).toEqual(["of:fid1:second"]);
+    });
+
+    it("keeps its `$NAME` subscription when a link resolves again to the same target", async () => {
+      const { link } = retargetableLink(roomCell("of:fid1:first"));
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = link;
+      await element._resolveCell();
+      element._updateSubscription();
+      expect(element._unsubscribe).toBeDefined();
+
+      await element._resolveCell();
+      expect(element._unsubscribe).toBeDefined();
+    });
   });
 
   it("does not subscribe before the element is connected", () => {

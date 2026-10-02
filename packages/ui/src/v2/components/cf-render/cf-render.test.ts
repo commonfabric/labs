@@ -525,7 +525,6 @@ describe("CFRender render concurrency", () => {
     const internals = element as unknown as {
       _cleanupLinkTargetSubscription(): void;
       _containerRef: { value?: HTMLDivElement };
-      _linkTargetUnsubscribe?: () => void;
       _renderCell(): Promise<void>;
       _renderChipDefault(
         container: HTMLElement,
@@ -557,7 +556,10 @@ describe("CFRender render concurrency", () => {
     element.variant = "tile";
     await internals._renderCell();
     expect(internals._resolvedCell).toBeUndefined();
-    expect(internals._linkTargetUnsubscribe).toBeDefined();
+    expect(
+      element.accessForTestingOnly.linkTarget.accessForTestingOnly.unsubscribe,
+    )
+      .toBeDefined();
     expect(unsubscribes).toBe(0);
 
     publish?.(target);

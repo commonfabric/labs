@@ -23,6 +23,7 @@ import {
   startDrag,
   updateDragPointer,
 } from "../../core/drag-state.ts";
+import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 
 /**
@@ -30,6 +31,10 @@ import { runtimeContext, spaceContext } from "../../runtime-context.ts";
  *
  * Every cell link is a drag source by default. Set `static` to suppress
  * drag behavior (used in drag previews to avoid recursion).
+ *
+ * A cell holding a link is followed while the element is connected: when the
+ * link moves to another cell, the pill names and navigates to the new target
+ * though `cell` itself is unchanged.
  *
  * @element cf-cell-link
  *
@@ -101,6 +106,19 @@ export class CFCellLink extends BaseElement {
   private _subscribedCellKey: string | undefined = undefined;
   private _resolveCellGeneration = 0;
 
+  /**
+   * Follows the target of a cell holding a link, so that the pill names and
+   * navigates to where the link points now.
+   */
+  #linkTarget = new LinkTargetWatch({
+    onRetarget: (target) => {
+      // A resolution still finishing would install the target it started
+      // with over this one.
+      this._resolveCellGeneration++;
+      this._setResolvedCell(target);
+    },
+  });
+
   //
   // Drag state
   //
@@ -117,11 +135,15 @@ export class CFCellLink extends BaseElement {
   override connectedCallback() {
     super.connectedCallback();
     this._updateSubscription();
+    // A disconnect stopped following the link; a first connect resolves
+    // through `willUpdate()` instead.
+    if (this.hasUpdated) void this._resolveCell();
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
     this._cleanupSubscription();
+    this.#linkTarget.cancel();
     this._endDrag();
   }
 
@@ -189,7 +211,9 @@ export class CFCellLink extends BaseElement {
       try {
         const resolvedCell = await cell.resolveAsCell();
         if (generation !== this._resolveCellGeneration) return;
-        this._setResolvedCell(resolvedCell);
+        const target = await this.#linkTarget.watch(cell, resolvedCell);
+        if (generation !== this._resolveCellGeneration) return;
+        this._setResolvedCell(target);
       } catch (e) {
         if (generation !== this._resolveCellGeneration) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -216,7 +240,9 @@ export class CFCellLink extends BaseElement {
         this._prepareSubscriptionTarget(this._cellKey(linkedCell));
         const resolvedCell = await linkedCell.resolveAsCell();
         if (generation !== this._resolveCellGeneration) return;
-        this._setResolvedCell(resolvedCell);
+        const target = await this.#linkTarget.watch(linkedCell, resolvedCell);
+        if (generation !== this._resolveCellGeneration) return;
+        this._setResolvedCell(target);
       } catch (e) {
         if (generation !== this._resolveCellGeneration) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -228,6 +254,7 @@ export class CFCellLink extends BaseElement {
         this._setResolvedCell(undefined);
       }
     } else {
+      this.#linkTarget.cancel();
       this._prepareSubscriptionTarget(undefined);
       this._setResolvedCell(undefined);
     }
@@ -271,6 +298,10 @@ export class CFCellLink extends BaseElement {
   private _setResolvedCell(cell: CellHandle | undefined) {
     const nextCellKey = this._cellKey(cell);
     if (cell === this._resolvedCell && nextCellKey === this._resolvedCellKey) {
+      // `_prepareSubscriptionTarget()` drops the `$NAME` subscription when the
+      // cell being resolved differs from its target, and no update follows an
+      // unchanged target to restore it.
+      this._updateSubscription();
       return;
     }
     this._resolvedCell = cell;
