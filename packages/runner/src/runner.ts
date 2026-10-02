@@ -249,7 +249,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope } from "./scope.ts";
+import { narrowestScope, scopeRank } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -3179,15 +3179,22 @@ export class Runner {
         link: derivedSigilLink,
       });
       setResultCell(derivedCell, resultCell.asSchema(pattern.resultSchema));
-      if (manifestMatch === -1) {
-        // Seed the build-time default for the freshly created cell. The
-        // manifest entry and this default are written together in one
-        // transaction, so a manifest-referenced cell is already durable; on a
-        // cold-cache resume its value may simply be unsynced. Reading and
-        // seeding only when there is no manifest entry keeps resume read-mostly:
-        // a probe read of the not-yet-loaded value would otherwise enter the
-        // commit's conflict set and lose to the durable value when it streams
-        // in, reverting the whole instantiation commit.
+      // Seed the build-time default into an absent instance of the cell. The
+      // manifest entry and this default are written together in one
+      // transaction, so a manifest entry vouches for a durable value; on a
+      // cold-cache resume that value may simply be unsynced. Skipping the probe
+      // where an entry vouches keeps resume read-mostly: a probe read of the
+      // not-yet-loaded value would otherwise enter the commit's conflict set
+      // and lose to the durable value when it streams in, reverting the whole
+      // instantiation commit. A cell scoped narrower than the result cell has
+      // an instance per user or per session, and the entry vouches only for
+      // the one seeded when the pattern was first set up, so such a cell's own
+      // instance is probed on every setup; a synced start pulls that instance
+      // first (`#syncCellsForRunningPattern()`).
+      const vouched = manifestMatch !== -1 &&
+        scopeRank(derivedCell.getAsNormalizedFullLink().scope) <=
+          scopeRank(resultCell.getAsNormalizedFullLink().scope);
+      if (!vouched) {
         const schemaDefault = isObjectOrArray(descriptor.schema)
           ? descriptor.schema.default as JSONValue | undefined
           : undefined;
