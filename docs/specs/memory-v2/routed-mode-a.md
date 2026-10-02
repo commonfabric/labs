@@ -19,16 +19,31 @@ clients use its `hello`, `connection.challenge`, `connection.auth`,
 - Routed binary compression uses `mcmp` version 2, a big-endian expanded length,
   two-byte space-hint length, canonical DID bytes and one minimal gzip member.
   Version 1 has no routing hint and is refused. Uncompressed `fvj1` text still
-  uses the Fabric codec after strict JSON validation.
+  uses the Fabric codec after strict JSON validation. Compression is negotiated
+  per hop: the router compresses frames to a client that negotiated it, and
+  router-to-toolshed data sockets stay uncompressed.
+- The router pings a quiet client and closes the connection when no frame
+  answers, so a vanished client releases its worker.
 
 The router issues a challenge through its link agent's channel-assigned context.
-A client completes it within 60 seconds. The agent hashes the exact signed
-statement bytes and signs issuance and receipt evidence; its fixed-format IPC
-never interprets public Memory values. The toolshed verifies the client
-signature, issuance signature, receipt signature, exact statement/issuance
-digests, claimed principal, router, deployment, epoch, context and timestamps.
-The statement's expiry cannot exceed one hour after either client issue or
-attested receipt. Positive client skew is bounded to 120 seconds.
+A client completes it within 60 seconds. The agent verifies the fixed-format
+signed statement itself before admitting the worker, hashes its exact bytes and
+signs issuance and receipt evidence; its fixed-format IPC never interprets
+public Memory values. The toolshed verifies the client signature, issuance
+signature, receipt signature, exact statement/issuance digests, claimed
+principal, router, deployment, epoch, context and timestamps. The statement's
+expiry cannot exceed one hour after either client issue or attested receipt.
+Positive client skew is bounded to 120 seconds.
+
+Each toolshed link has its own epoch, fresh for every connection, and a
+toolshed checks a proof only against its own link. A challenge records the
+link epochs live when it was issued, and the agent signs a separate issuance
+and receipt for each, so one client signature serves several toolsheds. A
+failed link is replaced with a new epoch; its toolshed closes the contexts it
+held, and only clients with sessions there reconnect. A statement signed
+before a toolshed's current link cannot reach it: the router pushes
+`connection/challenge` and holds that `session.open` until the client signs
+again. An open on a toolshed whose link is down is refused alone.
 
 ## Canonical binary records
 
