@@ -1143,9 +1143,9 @@ export interface ValidateAndTransformOptions {
    * Set by a reader that uses only whether the result is truthy, such as a
    * builtin branching on a condition. A record or an array is then read at its
    * root alone, and the read returns `true` where the schema it validates
-   * against declares a handle or accepts the container's type, and `undefined`
-   * where it refuses it. Every other value reads as it does without the
-   * option.
+   * against is an opaque handle or accepts the container's type, and
+   * `undefined` where it refuses it. Every other value reads as it does
+   * without the option.
    */
   rootOnly?: boolean;
 }
@@ -1471,14 +1471,19 @@ export function validateAndTransform(
         resolvedValueLink.schema,
       );
     // A record or an array read for its truthiness alone is truthy whatever it
-    // holds, so only the eager read's check at its root decides, and nothing
-    // below the root is read. The branch a value selects for itself is chosen
-    // by what lies below the root, so it plays no part here. Any other value
-    // is the whole of what it is, and reads on as it would anyway.
+    // holds, so only the eager read's checks at its root decide, and nothing
+    // below the root is read: an opaque handle stands for any value, and any
+    // other schema has to accept the container's type. The branch a value
+    // selects for itself is chosen by what lies below the root, so it plays no
+    // part here. Any other value is the whole of what it is, and reads on as
+    // it would anyway.
     if (options?.rootOnly === true && isKeyableObjectOrArray(value)) {
       tx.readValueOrThrow(resolvedValueLink, { nonRecursive: true });
       const schema = eagerSchema();
-      return SchemaObjectTraverser.hasAsCell(schema) ||
+      const rootHandle = ContextualFlowControl.getAsCellValues(
+        resolveSchema(schema),
+      ).at(0);
+      return ContextualFlowControl.getAsCellKind(rootHandle) === "opaque" ||
           schemaAcceptsType(schema, Array.isArray(value) ? "array" : "object")
         ? true
         : undefined;
