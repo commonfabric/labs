@@ -90,6 +90,18 @@ describe("CFC LlmDerived stamping mechanism", () => {
       modelTx.prepareCfc();
       expect((await modelTx.commit()).ok).toBeDefined();
 
+      // User push into the SAME array through the plain schema: no stamp.
+      const userTx = runtime.edit();
+      const plain = runtime.getCell(
+        signer.did(),
+        "llm-derived-messages",
+        messagesSchema,
+        userTx,
+      );
+      plain.push({ role: "user", content: "typed by the user" });
+      userTx.prepareCfc();
+      expect((await userTx.commit()).ok).toBeDefined();
+
       const readTx = runtime.edit();
       const messages = runtime.getCell(
         signer.did(),
@@ -103,6 +115,12 @@ describe("CFC LlmDerived stamping mechanism", () => {
         (entry) => entry.label.integrity ?? [],
       );
       expect(assistantIntegrity).toContainEqual(LLM_DERIVED_ATOM);
+
+      const userView = cfcLabelViewForCell(messages.key(1));
+      const userIntegrity = (userView?.entries ?? []).flatMap(
+        (entry) => entry.label.integrity ?? [],
+      );
+      expect(userIntegrity).not.toContainEqual(LLM_DERIVED_ATOM);
       readTx.commit();
     } finally {
       await runtime.dispose();
@@ -110,66 +128,56 @@ describe("CFC LlmDerived stamping mechanism", () => {
     }
   });
 
-  for (
-    const [order, modelIndex, userIndex] of [
-      ["the model's element first", 0, 1],
-      ["the user's element first", 1, 0],
-    ] as const
-  ) {
-    it(`leaves an element pushed through the plain schema unstamped, ${order}`, async () => {
-      const storageManager = StorageManager.emulate({ as: signer });
-      const runtime = new Runtime({
-        apiUrl: new URL("https://example.com"),
-        storageManager,
-      });
-      try {
-        const cause = `llm-derived-sibling-${modelIndex}`;
-        const pushModel = async () => {
-          const tx = runtime.edit();
-          setCfcImplementationIdentity(tx, {
-            kind: "builtin",
-            builtinId: "llm-dialog",
-          });
-          runtime.getCell(signer.did(), cause, stampingMessagesSchema, tx)
-            .push({ role: "assistant", content: "model bytes" });
-          tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
-        };
-        const pushUser = async () => {
-          const tx = runtime.edit();
-          runtime.getCell(signer.did(), cause, messagesSchema, tx)
-            .push({ role: "user", content: "typed by the user" });
-          tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
-        };
-        for (
-          const push of modelIndex === 0
-            ? [pushModel, pushUser]
-            : [pushUser, pushModel]
-        ) {
-          await push();
-        }
-
-        const readTx = runtime.edit();
-        const messages = runtime.getCell(
-          signer.did(),
-          cause,
-          messagesSchema,
-          readTx,
-        );
-        const integrityAt = (index: number) =>
-          (cfcLabelViewForCell(messages.key(index))?.entries ?? []).flatMap(
-            (entry) => entry.label.integrity ?? [],
-          );
-        expect(integrityAt(modelIndex)).toContainEqual(LLM_DERIVED_ATOM);
-        expect(integrityAt(userIndex)).not.toContainEqual(LLM_DERIVED_ATOM);
-        readTx.commit();
-      } finally {
-        await runtime.dispose();
-        await storageManager.close();
-      }
+  it("leaves an element pushed through the plain schema unstamped when the stamped element is pushed after it", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
     });
-  }
+    try {
+      const userTx = runtime.edit();
+      runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        messagesSchema,
+        userTx,
+      ).push({ role: "user", content: "typed by the user" });
+      userTx.prepareCfc();
+      expect((await userTx.commit()).ok).toBeDefined();
+
+      const modelTx = runtime.edit();
+      setCfcImplementationIdentity(modelTx, {
+        kind: "builtin",
+        builtinId: "llm-dialog",
+      });
+      runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        stampingMessagesSchema,
+        modelTx,
+      ).push({ role: "assistant", content: "model bytes" });
+      modelTx.prepareCfc();
+      expect((await modelTx.commit()).ok).toBeDefined();
+
+      const readTx = runtime.edit();
+      const messages = runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        messagesSchema,
+        readTx,
+      );
+      const integrityAt = (index: number) =>
+        (cfcLabelViewForCell(messages.key(index))?.entries ?? []).flatMap(
+          (entry) => entry.label.integrity ?? [],
+        );
+      expect(integrityAt(0)).not.toContainEqual(LLM_DERIVED_ATOM);
+      expect(integrityAt(1)).toContainEqual(LLM_DERIVED_ATOM);
+      readTx.commit();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
 
   it("stamps a split element on its own doc", async () => {
     // Exercises the generic split mechanism directly, via frame anchoring.
