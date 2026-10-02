@@ -119,7 +119,11 @@ export class LinkTargetWatch {
     const linkCell = cell.asSchema<CellHandle>({ asCell: ["cell"] });
     try {
       const synchronizedTarget = await linkCell.sync();
-      if (this.#token !== token || !this.#isCurrent(cell)) {
+      if (this.#token !== token) return undefined;
+      if (!this.#isCurrent(cell)) {
+        // Left in place, this setup would answer a later watch of the same
+        // cell with nothing observed and no subscription behind it.
+        this.#forget(token);
         return undefined;
       }
       let observedTarget = isCellHandle(synchronizedTarget)
@@ -148,12 +152,20 @@ export class LinkTargetWatch {
       }
       return observedTarget;
     } catch (error) {
-      if (this.#token === token) {
-        this.#token = undefined;
-        this.#cell = undefined;
-        this.#observed = undefined;
-      }
+      this.#forget(token);
       throw error;
+    }
+  }
+
+  /**
+   * Helper for `#subscribe()`, which clears the followed cell when the setup
+   * holding `token` is still the current one.
+   */
+  #forget(token: object): void {
+    if (this.#token === token) {
+      this.#token = undefined;
+      this.#cell = undefined;
+      this.#observed = undefined;
     }
   }
 }
