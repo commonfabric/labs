@@ -301,15 +301,29 @@ export const NestedRenderReferenceSchema = {
 } as const satisfies JSONSchema;
 
 /**
- * Nested render roots: component bindings whose component shows the cell they
- * name only through renders mounted from its reference, each with the schema
- * that component reads the binding with. The reconciler decides such a binding
- * on that read and leaves the cell's contents to the renders.
+ * How a nested render root's component reads its binding: with `schema`, and,
+ * when it mounts a render from each element of the list the binding names
+ * rather than from the binding's own reference, each element with `elements`.
+ */
+export type NestedRenderRead = {
+  readonly schema: JSONSchema;
+  readonly elements?: JSONSchema;
+};
+
+/**
+ * Nested render roots: component bindings whose component shows what they
+ * name only through renders mounted from references, each with how that
+ * component reads the binding. The reconciler decides such a binding on those
+ * reads and leaves what each reference lands on to the renders.
  */
 export const nestedRenderReadContracts: Readonly<
-  Record<string, Readonly<Record<string, JSONSchema>>>
+  Record<string, Readonly<Record<string, NestedRenderRead>>>
 > = {
-  "cf-render": { cell: NestedRenderReferenceSchema },
+  "cf-render": { cell: { schema: NestedRenderReferenceSchema } },
+  // `cf-picker` hands each item's reference to a `cf-render` of its own.
+  "cf-picker": {
+    items: { schema: pieceListSchema, elements: NestedRenderReferenceSchema },
+  },
 };
 
 /** Version exchanged when a renderer registers its component read contract. */

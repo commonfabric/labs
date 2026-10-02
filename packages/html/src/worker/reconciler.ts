@@ -252,6 +252,15 @@ type MembershipWatch = {
   reeval: () => void;
 };
 
+/**
+ * A read a prop's admission rests on: the cell read, and the labels each read
+ * of it consumed, as {@link WorkerReconciler#readRefusal} fits them.
+ */
+type DecidingRead = {
+  readonly source: Cell<unknown>;
+  readonly reads: readonly (SinkConsumedLabel | undefined)[];
+};
+
 function isNestedPatternOutput(value: unknown, cell: Cell<unknown>): boolean {
   if (
     !isObjectOrArray(value) || !(UI in value) ||
@@ -1079,10 +1088,13 @@ export class WorkerReconciler {
    * consumed changes, labels included, and whenever the membership those
    * labels name changes, and the binding is removed while the policy refuses
    * it. A nested render root, a binding in `nestedRenderReadContracts`, is
-   * decided on the read its component makes of it instead, which stops at
-   * the document its reference lands on and leaves that document's contents
-   * to the renders mounted from it, wherever such a render is held to everything
-   * the element is (see `#rootPolicyCovers()`); elsewhere it is decided on
+   * decided on the reads its component makes of it instead, wherever a render
+   * mounted from a reference is held to everything the element is (see
+   * `#rootPolicyCovers()`): the read of the binding and, for a component that
+   * mounts a render from each element of the list the binding names, the read
+   * of each element, decided as a `cf-render` cell is. A reference's read
+   * stops at the document it lands on and leaves that document's contents to
+   * the render mounted from it. Elsewhere a nested render root is decided on
    * everything the bound cell reaches. `replacing` says whether the element
    * may hold a binding for `propName` from before. `read` is the cell whose
    * read decides, when the binding was reached through a slot whose labels
@@ -1114,12 +1126,19 @@ export class WorkerReconciler {
     let shown: boolean | undefined = replacing || undefined;
     let consumed: SinkConsumedLabel | undefined;
     let first = true;
+    const nested = nestedRenderReadContracts[state.tagName]?.[propName];
+    const covered = nested !== undefined &&
+      this.#rootPolicyCovers(state.renderPolicy);
+    const elements = covered && nested.elements !== undefined
+      ? this.#nestedRenderElements(nested.elements, () => watch.reeval())
+      : undefined;
+    if (elements !== undefined) addCancel(elements.cancel);
     watch.reeval = () => {
+      if (elements?.settling === true) return;
       shown = this.#admitProp(
         state,
         propName,
-        read,
-        [consumed],
+        [{ source: read, reads: [consumed] }, ...(elements?.reads() ?? [])],
         shown,
         first,
         bind,
@@ -1127,33 +1146,124 @@ export class WorkerReconciler {
       );
       first = false;
     };
-    const hostSchema = nestedRenderReadContracts[state.tagName]?.[propName];
-    const hostRead = hostSchema === undefined ? read : read.asSchema(
-      this.#rootPolicyCovers(state.renderPolicy) ? hostSchema : true,
-    );
-    addCancel(this.#sinkCell(hostRead, (_value, labels) => {
+    const hostRead = nested === undefined
+      ? read
+      : read.asSchema(covered ? nested.schema : true);
+    addCancel(this.#sinkCell(hostRead, (value, labels) => {
       consumed = labels;
+      elements?.update(read, Array.isArray(value) ? value.length : 0);
       watch.reeval();
     }, true));
     return cancel;
   }
 
   /**
+   * The reads a component makes of each element of a list it mounts a render
+   * from each element of, each read with `schema`. `update()` keeps one read
+   * per element of the list `list` names, of the given length, and `settling`
+   * holds while it runs, so that the reads it starts, each reporting its first
+   * result to `changed` as it starts, are decided together once it returns.
+   * `reads()` returns each element, as `list.key(index)` names it, with what
+   * its read consumed.
+   *
+   * Each element is read at the slot holding it in the document `list`
+   * resolves to. A read of `list.key(index)` would cross the list's links
+   * under their stored schemas, and one that declares its elements references
+   * ends that read at the element's own link; read at its slot, the element is
+   * read as `cf-render` reads its cell, following the element's links to the
+   * document they land on. The links up to that document are the list read's
+   * to decide. A list that does not resolve has no element reads, and the
+   * list read refuses it.
+   */
+  #nestedRenderElements(
+    schema: JSONSchema,
+    changed: () => void,
+  ): {
+    readonly settling: boolean;
+    update(list: Cell<unknown>, length: number): void;
+    reads(): DecidingRead[];
+    cancel(): void;
+  } {
+    type Element = {
+      source: Cell<unknown>;
+      consumed: SinkConsumedLabel | undefined;
+      cancel: Cancel;
+    };
+    const elements: Element[] = [];
+    let resolved: Cell<unknown> | undefined;
+    let settling = false;
+    const resize = (list: Cell<unknown>, at: Cell<unknown>, length: number) => {
+      for (const element of elements.splice(length)) element.cancel();
+      while (elements.length < length) {
+        const index = elements.length;
+        const element: Element = {
+          source: list.key(index),
+          consumed: undefined,
+          cancel: () => {},
+        };
+        elements.push(element);
+        element.cancel = this.#sinkCell(
+          at.key(index).asSchema(schema),
+          (_value, labels) => {
+            element.consumed = labels;
+            changed();
+          },
+          true,
+        );
+      }
+    };
+    return {
+      get settling() {
+        return settling;
+      },
+      update: (list, length) => {
+        settling = true;
+        try {
+          let at: Cell<unknown> | undefined;
+          try {
+            at = list.resolveAsCell();
+          } catch {
+            at = undefined;
+          }
+          if (
+            at === undefined || resolved === undefined ||
+            !this.#sameCellForReuse(resolved, at)
+          ) {
+            for (const element of elements.splice(0)) element.cancel();
+          }
+          resolved = at;
+          if (at !== undefined) resize(list, at, length);
+        } finally {
+          settling = false;
+        }
+      },
+      reads: () =>
+        elements.map(({ source, consumed }) => ({
+          source,
+          reads: [consumed],
+        })),
+      cancel: () => {
+        for (const element of elements.splice(0)) element.cancel();
+      },
+    };
+  }
+
+  /**
    * Decides whether the node's render policy admits a prop or binding whose
-   * value was read from `source` by `reads`, each consuming the labels it
-   * reports, as {@link #readRefusal} decides, and emits only what the decision
-   * changes. `shown` says whether the prop may be showing before the decision,
-   * or is undefined when nothing has been shown for it; the result says
-   * whether it may be showing after. `show` runs when the prop is admitted and
-   * either its value `changed` or it was not showing. A refused prop is
-   * removed when it may be showing, and the refusal reported once per
+   * value rests on `decidingReads`, each a cell and the reads of it that
+   * consumed the labels they report, as {@link #readRefusal} decides for each,
+   * and emits only what the decision changes. The policy has to admit every
+   * one of them. `shown` says whether the prop may be showing before the
+   * decision, or is undefined when nothing has been shown for it; the result
+   * says whether it may be showing after. `show` runs when the prop is
+   * admitted and either its value `changed` or it was not showing. A refused
+   * prop is removed when it may be showing, and the refusal reported once per
    * standing block.
    */
   #admitProp(
     state: NodeState,
     key: string,
-    source: Cell<unknown>,
-    reads: readonly (SinkConsumedLabel | undefined)[],
+    decidingReads: readonly DecidingRead[],
     shown: boolean | undefined,
     changed: boolean,
     show: () => void,
@@ -1161,10 +1271,23 @@ export class WorkerReconciler {
     value: unknown = UNKNOWN_PROP_VALUE,
   ): boolean {
     const policy = state.renderPolicy;
-    const refusal = this.#readRefusal(source, reads, policy, watch);
+    const firstRefusal = <R>(
+      refusalOf: (read: DecidingRead) => R | undefined,
+    ): R | undefined => {
+      for (const read of decidingReads) {
+        const refusal = refusalOf(read);
+        if (refusal !== undefined) return refusal;
+      }
+      return undefined;
+    };
+    const refusal = firstRefusal(({ source, reads }) =>
+      this.#readRefusal(source, reads, policy, watch)
+    );
     const remoteRefusal =
       refusal === undefined && this.#isRemoteLoadProp(state, key, value)
-        ? this.#remoteLoadRefusal(source, reads, policy, watch)
+        ? firstRefusal(({ source, reads }) =>
+          this.#remoteLoadRefusal(source, reads, policy, watch)
+        )
         : undefined;
     if (refusal === undefined && remoteRefusal === undefined) {
       if (changed || shown !== true) show();
@@ -2580,8 +2703,7 @@ export class WorkerReconciler {
       shown = this.#admitProp(
         state,
         key,
-        source,
-        reads,
+        [{ source, reads }],
         shown,
         changed,
         () => deliver(value),
