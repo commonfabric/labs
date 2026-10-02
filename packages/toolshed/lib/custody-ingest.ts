@@ -190,15 +190,7 @@ export const custodyIngest = {
     channel: VouchedChannel,
   ): Promise<E[]> {
     return durableEdit(cell, (bound) => {
-      // A list that does not exist yet is created by `set()`: a commit in
-      // which `push()` creates its list stores no ExternalIngest mark.
-      // TODO(ubik2): Drop this branch once a `push()` that creates its list
-      // keeps the mark, so that no append has to read the list first.
-      if (bound.get() === undefined) {
-        bound.set(elements);
-      } else {
-        bound.pushAll(elements);
-      }
+      bound.pushAll(elements);
       return elements;
     }, channel);
   },
