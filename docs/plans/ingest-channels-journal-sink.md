@@ -51,8 +51,8 @@ One inbound POST → exactly one governed durable write:
 custodyIngest.update(targetCell, current => [...(current ?? []), ...records], channel)
 ```
 
-- `custodyIngest.update` (`custody-ingest.ts:169-180`) runs its mutate **inside** `editWithRetry`, re-reading the current array on every retry — no lost update under concurrent POSTs.
-- It mints one `ExternalIngest` mark per POST, bound to the digest of the written value, anchored at the target cell root (works for array appends, which diff element-wise and never touch the array path itself).
+- `custodyIngest.appendAll` (`custody-ingest.ts`) appends **inside** `editWithRetry`, so a concurrent POST is retried rather than lost. It appends with the cell's `push`, which leaves the records already in the cell untouched: each record is a document of its own, and writing the whole array back from a copy would store every earlier record again under a new id on each POST.
+- It mints one `ExternalIngest` mark per POST, bound to the digest of the records that POST carried, anchored at the target cell root (works for array appends, which diff element-wise and never touch the array path itself).
 - The mark records `{ channel, audience, receivedAt, valueDigest }`; `channel` = the target cell's space, `audience` = a fixed source string. `receivedAt` is operator wall-clock captured before the write (never from the payload).
 - The sink does **no deduplication** — it appends. Idempotency is a consumer/read-side concern (see [Cross-repo contract](#cross-repo-contract-loom-read-side)).
 
