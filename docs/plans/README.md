@@ -10,6 +10,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
+  callbacks, a cohesive handles module, one session UI for both command aliases,
+  and hands-on demo validation across labs, Weaver, and Loom.
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.
