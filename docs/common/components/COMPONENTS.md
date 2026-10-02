@@ -1107,9 +1107,10 @@ own. A missing, unreadable, or conflicting attestation leaves the result
 readable when it binds, as when its document has not loaded yet, decides the
 result once it arrives, and one that stops being readable sets the result back
 to `null`. It decides from the label each update of `$originator` delivers,
-and writes its decision again when `$result` changes to anything else, as a
-rolled-back write does. It stops following while disconnected and follows
-again once reconnected, as after a move to another parent. The component does not use the
+and reads the label when an update delivers none. Each decision is written
+once, until the label or the binding changes it. It stops following while
+disconnected and follows again once reconnected, as after a move to another
+parent. The component does not use the
 selected `#profile`, which may represent a different persona. The predicate
 selects presentation; CFC labels govern reads.
 

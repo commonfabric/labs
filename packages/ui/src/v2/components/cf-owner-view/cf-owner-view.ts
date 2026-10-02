@@ -7,7 +7,6 @@ import { html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { readCfcLabelView } from "../../core/cfc-label.ts";
 import { runtimeContext } from "../../runtime-context.ts";
 import { attestedOwnerPrincipal } from "./owner-predicate.ts";
 
@@ -34,8 +33,6 @@ export class CFOwnerView extends BaseElement {
   #stopFollowing: (() => void) | undefined;
   /** The label the followed origin's subscription last delivered. */
   #label: CfcLabelView | undefined;
-  #followedResult: CellHandle<boolean | null> | undefined;
-  #stopFollowingResult: (() => void) | undefined;
   /** Whether the element was disconnected and has not reconnected since. */
   #disconnected = false;
 
@@ -62,34 +59,30 @@ export class CFOwnerView extends BaseElement {
       void this.refresh();
       return;
     }
-    this.#follow(this.originator, this.result);
-    this.#decide(++this.#generation, this.#label);
+    this.#follow(this.originator);
+    void this.#decideFrom(++this.#generation, this.#label);
   }
 
   override disconnectedCallback(): void {
     this.#generation++;
     this.#disconnected = true;
-    this.#follow(undefined, undefined);
+    this.#follow(undefined);
     super.disconnectedCallback();
   }
 
   /**
    * Rechecks the origin when its binding or runtime changes: closes the
    * presentation, decides from the origin's label, and decides again each
-   * time the origin's subscription delivers a label. The label is what the
+   * time the origin's subscription delivers an update. The label is what the
    * store holds, which can lag the binding, as when the origin's document is
-   * not loaded yet, or is rolled back while the piece's start is retried. An
-   * origin that cannot be subscribed to has its label read once.
+   * not loaded yet, or is rolled back while the piece's start is retried.
    */
   async refresh(): Promise<void> {
     const generation = ++this.#generation;
-    const { originator, result } = this;
+    const { result } = this;
     this.#reset = false;
     this.#published = undefined;
-    const following = this.#follow(
-      this.isConnected ? originator : undefined,
-      this.isConnected ? result : undefined,
-    );
+    this.#follow(this.isConnected ? this.originator : undefined);
     if (!result) return;
     try {
       await result.setStrict(null);
@@ -100,57 +93,47 @@ export class CFOwnerView extends BaseElement {
     if (generation !== this.#generation) return;
     this.#reset = true;
     this.#published = null;
-    if (following) {
-      this.#decide(generation, this.#label);
-      return;
-    }
-    let label: CfcLabelView | undefined;
-    try {
-      label = await readCfcLabelView(originator);
-    } catch {
-      // Missing or unreadable attestation keeps the presentation closed.
+    await this.#decideFrom(generation, this.#label);
+  }
+
+  #follow(originator: CellHandle | undefined): void {
+    if (originator === this.#followed) return;
+    this.#stopFollowing?.();
+    this.#stopFollowing = undefined;
+    this.#followed = originator;
+    this.#label = undefined;
+    if (typeof originator?.subscribe !== "function") return;
+    this.#stopFollowing = originator.subscribe((_value, cfcLabel) => {
+      this.#label = cfcLabel;
+      if (this.#reset) void this.#decideFrom(++this.#generation, cfcLabel);
+    }, { includeCfcLabel: true });
+  }
+
+  /**
+   * Decides from `label`, the one an update of the origin delivered, or from
+   * a read of the origin's label when it delivered none. A subscription can
+   * deliver no label even when the cell has one, as when another handle on
+   * the same cell subscribed first for its value alone.
+   */
+  async #decideFrom(
+    generation: number,
+    label: CfcLabelView | undefined,
+  ): Promise<void> {
+    if (label === undefined) {
+      try {
+        label = await this.originator?.getCfcLabel();
+      } catch {
+        // Missing or unreadable attestation keeps the presentation closed.
+      }
     }
     this.#decide(generation, label);
   }
 
   /**
-   * Subscribes to `originator` with its label, and to `result`, and returns
-   * whether the origin delivers its label that way. A `result` that changes
-   * to something other than the published decision, as one rolled back
-   * does, has the decision written again.
+   * Writes the decision `label` supports, unless it is the one this binding
+   * last wrote. A decision is written once until the label or the binding
+   * changes it, whatever happens to `result` meanwhile.
    */
-  #follow(
-    originator: CellHandle | undefined,
-    result: CellHandle<boolean | null> | undefined,
-  ): boolean {
-    if (originator !== this.#followed) {
-      this.#stopFollowing?.();
-      this.#stopFollowing = undefined;
-      this.#followed = originator;
-      this.#label = undefined;
-      if (typeof originator?.subscribe === "function") {
-        this.#stopFollowing = originator.subscribe((_value, cfcLabel) => {
-          this.#label = cfcLabel;
-          if (this.#reset) this.#decide(++this.#generation, cfcLabel);
-        }, { includeCfcLabel: true });
-      }
-    }
-    if (result !== this.#followedResult) {
-      this.#stopFollowingResult?.();
-      this.#stopFollowingResult = undefined;
-      this.#followedResult = result;
-      if (typeof result?.subscribe === "function") {
-        this.#stopFollowingResult = result.subscribe((value) => {
-          if (value === this.#published) return;
-          this.#published = undefined;
-          if (this.#reset) this.#decide(++this.#generation, this.#label);
-        });
-      }
-    }
-    return this.#stopFollowing !== undefined;
-  }
-
-  /** Publishes the decision `label` supports, when it is not already out. */
   #decide(generation: number, label: CfcLabelView | undefined): void {
     const { runtime, originator, result } = this;
     if (
