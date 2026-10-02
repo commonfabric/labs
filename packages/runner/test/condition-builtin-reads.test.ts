@@ -1180,31 +1180,42 @@ describe("condition-builtin-reads", () => {
       );
     });
 
-    it("leaves the transaction cfc-relevant for a record whose schema carries `ifc`, as the eager read does", async () => {
-      const declared: JSONSchema = {
-        type: "object",
-        ifc: { confidentiality: [cfcAtom.user("did:key:zOther")] },
-      };
-      const observed = [];
-      for (
-        const [cause, schema] of [["declared", declared], ["plain", {
+    it("leaves the transaction cfc-relevant for a record whose schema carries `ifc` or whose document carries labels, as the eager read does", async () => {
+      const plain: JSONSchema = { type: "object" };
+      const records: Array<
+        { name: string; doc: Cell<unknown>; schema: JSONSchema }
+      > = [{
+        name: "a record whose schema carries `ifc`",
+        doc: await plainDoc("declared", { a: 1 }),
+        schema: {
           type: "object",
-        }]] as const
-      ) {
-        await plainDoc(cause, { a: 1 });
+          ifc: { confidentiality: [cfcAtom.user("did:key:zOther")] },
+        },
+      }, {
+        name: "a record whose document carries labels",
+        doc: await sealedDoc("labeled", { a: 1 }),
+        schema: plain,
+      }, {
+        name: "a plain record",
+        doc: await plainDoc("plain", { a: 1 }),
+        schema: plain,
+      }];
+
+      const observed = [];
+      for (const { name, doc, schema } of records) {
         const relevantAfter = (
           read: (cell: Cell<unknown>, tx: IExtendedStorageTransaction) => void,
         ): boolean => {
           const tx = runtime.edit();
           try {
-            read(runtime.getCell(patternSpace.did(), cause, schema, tx), tx);
+            read(doc.asSchema(schema).withTx(tx), tx);
             return tx.getCfcState().relevant;
           } finally {
             tx.abort();
           }
         };
         observed.push({
-          cause,
+          name,
           probe: relevantAfter((cell, tx) =>
             readsTruthyAtRoot(runtime, tx, cell.getAsNormalizedFullLink())
           ),
@@ -1213,8 +1224,9 @@ describe("condition-builtin-reads", () => {
       }
 
       expect(observed).toEqual([
-        { cause: "declared", probe: true, eager: true },
-        { cause: "plain", probe: false, eager: false },
+        { name: records[0].name, probe: true, eager: true },
+        { name: records[1].name, probe: true, eager: true },
+        { name: records[2].name, probe: false, eager: false },
       ]);
     });
 
