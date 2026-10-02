@@ -90,7 +90,6 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
-import type { HarnessClientActionOutcomeKind } from "../src/contracts/client-action.ts";
 import {
   checkHarnessClientProtocol,
   harnessClientProtocolEcho,
@@ -2321,9 +2320,11 @@ export class ConsoleServer {
 
   /**
    * Takes the person's answer to one action the model asked their client to
-   * perform. The route is the stdio `resolve_client_action` request under
-   * HTTP: the same service method decides, so the two cannot disagree. Its
-   * errors carry the code in an `error` object, as the Weaver reads them.
+   * perform: a final action's outcome, or a typed command's settlement. The
+   * route is the stdio `resolve_client_action` request under HTTP: the body
+   * goes to the same service method, which reads it with the same reader, so
+   * the two cannot disagree. Its errors carry the code in an `error` object,
+   * as the Weaver reads them.
    */
   async #resolveClientAction(request: Request): Promise<Response> {
     let parsed: unknown;
@@ -2334,24 +2335,9 @@ export class ConsoleServer {
         status: 400,
       });
     }
-    const body: Record<string, unknown> = isObjectOrArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-    if (
-      typeof body.sessionId !== "string" || typeof body.actionId !== "string"
-    ) {
-      return Response.json({ error: "sessionId and actionId are required" }, {
-        status: 400,
-      });
-    }
     const response = await this.#service.resolveClientAction(
       crypto.randomUUID(),
-      {
-        sessionId: body.sessionId,
-        actionId: body.actionId,
-        outcome: body.outcome as HarnessClientActionOutcomeKind,
-        ...(body.result !== undefined ? { result: body.result as string } : {}),
-      },
+      parsed,
     );
     if (response.ok) return Response.json({ ok: true });
     const { code, message } = response.error;

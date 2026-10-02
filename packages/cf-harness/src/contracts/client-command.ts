@@ -57,7 +57,7 @@ export type HarnessClientFeature = typeof HARNESS_CLIENT_FEATURES[number];
  * before work starts.
  */
 export const HARNESS_SUPPORTED_CLIENT_FEATURES:
-  readonly HarnessClientFeature[] = ["client_actions"];
+  readonly HarnessClientFeature[] = ["client_actions", "typed_commands"];
 
 /**
  * The features a console that answers without a protocol echo is taken to

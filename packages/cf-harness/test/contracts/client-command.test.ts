@@ -156,11 +156,15 @@ describe("client command contract", () => {
       expect(check.ok && check.protocol).toEqual(accepted.protocol);
     });
 
+    // The mismatch fixtures are the answers of a console serving
+    // `client_actions` alone, the one a host requiring typed commands meets.
     it("answers a missing feature with the HTTP mismatch body", () => {
       const declaration = readHarnessClientProtocolDeclaration(
         fixture("protocol-task-request").protocol,
       )!;
-      const check = checkHarnessClientProtocol(declaration);
+      const check = checkHarnessClientProtocol(declaration, [
+        "client_actions",
+      ]);
       expect(check.ok).toBe(false);
       if (check.ok) return;
       const { message, ...mismatch } = check.mismatch;
@@ -173,7 +177,7 @@ describe("client command contract", () => {
       const check = checkHarnessClientProtocol({
         protocolVersion: 2,
         requires: ["client_actions"],
-      });
+      }, ["client_actions"]);
       expect(check.ok).toBe(false);
       if (check.ok) return;
       const { message, ...details } = check.mismatch;

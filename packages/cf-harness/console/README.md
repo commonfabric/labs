@@ -825,46 +825,94 @@ check the route contract before starting a model turn.
 ### Client actions
 
 A task started with `"clientActions": true` on `POST /api/task` offers the model
-`weaver_action` for that session's turns. The tool takes `actions` (one to eight
-of `open_loom`, `command`, `open_url`, the vocabulary `finish_task` uses) and
-waits for the person. Each action rides the ordinary `GET /api/events` stream as
-a `client_action_requested` event (`turnId`, `actionId`, `action`), and every
-settlement, whether the person's answer, a timeout, or a cancel, as a
-`client_action_resolved` event (`turnId`, `actionId`, `outcome`, `result?`). A
-reader replaying the log treats a request as open until a resolved event names
-its `actionId`.
+`weaver_action` for that session's turns, and opens the session with guidance on
+using the Weaver's commands. The tool takes `actions`, one to eight, in the
+order they should run:
 
-`POST /api/client-actions` with
-`{ "sessionId", "actionId", "outcome", "result" }` settles one. `outcome` is
-`done`, `declined`, or `failed`; `result` is a string of at most 500 characters,
-the receipt line or the failure text. It answers 200 `{ "ok": true }`, 404
-`{ "error": { "code": "unknown_action" } }` for an id the session never issued,
-409 `{ "error": { "code": "action_resolved" } }` for one already settled
-(including a request a restart left open: startup settles it `failed` with
-`result: "interrupted"`, so a late answer to a replayed request is refused here,
-not as `unknown_action`), and 400 for a bad body. The tool returns the outcomes
-to the model in input order. An answer may arrive while its request is still
-being delivered, as when a client answers from the handler that receives the
-event: it is kept, its resolved event follows the request in the log, and its
-200 does not wait for that event to be written. If that write then fails, the
-call fails and a restart records the request `interrupted`. Only that answer is
-exempt: a handler that awaits any other request that writes an event (another
-action's answer, a cancel) from inside a delivery waits on itself.
+- `invoke_command` with an `invocation` of
+  `{ command, args, target?, approval }` runs one Weaver command: `command` is a
+  catalog id, `args` its arguments (at most 16 KiB of JSON; a larger call is
+  refused before anything is delivered), `target` `{ loomId, expectedVersion? }`
+  the loom it acts on, and `approval` the one its catalog entry names
+  (`automatic` or `person`).
+- `list_commands` with a `request` of `{ detail? }` asks for the Weaver's
+  catalog, with full descriptions for up to sixteen ids named in `detail`.
+- `open_loom` and `open_url`, the final-action kinds `finish_task` uses, ask the
+  person to open a loom or a web address. A slash-command line (`command`) is a
+  final action only and is refused here.
+
+Each action rides the ordinary `GET /api/events` stream as a
+`client_action_requested` event (`turnId`, `actionId`, `action`), and every
+settlement, whether the host's answer, a timeout, or a cancel, as a
+`client_action_resolved` event (`turnId`, `actionId`, `outcome`, `result?`, and
+for a typed action `settlement`). A reader replaying the log treats a request as
+open until a resolved event names its `actionId`.
+
+`POST /api/client-actions` settles one, with one of two bodies:
+
+- `{ "sessionId", "actionId", "outcome", "result" }` settles `open_loom` or
+  `open_url`. `outcome` is `done`, `declined`, or `failed`; `result` is a string
+  of at most 500 characters, the receipt line or the failure text.
+- `{ "sessionId", "actionId", "settlement" }` settles a typed action, as
+  [`src/contracts/client-command.ts`](../src/contracts/client-command.ts)
+  defines it: `executed` with the command's `outcome` (or, for `list_commands`,
+  the `catalog`), `declined`, or `failed_to_deliver` with
+  `landed: "no" | "unknown"`. A command request is settled by an outcome, a
+  decline, or a failure to deliver; a catalog request by a catalog or a failure
+  to deliver; and a command that asked for the person's approval is never
+  settled as having run without it. Any other pairing answers 400.
+
+It answers 200 `{ "ok": true }`, 404 `{ "error": { "code": "unknown_action" } }`
+for an id the session never issued, 409
+`{ "error": { "code": "action_resolved" } }` for one already settled, and 400
+for a bad body. A typed settlement the host already gave for the same action is
+answered 200 again without effect, so a client that lost the acknowledgment
+resends its answer after reconnecting rather than running the command again. An
+action the console settled itself (a timeout, a cancel, or a restart) is
+`action_resolved` to every later answer.
+
+The tool returns the outcomes to the model in input order. For an executed
+command the model gets the outcome's metadata — which executor answered and its
+HTTP status, `ok`, `code`, `error`, `outputs`, `completed`, `mayHaveLanded`,
+`bodyBytes` — and a `cfh:v:` handle to the complete JSON body, held in the
+session's handle table as a `document` referent with label source `command` and
+a `provenance` record (command, actor, target loom, the version the command
+answered with, origin loom). The body and the receipt never reach the model: the
+receipt is the resolved event's `result`, for the person, and the event's
+`settlement` record carries the same metadata and handle. A body over 256 KiB
+arrives omitted, with its size, and is held nowhere; its outcome still says
+whether the command happened. A catalog is returned to the model, with the
+schemas and descriptions of entries past 32 KiB left out. A version conflict is
+an executed command whose outcome is `ok: false`, not a failure of the channel.
+
+An answer may arrive while its request is still being delivered, as when a
+client answers from the handler that receives the event: it is kept, its
+resolved event follows the request in the log, and its 200 does not wait for
+that event to be written. If that write then fails, the call fails and a restart
+records the request `interrupted`. Only that answer is exempt: a handler that
+awaits any other request that writes an event (another action's answer, a
+cancel) from inside a delivery waits on itself.
 
 The wait has an idle clock of five minutes, reset whenever any action of the
-call settles; on expiry every unsettled action fails with `result: "timeout"`,
-and one not yet requested is never requested. Canceling the turn or closing the
-session declines every unsettled action with `result: "canceled"`. The stdio
-request `resolve_client_action` (same params, same error codes) calls the same
-service method, and `start_session` and `start_turn` take `clientActions: true`
-to opt in, off by default.
+call settles; on expiry every unsettled action is settled as timed out (`failed`
+with `result: "timeout"`, or for a typed action
+`{ "status": "interrupted", "reason": "timeout" }`), and one not yet requested
+is never requested. Canceling the turn or closing the session settles every
+unsettled action as canceled (`declined` with `result: "canceled"`, or
+`interrupted` with reason `canceled`). A request a restart left open is never
+replayed: startup settles it `failed` with `result: "interrupted"`, and a typed
+one with `{ "status": "interrupted", "reason": "restart" }`. The stdio request
+`resolve_client_action` (same params, same error codes) reads its params with
+the same reader and calls the same service method, and `start_session` and
+`start_turn` take `clientActions: true` to opt in, off by default.
 
 ### Client protocol
 
 A host declares what it needs with `protocol` on `POST /api/task`:
-`{ "protocolVersion": 1, "requires": ["client_actions"] }`. The console checks
-it before reading anything else and before any session or turn starts. Another
-version, or a required feature it does not serve, answers 409 with
+`{ "protocolVersion": 1, "requires": ["client_actions", "typed_commands"] }`.
+The console checks it before reading anything else and before any session or
+turn starts. Another version, or a required feature it does not serve, answers
+409 with
 `{ "error", "code": "protocol_mismatch", "protocol", "requestedVersion",
 "missing" }`,
 where `protocol` is what the console does serve; a malformed declaration
@@ -875,18 +923,15 @@ and `start_turn` take the same `protocol` param and refuse with error code
 `protocol_mismatch`, the same fields in `details`; an accepted one carries the
 same `protocol` echo beside the status in its result.
 
-The features are `client_actions`, the actions above, and `typed_commands`, the
-typed command invocation, catalog, and settlement defined in
-[`src/contracts/client-command.ts`](../src/contracts/client-command.ts). This
-console serves `client_actions` only, so a host requiring `typed_commands` is
-refused. In that contract a typed request rides the same
-`client_action_requested` event with action kind `invoke_command` or
-`list_commands`, and is settled on the same route with `settlement` in place of
-`outcome`; its resolved event carries the matching outcome word beside the
-settlement record, so a reader that knows only `done`, `declined`, and `failed`
-still clears it. The wire shapes are pinned by the JSON files under
+The features are `client_actions`, the final-action kinds above, and
+`typed_commands`, the typed command invocation, catalog, and settlement defined
+in [`src/contracts/client-command.ts`](../src/contracts/client-command.ts). This
+console serves both. A console that answers without a `protocol` serves
+`client_actions` alone, and a host requiring `typed_commands` treats it as
+unable to serve that host. The wire shapes are pinned by the JSON files under
 [`test/fixtures/client-command-wire/`](../test/fixtures/client-command-wire/),
-which the Weaver's Swift tests read too.
+which the Weaver's Swift tests read too; the two `protocol-mismatch-*` files are
+the answers of a console serving `client_actions` alone.
 
 ### Cancel route
 

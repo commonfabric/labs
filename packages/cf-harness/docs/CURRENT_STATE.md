@@ -554,11 +554,15 @@ The current package provides:
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
-- parent-only, host-opt-in `weaver_action`, which asks the person's client to
-  run client actions mid-turn and waits for each settlement (idle timeout of
-  five minutes reset by each settlement; cancel declines the rest), settled
-  through the `resolve_client_action` request or the console's
-  `POST /api/client-actions`;
+- parent-only, host-opt-in `weaver_action`, which asks the person's Weaver
+  mid-turn to invoke a typed command, list its command catalog, or open a loom
+  or web address, and waits for each settlement (idle timeout of five minutes
+  reset by each settlement; a cancel settles the rest), settled through the
+  `resolve_client_action` request or the console's `POST /api/client-actions`,
+  both read by one reader and handed to the session's one client-action
+  coordinator (`src/client-actions/coordinator.ts`). An executed command's JSON
+  body is held as a `document` handle with label source `command` and its
+  provenance; the model gets the outcome metadata and the token;
 - parent-only `finish_task` for a completed answer, a question, or a give-up
   reason, admitted through ordinary policy and artifacts as the sole call in a
   model turn. A completed answer satisfies the Fabric piece contract and may

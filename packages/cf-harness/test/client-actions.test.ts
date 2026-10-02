@@ -5,9 +5,9 @@ import { toFileUrl } from "@std/path";
 
 import {
   HARNESS_CLIENT_URL_MAX_LENGTH,
-  type HarnessClientActionRequester,
   readHarnessClientAction,
 } from "../src/contracts/client-action.ts";
+import type { HarnessClientActionRequester } from "../src/client-actions/coordinator.ts";
 import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,
@@ -29,13 +29,18 @@ import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
-import { weaverActionTool } from "../src/tools/weaver-action.ts";
+import { establishHarnessSessionContext } from "../src/session-assembly.ts";
+import {
+  WEAVER_COMMAND_GUIDANCE,
+  weaverActionTool,
+} from "../src/tools/weaver-action.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
 
 const LOOM = "loom-0123456789abcdef";
 const open = { kind: "open_loom", loomId: LOOM } as const;
 const command = { kind: "command", line: "/weave notes" } as const;
 const url = { kind: "open_url", url: "https://example.com/a" } as const;
+const page = { kind: "open_url", url: "https://example.com/b" } as const;
 
 Deno.test("a command or url that spans lines is not a client action", () => {
   // The person approves the one line the client shows; a second line
@@ -364,11 +369,11 @@ const request =
     event.kind === "client_action_requested" && event.actionId === actionId;
 
 Deno.test("weaver_action emits a request per action in order and returns outcomes in input order", async () => {
-  const h = harness({ calls: [{ actions: [open, command, url] }] });
+  const h = harness({ calls: [{ actions: [open, page, url] }] });
   await h.start();
   await h.delivered(request("id-3"));
   const requested = h.kinds("client_action_requested");
-  assertEquals(requested.map((e) => e.action), [open, command, url]);
+  assertEquals(requested.map((e) => e.action), [open, page, url]);
   assertEquals(requested.map((e) => e.actionId), ["id-1", "id-2", "id-3"]);
   assertEquals(requested.every((e) => e.turnId === "t"), true);
   assertEquals(h.toolResults.length, 0);
@@ -378,7 +383,7 @@ Deno.test("weaver_action emits a request per action in order and returns outcome
     const [actionId, outcome, result] of [
       ["id-3", "declined", undefined],
       ["id-1", "done", "opened"],
-      ["id-2", "failed", "no such command"],
+      ["id-2", "failed", "unreachable"],
     ] as const
   ) {
     const response = await h.request("resolve_client_action", {
@@ -395,7 +400,7 @@ Deno.test("weaver_action emits a request per action in order and returns outcome
     status: "ok",
     outcomes: [
       { action: open, outcome: "done", result: "opened" },
-      { action: command, outcome: "failed", result: "no such command" },
+      { action: page, outcome: "failed", result: "unreachable" },
       { action: url, outcome: "declined" },
     ],
   }]);
@@ -461,7 +466,7 @@ Deno.test("resolve_client_action names unknown, repeated, and malformed answers"
 
 Deno.test("an idle call fails every unsettled action as timeout, and each settlement resets the clock", async () => {
   using time = new FakeTime();
-  const h = harness({ idleMs: 60, calls: [{ actions: [open, command] }] });
+  const h = harness({ idleMs: 60, calls: [{ actions: [open, page] }] });
   await h.start();
   await h.delivered(request("id-2"));
   // Settle one before the first deadline; the second must get a fresh full
@@ -484,7 +489,7 @@ Deno.test("an idle call fails every unsettled action as timeout, and each settle
     status: "ok",
     outcomes: [
       { action: open, outcome: "done" },
-      { action: command, outcome: "failed", result: "timeout" },
+      { action: page, outcome: "failed", result: "timeout" },
     ],
   }]);
   assertEquals(
@@ -504,7 +509,7 @@ Deno.test("an idle call fails every unsettled action as timeout, and each settle
 });
 
 Deno.test("canceling the turn declines every pending action as canceled, with a resolved event each", async () => {
-  const h = harness({ calls: [{ actions: [open, command] }] });
+  const h = harness({ calls: [{ actions: [open, page] }] });
   await h.start();
   await h.delivered(request("id-2"));
   // A cancel that lands while requests are being written is applied after
@@ -519,7 +524,7 @@ Deno.test("canceling the turn declines every pending action as canceled, with a 
     status: "ok",
     outcomes: [
       { action: open, outcome: "declined", result: "canceled" },
-      { action: command, outcome: "declined", result: "canceled" },
+      { action: page, outcome: "declined", result: "canceled" },
     ],
   }]);
   const resolved = h.kinds("client_action_resolved");
@@ -550,17 +555,19 @@ Deno.test("closing the session settles pending actions the same way", async () =
 });
 
 Deno.test("invalid input emits nothing and a session that did not opt in has no door", async () => {
+  // A slash-command line is a final action only: mid-turn, a command is
+  // invoked by id with typed args.
   const h = harness({
     calls: [{ actions: [] }, {
       actions: [{ kind: "open_url", url: "ftp://x" }],
-    }],
+    }, { actions: [open, command] }],
   });
   await h.start();
   await h.callsDone;
   assertEquals(h.kinds("client_action_requested"), []);
   assertEquals(
     h.toolResults.map((r) => (r as { status: string }).status),
-    ["error", "error"],
+    ["error", "error", "error"],
   );
   h.release.resolve();
   await h.service.waitForIdle();
@@ -664,6 +671,21 @@ Deno.test("weaver_action is offered to a parent that opted in, never to one that
   );
 });
 
+Deno.test("a session whose host opted in opens with the Weaver command guidance, and no other does", async () => {
+  const contextOf = async (optIn: boolean) =>
+    await establishHarnessSessionContext({
+      engine: new CfHarnessEngine({
+        sandboxRuntime: sandbox,
+        runId: "root",
+        model: "gpt-test",
+        ...(optIn ? { requestClientActions: () => Promise.resolve([]) } : {}),
+      }),
+      config: { skillNames: [] },
+    });
+  expect(await contextOf(true)).toContain(WEAVER_COMMAND_GUIDANCE);
+  expect(await contextOf(false)).not.toContain(WEAVER_COMMAND_GUIDANCE);
+});
+
 Deno.test("weaver_action is gated by backing, absent from defaults, and nameable in a stdio policy", () => {
   const base = {
     fabricSessionAvailable: false,
@@ -712,7 +734,7 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
           } as unknown as HarnessToolContext;
           await weaverActionTool.invoke(
             context,
-            { actions: [url, command] } as never,
+            { actions: [url, page] } as never,
           );
           return await never.promise;
         },
@@ -763,7 +785,7 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
         kind: "client_action_requested",
         turnId: "t",
         actionId: "id-2",
-        action: command,
+        action: page,
       },
       {
         kind: "client_action_resolved",
@@ -819,7 +841,7 @@ Deno.test("a request that cannot be delivered settles the ones already written a
   // The second request's delivery fails (committed, then the client hook
   // throws); the third was never written.
   const h = harness({
-    calls: [{ actions: [open, command, url] }],
+    calls: [{ actions: [open, page, url] }],
     deliver: (e) => {
       if (e.kind === "client_action_requested" && e.actionId === "id-2") {
         throw new Error("sink down");
@@ -872,7 +894,7 @@ Deno.test("an idle timeout whose resolved event cannot be written fails the call
 
 Deno.test("a cancel while requests are being written stops writing and settles only the written", async () => {
   const h: ReturnType<typeof harness> = harness({
-    calls: [{ actions: [open, command, url] }],
+    calls: [{ actions: [open, page, url] }],
     deliver: (e) => {
       if (e.kind === "client_action_requested" && e.actionId === "id-1") {
         void h.request("cancel_turn", { sessionId: "s", turnId: "t" });
@@ -888,7 +910,7 @@ Deno.test("a cancel while requests are being written stops writing and settles o
     status: "ok",
     outcomes: [
       { action: open, outcome: "declined", result: "canceled" },
-      { action: command, outcome: "declined", result: "canceled" },
+      { action: page, outcome: "declined", result: "canceled" },
       { action: url, outcome: "declined", result: "canceled" },
     ],
   }]);
@@ -964,7 +986,7 @@ Deno.test("an idle timeout while a request is being delivered settles the unwrit
   // written; the second request's delivery is held past its deadline.
   const h: ReturnType<typeof harness> = harness({
     idleMs: 10,
-    calls: [{ actions: [open, command, url] }],
+    calls: [{ actions: [open, page, url] }],
     deliver: async (e) => {
       if (e.kind !== "client_action_requested") return;
       if (e.actionId === "id-1") {
@@ -991,7 +1013,7 @@ Deno.test("an idle timeout while a request is being delivered settles the unwrit
     status: "ok",
     outcomes: [
       { action: open, outcome: "done" },
-      { action: command, outcome: "failed", result: "timeout" },
+      { action: page, outcome: "failed", result: "timeout" },
       { action: url, outcome: "failed", result: "timeout" },
     ],
   }]);

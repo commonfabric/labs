@@ -18,10 +18,7 @@ import {
   HARNESS_BROWSER_ACCESS_LEASE_TYPE,
   HARNESS_BROWSER_ACCESS_PROFILE_MODES,
 } from "./contracts/browser-access.ts";
-import {
-  HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
-  isHarnessClientActionOutcomeKind,
-} from "./contracts/client-action.ts";
+import { readHarnessClientActionAnswer } from "./client-actions/coordinator.ts";
 import { readHarnessClientProtocolDeclaration } from "./contracts/client-command.ts";
 import { normalizePromptSlotBinding } from "./contracts/prompt-slot.ts";
 import {
@@ -563,13 +560,7 @@ const isValidRequestParams = (
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "reason");
     case "resolve_client_action":
-      return isNonEmptyString(params.sessionId) &&
-        isNonEmptyString(params.actionId) &&
-        isHarnessClientActionOutcomeKind(params.outcome) &&
-        (params.result === undefined ||
-          (typeof params.result === "string" &&
-            params.result.length <=
-              HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH));
+      return readHarnessClientActionAnswer(params) !== undefined;
     case "status":
       return hasOptionalString(params, "sessionId");
     case "list_events":
