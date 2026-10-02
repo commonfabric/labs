@@ -172,34 +172,40 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
       "prompt-injection-risk-value-screened",
     ]
   ) {
-    await t.step(`a view under ${kind} renders its text, never its src`, async () => {
-      const id = await seed(pixelView(), [owner, caveat(kind)]);
+    await t.step(
+      `a view under ${kind} renders its text, never its src`,
+      async () => {
+        const id = await seed(pixelView(), [owner, caveat(kind)]);
+        const { collector, cancel } = await render(id);
+        try {
+          const ops = collector.all();
+          assertEquals(texts(ops).includes("Owner text"), true);
+          assertEquals(setProps(ops, "src"), []);
+          // A prop that fetches nothing still applies, styling included.
+          assertEquals(setProps(ops, "alt").includes("pixel"), true);
+          assertEquals(setProps(ops, "style").includes("color: red"), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+  }
+
+  await t.step(
+    "prompt influence keeps fetching, as before the family",
+    async () => {
+      const id = await seed(pixelView(), [
+        owner,
+        caveat(CFC_CONCEPT_KIND.PromptInfluence),
+      ]);
       const { collector, cancel } = await render(id);
       try {
-        const ops = collector.all();
-        assertEquals(texts(ops).includes("Owner text"), true);
-        assertEquals(setProps(ops, "src"), []);
-        // A prop that fetches nothing still applies, styling included.
-        assertEquals(setProps(ops, "alt").includes("pixel"), true);
-        assertEquals(setProps(ops, "style").includes("color: red"), true);
+        assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
       } finally {
         cancel();
       }
-    });
-  }
-
-  await t.step("prompt influence keeps fetching, as before the family", async () => {
-    const id = await seed(pixelView(), [
-      owner,
-      caveat(CFC_CONCEPT_KIND.PromptInfluence),
-    ]);
-    const { collector, cancel } = await render(id);
-    try {
-      assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
-    } finally {
-      cancel();
-    }
-  });
+    },
+  );
 
   await t.step("the owner's own uncaveated image fetches", async () => {
     const id = await seed(pixelView(), [owner]);
@@ -221,38 +227,41 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     }
   });
 
-  await t.step("a style that can name a URL is refused; one that cannot applies", async () => {
-    const id = await seed({
-      type: "vnode",
-      name: "div",
-      props: {},
-      children: [
-        {
-          type: "vnode",
-          name: "p",
-          props: { style: `background-image: url(${ATTACKER_URL})` },
-          children: ["Fetching style"],
-        },
-        {
-          type: "vnode",
-          name: "p",
-          props: { style: "font-weight: bold" },
-          children: ["Plain style"],
-        },
-      ],
-    }, [owner, unscreened]);
-    const { collector, cancel } = await render(id);
-    try {
-      const styles = setProps(collector.all(), "style");
-      assertEquals(styles.includes("font-weight: bold"), true);
-      assertEquals(
-        styles.some((style) => String(style).includes("url(")),
-        false,
-      );
-    } finally {
-      cancel();
-    }
-  });
+  await t.step(
+    "a style that can name a URL is refused; one that cannot applies",
+    async () => {
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          {
+            type: "vnode",
+            name: "p",
+            props: { style: `background-image: url(${ATTACKER_URL})` },
+            children: ["Fetching style"],
+          },
+          {
+            type: "vnode",
+            name: "p",
+            props: { style: "font-weight: bold" },
+            children: ["Plain style"],
+          },
+        ],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        const styles = setProps(collector.all(), "style");
+        assertEquals(styles.includes("font-weight: bold"), true);
+        assertEquals(
+          styles.some((style) => String(style).includes("url(")),
+          false,
+        );
+      } finally {
+        cancel();
+      }
+    },
+  );
 
   await t.step("an upper-case tag is the same element", async () => {
     const id = await seed({
@@ -269,90 +278,102 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     }
   });
 
-  await t.step("a <style> element's text does not render under the caveat", async () => {
-    const css = `body { background: url(${ATTACKER_URL}) }`;
-    const id = await seed({
-      type: "vnode",
-      name: "div",
-      props: {},
-      children: [
-        { type: "vnode", name: "style", props: {}, children: [css] },
-        "Visible text",
-      ],
-    }, [owner, unscreened]);
-    const { collector, cancel } = await render(id);
-    try {
-      const rendered = texts(collector.all());
-      assertEquals(rendered.includes("Visible text"), true);
-      assertEquals(rendered.includes(css), false);
-    } finally {
-      cancel();
-    }
-  });
-
-  await t.step("a render boundary inside the view keeps the fetch refused", async () => {
-    const id = await seed({
-      type: "vnode",
-      name: "cf-cfc-render-boundary",
-      props: {},
-      children: [{
+  await t.step(
+    "a <style> element's text does not render under the caveat",
+    async () => {
+      const css = `body { background: url(${ATTACKER_URL}) }`;
+      const id = await seed({
         type: "vnode",
-        name: "img",
-        props: { src: ATTACKER_URL },
-        children: [],
-      }],
-    }, [owner, unscreened]);
-    const { collector, cancel } = await render(id);
-    try {
-      assertEquals(setProps(collector.all(), "src"), []);
-    } finally {
-      cancel();
-    }
-  });
+        name: "div",
+        props: {},
+        children: [
+          { type: "vnode", name: "style", props: {}, children: [css] },
+          "Visible text",
+        ],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        const rendered = texts(collector.all());
+        assertEquals(rendered.includes("Visible text"), true);
+        assertEquals(rendered.includes(css), false);
+      } finally {
+        cancel();
+      }
+    },
+  );
 
-  await t.step("a src read from a caveated cell is refused; its text renders", async () => {
-    const value = await seed(ATTACKER_URL, [owner, unscreened]);
-    const id = await seed({
-      type: "vnode",
-      name: "div",
-      props: {},
-      children: [
-        {
+  await t.step(
+    "a render boundary inside the view keeps the fetch refused",
+    async () => {
+      const id = await seed({
+        type: "vnode",
+        name: "cf-cfc-render-boundary",
+        props: {},
+        children: [{
           type: "vnode",
           name: "img",
-          props: { src: linkTo(value) },
+          props: { src: ATTACKER_URL },
           children: [],
-        },
-        linkTo(value),
-      ],
-    }, [owner]);
-    const { collector, cancel } = await render(id);
-    try {
-      const ops = collector.all();
-      assertEquals(texts(ops).includes(ATTACKER_URL), true);
-      assertEquals(setProps(ops, "src"), []);
-    } finally {
-      cancel();
-    }
-  });
+        }],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
 
-  await t.step("a clean src inside a caveated view is refused too", async () => {
-    // The caveated view chose which image to show, so loading even a clean
-    // URL tells its host what the view decided.
-    const value = await seed("https://images.example/clean.png", [owner]);
-    const id = await seed({
-      type: "vnode",
-      name: "img",
-      props: { src: linkTo(value) },
-      children: [],
-    }, [owner, unscreened]);
-    const { collector, cancel } = await render(id);
-    try {
-      assertEquals(setProps(collector.all(), "src"), []);
-    } finally {
-      cancel();
-    }
-  });
+  await t.step(
+    "a src read from a caveated cell is refused; its text renders",
+    async () => {
+      const value = await seed(ATTACKER_URL, [owner, unscreened]);
+      const id = await seed({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          {
+            type: "vnode",
+            name: "img",
+            props: { src: linkTo(value) },
+            children: [],
+          },
+          linkTo(value),
+        ],
+      }, [owner]);
+      const { collector, cancel } = await render(id);
+      try {
+        const ops = collector.all();
+        assertEquals(texts(ops).includes(ATTACKER_URL), true);
+        assertEquals(setProps(ops, "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
+
+  await t.step(
+    "a clean src inside a caveated view is refused too",
+    async () => {
+      // The caveated view chose which image to show, so loading even a clean
+      // URL tells its host what the view decided.
+      const value = await seed("https://images.example/clean.png", [owner]);
+      const id = await seed({
+        type: "vnode",
+        name: "img",
+        props: { src: linkTo(value) },
+        children: [],
+      }, [owner, unscreened]);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), []);
+      } finally {
+        cancel();
+      }
+    },
+  );
 
   await t.step("markdown content from a caveated cell is refused", async () => {
     const value = await seed(`![x](${ATTACKER_URL})`, [owner, unscreened]);
@@ -387,27 +408,30 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
     }
   });
 
-  await t.step("a view that gains the caveat with the same value stops fetching", async () => {
-    const id = "remote-loads-flip";
-    await seed(pixelView(), [owner], id);
-    const { collector, cancel } = await render(id);
-    try {
-      assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
-      collector.clear();
-      await seed(pixelView(), [owner, unscreened], id);
-      await t.settle();
-      const ops = collector.all();
-      assertEquals(setProps(ops, "src"), []);
-      // The fetching element is gone or its src removed.
-      assertEquals(
-        ops.some((op) =>
-          op.op === "remove-node" ||
-          (op.op === "remove-prop" && op.key === "src")
-        ),
-        true,
-      );
-    } finally {
-      cancel();
-    }
-  });
+  await t.step(
+    "a view that gains the caveat with the same value stops fetching",
+    async () => {
+      const id = "remote-loads-flip";
+      await seed(pixelView(), [owner], id);
+      const { collector, cancel } = await render(id);
+      try {
+        assertEquals(setProps(collector.all(), "src"), [ATTACKER_URL]);
+        collector.clear();
+        await seed(pixelView(), [owner, unscreened], id);
+        await t.settle();
+        const ops = collector.all();
+        assertEquals(setProps(ops, "src"), []);
+        // The fetching element is gone or its src removed.
+        assertEquals(
+          ops.some((op) =>
+            op.op === "remove-node" ||
+            (op.op === "remove-prop" && op.key === "src")
+          ),
+          true,
+        );
+      } finally {
+        cancel();
+      }
+    },
+  );
 });

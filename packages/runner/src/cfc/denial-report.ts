@@ -38,6 +38,7 @@ export const CFC_DENIAL_CODES = [
   "write-unprepared",
   "write-prepared-digest-mismatch",
   "render-confidentiality-ceiling",
+  "render-remote-load",
   "render-text-integrity",
   "render-literal-text-integrity",
 ] as const;

@@ -117,6 +117,15 @@ export interface RenderPolicy {
   caveatKindAllow?: readonly string[];
 
   /**
+   * Set when this subtree's own data carries a caveat the fetch ceiling
+   * refuses: a material-risk prompt caveat, which the display ceiling admits
+   * (SC-54) but a URL fetch does not (SC-55). No prop that would fetch a URL
+   * is set anywhere in the subtree, whatever that prop's own label, since the
+   * data chose it. Inherited, and only ever added on the way down.
+   */
+  remoteLoadsBlocked?: boolean;
+
+  /**
    * Confidentiality atoms this subtree may declassify before applying the max bound.
    * This is a temporary low-level capability hook for trusted UI experiments.
    */
