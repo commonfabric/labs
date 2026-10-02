@@ -1,8 +1,10 @@
 /**
- * A member removed from a space, and then granted it again, coming back to
- * the space's piece in the shell without reloading. The memory server refuses
- * the member's runtime the space at the removal and sends nothing at the
- * grant, so what brings the piece back is the shell asking again: through the
+ * A member viewing a piece that shows, through a link, a piece in a space the
+ * member has not been granted, and coming to see that piece once granted,
+ * without reloading. The memory server refuses the member's runtime the linked
+ * space on its first open, and the connection-per-space client closes the
+ * connection that refusal arrived on, so the grant reaches no session of the
+ * member's. What brings the piece in is the shell asking again: through the
  * Retry button on the renderer's "Access unavailable" placeholder, or on the
  * page regaining focus.
  */
@@ -31,15 +33,27 @@ import { clickPierce } from "./shadow-dom.ts";
 
 const { API_URL, FRONTEND_URL } = env;
 const REPO_ROOT = resolve(import.meta.dirname!, "../../..");
-const PIECE_SOURCE = join(
+const REFUSED_PIECE_SOURCE = join(
   import.meta.dirname!,
   "fixtures",
   "refused-space-piece.tsx",
 );
+const LINKED_VIEW_SOURCE = join(
+  import.meta.dirname!,
+  "fixtures",
+  "linked-view-piece.tsx",
+);
 const decoder = new TextDecoder();
 
-/** Files the fixture piece in `space` as the identity at `identityPath`. */
-async function filePiece(identityPath: string, space: DID): Promise<string> {
+/**
+ * Files the piece `source` defines in `space` as the identity at
+ * `identityPath`, and returns its id.
+ */
+async function filePiece(
+  identityPath: string,
+  space: DID,
+  source: string,
+): Promise<string> {
   // Through the temporary lock, because a nested Deno resolves dependencies of
   // its own and would refresh the repository's `deno.lock` as a side effect.
   const result = await runDenoCommandWithTemporaryLock({
@@ -52,7 +66,7 @@ async function filePiece(identityPath: string, space: DID): Promise<string> {
       join(REPO_ROOT, "packages", "cli", "mod.ts"),
       "piece",
       "new",
-      PIECE_SOURCE,
+      source,
       "--identity",
       identityPath,
       "--api-url",
@@ -151,68 +165,114 @@ describe("shell space access retry", () => {
   shell.bindLifecycle();
 
   /**
-   * Shows the owner's piece to a member in the shell, removes the member from
-   * the space and waits for the refusal, grants the member the space again,
-   * and hands `recover` the page, the space, and the settled retries the
-   * refusal showed, to bring the piece back with. Then waits for the retry
-   * that brings about to settle, and requires that it left the piece rather
-   * than the refusal.
+   * Files a piece in a space the member has never been granted, and a view of
+   * it in a space the member is granted, and shows the view to the member in
+   * the shell. The view links to the piece, so the member's runtime is refused
+   * the piece's space on its first open of it. Waits for the view and the
+   * refusal in the piece's place, then hands `run` the page, the refused
+   * space, the settled retries the refusal showed, and a grant of that space
+   * to the member. The grant resolves once the server has committed it, and
+   * then requires that the page still shows the refusal, no retry under way:
+   * nothing but a retry the shell asks for brings the piece in.
    */
-  async function refuseThenRegrant(
-    recover: (page: Page, space: DID, retries: number) => Promise<void>,
+  async function refusedOnFirstOpen(
+    run: (refused: {
+      page: Page;
+      space: DID;
+      retries: number;
+      grant: () => Promise<void>;
+    }) => Promise<void>,
   ): Promise<void> {
     await using ownerFile = await writeTempIdentity({
       implementation: "noble",
     });
     const owner = ownerFile.identity;
     const member = await Identity.generate({ implementation: "noble" });
-    const space = await createTestSpace(owner, {
+    const space = await createTestSpace(owner);
+    const viewSpace = await createTestSpace(owner, {
       grants: { [member.did()]: "WRITE" },
     });
-    const pieceId = await filePiece(ownerFile.path, space);
-    const controller = await PiecesController.initialize({
+    const pieceId = await filePiece(
+      ownerFile.path,
+      space,
+      REFUSED_PIECE_SOURCE,
+    );
+    const viewId = await filePiece(
+      ownerFile.path,
+      viewSpace,
+      LINKED_VIEW_SOURCE,
+    );
+    const pieces = await PiecesController.initialize({
       space,
       apiUrl: new URL(API_URL),
       identity: owner,
     });
     try {
-      const acl = new ACLManager(controller.runtime, space);
+      const views = await PiecesController.initialize({
+        space: viewSpace,
+        apiUrl: new URL(API_URL),
+        identity: owner,
+      });
+      try {
+        // Written as a link straight into the view's input, which holds no
+        // schema contract for a piece of another space to meet.
+        const piece = views.runtime.getCellFromLink(
+          (await pieces.get(pieceId, false)).getCell()
+            .getAsNormalizedFullLink(),
+        );
+        const input = await (await views.get(viewId, false)).input.getCell();
+        const linked = await views.runtime.editWithRetry((tx) => {
+          input.withTx(tx).key("shown").set(piece);
+        });
+        expect(linked.error).toBeUndefined();
+        await views.runtime.storageManager.synced();
+      } finally {
+        await views.dispose();
+      }
+
+      const acl = new ACLManager(pieces.runtime, space);
       const page = shell.page();
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceDid: space, pieceId },
+        view: { spaceDid: viewSpace, pieceId: viewId },
         identity: member,
       });
-      expect(await waitForRetryOutcome(page, 0)).toBe("piece");
-
-      await acl.remove(member.did());
+      await waitForCondition(
+        page,
+        (probe) => probe.collect("#linked-view-marker").length > 0,
+      );
       const retries = await waitForRefusal(page);
-
-      await acl.set(member.did(), "WRITE");
-      await recover(page, space, retries);
-      expect(await waitForRetryOutcome(page, retries)).toBe("piece");
+      await run({
+        page,
+        space,
+        retries,
+        grant: async () => {
+          await acl.set(member.did(), "WRITE");
+          await awaitViewSettled(page);
+          expect(await retryHasStarted(page, retries)).toBe(false);
+        },
+      });
     } finally {
-      await controller.dispose();
+      await pieces.dispose();
     }
   }
 
-  it.ignore("shows the piece again once the member presses Retry", async () => {
-    // TODO(danfuzz): The grant sends a `session/admissible`, on which the
-    // storage manager re-admits the member before the click, so the Retry
-    // button is gone by the time this presses it. Recover from a refusal no
-    // notice can end, and run this case again.
-    await refuseThenRegrant(async (page, _space, retries) => {
+  it("shows the piece once the member, granted it, presses Retry", async () => {
+    await refusedOnFirstOpen(async ({ page, retries, grant }) => {
+      await grant();
       await clickPierce(page, "[data-space-access-retry]");
       // The click reaches the worker before the settle request does, and the
       // worker marks the retry in flight while handling it, so once the view
       // has settled the page shows the retry under way or past.
       await awaitViewSettled(page);
       expect(await retryHasStarted(page, retries)).toBe(true);
+      expect(await waitForRetryOutcome(page, retries)).toBe("piece");
     });
   });
 
-  it("shows the piece again once the page regains focus", async () => {
-    await refuseThenRegrant(async (page, space) => {
+  it("shows the piece once the page, its member granted it, regains focus", async () => {
+    await refusedOnFirstOpen(async ({ page, space, retries, grant }) => {
+      await grant();
       // The shell asks the runtime from inside the `focus` handler, so the
       // retries it asked for are the calls made while the event is
       // dispatched.
@@ -233,36 +293,12 @@ describe("shell space access retry", () => {
         return asked.filter((retried) => retried === space);
       }, { args: [space] });
       expect(asked).toEqual([space]);
+      expect(await waitForRetryOutcome(page, retries)).toBe("piece");
     });
   });
 
   it("keeps keyboard focus on the Retry button through a retry that is refused", async () => {
-    await using ownerFile = await writeTempIdentity({
-      implementation: "noble",
-    });
-    const owner = ownerFile.identity;
-    const member = await Identity.generate({ implementation: "noble" });
-    const space = await createTestSpace(owner, {
-      grants: { [member.did()]: "WRITE" },
-    });
-    const pieceId = await filePiece(ownerFile.path, space);
-    const controller = await PiecesController.initialize({
-      space,
-      apiUrl: new URL(API_URL),
-      identity: owner,
-    });
-    try {
-      const acl = new ACLManager(controller.runtime, space);
-      const page = shell.page();
-      await shell.goto({
-        frontendUrl: FRONTEND_URL,
-        view: { spaceDid: space, pieceId },
-        identity: member,
-      });
-      expect(await waitForRetryOutcome(page, 0)).toBe("piece");
-      await acl.remove(member.did());
-      const retries = await waitForRefusal(page);
-
+    await refusedOnFirstOpen(async ({ page, retries }) => {
       // Focus the control from the page, and press it from the keyboard, as
       // someone tabbing to it would.
       await waitForCondition(page, (probe) => {
@@ -286,8 +322,6 @@ describe("shell space access retry", () => {
         };
       });
       expect(focused).toEqual({ retry: true });
-    } finally {
-      await controller.dispose();
-    }
+    });
   });
 });
