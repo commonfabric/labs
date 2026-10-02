@@ -80,10 +80,7 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-import {
-  recordNewDocumentProtectedDefaults,
-  recordNewProtectedDefaults,
-} from "./cfc/default-initialization.ts";
+import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
 import {
   CFC_POLICY_MANIFEST_DOC_SCHEMA,
   CFC_POLICY_MANIFEST_ID_PREFIX,
@@ -231,7 +228,6 @@ import {
   validateSchemaValue,
 } from "./cfc/schema-sanitization.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type ImplementationIdentity,
@@ -260,7 +256,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
+import { narrowestScope, scopeRank } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -918,22 +914,12 @@ function describeSkippedSubPatternNode(
   };
 }
 
-/**
- * Records a structural-provenance marker for each write redirect `projection`
- * stages into `resultCell`, at the position the redirect takes. A redirect to
- * one of `ownCells`, the documents the setup creates for its piece, is the
- * setup's own initialization of that cell and records a setup projection. Any
- * other redirect names a cell the piece was handed, through its argument or
- * through the code setting it up, and records a binding projection, which
- * covers the slot alone.
- */
 const recordSetupProjectionPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
   resultCell: Cell<any>,
   resultSchema: JSONSchema | undefined,
   projection: unknown,
-  ownCells: readonly NormalizedFullLink[],
   schemaPath: readonly string[] = [],
 ): void => {
   if (resultSchema === undefined) {
@@ -953,17 +939,12 @@ const recordSetupProjectionPolicyInputs = (
   // still-deferred binding of an embedded pattern) is inert there. The
   // prepare gate agrees: marker verification requires the stored value to be
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
-  // setup-projection marker for an alias would wrongly widen
+  // marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to. A binding-projection marker grants that
-  // exemption nothing; one for an alias would name a slot no check accepts.
+  // a path nothing redirects to.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
     const source = parseLink(projection, target);
-    const own = ownCells.some((cell) =>
-      cell.space === source.space && cell.id === source.id &&
-      normalizeCellScope(cell.scope) === normalizeCellScope(source.scope)
-    );
     tx.recordCfcWritePolicyInput({
       kind: "structural-provenance",
       target: {
@@ -972,9 +953,7 @@ const recordSetupProjectionPolicyInputs = (
         scope: target.scope,
         path: [...target.path, ...schemaPath],
       },
-      claim: own
-        ? CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION
-        : CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
+      claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
       sources: [{
         space: source.space,
         id: source.id,
@@ -993,7 +972,6 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
-        ownCells,
         [...schemaPath, String(index)],
       )
     );
@@ -1023,7 +1001,6 @@ const recordSetupProjectionPolicyInputs = (
         resultCell,
         resultSchema,
         child,
-        ownCells,
         [...schemaPath, key],
       );
     }
@@ -2946,20 +2923,17 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a binding-projection marker,
-    // which exempts the slot holding it from `writeAuthorizedBy` while the slot
-    // holds the cell the marker names (`setupProjectionSourceMatchesValue` in
+    // slots in. Each redirect it finds records a setup-projection marker, and
+    // a marker exempts writes at-or-below its target from `writeAuthorizedBy`
+    // for the rest of the transaction (`writeIsPatternSetupInitialization` in
     // cfc/prepare.ts), so the redirects it walks are the ones this setup
-    // establishes rather than the ones the document already held. The cell a
-    // redirect names receives no exemption: it is the caller's, and this setup
-    // writes none of it, so no cell counts as the setup's own.
+    // establishes rather than the ones the document already held.
     recordSetupProjectionPolicyInputs(
       tx,
       this.#runtime,
       argumentCell,
       argumentSchema,
       projection,
-      [],
     );
     diffAndUpdate(
       this.#runtime,
@@ -3138,20 +3112,12 @@ export class Runner {
       options,
     );
     if (changed) {
-      // A result field the setup projects to one of the piece's internal
-      // cells is the setup's own initialization of that cell. Those cells are
-      // minted from the result cell's cause, so no one else names them; a
-      // field naming any other cell, the piece's argument or a cell the code
-      // setting it up closed over, covers the field alone.
       recordSetupProjectionPolicyInputs(
         tx,
         this.#runtime,
         resultCell,
         pattern.resultSchema,
         result,
-        (pattern.derivedInternalCells ?? []).map((descriptor) =>
-          getDerivedInternalCellLink(resultCell, descriptor)
-        ),
       );
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)
@@ -3298,23 +3264,9 @@ export class Runner {
             meta: ignoreReadForScheduling,
           });
           if (currentValue === undefined) {
-            const seed = fabricFromConvertibleJsValue(schemaDefault);
-            derivedCell.setRawUntyped(seed);
-            // The cell is the pattern's own and absent until now, so its
-            // default is an initialization whether or not anything projects
-            // it: a result field, a sub-pattern's argument, or nothing.
-            const seeded = derivedCell.getAsNormalizedFullLink();
-            tx.recordCfcWritePolicyInput({
-              kind: "initialization",
-              mode: "seed",
-              target: {
-                space: seeded.space,
-                id: seeded.id,
-                scope: seeded.scope,
-                path: [...seeded.path],
-              },
-              value: seed,
-            }, runtimeWritePolicyAuthorization);
+            derivedCell.setRawUntyped(
+              fabricFromConvertibleJsValue(schemaDefault),
+            );
           }
         }
       }
@@ -3418,20 +3370,6 @@ export class Runner {
       argumentLink = newArgumentCell.getAsNormalizedFullLink();
       if (argumentLink === undefined) {
         throw new Error("Invalid argument link in updateArgument");
-      }
-      // The argument document is new, so a protected field the caller leaves
-      // out, and setup fills with its default, is the setup's initialization,
-      // whatever later reads or projects the field. A field the caller
-      // supplies is the caller's write, even where it equals the default.
-      if (nextArgument !== undefined) {
-        recordNewDocumentProtectedDefaults(
-          tx,
-          argumentLink,
-          pattern.argumentSchema,
-          defaults,
-          argument,
-          nextArgument,
-        );
       }
     } else if (!restageStoredArgument) {
       // Same stored setup over an argument document that already exists. The
