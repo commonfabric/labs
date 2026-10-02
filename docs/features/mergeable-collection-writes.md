@@ -412,8 +412,7 @@ first, since the op carries only the delta.
   one: nothing obliges a reshape to read what it overwrites, and a write made
   straight to the transaction reads nothing. With the intent gone that read is
   back in the conflict set, which is what refuses the replacing write from a
-  session whose view of the value is stale. The fallback for a document with
-  no base rests on exactly that read (below).
+  session whose view of the value is stale.
 
 - **A whole-document transaction abandons every intent it holds.** A
   transaction marked `markWholeDocumentWrites` — or `markAuthoritativeWrites`,
@@ -443,9 +442,18 @@ first, since the op carries only the delta.
   no document either. An op resolves against whatever the store holds and
   makes no such claim, so sending the two together would land the other write
   on a document its author never saw. `getNativeCommit` therefore abandons the
-  document's intents and emits the `set`, whose reads carry the claim: the
-  store refuses it where it holds the document, and the transaction runs again
-  with the document loaded, where it has a base and the op merges. The cost is
+  document's intents and emits the `set`, and records a read of the whole
+  document to go with it. The reads the transaction made are per path and
+  would refuse the `set` only where another session wrote one of those paths,
+  while the `set` replaces every field; the read at the document root
+  conflicts with any revision since the transaction's view. So the store
+  refuses the `set` where it holds the document, and the transaction runs
+  again with the document loaded, where it has a base and the op merges. The
+  read is not particular to this fallback: every whole-document `set` the
+  commit computes from a document's absence goes out with it, a plain
+  `key("count").set(1)` from a session that has not loaded the document
+  included. A write to the document root, a whole-document or authoritative
+  transaction, and a blind UI-input write carry no such read. The cost is
   that the push creating a list is not conflict-free when it carries another
   write to that document; two sessions creating it at once conflict, and the
   one refused retries onto the list the other created.

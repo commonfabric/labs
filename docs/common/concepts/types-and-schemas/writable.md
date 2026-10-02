@@ -77,8 +77,16 @@ left it and replaces whatever the server held, where an append would have
 added to it. The same goes for a `set()` of an object and then a `push` into a
 list inside it, and for `count.set(10)` and then `count.increment(1)`. Such a
 write conflicts and retries like any whole-value write. Setting a different
-field, or one element of the list, changes nothing: a `push` beside those is
-still mergeable.
+field, or one element of the list, changes nothing on a document that already
+exists: a `push` beside those is still mergeable. On a document the handler
+is the first to write, a `push` and any other write to that document are
+committed together as its whole value.
+
+That holds for any write to a document the handler saw as absent, a plain
+`set()` of one field included: the commit carries the whole document, and is
+refused, and the handler run again, if another user created the document in
+the meantime. The exception is a mergeable method that is the handler's only
+write to it, which lands on whatever is there.
 
 A `push` or `addUnique` onto a list that does not exist yet, or that was set
 to `undefined`, starts the list with what it adds.

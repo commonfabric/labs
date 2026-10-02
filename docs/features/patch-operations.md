@@ -68,10 +68,12 @@ Take `Cell.increment(2)`:
    it, and the commit poisons the path as above: a tail op whose prefix no longer
    matches its base, or a `remove-by-value` whose removals applied to the base do
    not reproduce the working array — both meaning the transaction also changed
-   that array outside the op, through a write that poisoned nothing. The commit
-   abandons a document's intents itself in two cases, and sends the document
-   whole: the document has no base and the transaction wrote something to it
-   besides its ops, or the transaction wrote the document's root.
+   that array outside the op, through a write that poisoned nothing. A
+   whole-document or authoritative transaction abandons every intent it holds
+   and sends each document whole. The commit does the same for one document in
+   two further cases: the document has no base and the transaction wrote
+   something to it besides its ops, or the transaction wrote the document's
+   root.
    [mergeable-collection-writes.md](./mergeable-collection-writes.md) gives the
    reason for each.
 4. **Apply** — the durable store applies the op against live state
