@@ -35,6 +35,7 @@ import {
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
   renderModulePolicySourceFor,
+  toConsoleDebugValue,
 } from "@/backends/runtime-processor.ts";
 import { NotificationType } from "@/protocol/mod.ts";
 
@@ -361,20 +362,111 @@ describe("HostReadGate, for what crosses beside a value", () => {
         gateFor(docs.runtime, owner).console(message, [SECRET_VALUE], consumed)
           .args,
       ).toEqual([SECRET_VALUE]);
-      // Code outside an action reads no cell.
+      // A call made outside an action carries no labels to decide it on,
+      // and may be a continuation of one that read anything.
       expect(
         gateFor(docs.runtime, visitor).console(
           message,
-          ["module loaded"],
+          ["logged later"],
           undefined,
         ).args,
-      ).toEqual(["module loaded"]);
+      ).toEqual([PLACEHOLDER]);
       // Labels that cannot be read refuse.
       expect(
         gateFor(docs.runtime, owner).console(message, ["logged"], () => {
           throw new Error("the transaction is gone");
         }).args,
       ).toEqual([PLACEHOLDER]);
+    });
+
+    it("withholds what a continuation of an action logs, which runs outside it", async () => {
+      const storageManager = StorageManager.emulate({ as: owner });
+      const shown: unknown[] = [];
+      let gate: HostReadGate | undefined;
+      let heardBoth: () => void = () => {};
+      const both = new Promise<void>((resolve) => {
+        heardBoth = resolve;
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager,
+        consoleHandler: ({ method, args, consumed }) => {
+          if (gate === undefined) return args;
+          shown.push(
+            gate.console(
+              { method },
+              args.map((arg) => toConsoleDebugValue(arg)),
+              consumed,
+            ).args,
+          );
+          if (shown.length === 2) heardBoth();
+          return [];
+        },
+      });
+      try {
+        gate = gateFor(runtime, visitor);
+        const tx = runtime.edit();
+        const input = runtime.getCell(space, "logged-input", undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: input.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { n: SECRET_VALUE },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        const compiled = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ n: string }, { out: string }>(",
+              "  ({ n }) => {",
+              "    const out = computed(() => {",
+              "      const v = n;",
+              "      console.log('in the action', v);",
+              "      Promise.resolve().then(() => console.log('after it', v));",
+              "      return 'x' + v;",
+              "    });",
+              "    return { out };",
+              "  },",
+              ");",
+            ].join("\n"),
+          }],
+        }, { space });
+        const result = runtime.getCell(
+          space,
+          "logged-result",
+          compiled.resultSchema,
+        );
+        const run = runtime.edit();
+        runtime.run(
+          run,
+          compiled,
+          runtime.getCell(space, "logged-input"),
+          result,
+        );
+        await run.commit();
+        const cancel = result.sink(() => {});
+        await both;
+        cancel();
+
+        expect(shown).toEqual([[PLACEHOLDER], [PLACEHOLDER]]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
     });
 
     it("withholds a failed action's message and stack from a reader its reads refuse", async () => {

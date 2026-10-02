@@ -570,17 +570,22 @@ export class HostReadGate {
    * A pattern's `console` call as a host may see it: the arguments, or the
    * placeholder in their place where the policy refuses what the action that
    * logged had read (`consumed`), which is what they can have been made
-   * from. Code that runs outside an action reads no cell, and logs as is.
+   * from. A call made outside an action carries no labels to decide it on:
+   * it may be a continuation of an action, run after the action's
+   * transaction has gone, holding anything the action read. Under a policy
+   * it is withheld.
    */
   console(
     message: { metadata?: ConsoleNotification["metadata"]; method: string },
     args: FabricValue[],
     consumed: (() => SinkConsumedLabel) | undefined,
   ): ConsoleNotification {
+    const withheld = this.#policy !== undefined &&
+      (consumed === undefined || this.#consumedRefused(consumed));
     return decided({
       type: NotificationType.ConsoleMessage as const,
       ...message,
-      args: this.#consumedRefused(consumed) ? [WITHHELD] : args,
+      args: withheld ? [WITHHELD] : args,
     });
   }
 
