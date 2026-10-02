@@ -216,3 +216,101 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
     Deno.removeSync(root, { recursive: true });
   }
 });
+
+Deno.test("a closed context ID stays refused only until its longest lease has expired", async () => {
+  const root = Deno.makeTempDirSync();
+  let clock = Math.floor(Date.now() / 1000);
+  const [toolshed, router, client, space] = await Promise.all(
+    [101, 102, 103, 104].map((seed) =>
+      Identity.fromRaw(new Uint8Array(32).fill(seed))
+    ),
+  );
+  const store = new RoutedEpochStore(`${root}/ledger`);
+  const host = new RoutedMemoryHost({
+    server: new Server({
+      store: new URL("memory://routed-host-closed-context-expiry"),
+      acl: { mode: "enforce" },
+      ownsSpace: (did) => did === space.did(),
+      requireExplicitAcl: true,
+      authorizeSessionOpen: () => undefined,
+      sessionOpenAuth: { audience: toolshed.did() },
+    }),
+    identity: toolshed,
+    deployment: "fixture",
+    routers: new Map([[router.did(), new Set(["127.0.0.1"])]]),
+    ownership: (did) => did === space.did() ? 1 : undefined,
+    epochs: store,
+    now: () => clock,
+  });
+  const flags = routedFlags({
+    ...getMemoryProtocolFlags(),
+    modernCellRep: true,
+    connectionAuth: true,
+    routedAuthV1: true,
+  });
+  const epoch = new Uint8Array(16).fill(1),
+    context = new Uint8Array(16).fill(2);
+  const socket = new Socket();
+  host.accept(
+    socket as unknown as WebSocket,
+    "/memory/router-link",
+    "127.0.0.1",
+  );
+  const hello = new RoutedReader((await socket.take()).slice(0, -64), "mlh1");
+  hello.text();
+  socket.receive(
+    await new RoutedWriter("mlc1").text("fixture").text(router.did()).text(
+      toolshed.did(),
+    ).fixed(epoch).fixed(hello.fixed(32)).sign(router),
+  );
+  assertEquals(new TextDecoder().decode(await socket.take()), "mlo1");
+  let sequence = 0;
+  const request = async (op: number, payload: Uint8Array) => {
+    socket.receive(
+      new RoutedWriter("mlq1").time(++sequence).fixed(new Uint8Array([op]))
+        .blob(payload).bytes,
+    );
+    const reply = new RoutedReader(await socket.take(), "mls1");
+    assertEquals(reply.time(), sequence);
+    return reply.fixed(1)[0];
+  };
+  /** A fresh client statement and router evidence for `context` at `clock`. */
+  const admit = async (seed: number) => {
+    const challenge = new Uint8Array(32).fill(seed);
+    const statement = await routedStatementPayload({
+      principal: client.did(),
+      router: router.did(),
+      deployment: "fixture",
+      challenge,
+      iat: clock,
+      exp: clock + 3600,
+    }).sign(client);
+    const issuance = await new RoutedWriter("mrc1").text("fixture").text(
+      router.did(),
+    ).fixed(epoch).fixed(context).fixed(challenge).time(clock)
+      .time(clock + 60).sign(router);
+    const receipt = await new RoutedWriter("mrr1").fixed(sha256(issuance))
+      .text(client.did()).fixed(sha256(statement)).time(clock).sign(router);
+    const proof = new RoutedWriter("mrp1").blob(statement).blob(issuance)
+      .blob(receipt).bytes;
+    return await request(
+      6,
+      new RoutedWriter("mvp1").fixed(context).blob(flags).blob(proof).bytes,
+    );
+  };
+  try {
+    assertEquals(await admit(10), 0);
+    assertEquals(await request(3, context), 0);
+    // Within the longest lease a closed ID cannot reopen, even with a fresh
+    // statement: its earlier statements could still be presented.
+    clock += 3600;
+    assertEquals(await admit(11), 1);
+    // After the lease, challenge lifetime and skew it is forgotten.
+    clock += 60 + 120 + 1;
+    assertEquals(await admit(12), 0);
+  } finally {
+    host.close();
+    store.close();
+    Deno.removeSync(root, { recursive: true });
+  }
+});

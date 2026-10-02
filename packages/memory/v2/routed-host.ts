@@ -50,13 +50,17 @@ type Context = {
   socket?: WebSocket;
   closed: boolean;
 };
+const CLOSED_CONTEXT_RETENTION_SECONDS = 3600 + 60 + 120;
+/** Closed contexts remembered per link within the retention period. */
+const MAX_CLOSED_CONTEXTS = 65536;
 type Link = {
   router: string;
   epoch: Uint8Array;
   peer: string;
   socket: WebSocket;
   contexts: Map<string, Context>;
-  closedContexts: Set<string>;
+  /** Closed context IDs and when they closed, oldest first. */
+  closedContexts: Map<string, number>;
   sequence: number;
   closed: boolean;
 };
@@ -208,7 +212,7 @@ export class RoutedMemoryHost {
     if (context.closed) return;
     context.closed = true;
     this.#audit(link, context, "context-closed");
-    link.closedContexts.add(routedHex(context.id));
+    link.closedContexts.set(routedHex(context.id), this.#now());
     try {
       for (const principal of context.grants.keys()) {
         this.#options.epochs.release(
@@ -233,6 +237,22 @@ export class RoutedMemoryHost {
     for (const [id, ticket] of this.#tickets) {
       if (ticket.context === context) this.#tickets.delete(id);
     }
+  }
+
+  /**
+   * Whether a context ID may open on this link. A closed ID stays refused
+   * until every statement it could hold has expired: the longest lease plus
+   * challenge lifetime and clock skew. Without expiry, a link that outlives
+   * 4,096 client disconnects would refuse every new client.
+   */
+  #reopenable(link: Link, id: Uint8Array): boolean {
+    const now = this.#now();
+    for (const [key, closed] of link.closedContexts) {
+      if (closed + CLOSED_CONTEXT_RETENTION_SECONDS > now) break;
+      link.closedContexts.delete(key);
+    }
+    return !link.closedContexts.has(routedHex(id)) &&
+      link.closedContexts.size < MAX_CLOSED_CONTEXTS;
   }
 
   #closeLink(link: Link): void {
@@ -322,7 +342,7 @@ export class RoutedMemoryHost {
             peer,
             socket,
             contexts: new Map(),
-            closedContexts: new Set(),
+            closedContexts: new Map(),
             sequence: 0,
             closed: false,
           };
@@ -383,8 +403,7 @@ export class RoutedMemoryHost {
       const r = new RoutedReader(payload, "mat1");
       const id = r.fixed(16);
       requireRouted(
-        !link.closedContexts.has(routedHex(id)) &&
-          link.closedContexts.size < 4096,
+        this.#reopenable(link, id),
       );
       const flags = r.blob();
       const parsed = parseRoutedJson(
@@ -437,8 +456,7 @@ export class RoutedMemoryHost {
       const r = new RoutedReader(payload, "mvp1");
       const id = r.fixed(16);
       requireRouted(
-        !link.closedContexts.has(routedHex(id)) &&
-          link.closedContexts.size < 4096,
+        this.#reopenable(link, id),
       );
       const flags = r.blob();
       requireRouted(
