@@ -1500,7 +1500,7 @@ const setupProjectionSourceMatchesValue = (
 // redirect *source* of a setup-projection marker recorded in this transaction,
 // covering the field path. A redirect to any other cell — a binding staged into
 // an argument, or a result field naming the piece's argument or a cell the code
-// setting the piece up closed over — records a capture of its slot instead
+// setting the piece up closed over — records a binding of its slot instead
 // (`writeIsRuntimeInitialization`), which does not count here: the cell it
 // names belongs to whoever handed the piece the binding, and the setup
 // initializes none of it.
@@ -1616,13 +1616,20 @@ const writeIsRuntimeInitialization = (
   path: readonly string[],
   waived: "writeAuthorizedBy" | "uiContract",
 ): boolean => {
-  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+  const candidates = tx.getCfcState().writePolicyInputs.filter((input) =>
     input.kind === "initialization" && input.mode !== "replay" &&
     tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
     normalizeCellScope(input.target.scope) === target.scope &&
     concretePathHasPrefix(path, input.target.path)
   );
+  // A capture refuses a re-point that a binding of the same slot accepts, so
+  // where both cover the path the capture decides, whatever order the
+  // records sort in.
+  const input =
+    candidates.find((input) =>
+      input.kind === "initialization" && input.mode === "capture"
+    ) ?? candidates[0];
   if (input?.kind !== "initialization") return false;
   // A capture or a binding covers a link to a cell, redirect or not, and
   // nothing the cell holds. The slot is what it installs; a write through a
@@ -1824,8 +1831,8 @@ const pathHoldsUnattributedInitialization = (
         // A setup projection names the result field it projects and the
         // internal cell holding the field's value; both are the pattern's own
         // initialization (`writeIsPatternSetupInitialization`). A slot holding
-        // a binding the setup staged is a capture, whose integrity the
-        // staging mints none of (`pathHoldsStagedReference`).
+        // a binding the setup staged is an initialization of its own, whose
+        // integrity the staging mints none of (`pathHoldsStagedReference`).
         return input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
           [input.target, ...input.sources].some(covers);
       }

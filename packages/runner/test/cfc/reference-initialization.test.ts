@@ -508,6 +508,47 @@ describe("reference-initialization", () => {
         body: "a",
       });
     });
+
+    it("refuses a link to another cell staged over a field that holds one when a binding covers the field beside the capture", async () => {
+      // A binding accepts a slot its setup re-points; a capture does not.
+      // Where both cover one slot, the capture decides, so the write fails
+      // closed whichever record comes first.
+      const first = runtime.edit();
+      const created = runtime.getCell(space, "argument", argumentSchema, first);
+      created.set({ element: entryCell(first, "entry-a", "a") });
+      recordReferencedArgumentFields(
+        first,
+        created.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      runtime.prepareTxForCommit(first);
+      expect((await first.commit()).error).toBeUndefined();
+
+      for (const bindingFirst of [true, false]) {
+        const tx = runtime.edit();
+        const held = runtime.getCell(space, "argument", argumentSchema, tx);
+        held.key("element").set(entryCell(tx, "entry-b", "b"));
+        const argument = held.getAsNormalizedFullLink();
+        const recordBinding = () =>
+          tx.recordCfcWritePolicyInput({
+            kind: "initialization",
+            mode: "binding",
+            target: { ...argument, path: ["element"] },
+            value: held.key("element").getRaw(),
+          }, runtimeWritePolicyAuthorization);
+        if (bindingFirst) recordBinding();
+        recordReferencedArgumentFields(tx, argument, ["element"]);
+        if (!bindingFirst) recordBinding();
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+      }
+      expect(runtime.getCell(space, "argument").key("element").get()).toEqual({
+        body: "a",
+      });
+    });
   });
 
   describe("a captured binding staged as a write redirect", () => {
