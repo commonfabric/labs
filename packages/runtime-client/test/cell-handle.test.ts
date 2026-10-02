@@ -993,6 +993,50 @@ describe("cell-handle", () => {
       });
     }
 
+    it("sends and shows nothing for a write queued before a refusal that runs after it", async () => {
+      let release: () => void = () => {};
+      const requests: { type: RequestType }[] = [];
+      const runtime = {
+        [$conn]: () => ({
+          signal: new AbortController().signal,
+          request: (request: { type: RequestType }) => {
+            requests.push(request);
+            // The first write holds the queue until it is released.
+            return requests.length === 1
+              ? new Promise<unknown>((resolve) => (release = () => resolve({})))
+              : Promise.resolve({});
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+        }),
+      } as unknown as RuntimeClient;
+      const cell = new CellHandle<string[]>(runtime, ref);
+      const shown: unknown[] = [];
+      cell.subscribe((value) => {
+        shown.push(value);
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate](["shown before the seal"]);
+      const first = cell.setStrict(["first"]);
+      const queued = [
+        cell.pushStrict("appended"),
+        cell.setStrict(["replaced"]),
+      ];
+
+      cell[$onCellRefused](refusal);
+      const afterRefusal = shown.length;
+      release();
+      await first;
+
+      for (const write of queued) {
+        await expect(write).rejects.toThrow(CellReadRefusedError);
+      }
+      expect(requests).toEqual([
+        expect.objectContaining({ type: RequestType.CellSet }),
+      ]);
+      expect(shown.slice(afterRefusal)).toEqual([]);
+      expect(cell.refusal).toEqual(refusal);
+    });
+
     it("writes again once an admitted update ends the refusal", async () => {
       const { runtime, requests } = recording();
       const cell = new CellHandle<string>(runtime, ref);

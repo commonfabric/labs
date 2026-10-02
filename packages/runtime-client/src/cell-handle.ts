@@ -284,8 +284,14 @@ export class CellHandle<T = unknown> {
       this,
     ) as T;
     this.#writeGeneration++;
-    this.#publishValue(snapshot);
+    this.#publishWrite(snapshot);
     await this.#enqueueOperation(async (queue) => {
+      // A refusal that arrived while the write waited its turn stands.
+      const refusedSince = this.#writeRefusal();
+      if (refusedSince !== undefined) {
+        console.error("[CellHandle] Write failed:", refusedSince);
+        return;
+      }
       const updateGeneration = this.#updateGeneration;
       const authoritativeGeneration = queue.authoritativeGeneration;
       await this.#sendWrite(serialized);
@@ -315,6 +321,9 @@ export class CellHandle<T = unknown> {
     ) as T;
     const writeGeneration = this.#writeGeneration;
     await this.#enqueueOperation(async (queue) => {
+      // A refusal that arrived while the write waited its turn stands.
+      const refusedSince = this.#writeRefusal();
+      if (refusedSince !== undefined) throw refusedSince;
       const updateGeneration = this.#updateGeneration;
       const authoritativeGeneration = queue.authoritativeGeneration;
       await this.#sendStrictWrite(
@@ -485,15 +494,29 @@ export class CellHandle<T = unknown> {
         updateGeneration === this.#updateGeneration &&
         authoritativeGeneration === queue.authoritativeGeneration &&
         this.#value === before;
-      if (publish) this.#publishValue(value);
+      if (publish) this.#publishWrite(value);
       return publish;
     });
   }
 
+  /**
+   * Publishes `value`, which a write computed, unless a refusal stands: a
+   * refused handle shows nothing of its cell, and a write, which may have
+   * been computed from what the worker now refuses, never ends a refusal.
+   * Only an admitted read does ({@link #publishValue}).
+   */
+  #publishWrite(value: T): void {
+    if (this.#refusal !== undefined) return;
+    this.#publishValue(value);
+  }
+
+  /**
+   * Publishes `value` to every subscriber. An admitted read publishes what it
+   * found through here, which ends a refusal; a write goes through
+   * {@link #publishWrite}.
+   */
   #publishValue(value: T): void {
     this.#value = value;
-    // A write is published only while no refusal stands, and an
-    // initialization publishes what an admitted read found, which ends one.
     this.#refusal = undefined;
     for (const { onValue } of this.#callbacks.values()) {
       try {
@@ -641,6 +664,10 @@ export class CellHandle<T = unknown> {
     );
     const writeGeneration = ++this.#writeGeneration;
     const append = (queue: CellOperationQueue): Promise<void> => {
+      // A refusal that arrived while the append waited its turn stands, and
+      // what it would append to, the value from before it, is refused.
+      const refusedSince = this.#writeRefusal();
+      if (refusedSince !== undefined) return Promise.reject(refusedSince);
       const authoritativeGeneration = queue.authoritativeGeneration;
       const current = (queue.hasValue ? queue.value : fallback) as unknown[];
       if (!Array.isArray(current)) {
@@ -651,7 +678,7 @@ export class CellHandle<T = unknown> {
       queue.value = value;
       queue.hasValue = true;
       if (writeGeneration === this.#writeGeneration) {
-        this.#publishValue(value as unknown as T);
+        this.#publishWrite(value as unknown as T);
       }
       const rollback = () => {
         if (
@@ -664,7 +691,7 @@ export class CellHandle<T = unknown> {
           queue.hasValue = true;
           queue.value = current;
           if (writeGeneration === this.#writeGeneration) {
-            this.#publishValue(current as unknown as T);
+            this.#publishWrite(current as unknown as T);
           }
         }
       };

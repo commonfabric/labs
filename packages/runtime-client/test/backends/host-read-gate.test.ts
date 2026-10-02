@@ -144,9 +144,6 @@ async function shelf() {
     { token: CREDENTIAL, account: "owner account" },
     [[["token"], [cfcAtom.resource("CredentialSecret")]], [[], [ownerOnly]]],
   );
-  const openPath = runtime.getCell(space, "importer-open-path", {
-    asCell: ["stream"],
-  });
   const sidebar = await write("importer-sidebar", {
     type: "vnode",
     name: "div",
@@ -155,7 +152,7 @@ async function shelf() {
   }, [[[], [ownerOnly]]]);
   const exportsOf = {
     [NAME]: "Importer",
-    openPath: link(openPath),
+    openPath: { $stream: true },
     sidebarUI: link(sidebar),
   };
   const importer = await write("importer", {
@@ -178,6 +175,13 @@ async function shelf() {
     [[], [ownerOnly]],
     [["auth", "token"], [cfcAtom.resource("CredentialSecret")]],
   ]);
+  // A piece with no label of its own whose `note` field is labeled with the
+  // owner's space, and whose schema declares the same of `note`.
+  const spaceNote = await write(
+    "space-note",
+    { note: HOME_NAME },
+    [[["note"], [cfcAtom.space(space)]]],
+  );
   await runtime.idle();
 
   return {
@@ -187,6 +191,7 @@ async function shelf() {
     importer,
     inlineImporter,
     credentialPiece,
+    spaceNote,
     sealedEntry,
     piece,
     nestedPiece,
@@ -363,6 +368,32 @@ describe("HostReadGate", () => {
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
     });
 
+    it("returns a member a field labeled with their space, under a schema that declares the same, beside a node with no label of its own", async () => {
+      await using docs = await shelf();
+      const schema = {
+        type: "object",
+        properties: {
+          note: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.space(space)] },
+          },
+        },
+      } as const;
+      const gate = gateFor(docs.runtime, owner);
+      const { updates, cancel } = subscribe(
+        gate,
+        docs.spaceNote.asSchema(schema),
+      );
+      cancel();
+
+      expect(gate.read(docs.spaceNote.asSchema(schema))).toEqual({
+        value: { note: HOME_NAME },
+      });
+      expect(updates).toEqual([
+        expect.objectContaining({ value: { note: HOME_NAME } }),
+      ]);
+    });
+
     it("returns a visitor the whole of a piece anyone may see", async () => {
       await using docs = await shelf();
       const answer = gateFor(docs.runtime, visitor).read(
@@ -433,7 +464,12 @@ describe("HostReadGate", () => {
     // credential elsewhere in the piece does not refuse it.
     const openPathRead = {
       type: "object",
-      properties: { openPath: { asCell: ["stream"] } },
+      properties: {
+        openPath: {
+          type: "object",
+          properties: { $stream: { type: "boolean" } },
+        },
+      },
     } as const;
     const sidebarRead = {
       type: "object",
@@ -462,11 +498,7 @@ describe("HostReadGate", () => {
         const openPath = gate.read(docs[piece].asSchema(openPathRead));
         const sidebar = gate.read(docs[piece].asSchema(sidebarRead));
 
-        expect(openPath).toEqual({
-          value: {
-            openPath: expect.objectContaining({ "/": expect.anything() }),
-          },
-        });
+        expect(openPath).toEqual({ value: { openPath: { $stream: true } } });
         expect(sidebar).toEqual({
           value: { sidebarUI: expect.objectContaining({ name: "div" }) },
         });
@@ -497,6 +529,17 @@ describe("HostReadGate", () => {
       });
       expect("cfcLabelView" in (answer as { cell: object }).cell).toBe(false);
       expect(holds(answer, CREDENTIAL)).toBe(false);
+    });
+
+    it("answers both reads of a piece that exports neither with neither", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, visitor);
+
+      for (const schema of [openPathRead, sidebarRead]) {
+        expect(gate.read(docs.publicPiece.asSchema(schema))).toEqual({
+          value: {},
+        });
+      }
     });
 
     it("refuses a visitor the same reads of the owner's piece", async () => {

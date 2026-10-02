@@ -9,16 +9,12 @@ import {
   urlToAppView,
 } from "@commonfabric/navigation";
 import { type NameSchema, stringSchema } from "@commonfabric/runner/schemas";
-import {
-  type JSONSchema,
-  parseCellReference,
-} from "@commonfabric/runner/shared";
+import { parseCellReference } from "@commonfabric/runner/shared";
 import { slugIdForSpace, validateSlug } from "@commonfabric/runner/slugs";
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type Cancel,
   type CellHandleRead,
-  CellReadRefusedError,
   type ErrorReport,
   type FavoritePieceAddress,
   NAME,
@@ -31,6 +27,7 @@ import { property, state } from "lit/decorators.js";
 import { CellEventTarget, CellUpdateEvent } from "../lib/cell-event-target.ts";
 import { DebuggerController } from "../lib/debugger-controller.ts";
 import { GlobalShortcutsController } from "../lib/global-shortcuts-controller.ts";
+import { deliverOpenPath } from "../lib/open-path.ts";
 import {
   RuntimeInternals,
   type SlugReferenceRefusal,
@@ -38,15 +35,6 @@ import {
 } from "../lib/runtime.ts";
 import { BaseView, createDefaultAppState } from "./BaseView.ts";
 import type { LoadError } from "./BodyView.ts";
-
-/**
- * The read that asks whether a piece exports an `openPath` stream: the
- * piece's result, read for that field alone, as the stream's handle.
- */
-const OpenPathSchema = {
-  type: "object",
-  properties: { openPath: { asCell: ["stream"] } },
-} as const satisfies JSONSchema;
 
 /**
  * Which fields of a resolution the view's state depends on.
@@ -450,15 +438,12 @@ export class XAppView extends BaseView {
   /** Deliver a `?path=` deep link into the loaded piece, once.
    *
    * Opt-in by contract: the piece must export an `openPath` stream on its
-   * result (e.g. Mobile Loom opens the given cabinet path in its page
-   * viewer). Pieces without the stream are untouched — the field simply
-   * goes undelivered, as it does where the display ceiling keeps the field
-   * from the shell. The piece is asked for that field alone
-   * (`OpenPathSchema`), so the read is decided on what it reads, not on
-   * what else the piece holds. The link is claimed only once the answer is
-   * in, so a rerun that asked meanwhile, or a selection that moved on,
-   * sends nothing. Fire-and-forget; a failed send must never affect pattern
-   * loading. */
+   * result (`deliverOpenPath()`). A piece that exports none, or whose
+   * `openPath` is not a stream, is not written to, and nor is one whose field
+   * the display ceiling keeps from the shell. The link is claimed only once
+   * the answer is in, so a rerun that asked meanwhile, or a selection that
+   * moved on, sends nothing. Fire-and-forget; a failed send must never
+   * affect pattern loading. */
   #maybeDeliverOpenPath(
     pattern: PieceHandle<NameSchema>,
     signal: AbortSignal,
@@ -466,21 +451,11 @@ export class XAppView extends BaseView {
     if (this.#openPathDelivered) return;
     const view = this.app?.view;
     if (!view || !("openPath" in view) || !view.openPath) return;
-    const path = view.openPath;
-    const exports = pattern.cell().asSchema<{ openPath?: unknown }>(
-      OpenPathSchema,
-    );
-    exports.sync().then(
-      async (data) => {
-        if (data?.openPath === undefined) return;
-        if (signal.aborted || this.#openPathDelivered) return;
-        this.#openPathDelivered = true;
-        await exports.key("openPath").send({ path });
-      },
-      (error) => {
-        if (!(error instanceof CellReadRefusedError)) throw error;
-      },
-    ).catch((error) => {
+    deliverOpenPath(pattern.cell(), view.openPath, () => {
+      if (signal.aborted || this.#openPathDelivered) return false;
+      this.#openPathDelivered = true;
+      return true;
+    }).catch((error) => {
       console.error("[AppView] Failed to deliver the deep link:", error);
     });
   }

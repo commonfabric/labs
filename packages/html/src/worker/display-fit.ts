@@ -176,16 +176,19 @@ export function readRefusal(
  * at. A cell's label view holds an entry for each labeled path at or below
  * the cell, and folds what its ancestors' labels cover into the entries at
  * the node itself, so these are the labels of the node and of every
- * ancestor, and none of what lies below it.
+ * ancestor, and none of what lies below it. A view whose entries all lie
+ * below the node narrows to an empty one, not to none: the cell is labeled,
+ * at its fields, and what a read takes in of those is fitted as the read
+ * consumed it, not by the schema a cell with no label falls back to.
  */
 function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
   if (source.view === undefined) return source;
-  const entries = source.view.entries.filter((entry) =>
-    entry.path.length === 0
-  );
   return {
     ...source,
-    view: entries.length === 0 ? undefined : { ...source.view, entries },
+    view: {
+      ...source.view,
+      entries: source.view.entries.filter((entry) => entry.path.length === 0),
+    },
   };
 }
 
