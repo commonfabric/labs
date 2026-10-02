@@ -10,6 +10,7 @@ import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
 import { bindCurrentPrincipalConfidentiality } from "../src/cfc/current-principal-confidentiality.ts";
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
@@ -915,6 +916,96 @@ describe("cfc-current-principal-confidentiality", () => {
         expect(itemLabel).not.toContainEqual(
           cfcAtom.user(ownerIdentity.did()),
         );
+      });
+    });
+
+    describe("a document that already existed", () => {
+      // The visitor writes a document that existed before the transaction,
+      // holding no labels, and links it into the owner's list. It is not a new
+      // document, so its declaration binds to the visitor and not to the
+      // list's owner.
+
+      const linkExistingNote = async (
+        owner: Runtime,
+        visitor: Runtime,
+        stage: (address: Omit<IMemorySpaceAddress, "path">) => Promise<void>,
+        { alsoCreateForUser = false } = {},
+      ) => {
+        const link = await createList(owner, privateNotes, []);
+        const note = visitor.getCell<Note>(ownerIdentity.did(), "existing");
+        const noteLink = note.getAsNormalizedFullLink();
+        await stage({
+          space: noteLink.space,
+          id: noteLink.id,
+          scope: "space",
+          type: "application/json",
+        });
+        const append = visitor.edit();
+        const existing = visitor.getCellFromLink<Note>(
+          noteLink,
+          privateNotes.items,
+          append,
+        );
+        existing.set({ note: "Piranesi" });
+        if (alsoCreateForUser) {
+          const forUser = visitor.getCell<Note>(
+            ownerIdentity.did(),
+            "existing",
+            undefined,
+            append,
+            "user",
+          );
+          expect(forUser.getAsNormalizedFullLink().id).toBe(noteLink.id);
+          forUser.set({ note: "Halls" });
+        }
+        visitor.getCellFromLink<Note[]>(link, privateNotes, append).push(
+          existing,
+        );
+        expect((await append.commit()).error).toBeUndefined();
+        return storedConfidentialityAt(visitor, noteLink, []);
+      };
+
+      it("binds a document stored as present but `undefined` to its writer", async () => {
+        await withOwnerAndVisitor(async (owner, visitor) => {
+          const noteLabel = await linkExistingNote(
+            owner,
+            visitor,
+            async (address) => {
+              const seed = visitor.edit();
+              seed.writeOrThrow({ ...address, path: ["value"] }, undefined);
+              expect((await seed.commit()).error).toBeUndefined();
+            },
+          );
+          expect(noteLabel).toContainEqual(
+            cfcAtom.user(visitorIdentity.did()),
+          );
+          expect(noteLabel).not.toContainEqual(
+            cfcAtom.user(ownerIdentity.did()),
+          );
+        });
+      });
+
+      it("binds a document to its writer when the transaction creates one of the same id in another scope", async () => {
+        await withOwnerAndVisitor(async (owner, visitor) => {
+          const noteLabel = await linkExistingNote(
+            owner,
+            visitor,
+            async (address) => {
+              const seed = visitor.edit();
+              seed.writeOrThrow({ ...address, path: ["value"] }, {
+                note: "Solaris",
+              });
+              expect((await seed.commit()).error).toBeUndefined();
+            },
+            { alsoCreateForUser: true },
+          );
+          expect(noteLabel).toContainEqual(
+            cfcAtom.user(visitorIdentity.did()),
+          );
+          expect(noteLabel).not.toContainEqual(
+            cfcAtom.user(ownerIdentity.did()),
+          );
+        });
       });
     });
 

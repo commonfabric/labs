@@ -84,10 +84,13 @@ The value is as trustworthy as the runtime that runs the handler.
 
 ## Its relation to the `CurrentPrincipal` label subject
 
-The `CurrentPrincipal` placeholder in a label — what `AuthoredByCurrentUser`
-and `RepresentsCurrentUser` lower to, and what `ownerPrincipal` may name —
-resolves when the write is prepared, to the `actingPrincipal` of the
-transaction's trust snapshot. Where the handler has an actor and that snapshot
+The `CurrentPrincipal` placeholder in a principal claim — what
+`AuthoredByCurrentUser` and `RepresentsCurrentUser` lower to, and what
+`ownerPrincipal` may name — resolves when the write is prepared, to the
+`actingPrincipal` of the transaction's trust snapshot. A `User` reader named
+`CurrentPrincipal` resolves by its own rule, which
+[the next section](#a-reader-named-currentprincipal) gives, and is not one of
+the places below. Where the handler has an actor and that snapshot
 names the identity the runtime authenticates as, which is the default when no
 host supplies a snapshot of its own, the two agree: a label the same handler
 writes names the principal `currentPrincipal()` returned.
@@ -115,8 +118,9 @@ exists, and on where a new one is created.
 - **A store already holding labels** keeps the readers it stores. A writer
   presenting the same symbolic declaration does not become a reader of it.
 - **A document created beneath a stored parent** takes the parent's readers.
-  When a transaction creates a document and links it into a document that
-  existed before the transaction, the placeholder binds to the concrete `User`
+  When a transaction creates a document, writing it where nothing stood before
+  in its scope, and links it into a document that existed before the
+  transaction, the placeholder binds to the concrete `User`
   readers the parent's declared policy names at the position the link lands
   on. An item a second principal appends to an owner-private list is that
   case: the item becomes a document of its own, and it is bound to the list's
@@ -179,9 +183,11 @@ against claims naming someone other than the acting principal.
 `packages/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
 reader binding, under "a document created under a labeled parent": an item
 another principal appends to an owner-private list, a document nested in it,
-the owner's own append, a list whose policy names no `User` reader, and an
-existing store another principal writes.
+the owner's own append, a list whose policy names no `User` reader, an
+existing document linked into the list, both one stored as present but
+`undefined` and one whose id the transaction also creates in another scope,
+and an existing store another principal writes.
 `packages/patterns/integration/owner-private-inbox-multi-runtime.test.ts`
 drives the same append through compiled patterns in separate runtimes, under
-either server-execution posture, and refuses a stranger's served copy of the
-appended items.
+either server-execution posture. With server execution on, it also refuses a
+stranger's served copy of the appended items.

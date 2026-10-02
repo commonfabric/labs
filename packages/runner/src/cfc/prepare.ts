@@ -7730,8 +7730,10 @@ const linkDocument = (address: LinkWritePolicyInput["source"]) => ({
 });
 
 /**
- * The ids of the documents this transaction created in `space`, by writing
- * each at or directly beneath its root where no value stood before.
+ * The documents this transaction created in `space`, by their `targetKey()`:
+ * each it wrote at or directly beneath its root where the slot was known to be
+ * absent before. A slot whose earlier presence the transaction cannot tell,
+ * or one present and holding `undefined`, is not a creation.
  */
 const documentsCreatedIn = (
   tx: IExtendedStorageTransaction,
@@ -7739,10 +7741,12 @@ const documentsCreatedIn = (
 ): Set<string> => {
   const created = new Set<string>();
   for (const detail of tx.getWriteDetails?.(space) ?? []) {
-    if (
-      detail.address.path.length <= 1 && detail.previousValue === undefined
-    ) {
-      created.add(detail.address.id);
+    if (detail.address.path.length <= 1 && detail.previousPresent === false) {
+      created.add(targetKey({
+        space,
+        id: detail.address.id,
+        scope: normalizeCellScope(detail.address.scope),
+      }));
     }
   }
   return created;
@@ -7751,8 +7755,8 @@ const documentsCreatedIn = (
 /** Whether this transaction created the document `address` names. */
 const createdInTransaction = (
   tx: IExtendedStorageTransaction,
-  address: { space: MemorySpace; id: string },
-): boolean => documentsCreatedIn(tx, address.space).has(address.id);
+  address: LinkWritePolicyInput["source"],
+): boolean => documentsCreatedIn(tx, address.space).has(targetKey(address));
 
 /**
  * Whether `entry` is store policy a value read consumes: a declared or legacy
@@ -7810,7 +7814,7 @@ const creatorBinding = (
       ids = documentsCreatedIn(tx, address.space);
       created.set(address.space, ids);
     }
-    return ids.has(address.id) && envelopeOf(address).status === "none";
+    return ids.has(targetKey(address)) && envelopeOf(address).status === "none";
   };
   // Each new document's placements: the new documents it sits beneath, and
   // the stored policy it finds beneath each stored parent.
