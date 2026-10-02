@@ -811,16 +811,18 @@ export class CellHandle<T = unknown> {
       updateGeneration === this.#updateGeneration &&
       authoritative;
     if ("refused" in read) {
-      if (latest) {
-        this.#value = undefined;
-        this.#cfcLabel = undefined;
-        this.#refusal = read.refused;
-      }
+      // Subscribers hear it, as they hear a refused update.
+      if (latest) this.#refuse(read.refused);
       throw new CellReadRefusedError(read.refused);
     }
     if (latest) {
-      this.#value = read.value as T | undefined;
-      this.#refusal = undefined;
+      if (this.#refusal === undefined) {
+        this.#value = read.value as T | undefined;
+      } else {
+        // A read that ends a refusal is news to the subscribers that heard
+        // it, so they hear the value it found.
+        this.#publishValue(read.value as T);
+      }
     }
     return read.value;
   }

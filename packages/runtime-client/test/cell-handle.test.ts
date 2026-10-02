@@ -949,6 +949,39 @@ describe("cell-handle", () => {
       });
     }
 
+    for (const read of ["sync", "pull"] as const) {
+      it(`tells its subscribers of a refused \`${read}()\`, as \`initialize()\` does`, async () => {
+        const cell = new CellHandle<string>(
+          makeRuntime({ refused: refusal }),
+          ref,
+        );
+        const refusals: unknown[] = [];
+        cell.subscribe(() => {}, {
+          onRefused: (heard) => refusals.push(heard),
+        });
+
+        await expect(cell[read]()).rejects.toThrow(CellReadRefusedError);
+
+        expect(refusals).toEqual([refusal]);
+      });
+
+      it(`hands its subscribers the value an admitted \`${read}()\` ends a refusal with`, async () => {
+        const cell = new CellHandle<string>(
+          makeRuntime({ value: "admitted" }),
+          ref,
+        );
+        const values: Array<string | undefined> = [];
+        cell.subscribe((value) => {
+          values.push(value);
+        }, { onRefused: () => {} });
+        cell[$onCellRefused](refusal);
+
+        await cell[read]();
+
+        expect(values.at(-1)).toBe("admitted");
+      });
+    }
+
     it("holds a value again after an admitted `sync()`", async () => {
       const cell = new CellHandle<string>(
         makeRuntime({ value: "admitted" }),
