@@ -17,7 +17,7 @@ import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
@@ -358,7 +358,6 @@ export function aggregate(
             },
           );
           setResultCell(entry.resultCell.withTx(tx), parent);
-          setPatternCell(entry.resultCell.withTx(tx), parent.key("pattern"));
           rollback.setupIssued(entry);
         }
         return entry.resultCell;

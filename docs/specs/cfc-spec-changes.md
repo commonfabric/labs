@@ -926,10 +926,11 @@ this file is the single tracking place:
 - Schema-sanitization / contamination scoping promotion from ch. 14 to
   normative (audit 3.12). Not re-verified.
 - ~~`/value` envelope-prefix wire-format decision (audit Wave 4 #28)~~ —
-  **verified: decided by the spec.** §4.6.4/§4.6.5 normatively require the
-  `/value` envelope prefix for persisted payload labels and value-relative
-  normalization before IFC matching. Remaining work is **implementation
-  conformance** (or documenting equivalence), not a decision.
+  **decided (owner, 2026-09-30): value-relative entries stay, and §4.6.4
+  changes to match (SC-55).** The remaining work is **implementation
+  conformance** with §4.6.5: the runner converts a document path outside
+  `value`, such as `["source"]`, to the payload path of the same name, and
+  matches it against payload labels.
 
 ## Also noted by the sweep (not previously tracked)
 
@@ -1615,3 +1616,79 @@ a separate intent atom (the registered and unminted `UserSurfaceInput`) as
 what a reader would consult for a gesture. Implemented in
 `packages/runner/src/cfc/prepare.ts` (`currentPrincipalIntegrityReason`);
 described in [`current-principal.md`](../features/current-principal.md).
+
+## From the display ceiling's prompt-caveat family (2026-10-01)
+
+**SC-54 [normative] The default display ceiling admits the prompt-caveat
+family — §8.10.6, §10.1.** `open`. §8.10.6 admits caveat kinds from a
+deployment's allow-list that "SHOULD start from the influence-class caveat
+kinds" and keeps material-risk kinds "subject to their ordinary discharge
+evidence", so a value carrying `prompt-injection-risk-unscreened` could not
+be shown even to its own owner until a screener had run. Since the renderer
+began deciding text children on the labels their read consumed (#8264), that
+reading withholds every unscreened imported message body from its owner. The
+CFC spec owner ruled on 2026-10-01 that a prompt caveat says only that the
+content must not be trusted as instructions to a model, so it has nothing to
+do with a display, and that the ceiling should admit the whole family rather
+than a list of kinds. Proposed edit: §8.10.6 admits every prompt-caveat kind
+§10.1 lists (the screening-gradient tiers and `prompt-influence`) by family,
+keeps an enumerated, deployment-declared allow-list for other caveat kinds,
+and says admission is not discharge: the caveat stays on the value. That
+alone makes no other sink refuse it: labs' llm sinks are ungated today
+([llm-sink admission](../plans/cfc-llm-sink-admission.md)), so until this
+change the display ceiling was where the unscreened caveat changed an
+outcome. This entry is the new release judgment §8.10.6's tighten-only bullet
+requires for admitting a caveat kind.
+§10.1 gains a line saying a display boundary admits the family, which leaves
+its `InjectionSafe` requirement for discharge untouched. A channel that reads
+rendered output back into a model (a screenshot, an accessibility tree, the
+page's text) is a model sink and a new boundary context (§8.10.5.2), not a
+display. Implemented in `packages/runner/src/cfc/prompt-caveat-kinds.ts`
+(`PROMPT_CAVEAT_FAMILY_KINDS`), which `defaultRenderConfidentialityCeiling` in
+`packages/lib-shell/src/runtime.ts` admits: the family expands into the
+ceiling's enumerated `caveatKinds` from that one constant, so the wire carries
+kinds, not a family token. Labs admits the screening-gradient tiers and
+`prompt-influence` in both spellings, and not the unsuffixed
+`prompt-injection-risk` form §10.1 still lists as legacy, which labs retired
+(#5661); the spec edit should say whether §10.1 retires it too.
+
+What the change exposes, for the spec edit and as follow-up work:
+
+- **URL-loading render is network egress, not display.** An `<img src>`, a
+  markdown image (`cf-markdown` loads any http(s) image URL) or a link preview
+  that fetches its `url` makes a request when it renders. Model output that
+  read injected text and the owner's data carries both labels; once the
+  display admits the caveat, such output can put the owner's data in a URL a
+  render fetches. Those props need gating as network sinks, at the
+  public-only ceiling the fetch sinks already use, rather than admission as
+  display.
+- **Rendered output read back into a model is a model sink.** cf-harness's
+  `browser` tool returns a page's snapshot and text into an agent's context
+  with no label check; a page in the shell can now show it unscreened text.
+- **A clause of alternatives fails closed.** The allow-list admits a single
+  caveat atom, so a clause holding a tier upgrade's alternatives (unscreened
+  or ingress-screened) is refused. Nothing stores that shape today.
+
+## From the value-field path fix (2026-09-30)
+
+A document keeps its payload under `value`, and its other top-level members,
+such as `cfc` and `source`, are envelope metadata. The runner persists a label
+map whose entry paths are relative to `value`: an entry at `["error", "code"]`
+labels what §4.6.4 spells `/value/error/code`, and an entry at the empty path
+labels the payload root. No entry can name an envelope member.
+
+**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `open`.
+§4.6.4 requires persisted payload labels under an explicit `/value` prefix and
+allows an equivalent internal layout. The runner's map is such a layout, and it
+spares the common case, a payload label, from spelling `value` (owner decision
+2026-09-30: keep the layout, and change the spec to match). Proposed edit:
+state that a persisted entry's path is relative to `value`, so the empty path
+is the payload root, and drop the `/value` prefix requirement together with the
+migration note that reads a legacy `/` entry as `/value`. A label on an
+envelope member, the envelope root included, would be an entry with an
+optional `root: "document"`, whose path is then relative to the document; an
+entry without `root` labels the payload. A reader of today's label-map
+version reads an entry's `path` and `label` and ignores any other member, so
+it would take a `root` entry for a payload label. The first such entry
+therefore needs a new label-map version, which today's readers refuse. §4.6.5
+is unchanged: an envelope member's path is never matched as a payload path.

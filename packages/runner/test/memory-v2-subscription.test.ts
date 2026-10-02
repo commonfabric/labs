@@ -104,7 +104,7 @@ const staleReadSource = (uri: URI, seq: number) => ({
       space,
       id: uri,
       type: "application/json",
-      path: [],
+      path: toDocumentPath([]),
       meta: { seq },
     }];
   },

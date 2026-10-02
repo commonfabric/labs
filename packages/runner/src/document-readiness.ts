@@ -1,5 +1,7 @@
 /** Confirms document availability for runtime-owned reactive actions. */
 
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+
 import { type Cell, syncCellForIdentity } from "./cell.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Action } from "./scheduler.ts";
@@ -13,9 +15,13 @@ import type {
 /** A runtime read whose backing document is still loading. */
 export class DocumentPending extends Error {}
 
-/** A document confirmation's pending, completed, or failed outcome. */
+/**
+ * A document confirmation's pending, completed, or failed outcome. A pending
+ * one holds the scope identity of each read waiting on it, `undefined` for a
+ * read that carries none.
+ */
 type Confirmation =
-  | { status: "pending" }
+  | { status: "pending"; waiters: Set<ScopeKeyIdentity | undefined> }
   | { status: "confirmed" }
   | { status: "failed"; error: Error };
 
@@ -23,6 +29,8 @@ type Confirmation =
  * Holds missing-document reads until synchronization establishes presence or
  * absence. Completion re-arms the registered action even when storage writes
  * nothing; cancellation and replica reset retire outstanding confirmations.
+ * On a fanned-out action, completion re-arms only the instances whose reads
+ * waited on the document, so their siblings stay current.
  */
 export function createDocumentReadiness(
   runtime: Runtime,
@@ -108,12 +116,16 @@ export function createDocumentReadiness(
       const prior = confirmations.get(key);
       if (prior?.status === "confirmed") return false;
       if (prior?.status === "failed") throw prior.error;
+      if (prior?.status === "pending") prior.waiters.add(identity);
       if (prior === undefined) {
         if (!subscribed) {
           runtime.storageManager.subscribe(subscription);
           subscribed = true;
         }
-        const confirmation: Confirmation = { status: "pending" };
+        const confirmation: Confirmation = {
+          status: "pending",
+          waiters: new Set([identity]),
+        };
         confirmations.set(key, confirmation);
         const root = runtime.getCellFromLink({
           ...link,
@@ -124,7 +136,17 @@ export function createDocumentReadiness(
           if (!active || confirmations.get(key) !== confirmation) return;
           confirmations.set(key, next);
           if (action) {
-            runtime.scheduler.invalidateAction(action, { retry: true });
+            // A waiter with no scope identity read as the whole action, so
+            // every instance runs again.
+            const instances = [...confirmation.waiters].filter((
+              waiter,
+            ): waiter is ScopeKeyIdentity => waiter !== undefined);
+            runtime.scheduler.invalidateAction(action, {
+              retry: true,
+              ...(instances.length === confirmation.waiters.size
+                ? { instances }
+                : {}),
+            });
           }
         };
         // syncCell registers its pending load before yielding, but can fulfill

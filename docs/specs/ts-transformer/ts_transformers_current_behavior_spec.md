@@ -668,6 +668,51 @@ Diagnostics emitted in all modes:
     `wish(...)`, or reactive collection aliases and their property accesses
   - message instructs the author to move the use into a nested
     `computed(() => ...)` or module-scope `lift()`
+- **Error** `pattern-context:self-access`
+  - enforces the target-language matrix row "`x[SELF]` inside an explicit
+    computation callback, inside a reactive collection callback, or on anything
+    but the pattern's own input parameter" (Unsupported)
+  - an element access keyed by `SELF` (`x[SELF]`) inside a compute callback —
+    `computed(...)`, `action(...)`, `lift(...)`, a `handler(...)` body, an
+    inline JSX event handler — or inside a reactive collection callback such as
+    `items.map((item) => ...)`
+  - in pattern context, an `x[SELF]` whose receiver is not the pattern's input
+    parameter: a value read off the input (`input.sub[SELF]`), another
+    pattern's result (`child[SELF]`), or a local bound to `input[SELF]`
+    (`self[SELF]`). The input parameter is the first parameter, bound to a
+    plain name and not a rest parameter, of a `pattern(...)` callback or of a
+    standalone function definition. The receiver must be that parameter
+    itself: a local holding the input (`const i = input; i[SELF]`) is not
+    followed back to it, and the message says so rather than calling the read
+    `undefined`
+  - in pattern context, a well-known key other than `SELF` (`NAME`, `UI`,
+    `FS`) read through `input[SELF]` on the input parameter, as in
+    `input[SELF][NAME]`: the data-flow analyzer
+    counts only `SELF` among those keys as static, so the read is lifted and
+    is `undefined` against the plain value the lift sees. The message suggests
+    `const me = input[SELF]` and reading the key off `me`, which lowers in
+    place
+  - `SELF` names the pattern's own result only on the reactive proxy a
+    `pattern(...)` body receives as its input. A compute callback sees plain
+    values, a reactive collection callback sees a captured reference to the
+    input, and a value read off the input is not the input, so `[SELF]` on any
+    of them is `undefined` at runtime, and the link it would make names a cell
+    that never holds a value
+  - not reported: a receiver built from an object literal (`{ [SELF]: 1 }`,
+    or a name a `const` declaration initializes with one; a `let` or `var`
+    could hold anything by the time it is read), which holds whatever keys it
+    was given; anything in a standalone function definition, which is ordinary
+    code over whatever it is handed, and which a `pattern(...)` callback held
+    in a `const` also is; and `input[SELF]` read directly in the pattern body,
+    in its JSX, in a plain array callback, or bound into a handler's state
+    (`poke({ room: input[SELF] })`), which the matrix row for `input[SELF]`
+    makes Supported (§9.7)
+  - the message names the access. Inside a callback it instructs the author to
+    read `const self = input[SELF]` in the pattern body, or destructure
+    `[SELF]: self` in the pattern's parameter, and capture `self`, or hand it
+    to the handler as state; on another receiver it instructs the author to
+    read `input[SELF]` first and the rest of the path off it
+  - `test/pattern-input-self.test.ts`
 - **Error** `pattern-context:optional-chaining`
   - optional property / element access that appears outside a supported
     lowerable expression site — including inside a lowered array-method
@@ -767,16 +812,35 @@ structurally representable.
   expressions
 - direct top-level `any` / `unknown` result inference emits
   `pattern:any-result-schema`
-- individual inferred-result **fields** whose type is `unknown` emit **Error**
-  `pattern-result:unknown-type`, naming the offending paths — the schema would
+- individual inferred-result **fields** whose type is `unknown`, at any depth of
+  object types, array elements, tuple elements, `readonly` types, and the
+  members of a union, emit **Error** `pattern-result:unknown-type`, naming the
+  offending paths (`a.b`, `items[]`, `pair[0]`, and `pair[1...]` for a tuple's
+  rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
-  (`schema-injection.ts:2621`)
+  (`reportUnknownPatternResult()` in `schema-injection.ts`)
 - authors who intentionally want a permissive/opaque output boundary must make
   it explicit with `pattern<Input, Output>(...)`
 
 This inference runs through `collectFunctionSchemaTypeNodes` via
-`inferReturnType`, object-literal recovery, and direct projection recovery.
+`inferReturnType`, object-literal recovery, and direct projection recovery. The
+inferred return type is printed under the flags §10.1 names, so a result type
+holding `[]` anywhere is printed whole. A result type the checker prints no node
+for, such as the instance type of an anonymous class expression, and that no
+recovery reads, stands as an `unknown` placeholder recorded as printed from it,
+as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
+as that type (§12). Both checks above read such a placeholder by its type:
+whether the type is `any` or `unknown`, and which of its fields are `unknown`.
+The field walk descends each object type with no name, each instance of a class
+expression with no name, each array element, each tuple element, and each
+member of a union, as the node walk descends a printed type literal, array,
+tuple, union, and `readonly` operand. It skips a member schema generation leaves
+out of an object's schema, a symbol-keyed member or a cell's internal marker
+(`isInternalMemberName()` in the schema generator), since no consumer receives
+it as a field. It stops at a type it is already inside, since a type with no
+name can hold itself through `typeof`, and walks a type reached again by
+another path under that path.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1546,17 +1610,32 @@ Result shape:
   lift-applied wrappers where needed
 - a spread of a capture, in the callback body outside any function nested in
   it, is written out as the properties it copies when the capture is a `const`
-  declared outside module scope and initialized with an object literal whose
-  properties all have static keys (identifiers or string literals; no spread,
-  method, accessor, or computed key). A `__proto__:` assignment sets the
-  prototype and contributes no key; the shorthand `{ __proto__ }` makes an own
-  property and is written back as `["__proto__"]`:
+  declared outside module scope whose keys are known where it is declared
+  (`staticKeysOfInitializer`): an object literal whose properties all have
+  static keys (identifiers, string literals, or numeric literals, a numeric
+  one read under its decimal name; no method, accessor, or computed key), a
+  spread inside that literal of another such object, or a `const` that names
+  one, at any depth, an object two spreads share being read each time. The
+  operand is read through any parentheses, `as`, `satisfies`, or `!` around
+  it. A `__proto__:` assignment
+  sets the prototype and contributes no key; the shorthand `{ __proto__ }`
+  makes an own property and is written back as `["__proto__"]`:
   `{ ...records, id: item.id }` ->
   `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
   callback reads a capture as an opaque reference, which has no keys to spread;
   those keys are exactly what the spread copies where `records` is declared
   (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
-  `closures/map-captured-object-spread.expected.jsx`)
+  `closures/map-captured-object-spread.expected.jsx`). A spread of any other
+  capture — a `const` initialized by a function call, a literal with a
+  computed key — is left as written and reported as an error,
+  `pattern-context:computation`: "Spread of the captured value `records`
+  copies nothing…" (`reportUnexpandedSpread`). The report is made once per
+  spread: the pattern-context check of §9.7 reports the same spread when the
+  capture is a tracked opaque value, and both go through `reportSpreadError`
+  (`reportDiagnosticOnce`), where the earlier report stands. Only spread
+  reports share that key, so two different computation errors on one node, a
+  non-static default and a rest element of one parameter say, are each made
+  (`test/closures/captured-object-spread.test.ts`)
 
 ### 9.5 Lift-applied strategy
 
@@ -1640,6 +1719,34 @@ Primary behaviors:
   nested blocks) also receive `.key(...)` lowering
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
+- reads `input[SELF]` in place, as the destructured `[SELF]: self` binding is
+  read: the data-flow analyzer counts a `SELF` element key as static on any
+  receiver (`isSelfElementAccess` in `src/ast/dataflow.ts`), so the access is
+  not lifted. Outside a standalone function definition, validation has
+  already rejected every receiver but the pattern's input parameter (§6.5). A
+  `pattern(...)` callback held in a `const` is read as a standalone
+  definition, so there an `x[SELF]` on another receiver is not reported, and
+  lowers as written.
+  Every lowering that reads a path off a reactive value builds the read with
+  one helper, `createPathRead()` in
+  `src/transformers/destructuring-lowering.ts`: the pattern-body lowering,
+  the destructuring prologue, and the receiver of a lowered collection method.
+  It emits `input[__cfHelpers.SELF]` for a leading `SELF` segment and keys the
+  rest of the path off it, so `input[SELF].title` becomes
+  `input[__cfHelpers.SELF].key("title")` and `input[SELF].items.map(fn)`
+  becomes `input[__cfHelpers.SELF].key("items").mapWithPattern(...)`. A
+  `SELF` segment in any other position is keyed like any other segment, which
+  only a program §6.5 has rejected can reach. `const self = input[SELF]` and
+  `const { [SELF]: self } = input` in the body both lower to
+  `const self = input[__cfHelpers.SELF]`. A computation over the read, such as
+  `input[SELF].title + "!"`, lifts with the keyed read as its capture; a
+  receiver-method call over it, such as `input[SELF].title.toUpperCase()`,
+  lifts with the authored `input[SELF].title` as its capture, read off the
+  reactive input when the lift is applied (golden
+  `closures/pattern-input-self-index`). Other well-known keys (`UI`, `NAME`,
+  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` would lift
+  and read `undefined`; §6.5 reports it instead, and a local bound to
+  `input[SELF]`, or a destructured `[SELF]: self`, reads `[NAME]` in place
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for
@@ -1686,6 +1793,16 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - otherwise infers from signatures/contextual types
 - `_param` convention implies `never` schema for that parameter
 - failed inference falls back to `unknown`
+- every print of a type as a type node allows the empty tuple, without which
+  the checker prints nothing at all for a type holding `[]` anywhere, so an
+  inferred result holding an alias given `readonly []` reads as its
+  instantiation. The shared flag set is `TYPE_NODE_FLAGS`
+  (`src/ast/type-inference.ts`); `DEFAULT_TYPE_NODE_FLAGS` adds
+  `UseAliasDefinedOutsideCurrentScope` to it for an annotation printed into
+  the output, and `typeToTypeNodeWithRegistry()` adds `AllowEmptyTuple` to
+  whatever flags its caller passes. `test/type-node-print-flags.test.ts`
+  checks that every raw `checker.typeToTypeNode()` call in the package names
+  `AllowEmptyTuple` or one of the two sets
 - `typeRegistry` is consulted first for synthetic nodes/types
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
@@ -1760,6 +1877,9 @@ If schemas are not already present via type args:
   recovery (`x => x.foo`, `x => x["foo"]`)
 - direct projection recovery can reuse result types recovered from local
   `lift(...)` initializer aliases registered in `typeRegistry`
+- a result type the checker prints no node for, and that no recovery reads, is
+  carried as an `unknown` placeholder recorded as printed from it, so the
+  result schema is generated from the type (§6.6)
 - unresolved generic helper-definition-site type parameters degrade to
   `{ type: "unknown" }` when schemas are injected from explicit builder type
   arguments
@@ -1865,6 +1985,17 @@ adjustments:
   are retained the original TypeReference is kept for schema fidelity.
 - pattern boundaries apply defaults-only mode to preserve broad shape continuity
   while still applying extracted static defaults
+- on the input parameter of a `pattern(...)` callback, capability analysis
+  records nothing for a use under `SELF`: no path, and no flag such a path
+  would set, so a `SELF` read leaves an otherwise identity-only input
+  identity-only. `input[SELF]` there names the pattern's own result, not any
+  of the input's data, so it asks nothing of the input schema and draws no
+  `schema:path-not-in-type` error. The analysis is told which function is a
+  pattern callback (the `patternCallback` option), and pattern-callback
+  lowering sets it for every callback it lowers, whether the `pattern(...)`
+  call holds the callback inline or names it through a `const`. On any other
+  function's parameter, `x[SELF]` is recorded as the path `$SELF`
+  (`test/policy/capability-analysis.test.ts`, `test/pattern-input-self.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
@@ -2520,6 +2651,20 @@ Special path:
   pinned by `test/cfc-authoring.test.ts`,
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
+- Authored writer identities also survive plain generic interfaces and object
+  aliases, forwarded aliases, inherited members, index signatures, and `Record`
+  value arguments, in both pattern input and explicit output schemas. A whole
+  `WriteAuthorizedBy` can be passed as a type argument, or a member can apply it
+  to a writer parameter supplied as a direct `typeof` query. Defaults read under
+  preceding parameters. Recursive `$defs` preserve the declaration identity of
+  each writer even when two handlers have identical types. Unread authored
+  bindings remain fatal; secondary type-only reads retain the exemption
+  described in §6.8. An indexed access or conditional generic member whose
+  instantiated carrier retains a writer policy but loses its binding syntax
+  also reports `cfc-write-authorized-by:unread`, including on stored-source
+  compilation. Pinned by `test/generic-writer-policy.test.ts` and
+  `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
+  mapping spec §11 describes the binding rules.
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 
@@ -3098,11 +3243,29 @@ encloses the original expression, wrappers included:
     `void`, and unions/intersections thereof (`isPrimitiveSnapshotCall`,
     `isPrimitiveLikeType`);
   - any call whose callee is a property access (`receiver.method(...)`).
-- **`new` expressions.** Only `new Map(...)` and `new Set(...)`
-  (`CF_DATA_CONSTRUCTOR_NAMES`). Notably `new Proxy(...)` is left unwrapped —
-  "Proxy snapshots stay unsupported until Proxy is re-enabled in SES
-  compartments" (`test/transform.test.ts`, "wraps top-level data candidates
-  with __cfHelpers.__cf_data").
+- **`new` expressions.** `new Map(...)` and `new Set(...)`
+  (`CF_DATA_CONSTRUCTOR_NAMES`, by name), and a construction of a
+  `FabricPrimitive` such as `new FabricDurationNsec(600n)`, which the runtime
+  freezer keeps as it is (`SES_SANDBOXING_SPEC.md` §4.2.3). The class has to
+  be one `commonfabric` declares — under any import name, as a namespace
+  member (`cf.FabricDurationNsec`), or through a `const` bound to a bare
+  reference to one (`constructorNamedBy`, `isCommonFabricSymbol`) — and its
+  instance type has to carry the
+  `FabricPrimitive` brand (`constructsFabricPrimitive`;
+  `declaresFabricPrimitiveBrand` from
+  `@commonfabric/schema-generator/fabric-primitive-brand`, which reads the
+  brand by the name of its key and so is not enough alone). A class of the
+  author's own is not wrapped, whether it shares a primitive's name, declares
+  a member under a symbol named `FABRIC_PRIMITIVE_BRAND` or under the real
+  one, or extends a primitive, nor is a `const` bound to one, so the verifier refuses it before its
+  constructor runs (tests: "wraps a top-level fabric primitive construction
+  with __cfHelpers.__cf_data", "does not wrap a construction that only looks
+  like a fabric primitive"; `packages/runner/test/engine-ses.test.ts`, "keeps
+  a fabric primitive constructed at top level as it is", "refuses a top-level
+  construction that only looks like a fabric primitive"). Notably `new Proxy(...)` is left
+  unwrapped — "Proxy snapshots stay unsupported until Proxy is re-enabled in
+  SES compartments" (`test/transform.test.ts`, "wraps top-level data
+  candidates with __cfHelpers.__cf_data").
 - **Literals.** Regular-expression literals, object literals, and array
   literals are always wrapped.
 - Everything else — identifier references, primitive literals, template
@@ -4125,9 +4288,10 @@ null when it does not apply. Current built-in behavior:
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
 7. A spread, inside a reactive collection callback, of a capture that §9.4 does
    not write out — a `const` initialized by a function call, say — copies
-   nothing, because the callback reads the capture as an opaque reference. No
-   diagnostic reports it unless the capture is a tracked reactive root, whose
-   spread §9.7 reports as not lowerable.
+   nothing, because the callback reads the capture as an opaque reference.
+   §9.4 reports it as an error rather than writing it out; the keys of such a
+   capture are not known when the code is compiled, so the spread itself
+   stays unsupported.
 
 ## 20. Test Coverage Snapshot
 

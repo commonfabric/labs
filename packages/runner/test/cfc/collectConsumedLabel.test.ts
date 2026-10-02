@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 
 import { collectConsumedLabel } from "../../src/cfc/prepare.ts";
 import { describeRefusalInputs } from "../../src/cfc/refusal-detail.ts";
@@ -171,7 +172,7 @@ describe("collectConsumedLabel()", () => {
     const read: IReadActivity = {
       ...address,
       id: "of:source",
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     };
     const result = collectConsumedLabel(transaction(
@@ -228,7 +229,7 @@ describe("collectConsumedLabel()", () => {
     ];
     const read: IReadActivity = {
       ...address,
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     };
     const collect = (nonRecursive: boolean) =>
@@ -251,15 +252,30 @@ describe("collectConsumedLabel()", () => {
 
   it("refreshes metadata between collections and separates document scopes and media types", () => {
     const reads: IReadActivity[] = [
-      { ...address, path: ["value", "field"], meta: {} },
-      { ...address, path: ["value", "other"], meta: {} },
-      { ...address, scope: "user", path: ["value", "field"], meta: {} },
-      { ...address, type: "text/plain", path: ["value", "field"], meta: {} },
-      { ...address, id: "of:other", path: ["value", "field"], meta: {} },
+      { ...address, path: toDocumentPath(["value", "field"]), meta: {} },
+      { ...address, path: toDocumentPath(["value", "other"]), meta: {} },
+      {
+        ...address,
+        scope: "user",
+        path: toDocumentPath(["value", "field"]),
+        meta: {},
+      },
+      {
+        ...address,
+        type: "text/plain",
+        path: toDocumentPath(["value", "field"]),
+        meta: {},
+      },
+      {
+        ...address,
+        id: "of:other",
+        path: toDocumentPath(["value", "field"]),
+        meta: {},
+      },
       {
         ...address,
         space: "did:key:other",
-        path: ["value", "field"],
+        path: toDocumentPath(["value", "field"]),
         meta: {},
       },
     ];
@@ -307,7 +323,7 @@ describe("collectConsumedLabel()", () => {
   it("rejects malformed metadata even when its entry is outside the consumed path", () => {
     const read: IReadActivity = {
       ...address,
-      path: ["value", "field"],
+      path: toDocumentPath(["value", "field"]),
       meta: {},
     };
     const tx = transaction([], [read], [

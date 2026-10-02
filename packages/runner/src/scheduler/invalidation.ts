@@ -248,15 +248,18 @@ export function collectTriggeredActionsForChange(
 }
 
 export interface MarkInvalidOptions {
-  /** Server-execution v2 fan-out stage B (B7): how a fanned-out node's
-   * per-instance dirtiness responds to an UNTARGETED invalidation (no
-   * cause). "all" (the default) dirties every instance — the
-   * conservative meaning of "this node must run". "keep" leaves the
-   * instance record alone: the caller already dirtied exactly the
-   * instances that must re-run (a retried instance's own key; an
-   * arriving demander, whose instances have never run and so are not
-   * clean), and the siblings stay current. A CAUSE-bearing invalidation
-   * ignores this: the cause names its instance (or all). */
+  /**
+   * How a fanned-out node's per-instance dirtiness responds to the
+   * invalidation (B7). `all`, the default, dirties the instances the
+   * invalidation covers: with a cause, those `dirtyFanOutForCause()` picks
+   * for it, which for a cause naming no instance is every one; with no
+   * cause, every instance, the conservative meaning of "this node must run".
+   * `keep` leaves the instance record alone, with a cause or without one: the
+   * caller already dirtied exactly the instances that must re-run (a retried
+   * instance's own key; an arriving demander, whose instances have never run
+   * and so are not clean), and the siblings stay current. A cause is
+   * recorded on the node either way.
+   */
   fanOutInstances?: "all" | "keep";
 
   /** The invalidation is a RETRY the scheduler owes after a WAIT: a run
@@ -291,7 +294,8 @@ export interface MarkInvalidOptions {
  * On a fanned-out node (stage B) the cause also decides WHICH instances
  * re-run (B7, precise per-instance dirtiness): a keyed cause dirties the
  * instances whose reads covered that instance; an unkeyed one, or no
- * cause at all, dirties every instance unless the caller says "keep".
+ * cause at all, dirties every instance. A caller that says `keep` dirties
+ * none, with a cause or without one.
  */
 export function markInvalid(
   nodes: NodeRegistry,
@@ -304,10 +308,10 @@ export function markInvalid(
   if (cause !== undefined) {
     addInvalidCause(record, cause);
   }
-  if (record.fanOut !== undefined) {
+  if (record.fanOut !== undefined && options.fanOutInstances !== "keep") {
     if (cause !== undefined) {
       dirtyFanOutForCause(record.fanOut, cause);
-    } else if (options.fanOutInstances !== "keep") {
+    } else {
       dirtyFanOutAll(record.fanOut);
     }
   }
@@ -359,13 +363,23 @@ export function takeInvalidCauses(
   return causes;
 }
 
+/**
+ * Gives a retried run back the invalid causes its failed attempt consumed, so
+ * that the retry's transaction joins their labels (§8.9.2), and leaves the
+ * node invalid.
+ *
+ * On a fanned-out node this dirties no instance. The causes dirtied the
+ * instances they cover when they arrived, and dirtying the retried instance
+ * itself is the caller's part, so a retry of one instance leaves its siblings
+ * current.
+ */
 export function restoreInvalidCauses(
   nodes: NodeRegistry,
   action: Action,
   addresses: readonly IMemorySpaceAddress[],
 ): void {
   for (const address of addresses) {
-    markInvalid(nodes, action, address);
+    markInvalid(nodes, action, address, { fanOutInstances: "keep" });
   }
 }
 

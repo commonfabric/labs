@@ -196,9 +196,6 @@ export interface SetVerdict {
   /** Lines the pull request's description accepts for this member. */
   accepted?: number;
 
-  /** How far above the baseline this run came, where it came above it. */
-  rise?: number;
-
   outcome:
     | "passed"
     | "rose"
@@ -398,7 +395,6 @@ export async function runGate(input: GateInput): Promise<GateReport> {
         uncoveredLines,
         baseline,
         accepted,
-        rise,
         outcome: "accepted",
       });
       continue;
@@ -410,7 +406,6 @@ export async function runGate(input: GateInput): Promise<GateReport> {
       uncoveredLines,
       baseline,
       ...(accepted === undefined ? {} : { accepted }),
-      rise,
       outcome: "rose",
     });
   }
@@ -488,17 +483,6 @@ function gateFindings(report: GateReport): string[] {
         `${OUTCOME_PROSE[verdict.outcome]} |`,
     );
   }
-  // One line per member rather than per set: the marker names the member,
-  // so two sets over one member that both rose are accepted by the larger
-  // of the two rises.
-  const rose = new Map<string, number>();
-  for (const verdict of report.verdicts) {
-    if (verdict.outcome !== "rose" || verdict.rise === undefined) continue;
-    rose.set(
-      verdict.member,
-      Math.max(rose.get(verdict.member) ?? 0, verdict.rise),
-    );
-  }
   if (
     report.verdicts.some((verdict) =>
       verdict.outcome === "no-report" || verdict.outcome === "nothing-measured"
@@ -507,22 +491,19 @@ function gateFindings(report: GateReport): string[] {
     lines.push("");
     lines.push(
       "This change forced a set that no lane's report measured, so the " +
-        "gate fails without having measured it. An acceptance does not " +
-        "clear this: a report that measures the set has to reach the gate.",
+        "gate fails without having measured it. A report that measures the " +
+        "set has to reach the gate.",
     );
   }
-  if (rose.size > 0) {
+  if (report.verdicts.some((verdict) => verdict.outcome === "rose")) {
     lines.push("");
     lines.push(
-      "This is a coverage failure rather than a test failure. Cover the " +
-        "lines, or accept the rise in the pull request's description:",
+      "This is a coverage failure rather than a test failure. Write tests " +
+        "that cover the new code. If some of it cannot be covered, also " +
+        "write tests that cover other uncovered lines of the same package, " +
+        "in the suite of each set that rose. Every line they cover lowers " +
+        "that set's count, whether or not this change wrote it.",
     );
-    lines.push("");
-    lines.push("```text");
-    for (const [member, rise] of rose) {
-      lines.push(`ACCEPT_COVERAGE_DEBT: ${member} +${rise} lines`);
-    }
-    lines.push("```");
   }
   return lines;
 }

@@ -1,14 +1,21 @@
+---
+status: historical
+created: 2026-10-01
+archived: 2026-10-01
+reason: "Superseded design; `noticeSpaceAccess()` was reverted, having no caller, as room offers moved to a different delivery design."
+---
+
 # Telling a member of a space about it from a handler
 
 `noticeSpaceAccess(principal, entry)` lets a handler tell someone about a space
 they can reach: once the handler's commit is accepted, it sends a message to
-`principal`'s [DID inbox](did-inboxes.md) naming the space and a document in
+`principal`'s [DID inbox](../../features/did-inboxes.md) naming the space and a document in
 it. It is what a pattern that admits someone uses to let them know, when the
 two share no space the person would think to look in. The implementation is
 `packages/runner/src/builder/space-access-notice.ts`.
 
 `entry` names the space and the document the way `target` does for
-`spaceAccess(target)`, described in [`space-access.md`](space-access.md): a
+`spaceAccess(target)`, described in [`space-access.md`](../../features/space-access.md): a
 cell, or a value read through one, after following any links it holds. It must
 land at the root of a document in the space's own scope, since the notice names
 a document the recipient can open, and a document of one principal's own scope
@@ -101,7 +108,7 @@ transaction. It runs once the memory server accepts the handler's commit, and
 never if the commit is refused or the transaction aborted. A handler that runs
 again for a conflict stages it again, and only the run that commits sends. A
 handler that also changes the space's access list commits that change first,
-as [`space-access-changes.md`](space-access-changes.md) describes, so the send
+as [`space-access-changes.md`](../../features/space-access-changes.md) describes, so the send
 reads a list that holds it.
 
 The message goes to the inbox at the host this runtime's `apiUrl` names, the
@@ -119,7 +126,7 @@ principal in one run stages nothing more.
 
 A second delivery of the same event may be refused at its commit, or, once the
 stream has handled the first, admitted again and committed as a new run of the
-same event, as [`event-key.md`](event-key.md#re-admission-of-the-same-id)
+same event, as [`event-key.md`](../../features/event-key.md#re-admission-of-the-same-id)
 describes. Either way it sends the same operation id, so the notice stays
 single.
 
@@ -167,7 +174,7 @@ post-commit effect, which only full settlement waits for, so the list is
 brought up to date at each `{ settle: true }` step and nowhere else: an
 assertion on it follows one. Each participant of a multi-user test is handed
 what its own runtime sent, which is a list of notices from that participant's
-user. [Pattern testing](../common/workflows/pattern-testing.md#notices-a-handler-sends)
+user. [Pattern testing](../../common/workflows/pattern-testing.md)
 shows a test reading it.
 
 A run against a caller-supplied storage host, which names its own `apiUrl`,

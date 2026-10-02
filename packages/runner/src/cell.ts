@@ -4515,6 +4515,17 @@ function runOwnTransactionRefusal(method: string): string {
     `one cannot ${method}() while it runs`;
 }
 
+/**
+ * Returns the cell `value` is, or the cell a `Reactive` proxy over a whole cell
+ * stands for, and `undefined` for anything else. The proxy passes `isCell()`,
+ * but reads every property other than the cell methods it forwards as a child
+ * proxy, so a caller that needs the whole of a cell's surface takes the cell
+ * from here.
+ */
+export function unwrapCell(value: unknown): Cell<unknown> | undefined {
+  return cellImplOf(value) as Cell<unknown> | undefined;
+}
+
 /** Returns the runtime `cell` belongs to. Host code only. */
 export function cellRuntime(cell: AnyCell<unknown>): Runtime {
   return runtimeOf(requireCellImpl(cell));

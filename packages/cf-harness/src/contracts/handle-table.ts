@@ -85,8 +85,12 @@ export const ANY_HANDLE_TOKEN_PATTERN = new RegExp(
  * reports the label's atom types alone. A research referent is the one whose
  * content `describe_handle` does return, under this same label, which is how
  * a run — or a child handed the token — reads what research found instead of
- * researching again. The two kinds are told apart by `kind`, and each has
- * the label sources that can apply to it and no other.
+ * researching again. A return referent is a string a child's structured
+ * return sealed: the parent holds it to pass on — to another child, or to a
+ * tool field that takes a handle — and never reads it, so `describe_handle`
+ * reports its label's atom types alone, as for a document. The kinds are told
+ * apart by `kind`, and each has the label sources that can apply to it and no
+ * other.
  */
 export type HarnessHandleReferent =
   | (HarnessHandleReferentBase & {
@@ -105,6 +109,13 @@ export type HarnessHandleReferent =
 
     /** The label research derived for its kit. */
     labelSource: "research";
+  })
+  | (HarnessHandleReferentBase & {
+    /** A string a child's structured return sealed. */
+    kind: "return";
+
+    /** The model-context label of the child that returned it. */
+    labelSource: "child";
   });
 
 /** What every referent carries whatever its kind. */
@@ -115,7 +126,11 @@ interface HarnessHandleReferentBase {
   /** The tool that observed the referent. */
   source: string;
 
-  /** The content as the model saw it, JSON. */
+  /**
+   * The content, JSON: as the model that holds the token saw it, for a
+   * document or research; as the child that returned it wrote it, for a
+   * return.
+   */
   value: FabricValue;
 
   /** The label the content was admitted under. */
