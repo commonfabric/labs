@@ -1190,9 +1190,10 @@ export class WorkerReconciler {
    * stored schemas, and one that declares a reference ends the read at its own
    * link. So each reference is read at the slot holding it in the document the
    * links on the way resolve to, following its own links to the document they
-   * land on; the links up to that slot are the binding read's to decide. A
-   * link on the way that does not resolve, and a position on the way that the
-   * binding's read holds as a reference, add a read that did not complete.
+   * land on; the links up to that slot are the binding read's to decide.
+   * Links on the way, or a reference's own, that cannot be followed, and a
+   * position on the way that the binding's read holds as a reference, add a
+   * read that did not complete.
    */
   #nestedRenderElements(
     paths: readonly NestedRenderPath[],
@@ -1206,7 +1207,7 @@ export class WorkerReconciler {
     type Element = {
       source: Cell<unknown>;
       consumed: SinkConsumedLabel | undefined;
-      cancel: Cancel;
+      cancel?: Cancel;
     };
     let elements = new Map<string, Element>();
     let failed: Cell<unknown>[] = [];
@@ -1226,62 +1227,58 @@ export class WorkerReconciler {
             held: unknown,
             path: readonly string[],
           ): void => {
-            if (path.length === 0) {
-              const slot = at.getAsNormalizedFullLink();
-              const key = JSON.stringify([
-                slot.space,
-                slot.scope,
-                slot.id,
-                slot.path,
-                source.getAsNormalizedFullLink().path,
-              ]);
-              const kept = next.get(key) ?? elements.get(key);
-              if (kept !== undefined) {
-                next.set(key, kept);
+            try {
+              if (path.length === 0) {
+                const slot = at.getAsNormalizedFullLink();
+                const key = JSON.stringify([
+                  slot.space,
+                  slot.scope,
+                  slot.id,
+                  slot.path,
+                  source.getAsNormalizedFullLink().path,
+                ]);
+                const kept = next.get(key) ?? elements.get(key);
+                if (kept !== undefined) {
+                  next.set(key, kept);
+                  return;
+                }
+                const element: Element = { source, consumed: undefined };
+                element.cancel = this.#sinkCell(
+                  at.asSchema(NestedRenderReferenceSchema),
+                  (_value, labels) => {
+                    element.consumed = labels;
+                    changed();
+                  },
+                  true,
+                );
+                next.set(key, element);
                 return;
               }
-              const element: Element = {
-                source,
-                consumed: undefined,
-                cancel: () => {},
-              };
-              next.set(key, element);
-              element.cancel = this.#sinkCell(
-                at.asSchema(NestedRenderReferenceSchema),
-                (_value, labels) => {
-                  element.consumed = labels;
-                  changed();
-                },
-                true,
-              );
-              return;
-            }
-            // A position the binding's read holds as a reference was not read
-            // into, so what lies past it is unknown rather than absent.
-            if (isCell(held)) {
-              unread.push(source);
-              return;
-            }
-            let resolved: Cell<unknown>;
-            try {
-              resolved = at.resolveAsCell();
+              // A position the binding's read holds as a reference was not
+              // read into, so what lies past it is unknown rather than absent.
+              if (isCell(held)) {
+                unread.push(source);
+                return;
+              }
+              const resolved = at.resolveAsCell();
+              const [head, ...rest] = path;
+              if (head === "*") {
+                if (!Array.isArray(held)) return;
+                held.forEach((item, index) =>
+                  visit(source.key(index), resolved.key(index), item, rest)
+                );
+              } else if (isObjectNotArray(held)) {
+                visit(source.key(head), resolved.key(head), held[head], rest);
+              }
             } catch {
+              // Links that cannot be followed, as a cycle of them cannot, end
+              // a read that does not complete.
               unread.push(source);
-              return;
-            }
-            const [head, ...rest] = path;
-            if (head === "*") {
-              if (!Array.isArray(held)) return;
-              held.forEach((item, index) =>
-                visit(source.key(index), resolved.key(index), item, rest)
-              );
-            } else if (isObjectNotArray(held)) {
-              visit(source.key(head), resolved.key(head), held[head], rest);
             }
           };
           for (const path of paths) visit(root, root, value, path);
           for (const [key, element] of elements) {
-            if (!next.has(key)) element.cancel();
+            if (!next.has(key)) element.cancel?.();
           }
           elements = next;
           failed = unread;
@@ -1297,7 +1294,7 @@ export class WorkerReconciler {
         })),
       ],
       cancel: () => {
-        for (const element of elements.values()) element.cancel();
+        for (const element of elements.values()) element.cancel?.();
         elements.clear();
       },
     };

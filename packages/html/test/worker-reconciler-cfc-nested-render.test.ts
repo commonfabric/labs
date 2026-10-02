@@ -1674,6 +1674,74 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     );
 
     await t.step(
+      "withholds `cf-map`'s value when links on the way to a popup, or a popup's own, run in a cycle",
+      async () => {
+        // A cycle of links has no document to land on, so a read that
+        // follows one does not complete. The same shapes without the cycle
+        // bind, as the control row shows.
+
+        const looped = runtime.getCell(space, "cycle-loop-a");
+        await write("cycle-loop-b", link(looped));
+        await write(
+          "cycle-loop-a",
+          link(runtime.getCell(space, "cycle-loop-b")),
+        );
+        const loop = link(looped);
+        const piece = link(
+          await write("cycle-piece", {
+            [NAME]: "Shelf",
+            [UI]: vnode("div", ["Shelf heading"]),
+          }),
+        );
+        const marker = (popup: unknown) => ({
+          position: { lat: 1, lng: 2 },
+          title: "Pin",
+          popup,
+        });
+        const popupsAsReferences: JSONSchema = {
+          type: "object",
+          properties: {
+            markers: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { popup: { asCell: ["cell"] } },
+              },
+            },
+          },
+        };
+        const values: readonly [string, unknown, JSONSchema][] = [
+          ["markers in a cycle", { markers: loop }, true],
+          ["a marker in a cycle", { markers: [loop] }, true],
+          [
+            "a popup in a cycle",
+            { markers: [marker(loop)] },
+            popupsAsReferences,
+          ],
+          ["no cycle", { markers: [marker(piece)] }, popupsAsReferences],
+        ];
+        const outcomes: Record<string, number> = {};
+        for (const [id, value, schema] of values) {
+          const held = await write(`cycle-value-${id}`, value);
+          outcomes[id] = await boundCount(
+            await view(
+              `cycle-view-${id}`,
+              vnode("cf-map", [], { $value: link(held.asSchema(schema)) }),
+            ),
+            visitor,
+            "value",
+          );
+        }
+        expect(outcomes).toEqual({
+          "markers in a cycle": 0,
+          "a marker in a cycle": 0,
+          "a popup in a cycle": 0,
+          "no cycle": 1,
+        });
+      },
+    );
+
+    await t.step(
       "withholds a cell that reaches a refused document through a chain of links",
       async () => {
         // The pinned entry links to a document whose root is itself a link:
