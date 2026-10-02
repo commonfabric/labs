@@ -113,18 +113,14 @@ export interface ManagerStreamEvent {
 
 /** A group room being composed in the manager's own rendering. */
 export interface GroupDraft {
-  // Each field is optional, so that a draft missing one still reads: each
-  // control writes its own field, and a draft can lose fields its controls
-  // haven't written since.
-
   /** The room's title. */
-  title?: string;
+  title: string;
 
   /** The other members' DIDs, one per line or separated by spaces. */
-  members?: string;
+  members: string;
 
   /** Whether the room admits anyone who has its link. */
-  joinableByLink?: boolean;
+  joinableByLink: boolean;
 }
 
 /** An empty group draft. */
