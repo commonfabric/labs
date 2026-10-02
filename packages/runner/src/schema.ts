@@ -1147,7 +1147,7 @@ export interface ValidateAndTransformOptions {
    * `undefined` where it refuses it. Every other value reads as it does
    * without the option.
    */
-  rootOnly?: boolean;
+  truthinessOnly?: boolean;
 }
 
 export function validateAndTransform(
@@ -1477,7 +1477,7 @@ export function validateAndTransform(
     // selects for itself is chosen by what lies below the root, so it plays no
     // part here. Any other value is the whole of what it is, and reads on as
     // it would anyway.
-    if (options?.rootOnly === true && isKeyableObjectOrArray(value)) {
+    if (options?.truthinessOnly === true && isKeyableObjectOrArray(value)) {
       tx.readValueOrThrow(resolvedValueLink, { nonRecursive: true });
       const schema = eagerSchema();
       const rootHandle = ContextualFlowControl.getAsCellValues(
@@ -1685,16 +1685,16 @@ export function validateAndTransform(
 }
 
 /**
- * Returns whether the value at `link`, read through `tx`, is truthy, as
- * `validateAndTransform()` reads it with `rootOnly` set.
+ * Returns whether the value at `sourceRef`, read through `tx`, is truthy, as
+ * `validateAndTransform()` reads it with `truthinessOnly` set.
  */
 export function readsTruthyAtRoot(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-  link: NormalizedFullLink,
+  sourceRef: NormalizedFullLink | CellViewRef,
 ): boolean {
   return Boolean(
-    validateAndTransform(runtime, tx, link, [], { rootOnly: true }),
+    validateAndTransform(runtime, tx, sourceRef, [], { truthinessOnly: true }),
   );
 }
 
