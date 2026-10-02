@@ -132,13 +132,15 @@ export class CFOwnerView extends BaseElement {
   /**
    * Writes the decision `label` supports, unless it is the one this binding
    * last wrote. A decision is written once until the label or the binding
-   * changes it, whatever happens to `result` meanwhile.
+   * changes it, whatever happens to `result` meanwhile. A label from an
+   * origin other than the bound one, as an update the old origin delivers
+   * before the element follows a new one, decides nothing.
    */
   #decide(generation: number, label: CfcLabelView | undefined): void {
     const { runtime, originator, result } = this;
     if (
       !runtime || !originator || !result || !this.isConnected ||
-      generation !== this.#generation
+      generation !== this.#generation || originator !== this.#followed
     ) return;
     let decision: boolean | null = null;
     try {

@@ -1103,16 +1103,19 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
 the single root `represents-principal` attestation on `$originator`. It writes
 the result to the per-user boolean `$result` cell and renders no content of its
 own. A missing, unreadable, or conflicting attestation leaves the result
-`null`. The component follows `$originator`, so an attestation that is not
-readable when it binds, as when its document has not loaded yet, decides the
-result once it arrives, and one that stops being readable sets the result back
-to `null`. It decides from the label each update of `$originator` delivers,
-and reads the label when an update delivers none. Each decision is written
-once, until the label or the binding changes it. It stops following while
-disconnected and follows again once reconnected, as after a move to another
-parent. The component does not use the
-selected `#profile`, which may represent a different persona. The predicate
-selects presentation; CFC labels govern reads.
+`null`. The component follows `$originator` and decides again on each update
+the subscription delivers, from the label the update carries, or from a read
+of the label when it carries none. So an attestation that is not readable
+when it binds, as when its document has not loaded yet, decides the result
+once an update brings it, and an update that finds the attestation no longer
+readable sets the result back to `null`. Only an update does either: a change
+to the label alone reaches the component only through a subscription that
+carries labels, and an update whose value is undefined is not delivered. Each
+decision is written once, until the label or the binding changes it. It stops
+following while disconnected and follows again once reconnected, as after a
+move to another parent. The component does not use the selected `#profile`,
+which may represent a different persona. The predicate selects presentation;
+CFC labels govern reads.
 
 ## cf-share-snapshot
 

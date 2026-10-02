@@ -286,6 +286,30 @@ describe("CFOwnerView", () => {
       origin.arrive(aliceAttestation);
       expect(origin.writes).toEqual([null, false]);
     });
+
+    it("ignores an update from an origin it is no longer bound to", async () => {
+      // The binding changes when the property is set, and the element
+      // follows the new origin only once the update that follows runs. An
+      // update the old origin delivers in between is not this binding's.
+      const element = new HeadlessOwnerView();
+      const origin = followedOrigin(element);
+      await element.refresh();
+      const aliceLabel = (
+        callback: (value: unknown, cfcLabel?: CfcLabelView) => void,
+      ) => {
+        callback(undefined, aliceAttestation);
+        return () => {};
+      };
+      element.originator = {
+        getCfcLabel: () => Promise.resolve(aliceAttestation),
+        subscribe: aliceLabel,
+      } as unknown as CellHandle;
+
+      origin.arrive(attestationOf("did:key:bob"));
+      await element.refresh();
+
+      expect(origin.writes).toEqual([null, null, false]);
+    });
   });
 
   describe("writes each decision once", () => {
