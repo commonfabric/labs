@@ -305,6 +305,9 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
   await t.step(
     "a render boundary inside the view keeps the fetch refused",
     async () => {
+      // The src is a clean cell, so only the view's inherited block can
+      // refuse it.
+      const clean = await seed("https://images.example/clean.png", [owner]);
       const id = await seed({
         type: "vnode",
         name: "cf-cfc-render-boundary",
@@ -312,7 +315,7 @@ Deno.test("render-time URL fetches keep the pre-family ceiling", async (t) => {
         children: [{
           type: "vnode",
           name: "img",
-          props: { src: ATTACKER_URL },
+          props: { src: linkTo(clean) },
           children: [],
         }],
       }, [owner, unscreened]);
