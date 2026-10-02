@@ -1824,6 +1824,16 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
   which can differ from the arguments of its underlying reference type.
+- a printed type that carries a scope's brand with no alias to print it by,
+  as the checker leaves a type it narrowed (assignment narrows
+  `PerUser<boolean> | null` to the brand over `false` and `true`), is written
+  as the wrapper around its payload, `__cfHelpers.PerUser<...>`, each member of
+  the payload printed afresh. One the printer writes by an alias, its own or
+  each branded member's, as `PerUser<A> | null`, is left to the printer. A
+  recursive one is written once: where the print of its payload holds the type
+  again, that print is kept as the printer wrote it
+  (`qualifyCommonFabricTypeRefs` in `ast/type-building.ts`;
+  `test/scope-wrapper-alias-schema.test.ts`).
 
 ### 10.2 `pattern(...)`
 
@@ -2128,6 +2138,12 @@ adjustments:
   candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
+- a property a shrink or an identity-only path rebuilds is optional where its
+  declaration says so, or where its rebuilt node admits `undefined`, a scope
+  wrapper's argument included, so `PerUser<T | undefined>` and
+  `PerUser<T> | undefined` both capture as optional properties
+  (`typeNodeIncludesUndefined` in `transformers/type-shrinking.ts`;
+  `test/scope-wrapper-alias-schema.test.ts`)
 - a node built from part of a value keeps the value's CFC labels. The literal a
   property chain builds, each node a type-driven or node-driven shrink builds,
   and a node the narrowing of cells rebuilds is recorded as narrowing the value
@@ -2190,12 +2206,21 @@ adjustments:
   for its type would, every part a pass keeps is read by its type, and no pass
   builds a node from a piece of a print
   (`test/printed-type-node-schema.test.ts`). A scoped cell
-  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt when
-  the narrowing of cells reaches its scope wrapper directly: its cell, printed
-  afresh, is narrowed inside a rebuilt scope wrapper registered with the scoped
-  cell's type, through which node-driven shrinking and identity-only paths then
-  reach the cell. Schema generation reads the scope from the wrapper's name and
-  the cell from the node inside it. Capability narrowing does not reach a scoped
+  (`PerUser<Writable<T>>`), whose scope only its wrapper names, by its alias or
+  its brand, is rebuilt when the narrowing of cells reaches its scope wrapper
+  directly: its cell, printed afresh, is narrowed inside a rebuilt scope wrapper
+  registered with the scoped cell's type, through which node-driven shrinking
+  and identity-only paths then reach the cell. A scoped cell may hold CFC
+  carriers beside it, whose labels the capture's schema keeps, and other
+  members, as `PerSpace<Cell<A> & Extra>` does, beside which the cell is
+  rebuilt alone, as schema generation reads it. A scoped cell beside `null` or
+  `undefined` is rebuilt with them inside the wrapper,
+  `PerSession<ReadonlyCell<boolean> | null>`
+  (`test/scope-wrapper-alias-schema.test.ts`). A cell in a scope that the
+  narrowing of cells cannot take it apart from keeps the type it was declared
+  with: rebuilt from its value, it would lose the scope, and the cap on its
+  handle, that only the wrapper names. Schema generation reads the scope from the
+  wrapper's name and the cell from the node inside it. Capability narrowing does not reach a scoped
   cell through the printed union of an optional member, so that cell keeps its
   authored capability and value shape. Node-driven shrinking keeps the print of
   a scoped cell whole. Two rules keep what a print says through the unfolding: a

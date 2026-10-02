@@ -7,6 +7,7 @@ import ts from "typescript";
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
+  asObjectSchema,
   createTestProgram,
   getTypeFromCode,
   getTypeFromFiles,
@@ -28,11 +29,58 @@ interface SchemaRoot {
       .toThrow("Nested scope wrappers require a cell boundary between scopes.");
   });
 
+  for (
+    const [form, declarations, declared] of [
+      ["written out", "", "PerSession<PerUser<Cell<string>>>"],
+      [
+        "through an alias",
+        "type Draft = PerUser<Cell<string>>;",
+        "PerSession<Draft>",
+      ],
+    ] as const
+  ) {
+    it(`rejects scope wrappers of two scopes around one cell ${form}`, async () => {
+      // The cell's own scope caps its handle, which the outer wrapper's would
+      // replace.
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${declarations}
+interface SchemaRoot {
+  invalid: ${declared};
+}
+`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
+    });
+  }
+
+  it("caps a cell that two wrappers of one scope hold with that scope", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `
+interface SchemaRoot {
+  draft: PerUser<PerUser<Cell<string>>>;
+}
+`,
+      "SchemaRoot",
+    );
+
+    expect(
+      asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      ).properties?.draft,
+    ).toEqual({ type: "string", asCell: [{ kind: "cell", scope: "user" }] });
+  });
+
   it("throws for a scope wrapper that is a union member", async () => {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<string> | undefined;
+  draft: PerUser<string> | number;
 }
 `,
       "SchemaRoot",
@@ -46,7 +94,7 @@ interface SchemaRoot {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<Cell<string>> | undefined;
+  draft: PerUser<Cell<string>> | number;
 }
 `,
       "SchemaRoot",
@@ -56,11 +104,13 @@ interface SchemaRoot {
       .toThrow("A scope wrapper cannot be a member of a union.");
   });
 
-  it("throws for a scope wrapper unioned with a value type", async () => {
+  it("throws for a scope wrapper over a union that is a union member", async () => {
+    // `PerUser<boolean>` distributes into `true` and `false`, each carrying
+    // the brand, beside `number`.
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<string> | null;
+  draft: PerUser<boolean> | number;
 }
 `,
       "SchemaRoot",
@@ -68,6 +118,163 @@ interface SchemaRoot {
 
     expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
       .toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  it("throws for a scope wrapper around a cell beside anything but `null` or `undefined`", async () => {
+    // Beside a value, one scope cannot be both the value's slot scope and the
+    // cell's cap. Beside another cell, a read's value projection resolves no
+    // handle out of the union, so no read can show the cap holding.
+    for (
+      const declaration of [
+        "PerSpace<Cell<string> | number>",
+        "PerSpace<Cell<string> | Cell<number>>",
+        "PerSpace<Cell<string>> | PerSpace<Cell<number>>",
+      ]
+    ) {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface SchemaRoot { handle: ${declaration}; }`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper around a cell cannot hold anything beside");
+    }
+  });
+
+  it("caps the handle of an optional property's scoped cell", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "interface SchemaRoot { handle?: PerSpace<Cell<string>>; }",
+      "SchemaRoot",
+    );
+
+    expect(
+      (new SchemaGenerator().generateSchema(type, checker, typeNode) as {
+        properties: unknown;
+      }).properties,
+    ).toEqual({
+      handle: { type: "string", asCell: [{ kind: "cell", scope: "space" }] },
+    });
+  });
+
+  it("throws for a scope wrapper unioned with a value type", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `
+interface SchemaRoot {
+  draft: PerUser<string> | { other: string };
+}
+`,
+      "SchemaRoot",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  describe("a scope wrapper beside only `null` or `undefined`", () => {
+    // `Scoped` keeps `null` and `undefined` outside the brand, so the wrapper
+    // beside them is one type with the wrapper around them, and scopes the
+    // whole slot as that does.
+
+    /** The schema of `SchemaRoot`'s `draft`, declared as `declaration`. */
+    const draftSchema = async (declaration: string) => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface SchemaRoot { draft: ${declaration}; }`,
+        "SchemaRoot",
+      );
+      return (new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+      ) as JSONSchemaObj).properties?.draft;
+    };
+
+    it("scopes the slot of a value beside `undefined`", async () => {
+      expect(await draftSchema("PerUser<string> | undefined")).toEqual({
+        type: ["string", "undefined"],
+        scope: "user",
+      });
+    });
+
+    it("scopes the slot of a value beside `null`", async () => {
+      expect(await draftSchema("PerUser<string> | null")).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        scope: "user",
+      });
+    });
+
+    it("reads `PerUser<boolean> | null` as `PerUser<boolean | null>`", async () => {
+      expect(await draftSchema("PerUser<boolean> | null")).toEqual(
+        await draftSchema("PerUser<boolean | null>"),
+      );
+    });
+
+    for (const nullish of ["null", "undefined"]) {
+      it(`declares a scoped cell's scope for the slot and as its handle's cap beside \`${nullish}\``, async () => {
+        // The cell is an `anyOf` branch: the slot's scope is read at the top,
+        // and the cap wherever the handle is reached.
+        const expected = {
+          anyOf: [
+            { type: nullish },
+            { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+          ],
+          scope: "user",
+        };
+
+        expect(await draftSchema(`PerUser<Cell<string>> | ${nullish}`))
+          .toEqual(expected);
+        expect(await draftSchema(`PerUser<Cell<string> | ${nullish}>`))
+          .toEqual(expected);
+      });
+    }
+
+    it("keeps the scope of a value inside a scoped cell beside `null`", async () => {
+      // With a cell boundary between them, both scopes survive, as they do
+      // for the cell alone.
+      expect(await draftSchema("PerUser<Cell<PerSession<string>>> | null"))
+        .toEqual({
+          anyOf: [
+            { type: "null" },
+            {
+              type: "string",
+              asCell: [{ kind: "cell", scope: "user" }],
+              scope: "session",
+            },
+          ],
+          scope: "user",
+        });
+    });
+
+    it("checks a nullable scoped cell inside a nullable scoped cell against each one's own scope", async () => {
+      // The inner cell is inside the outer one's value, a slot of its own
+      // whose scope is declared beside the outer cell's entry.
+      expect(
+        await draftSchema(
+          "PerUser<Cell<PerSession<Cell<string>> | null>> | null",
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "null" },
+          {
+            anyOf: [
+              { type: "null" },
+              { type: "string", asCell: [{ kind: "cell", scope: "session" }] },
+            ],
+            scope: "session",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        ],
+        scope: "user",
+      });
+    });
+
+    it("throws for a handle's cap in a branch that is not the slot's scope", async () => {
+      // `PerUser<Cell<string>> | PerSession<Cell<string>>` puts two caps in
+      // branches under no scope of the slot's own.
+      await expect(
+        draftSchema("PerUser<Cell<string>> | PerSession<Cell<string>>"),
+      ).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+    });
   });
 
   it("throws for a scope inside a cell that is a union member", async () => {
@@ -474,7 +681,7 @@ interface SchemaRoot { head: Node<{ a: string }>; }
       const { type, checker, typeNode } = await getTypeFromCode(
         `
 type Draft = PerUser<Cell<string>>;
-interface SchemaRoot { draft: Draft | undefined; }
+interface SchemaRoot { draft: Draft | number; }
 `,
         "SchemaRoot",
       );
@@ -639,6 +846,8 @@ interface Later { x: never; }
       type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
       type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
       interface Stored { name?: string }
+      interface A { a: string }
+      interface B { b: number }
     `;
     const named = (name: string) => ts.factory.createTypeReferenceNode(name);
 
@@ -693,6 +902,34 @@ interface Later { x: never; }
         $defs: {
           Stored: { type: "object", properties: { name: { type: "string" } } },
         },
+      });
+    });
+
+    it("emits the resolved payload for an intersection printed as import types", async () => {
+      // The checker cannot intersect `A` and `B` again without the brand, so
+      // the payload is the wrapper's own type, read in place without the
+      // wrapper's node, which would read it as the wrapper once more.
+      const importType = (name: string) =>
+        ts.factory.createImportTypeNode(
+          ts.factory.createLiteralTypeNode(
+            ts.factory.createStringLiteral("./types.ts"),
+          ),
+          undefined,
+          ts.factory.createIdentifier(name),
+        );
+      const schema = await printedSchema(
+        "A & B",
+        ts.factory.createIntersectionTypeNode([
+          importType("A"),
+          importType("B"),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        scope: "user",
       });
     });
 

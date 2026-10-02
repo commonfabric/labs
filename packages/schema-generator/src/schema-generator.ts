@@ -24,7 +24,7 @@ import {
   CommonFabricFormatter,
   lowersFromReferenceArguments,
   resolveScopeWrapperNode,
-  scopeOfAliasChain,
+  scopeOfScopeWrapper,
   scopesCellHandle,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
@@ -1919,8 +1919,7 @@ export class SchemaGenerator {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
-    const checker = context.typeChecker;
-    const aliasScope = scopeOfAliasChain(type, checker);
+    const aliasScope = scopeOfScopeWrapper(type, context.typeChecker);
     const key =
       (aliasScope === undefined
         ? this.#namedReadingKey(type, context)
@@ -2568,7 +2567,7 @@ export class SchemaGenerator {
     // schema, the only place the write path reads it. A recursive one is
     // written once under `$defs` without its scope, and each reference to it
     // carries the scope instead.
-    const aliasScope = scopeOfAliasChain(type, context.typeChecker);
+    const aliasScope = scopeOfScopeWrapper(type, context.typeChecker);
     const isScopeWrapperAlias = aliasScope !== undefined;
     // One around a cell caps the handle and is itself a wrapper: it is not a
     // cycle's entry, so a cycle through it is found at the cell's value and
@@ -2624,13 +2623,15 @@ export class SchemaGenerator {
     const stackKey = bindingKey === undefined
       ? type
       : `${this.#bindingId(bindingType)}|${bindingKey}`;
-    // `never` holds no type, so it is never met inside itself and is not a
-    // cycle's entry. A wrapper the checker reduces to it, as it reduces
-    // `PerUser<never>` (`never & brand` is `never`), has `never` both for its
-    // own type and for its payload's, and the payload read inside it is the
-    // value it wraps, not its recursion.
-    const tracksCycle = !scopesHandle && !isWrapperContext &&
-      (type.flags & ts.TypeFlags.Never) === 0;
+    // `never`, `null` and `undefined` hold no type, so none is met inside
+    // itself, and none is a cycle's entry. A wrapper the checker reduces to
+    // one, as it reduces `PerUser<never>` (`never & brand` is `never`) and
+    // `PerUser<null>` (`Scoped` keeps `null` outside its brand), has it both
+    // for its own type and for its payload's, and the payload read inside it
+    // is the value it wraps, not its recursion.
+    const holdsNoType = (type.flags &
+      (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
+    const tracksCycle = !scopesHandle && !isWrapperContext && !holdsNoType;
     // The same type read inside itself with the same arguments written for
     // it, each read under deeper bindings, is either a nesting its author
     // wrote out, `Pair<Pair<string>>`, or a recursion that instantiates it
@@ -2901,7 +2902,7 @@ export class SchemaGenerator {
     }) &&
       detectWrapperViaNode(node, context.typeChecker) === undefined &&
       resolveScopeWrapperNode(node) === undefined &&
-      scopeOfAliasChain(type, context.typeChecker) === undefined;
+      scopeOfScopeWrapper(type, context.typeChecker) === undefined;
   }
 
   /**
