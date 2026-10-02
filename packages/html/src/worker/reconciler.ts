@@ -28,12 +28,14 @@ import {
   cellOfOpaqueReference,
   cellRuntime,
   convertCellsToLinks,
+  hostValueOf,
   isCell,
   isStream,
   type JSONSchema,
   KeepAsCell,
   parseLink,
   type SinkConsumedLabel,
+  sinkProjected,
   type Stream,
   UI,
   useCancelGroup,
@@ -1098,10 +1100,17 @@ export class WorkerReconciler {
     const hostRead = hostSchema === undefined ? read : read.asSchema(
       this.#rootPolicyCovers(state.renderPolicy) ? hostSchema : true,
     );
-    addCancel(this.#sinkCell(hostRead, (_value, labels) => {
-      consumed = labels;
-      watch.reeval();
-    }, true));
+    // The binding hands the host a handle whose reads take in the whole
+    // value, so its decision is made on the read they are decided on.
+    addCancel(this.#sinkCell(
+      hostRead,
+      (_value, labels) => {
+        consumed = labels;
+        watch.reeval();
+      },
+      true,
+      true,
+    ));
     return cancel;
   }
 
@@ -1349,11 +1358,19 @@ export class WorkerReconciler {
     return undefined;
   }
 
-  /** Keeps a rendered subscription responsive to session access loss and recovery. */
+  /**
+   * Keeps a rendered subscription responsive to session access loss and
+   * recovery. `host`, for a read a host makes through a binding, reads each
+   * value as the worker hands it to a host (`hostValueOf()`), so the labels
+   * delivered are those of what the host's read takes in, a field the schema
+   * leaves untyped included; a stream, which holds no value, is heard as
+   * anything else is.
+   */
   #sinkCell<T>(
     cell: Cell<T>,
     deliver: (value: T | undefined, consumed?: SinkConsumedLabel) => void,
     includeConsumedLabel = false,
+    host = false,
   ): Cancel {
     const [cancel, addCancel] = useCancelGroup();
     const watched = new Set<string>();
@@ -1365,7 +1382,7 @@ export class WorkerReconciler {
         deliver(this.#cellAccessError(cell) ? undefined : current, consumed);
       }
     };
-    addCancel(cell.sink((value, _cfcLabel, read) => {
+    const onRead = (value: T | undefined, read?: SinkConsumedLabel) => {
       current = value;
       consumed = read;
       if (this.#spaceAccess !== undefined) {
@@ -1378,7 +1395,17 @@ export class WorkerReconciler {
         }
       }
       emit();
-    }, { readOnly: true, includeConsumedLabel }));
+    };
+    addCancel(
+      host && !isStream(cell)
+        ? sinkProjected(cell, hostValueOf, (_value, read) => {
+          onRead(undefined, read);
+        })
+        : cell.sink(
+          (value, _cfcLabel, read) => onRead(value, read),
+          { readOnly: true, includeConsumedLabel },
+        ),
+    );
     return () => {
       active = false;
       cancel();
