@@ -153,9 +153,12 @@ how the syncer watches for the change is the syncer's own business.
   this deployment's audience: toolshed checks the signature, the issuer, the
   audience, and the service account. The token does not cover the body, and
   names no subscription. So the trust boundary is the service account: anyone
-  who can mint a token as it can post a notification for any bound mailbox.
-  The most that buys is a spurious wake-up, since a record carries no mail and
-  the syncer fetches changes from Gmail itself.
+  who can mint a token as it can post a notification for any bound mailbox,
+  as often as it likes. That discloses nothing, since a record carries no mail
+  and the syncer fetches changes from Gmail itself. What it costs is
+  availability: each post adds a record to the journal of every channel bound
+  to the mailbox and prompts a sync, so a holder of the account can grow those
+  journals and keep syncers busy.
 - **Syncer to control plane (a).** The signed request proves the caller's
   identity key, and the channel's space must list that identity as OWNER.
 - **Toolshed to Gmail (b).** The access token proves the caller can read the

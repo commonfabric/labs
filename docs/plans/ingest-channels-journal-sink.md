@@ -128,7 +128,7 @@ The seam requires these changes on loom's side (Workstream A/D-read):
 ## Open decisions
 
 1. **Packaging** — a generically-named `POST /api/ingest` carrying `sink: "stream" | "journal"` (recommended; `/api/webhooks` misdescribes the general capability) vs. extending the webhook route in place. Either way the auth/registry helpers are shared. *Still open for the `stream` sink.*
-2. ~~**Journal-creation auth**~~ — **RESOLVED.** Creation requires a real caller principal (a first-party request proof) *and* an explicit `OWNER` grant for that DID on the target space's ACL. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md). The control plane is a separate prefix, `/api/ingest-channels`, so the data plane's wildcard CORS never covers it.
+2. ~~**Journal-creation auth**~~ — **RESOLVED.** Creation requires a real caller principal (a first-party request proof) *and* an explicit `OWNER` grant for that DID on the target space's ACL. See [self-serve-ingest-channels.md](../features/self-serve-ingest-channels.md). The control plane sits apart from the data plane, so the data plane's wildcard CORS never covers it: the verbs that act on one space are under `/api/spaces/:space/ingest-channels`, and the caller's own list, which names no space, is at `/api/ingest-channels/list`.
 
 ## Acceptance / test plan
 

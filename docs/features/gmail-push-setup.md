@@ -102,12 +102,29 @@ gcloud pubsub subscriptions create <subscription> --project <project> \
   --push-auth-token-audience="<audience>"
 ```
 
+Pub/Sub mints each push token itself, as its own service agent,
+`service-<project number>@gcp-sa-pubsub.iam.gserviceaccount.com`. A project
+created after April 8, 2019 lets the agent do that with nothing further. An
+older project needs the agent granted the Service Account Token Creator role,
+without which every delivery fails to authenticate:
+
+```bash
+gcloud projects add-iam-policy-binding <project> \
+  --member="serviceAccount:service-<project number>@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
 A machine on a tailnet can be made reachable for this one route with
 Tailscale Funnel, which publishes it at the machine's `ts.net` name with a
 certificate. Mounting only the push path keeps the rest of the server private,
 and the push endpoint is the route built to face the internet, since it
 refuses anything without a token Google signed. The target repeats the path,
-because Funnel strips the mounted prefix before forwarding:
+because Funnel strips the mounted prefix before forwarding.
+
+Funnel opens the machine's whole HTTPS port to the internet, not one path. A
+route already mounted on that port with `tailscale serve` becomes public along
+with this one, so check `tailscale serve status` first, and expect only the
+push path there:
 
 ```bash
 tailscale funnel --bg \
@@ -134,9 +151,18 @@ gcloud pubsub subscriptions create <subscription> --project <project> \
   --topic <topic> --ack-deadline=30 --message-retention-duration=1d
 ```
 
-The relay signs each delivery with an identity token for the service account,
-so whoever runs it needs permission to mint one. Owning the project does not
-include that permission; it is a separate role, granted on the service account:
+Whoever runs the relay needs two permissions. The first is to pull from the
+subscription. A project owner has it already; anyone else needs the Pub/Sub
+Subscriber role on the subscription:
+
+```bash
+gcloud pubsub subscriptions add-iam-policy-binding <subscription> --project <project> \
+  --member="user:<you>" --role="roles/pubsub.subscriber"
+```
+
+The second is to sign each delivery with an identity token for the service
+account. Owning the project does not include that permission; it is a
+separate role, granted on the service account:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding <account> --project <project> \
@@ -195,13 +221,24 @@ curl -s https://oauth2.googleapis.com/token \
 
 The response holds an `access_token`, good for an hour, and a `refresh_token`
 that mints further ones. Both are credentials for the mailbox: keep them out
-of the repository and out of shell history. This confirms which mailbox a
-token reads, and is the same lookup toolshed makes when binding:
+of the repository and out of shell history. A command with a token typed into
+it lands in that history, so read the access token into a variable without
+echoing it, and let the commands below name the variable:
 
 ```bash
-curl -s -H "Authorization: Bearer <access token>" \
+read -rs GMAIL_ACCESS_TOKEN
+```
+
+This confirms which mailbox a token reads, and is the same lookup toolshed
+makes when binding:
+
+```bash
+curl -s -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
   https://gmail.googleapis.com/gmail/v1/users/me/profile
 ```
+
+The exchange above carries the client secret and the code the same way. Read
+those into variables too, or run it from a file kept outside the repository.
 
 ## Toolshed settings
 
@@ -251,7 +288,7 @@ the Gmail access token from `CF_GMAIL_ACCESS_TOKEN`:
 
 ```bash
 cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push
-CF_GMAIL_ACCESS_TOKEN="<access token>" cf ingest gmail-bind <channel>
+CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest gmail-bind <channel>
 ```
 
 `gmail-bind` prints the address it bound, which is the one Gmail reports for
@@ -264,7 +301,7 @@ Limiting it to the inbox leaves out label and read-state changes elsewhere:
 
 ```bash
 curl -s -X POST https://gmail.googleapis.com/gmail/v1/users/me/watch \
-  -H "Authorization: Bearer <access token>" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" -H "Content-Type: application/json" \
   -d '{"topicName":"projects/<project>/topics/<topic>","labelIds":["INBOX"],"labelFilterBehavior":"include"}'
 ```
 
@@ -276,11 +313,13 @@ any mail arrives. Repeating the call on a mailbox that has not changed
 publishes nothing.
 
 To test delivery without waiting for mail, publish a message in Gmail's shape
-to the topic:
+to the topic. The history id is a quoted string: it is an unsigned 64-bit
+integer, and toolshed drops a notification whose id arrives as a number too
+large to be exact:
 
 ```bash
 gcloud pubsub topics publish <topic> --project <project> \
-  --message='{"emailAddress":"<address>","historyId":<history id>}'
+  --message='{"emailAddress":"<address>","historyId":"<history id>"}'
 ```
 
 `POST https://gmail.googleapis.com/gmail/v1/users/me/stop`, with the same
@@ -329,6 +368,6 @@ curl -s -X POST -H "Authorization: Bearer <gcloud token>" -H "Content-Type: appl
   arrived in the inbox since an earlier id:
 
 ```bash
-curl -s -H "Authorization: Bearer <access token>" \
+curl -s -H "Authorization: Bearer $GMAIL_ACCESS_TOKEN" \
   "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId=<earlier id>&historyTypes=messageAdded&labelId=INBOX"
 ```

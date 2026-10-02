@@ -221,8 +221,9 @@ For each project:
 2. Create a service account for the push subscription to sign as.
 3. Create a push subscription on the topic, with the endpoint
    `https://<toolshed>/api/spaces/<service space>/ingest-push/gmail`, OIDC
-   authentication as that service account, and the service space's DID as
-   the audience.
+   authentication as that service account, and the deployment's audience:
+   the service space's DID, unless `INGEST_GMAIL_PUSH_AUDIENCE` sets
+   another.
 4. Add the service account to `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS`.
 
 The audience has to be set on the subscription. One that names none gets the
