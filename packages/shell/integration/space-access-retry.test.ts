@@ -268,6 +268,8 @@ describe("shell space access retry", () => {
         return true;
       });
       await page.keyboard.press("Enter");
+      await awaitViewSettled(page);
+      expect(await retryHasStarted(page, retries)).toBe(true);
       expect(await waitForRetryOutcome(page, retries)).toBe("refused");
 
       const focused = await waitForCondition(page, () => {
