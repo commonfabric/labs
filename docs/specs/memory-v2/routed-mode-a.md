@@ -94,7 +94,8 @@ router, deployment, epoch and context. Exact repeats within the same active
 context are idempotent. Re-signed router evidence cannot move them to another
 context or epoch. Release tombstones prevent replay from reinstating new-open
 authority; a fresh client signature can reauthorize. Closed contexts cannot
-reopen under the same link ID, and their proofs are tombstoned through expiry.
+reopen under the same link ID until every statement they could hold has
+expired (3,780 seconds), and their proofs are tombstoned through expiry.
 Key revocation remains permanently denied after toolshed restart.
 
 Release leaves existing sessions on their original lease. Renewal with a fresh
