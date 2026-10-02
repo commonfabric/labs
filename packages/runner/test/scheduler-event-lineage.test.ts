@@ -574,7 +574,7 @@ describe("scheduler event lineage", () => {
       ) => void,
     ): Promise<{
       originAttempts: number;
-      delivered: unknown[];
+      delivered: readonly unknown[];
       dropWarnings: string[];
     }> {
       const streamA = runtime.getCell<unknown>(
