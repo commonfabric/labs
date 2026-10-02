@@ -4,8 +4,10 @@ import { navigate } from "@commonfabric/navigation";
 import { hasEntityUriScheme } from "@commonfabric/runner/entity-kind";
 import { type NameSchema, nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type CellHandle,
+  CellReadRefusedError,
   type FavoritePieceAddress,
 } from "@commonfabric/runtime-client";
 import { Task, TaskStatus } from "@lit/task";
@@ -782,14 +784,25 @@ export class XHeaderView extends BaseView {
         if (id) ids.push(id);
       }
 
+      // A name the worker refuses is listed as withheld. A refusal can stand
+      // for a moment that passes, as a read made before the viewer's
+      // membership or a module policy has resolved, so a list holding one is
+      // not cached: the next open reads the names again.
+      let withheld = false;
       const results = await Promise.allSettled(
         ids.map(async (id) => {
           // Project the persisted result to its name so menu labels do not
           // materialize each piece's output graph or start its pattern.
           const piece = await rt.getPattern(space, id, { start: false });
           signal.throwIfAborted();
-          const name = await piece.cell().asSchema<NameSchema>(nameSchema)
-            .sync();
+          let name: { [NAME]?: string } | undefined;
+          try {
+            name = await piece.cell().asSchema<NameSchema>(nameSchema).sync();
+          } catch (error) {
+            if (!(error instanceof CellReadRefusedError)) throw error;
+            withheld = true;
+            return { id: piece.id(), name: CFC_POLICY_PLACEHOLDER_TEXT };
+          }
           return {
             id: piece.id(),
             name: name?.[NAME] ?? `Piece #${piece.id().slice(0, 6)}`,
@@ -798,13 +811,14 @@ export class XHeaderView extends BaseView {
       );
 
       signal.throwIfAborted();
-      this.#piecesCache = results
+      const pieces = results
         .filter(
           (r): r is PromiseFulfilledResult<PieceItem> =>
             r.status === "fulfilled",
         )
         .map((r) => r.value);
-      return this.#piecesCache;
+      if (!withheld) this.#piecesCache = pieces;
+      return pieces;
     },
     args: () => [this.rt, this.space, this.#piecesVisible] as const,
   });

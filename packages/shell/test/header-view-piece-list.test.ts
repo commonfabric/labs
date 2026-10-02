@@ -17,6 +17,7 @@ import { expect } from "@std/expect";
 import { TaskStatus } from "@lit/task";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
+import { CellReadRefusedError } from "@commonfabric/runtime-client";
 
 import type { XHeaderView as HeaderViewClass } from "../src/views/HeaderView.ts";
 import { templateMarkup } from "./lit-template-markup.ts";
@@ -98,7 +99,19 @@ function installBrowserGlobals(): () => void {
  * given. `arrived` resolves once a space's name reads are waiting at the gate,
  * so a test can abandon a load that has already done its reading.
  */
-function makeRuntime() {
+function makeRuntime(
+  {
+    refusedReads = 0,
+  }: {
+    /**
+     * How many of the first reads of the `named` piece's name the worker
+     * refuses, as it does a read made before the viewer's membership has
+     * resolved.
+     */
+    refusedReads?: number;
+  } = {},
+) {
+  let refusalsLeft = refusedReads;
   const latches = (): (space: string) => PromiseWithResolvers<void> => {
     const map = new Map<string, PromiseWithResolvers<void>>();
     return (space) => {
@@ -154,6 +167,12 @@ function makeRuntime() {
               rt.reads.push({ space, schema });
               arrival(space).resolve();
               await gate(space).promise;
+              if (id === "named" && refusalsLeft > 0) {
+                refusalsLeft--;
+                throw new CellReadRefusedError({
+                  refusedBy: "display-ceiling",
+                });
+              }
               return value;
             },
           }),
@@ -304,6 +323,33 @@ describe("HeaderView piece list", () => {
       handleKeyDown(unhandled);
       expect(view.headerPieceDropdownOpen).toBe(false);
       expect(unhandled.defaultPrevented).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("lists a name the worker refuses as withheld, and reads it again at the next open", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const rt = makeRuntime({ refusedReads: 1 });
+      rt.release("did:key:first");
+      const view = await mountHeader(rt);
+      const { pieces } = view.accessForTestingOnly;
+
+      view.headerPieceDropdownOpen = true;
+      await pieces.run();
+      expect(pieces.value).toEqual([
+        { id: "named", name: "Content hidden by policy" },
+        { id: "untitled", name: "Piece #untitl" },
+      ]);
+
+      // Not cached: the next open asks again, and the name is admitted now.
+      view.headerPieceDropdownOpen = false;
+      await pieces.run();
+      view.headerPieceDropdownOpen = true;
+      await pieces.run();
+      expect(pieces.value).toEqual(namesIn("did:key:first"));
+      expect(rt.registryReads).toBe(2);
     } finally {
       restore();
     }
