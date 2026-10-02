@@ -1062,4 +1062,49 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       await storageManager.close();
     }
   });
+
+  describe("a floor on one branch of a union and a stamp on another", () => {
+    // The floor applies structurally, whichever branch the written value
+    // takes. A stamp credits it only where the stamp lands on that value, or
+    // where the floor's own branch names it.
+
+    const UNION_SCHEMA = {
+      type: "object",
+      properties: {
+        out: {
+          anyOf: [
+            { type: "string", ifc: { requiredIntegrity: [ADMIN_ATOM] } },
+            { type: "number", ifc: { addIntegrity: [ADMIN_ATOM] } },
+          ],
+        },
+      },
+    } as const satisfies JSONSchema;
+
+    const writeOut = async (name: string, out: string | number) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+      try {
+        const tx = runtime.edit();
+        runtime.getCell(signer.did(), name, UNION_SCHEMA, tx).set({ out });
+        tx.prepareCfc();
+        return (await tx.commit()).error;
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    it("refuses a value of the floored branch, which the other branch's stamp does not land on", async () => {
+      const error = await writeOut("wf-union-unstamped", "not-approved");
+
+      expect(isCfcEnforcementRejection(error)).toBe(true);
+      expect(String((error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out",
+      );
+    });
+
+    it("admits a value of the stamping branch, which carries the stamp", async () => {
+      expect(await writeOut("wf-union-stamped", 7)).toBeUndefined();
+    });
+  });
 });

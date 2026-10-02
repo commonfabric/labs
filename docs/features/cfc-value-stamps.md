@@ -110,6 +110,13 @@ part of that. They credit the floor whichever schema declares it, the writer's
 or the document's stored one. A writer that stamps nothing does not pass a
 floor on the strength of an earlier writer's stamp.
 
+In a union, the floor applies whichever branch the written value takes, and a
+branch's stamp lands only on a value that takes the branch. So a stamp credits
+the floor in two cases: it lands on the written value, or the floor's own
+branch names it, as a branch that both requires and stamps an atom does. A
+stamp named by some other branch, which the value does not take, credits
+nothing.
+
 ## A stamp held in a declared entry
 
 An envelope can hold a stamp's atoms in a `declared` entry. Nothing tells such

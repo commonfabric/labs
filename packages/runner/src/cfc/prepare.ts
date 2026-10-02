@@ -9767,13 +9767,14 @@ const verifyWriteFloor = function* (
     linkWriteInputs: readonly LinkWritePolicyInput[];
     linkLabels: LinkLabelDeriver;
     flowIntegrity: readonly CfcAtom[];
-    // The value stamps the transaction's own schemas name at a path. They
-    // credit a floor whichever schema declares it: a floor the document
-    // stores is satisfied by what this write stamps, never by a stamp the
-    // stored schema names. The floor applies structurally, whatever branch
-    // of a union the written value takes, so the stamps credited are every
-    // branch's.
-    valueStampsAt: (path: readonly string[]) => readonly CfcAtom[];
+    // The value stamps the transaction's own schemas name at a path: the
+    // ones that `land` on the value written there, and all the ones `named`
+    // there, by any branch of a union. A stamp is never read off the schema
+    // the document stores.
+    valueStampsAt: (path: readonly string[]) => {
+      readonly land: readonly CfcAtom[];
+      readonly named: readonly CfcAtom[];
+    };
   },
 ): Generator<void, string[]> {
   const failures: string[] = [];
@@ -9836,19 +9837,30 @@ const verifyWriteFloor = function* (
     // `addIntegrity` mints + `exactCopyOf`/`projection` carries,
     // evidence-gated so a pattern author cannot forge runtime-minted atoms
     // to satisfy their own floor.
+    const mint = labelMintOptionsAt(tx, target, entry.path);
     const declared = derivePersistedLabel(
       tx,
       entry.schema,
       entry.label,
       entryLabels,
       target.space,
-      { ...labelMintOptionsAt(tx, target, entry.path), mintValueStamps: false },
+      { ...mint, mintValueStamps: false },
     );
+    // A stamp credits the floor where it lands on the written value. The
+    // floor applies structurally, whichever branch of a union the value
+    // takes, so the stamps the floor's own branch names credit it as well,
+    // provided the writer's schema names them: a branch that both requires
+    // and stamps an atom is satisfied by a write through it. A stamp another
+    // branch names, which the value does not take, credits nothing.
+    const stamps = ctx.valueStampsAt(entry.path);
     const base = gateRuntimeMintedIntegrity(
       {
         integrity: mergeLabelValues(
           declared.integrity,
-          ctx.valueStampsAt(entry.path),
+          stamps.land,
+          valueStampsOf(tx, entry.schema, mint).filter((atom) =>
+            stamps.named.some((named) => deepEqual(named, atom))
+          ),
         ),
       },
       ctx.identityForPath(entry.path),
@@ -10441,11 +10453,12 @@ export function* prepareBoundaryCommitSteps(
     // The stamps this transaction's own schemas name for the values it
     // writes (`ifc.addIntegrity`, principal claims excepted), each at the
     // schema position naming it and before the runtime-minted gate. Two
-    // branches of a union are two positions at one path.
+    // branches of a union are two positions at one path, and a branch's
+    // stamp `lands` only on a value that takes the branch.
     const valueStamps: {
-      entry: ReturnType<typeof cfcSchemaEntries>[number];
       path: ValuePath;
       stamps: readonly CfcAtom[];
+      lands: boolean;
     }[] = [];
     const stampingSchema = stampingSchemas.get(key);
     if (stampingSchema !== undefined) {
@@ -10457,9 +10470,16 @@ export function* prepareBoundaryCommitSteps(
         );
         if (stamps.length > 0) {
           valueStamps.push({
-            entry,
             path: canonicalizeLogicalPath(entry.path),
             stamps,
+            lands: ifcEntryAppliesToAttemptedWrite(
+              tx,
+              target,
+              entry.path,
+              entry.schema,
+              entry.root,
+              entry.conditional === true,
+            ),
           });
         }
       }
@@ -10569,9 +10589,16 @@ export function* prepareBoundaryCommitSteps(
         const failures = yield* verifyWriteFloor(tx, schema, target, {
           identityForPath: (path) =>
             identityForSchemaPath(writeAuthorIdentities.get(key), path),
-          valueStampsAt: (path) =>
-            valueStamps.filter((stamped) => arraysEqual(stamped.path, path))
-              .flatMap((stamped) => stamped.stamps),
+          valueStampsAt: (path) => {
+            const at = valueStamps.filter((stamped) =>
+              arraysEqual(stamped.path, path)
+            );
+            return {
+              land: at.filter((stamped) => stamped.lands)
+                .flatMap((stamped) => stamped.stamps),
+              named: at.flatMap((stamped) => stamped.stamps),
+            };
+          },
           linkWriteInputs: currentLinkWrites.get(key) ?? [],
           linkLabels,
           // Only PERSISTED flow integrity may credit the floor: `observe` mode
@@ -11857,22 +11884,11 @@ export function* prepareBoundaryCommitSteps(
 
     // The value stamps land at the positions this transaction wrote, gated
     // by who authored each write, and are reconciled with the ones the
-    // document stores. A union's branch stamps only a value that takes it.
+    // document stores.
     const valueStampMints: IntegrityMint[] = [];
     if (mintsValueStamps) {
-      for (const { entry, path, stamps } of valueStamps) {
-        if (
-          !ifcEntryAppliesToAttemptedWrite(
-            tx,
-            target,
-            entry.path,
-            entry.schema,
-            entry.root,
-            entry.conditional === true,
-          )
-        ) {
-          continue;
-        }
+      for (const { path, stamps, lands } of valueStamps) {
+        if (!lands) continue;
         const integrity = gateRuntimeMintedIntegrity(
           { integrity: [...stamps] },
           identityForSchemaPath(writeAuthorIdentities.get(key), path),
