@@ -90,7 +90,14 @@ An offer holds:
 - `from`: the DID of the event's actor, from `currentPrincipal()`. Nothing in
   the event's payload can choose it. With server execution on, the serving loop
   stamps the actor; with it off, the sender's own runtime does.
-- `receivedAt`: when the inbox received the offer.
+- `id`: the event key of the event that delivered the offer, from
+  `eventKey()`, which [`event-key.md`](event-key.md) describes. Like `from`, it
+  is stamped by `receive`, and an `id` in the event's payload is never read.
+  Every run of one delivery stamps the same id, and every other delivery gets
+  another, except one that re-admits the same event id, which a reader keying
+  its receipts by `id` takes for the offer it already handled.
+- `receivedAt`: when the inbox received the offer. A handler's clock reads to
+  the second, so two offers can share it, and `id` is what tells them apart.
 
 ## Sending one
 
@@ -115,8 +122,8 @@ cannot read.
 ## Reading them
 
 The owner reads `offers`. Nothing marks an offer as read or removes it, so a
-reader keeps its own record of the offers it has handled, wherever it keeps its
-own state.
+reader keeps its own record of the offers it has handled, keyed by `id`,
+wherever it keeps its own state.
 
 ## What it does not protect
 
