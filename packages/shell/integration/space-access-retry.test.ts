@@ -185,7 +185,8 @@ describe("shell space access retry", () => {
    * it in a space the member is granted, and shows the view to the member in
    * the shell. The view links to the piece, so the member's runtime is refused
    * the piece's space on its first open of it. Waits for the view and the
-   * refusal in the piece's place, then hands `run` the page, the refused
+   * refusal in the piece's place, and for the member's runtime to settle and
+   * sync every space it opened, then hands `run` the page, the refused
    * space, the settled retries the refusal showed, and a grant of that space
    * to the member. The grant resolves once the server has committed it, and
    * then requires that the page still shows the refusal, no retry under way:
@@ -258,6 +259,16 @@ describe("shell space access retry", () => {
         (probe) => probe.collect("#linked-view-marker").length > 0,
       );
       const retries = await waitForRefusal(page);
+      // Under server execution the member's runtime opens its home space
+      // after the view, and the reads that follow open the refused space's
+      // session again. One landing after the grant would admit the space with
+      // no retry of the shell's, so the grant waits until the view has settled
+      // and every space the runtime opened has synced.
+      await awaitViewSettled(page);
+      await page.evaluate(async () => {
+        await globalThis.commonfabric?.rt?.allSynced();
+      });
+      await awaitViewSettled(page);
       await run({
         page,
         space,
