@@ -1,6 +1,7 @@
 /** Durable proof custody: a router cannot move or revive client authorization. */
 import { assertEquals, assertThrows } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { stub } from "@std/testing/mock";
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
 Deno.test("proof binding and release survive toolshed restart", async () => {
   const directory = Deno.makeTempDirSync();
@@ -109,6 +110,35 @@ Deno.test("truncated authority ledger fails closed", () => {
     Deno.writeTextFileSync(`${directory}/ledger`, '["epoch"');
     assertThrows(() => new RoutedEpochStore(`${directory}/ledger`));
   } finally {
+    Deno.removeSync(directory, { recursive: true });
+  }
+});
+
+Deno.test("failed durable ledger replacement leaves authority fail-closed", async () => {
+  const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+  const router = (await Identity.fromRaw(new Uint8Array(32).fill(87))).did();
+  const store = new RoutedEpochStore(path);
+  try {
+    store.consume(router, "11".repeat(16));
+    const record = Deno.readTextFileSync(path);
+    Deno.writeTextFileSync(
+      path,
+      record.repeat(Math.ceil(17 * 1024 * 1024 / record.length)),
+      { append: true },
+    );
+    using _replacement = stub(Deno, "renameSync", () => {
+      throw new Deno.errors.PermissionDenied(
+        "Injected durable replacement failure",
+      );
+    });
+    assertThrows(
+      () => store.consume(router, "22".repeat(16)),
+      Deno.errors.PermissionDenied,
+    );
+    assertEquals(store.healthy, false);
+    assertThrows(() => store.consume(router, "33".repeat(16)));
+  } finally {
+    store.close();
     Deno.removeSync(directory, { recursive: true });
   }
 });

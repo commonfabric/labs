@@ -23,6 +23,9 @@ import {
   routedFlags,
 } from "../v2/routed-parser.ts";
 import {
+  readRoutedBase64,
+  readRoutedHex,
+  readRoutedStatement,
   routedBase64,
   routedHex,
   RoutedReader,
@@ -61,7 +64,16 @@ class FramedSocket extends EventTarget {
     while (!this.output.length) {
       assertEquals(this.readyState, 1);
       this.changed = Promise.withResolvers<void>();
-      await this.changed.promise;
+      const timeout = setTimeout(
+        () =>
+          this.changed.reject(new Error("Framed test peer response deadline")),
+        5000,
+      );
+      try {
+        await this.changed.promise;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
     return this.output.shift()!;
   }
@@ -151,27 +163,32 @@ async function fixture(name: string) {
     response.end();
     return { status, bytes };
   }
-  async function proof(signer = principal, seconds = 600) {
-    const challenge = new Uint8Array(32).fill(++challengeNumber);
-    const statement = await routedStatementPayload({
-      principal: signer.did(),
-      router: router.did(),
-      deployment: "fixture",
-      challenge,
-      iat: now,
-      exp: now + seconds,
-    }).sign(signer);
+  async function attest(statement: Uint8Array) {
+    const { challenge, principal } = await readRoutedStatement(statement);
     const issuance = await new RoutedWriter("mrc1").text("fixture").text(
       router.did(),
     )
       .fixed(epoch).fixed(context).fixed(challenge).time(now).time(now + 60)
       .sign(router);
     const receipt = await new RoutedWriter("mrr1").fixed(sha256(issuance)).text(
-      signer.did(),
+      principal,
     )
       .fixed(sha256(statement)).time(now).sign(router);
     return new RoutedWriter("mrp1").blob(statement).blob(issuance).blob(receipt)
       .bytes;
+  }
+  async function proof(signer = principal, seconds = 600) {
+    const challenge = new Uint8Array(32).fill(++challengeNumber);
+    return await attest(
+      await routedStatementPayload({
+        principal: signer.did(),
+        router: router.did(),
+        deployment: "fixture",
+        challenge,
+        iat: now,
+        exp: now + seconds,
+      }).sign(signer),
+    );
   }
   const issued = await control(
     1,
@@ -260,6 +277,9 @@ async function fixture(name: string) {
     outsider,
     root,
     toolshed,
+    router,
+    attest,
+    epochs,
     control,
     proof,
     ticket,
@@ -385,6 +405,14 @@ Deno.test("omitted views retain their quota across watch replacements and resume
           type: "session.open",
           space: f.space.did(),
           principal: f.principal.did(),
+          session: { ...session, sessionToken: "invalid-resume-token" },
+        })).error !== undefined,
+      );
+      assert(
+        (await f.request({
+          type: "session.open",
+          space: f.space.did(),
+          principal: f.principal.did(),
           session,
         })).ok !== undefined,
       );
@@ -404,6 +432,55 @@ Deno.test("omitted views retain their quota across watch replacements and resume
     );
     await f.socket.closed.promise;
     assertEquals(f.link.readyState, 1);
+  } finally {
+    await f.close();
+    resetServerExecutionConfig();
+  }
+});
+
+Deno.test("rejected view mutations leave no persistent quota reservation", async () => {
+  setServerExecutionConfig(true);
+  const f = await fixture("rejected-views");
+  try {
+    const views = Array.from(
+      { length: 64 },
+      (_, i) => ({
+        id: `v${i}`,
+        revision: 0,
+        query: {
+          roots: [{ id: "of:visible", selector: { path: [], schema: false } }],
+        },
+        mode: "speculate",
+        componentContractVersion: "1",
+      }),
+    );
+    // Reject after wire parsing, so the backend responds to the actual request.
+    setServerExecutionConfig(false);
+    for (let i = 0; i < 16; i++) {
+      const session = await f.open();
+      assert(
+        (await f.request({
+          type: "session.watch.set",
+          space: f.space.did(),
+          sessionId: session.sessionId,
+          watches: [],
+          views,
+        })).error !== undefined,
+      );
+    }
+    assertEquals(f.server.viewInterestsForSpace(f.space.did()), []);
+    const session = await f.open();
+    setServerExecutionConfig(true);
+    assert(
+      (await f.request({
+        type: "session.watch.set",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: [],
+        views,
+      })).ok !== undefined,
+    );
+    assertEquals(f.server.viewInterestsForSpace(f.space.did()).length, 64);
   } finally {
     await f.close();
     resetServerExecutionConfig();
@@ -487,6 +564,245 @@ Deno.test("custom transports omit routed capability and reject an unsolicited ro
     Error,
     "Routed transport codec unavailable",
   );
+});
+
+Deno.test("SDK pins router metadata across toolshed responses and signs pushed renewals", async () => {
+  const f = await fixture("sdk-renewal");
+  const now = Math.floor(Date.now() / 1000);
+  let receiver: ((payload: string) => void) | undefined;
+  let challengeNumber = 100, signatures = 0, codec = false;
+  const renewed = Promise.withResolvers<void>();
+  const challenge = () => ({
+    value: routedHex(new Uint8Array(32).fill(++challengeNumber)),
+    expiresAt: now + 60,
+  });
+  const respond = (body: Record<string, unknown>) =>
+    receiver!(`fvj1:${JSON.stringify(body)}`);
+  const transport: Transport = {
+    setReceiver: (callback) => {
+      receiver = callback;
+    },
+    setRoutedMessagesEnabled: (enabled) => {
+      codec = enabled;
+    },
+    close: () => Promise.resolve(),
+    send: async (payload) => {
+      const body = decodeRoutedFrame(payload, false).body;
+      if (body.type === "hello") {
+        assertEquals(
+          (body.flags as Record<string, unknown>).routedAuthV1,
+          true,
+        );
+        respond({
+          type: "hello.ok",
+          protocol: "memory",
+          flags: JSON.parse(new TextDecoder().decode(f.flags)),
+          sessionOpen: {
+            audience: f.router.did(),
+            deployment: "fixture",
+            challenge: challenge(),
+          },
+        });
+      } else if (body.type === "connection.challenge") {
+        respond({
+          type: "response",
+          requestId: body.requestId,
+          ok: { challenge: challenge() },
+        });
+      } else if (body.type === "connection.auth") {
+        const statement = readRoutedBase64(body.statement);
+        const signed = await readRoutedStatement(statement);
+        assertEquals(signed.router, f.router.did());
+        assertEquals(signed.deployment, "fixture");
+        const proof = await f.attest(statement);
+        assertEquals(
+          (await f.control(
+            6,
+            new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(proof)
+              .bytes,
+          )).status,
+          0,
+        );
+        respond({
+          type: "response",
+          requestId: body.requestId,
+          ok: { principal: signed.principal, expiresAt: signed.exp },
+        });
+        if (++signatures === 3) renewed.resolve();
+      } else {
+        const response = await f.request(body);
+        respond({ ...response, requestId: body.requestId });
+      }
+    },
+  };
+  const client = await connect({ transport });
+  const signer = (identity: Identity) => ({
+    did: identity.did(),
+    authorizeSessionOpen: () => {
+      throw new Error("Routed opens must use connection auth");
+    },
+    authorizeConnection: async (
+      context: {
+        audience: string;
+        deployment?: string;
+        challenge: { value: string };
+      },
+    ) => {
+      assertEquals(context.audience, f.router.did());
+      assertEquals(context.deployment, "fixture");
+      return {
+        statement: routedBase64(
+          await routedStatementPayload({
+            principal: identity.did(),
+            router: context.audience,
+            deployment: context.deployment!,
+            challenge: readRoutedHex(context.challenge.value, 32),
+            iat: now,
+            exp: now + 600,
+          }).sign(identity),
+        ),
+      };
+    },
+  });
+  try {
+    assert(codec);
+    const session = await client.mount(f.space.did(), {}, signer(f.principal));
+    await assertRejects(() =>
+      client.mount(f.space.did(), {}, signer(f.outsider))
+    );
+    assertEquals(signatures, 2);
+    respond({
+      type: "connection/challenge",
+      principal: f.principal.did(),
+      challenge: challenge(),
+    });
+    await renewed.promise;
+    await session.watchSet([]);
+    const view = await session.watchAdd([{
+      id: "sdk-acl",
+      kind: "graph",
+      query: {
+        roots: [{
+          id: `of:${f.space.did()}`,
+          selector: { path: [], schema: false },
+        }],
+      },
+    }]);
+    assertEquals(view.entities.length, 1);
+    assertEquals(signatures, 3);
+  } finally {
+    await client.close();
+    await f.close();
+  }
+});
+
+Deno.test("release cannot acknowledge authority when the durable ledger fails", async () => {
+  const f = await fixture("failed-release");
+  try {
+    await f.open();
+    f.epochs.close();
+    // A durability failure closes the link before any release acknowledgement.
+    await assertRejects(() =>
+      f.control(
+        4,
+        new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did()).bytes,
+      )
+    );
+    assertEquals(f.socket.readyState, 3);
+    assertEquals(f.link.readyState, 3);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("toolshed space control and revocation deny stale ownership and close failed durable custody", async () => {
+  const f = await fixture("space-control");
+  try {
+    assertEquals(
+      (await f.control(
+        5,
+        new RoutedWriter("mas1").fixed(f.context).text(f.space.did()).time(1)
+          .bytes,
+      )).status,
+      0,
+    );
+    assertEquals(
+      (await f.control(
+        4,
+        new RoutedWriter("mrl1").fixed(f.context).text(f.outsider.did()).bytes,
+      )).status,
+      0,
+    );
+    const session = await f.open();
+    const watch = {
+      id: "added",
+      kind: "graph",
+      query: {
+        roots: [{ id: "of:visible", selector: { path: [], schema: false } }],
+      },
+    };
+    assert(
+      (await f.request({
+        type: "session.watch.add",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        watches: [watch],
+      })).ok !== undefined,
+    );
+    f.advanceOwnership();
+    assertEquals(
+      (await f.control(
+        5,
+        new RoutedWriter("mas1").fixed(f.context).text(f.space.did()).time(2)
+          .bytes,
+      )).status,
+      1,
+    );
+    f.epochs.close();
+    f.host.close();
+    assertEquals(f.socket.readyState, 3);
+    assertEquals(f.link.readyState, 3);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("invalid private endpoints and frame types have no authority; revocation fails closed without a ledger", async () => {
+  const f = await fixture("private-admission");
+  try {
+    for (
+      const [path, peer] of [["/api/storage/memory", "127.0.0.1"], [
+        "/memory/router-link",
+        "127.0.0.2",
+      ]]
+    ) {
+      const socket = new FramedSocket();
+      f.host.accept(socket as unknown as WebSocket, path, peer);
+      assertEquals(socket.readyState, 3);
+    }
+    const untrusted = new FramedSocket();
+    f.host.accept(
+      untrusted as unknown as WebSocket,
+      "/memory/router-link",
+      "127.0.0.1",
+    );
+    await untrusted.bytes();
+    untrusted.receive("text-not-binary-link");
+    await untrusted.closed.promise;
+    assertEquals(f.link.readyState, 1);
+    f.epochs.close();
+    let refused = false;
+    try {
+      f.host.revokeRouter(f.router.did());
+    } catch {
+      refused = true;
+    }
+    assert(refused);
+    assertEquals(f.socket.readyState, 3);
+    assertEquals(f.host.acceptsPeer("127.0.0.1"), false);
+  } finally {
+    await f.close();
+  }
 });
 
 Deno.test("private TLS listener accepts bounded binary links and rejects HTTP, Origin and extensions", async () => {

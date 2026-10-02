@@ -189,8 +189,11 @@ export class MemoryRouterPolicy {
       return {
         close: async () => {
           clearInterval(fence);
-          await listener.close();
-          epochs.close();
+          try {
+            await listener.close();
+          } finally {
+            epochs.close();
+          }
         },
       };
     } catch (error) {

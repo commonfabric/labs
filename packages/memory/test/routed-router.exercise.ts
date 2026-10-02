@@ -43,6 +43,24 @@ async function command(args: string[]) {
   }
   return new TextDecoder().decode(result.stdout);
 }
+console.log(JSON.stringify({
+  environment: {
+    kernel: (await command(["uname", "-r"])).trim(),
+    architecture: Deno.build.arch,
+    deno: Deno.version.deno,
+    tools: (await command([
+      "dpkg-query",
+      "-W",
+      "-f=${Package}=${Version}\n",
+      "nftables",
+      "openssl",
+      "python3",
+      "procps",
+      "strace",
+      ...(systemd ? ["systemd"] : []),
+    ])).trim().split("\n"),
+  },
+}));
 async function certificate(name: string, seed: number) {
   const key = `${root}/${name}.pem`, cert = `${root}/${name}.crt`;
   const prefix = readRoutedHex("302e020100300506032b657004220420", 16);
@@ -158,7 +176,7 @@ Deno.writeTextFileSync(
     listener_uid: 990,
     max_workers: 32,
     max_unauthenticated: 8,
-    max_per_source: 16,
+    max_per_source: 8,
     development: false,
   }),
 );
@@ -541,6 +559,81 @@ try {
   });
   assert(unknown.error !== undefined);
   pass("unknown space denied");
+  const quotaWatch = {
+    id: "quota-old",
+    kind: "graph",
+    query: {
+      roots: [{ id: "of:fixture-data", selector: { path: [], schema: false } }],
+    },
+  };
+  assert(
+    (await client.request({
+      type: "session.watch.set",
+      space: spaces[1],
+      sessionId: b,
+      watches: [quotaWatch],
+    })).ok !== undefined,
+  );
+  const invalidWatches = Array.from(
+    { length: 960 },
+    (_, i) => ({
+      ...quotaWatch,
+      id: i === 0 ? quotaWatch.id : `invalid${i}`,
+      query: {
+        roots: [{
+          id: "of:different-root",
+          selector: { path: [], schema: false },
+        }],
+      },
+    }),
+  );
+  assert(
+    (await client.request({
+      type: "session.watch.add",
+      space: spaces[1],
+      sessionId: b,
+      watches: invalidWatches,
+    })).error !== undefined,
+  );
+  const quotaSession = await client.request({
+    type: "session.open",
+    space: spaces[1],
+    principal: bob.did(),
+    session: {},
+  });
+  assert(quotaSession.ok !== undefined);
+  const quotaId = (quotaSession.ok as { sessionId: string }).sessionId;
+  const validWatches = Array.from(
+    { length: 65 },
+    (_, i) => ({
+      id: `valid${i}`,
+      kind: "graph",
+      query: {
+        roots: [{
+          id: "of:fixture-data",
+          selector: { path: [], schema: false },
+        }],
+      },
+    }),
+  );
+  assert(
+    (await client.request({
+      type: "session.watch.set",
+      space: spaces[1],
+      sessionId: quotaId,
+      watches: validWatches,
+    })).ok !== undefined,
+  );
+  assert(
+    (await client.request({
+      type: "session.close",
+      space: spaces[1],
+      sessionId: quotaId,
+    })).ok !== undefined,
+  );
+  pass(
+    "rejected watch mutations reserve no persistent router or toolshed quota",
+  );
   await client.authenticate(alice, 180); // Renewal extends the original session.
   await pause(3500);
   const watched = await client.request({
@@ -789,7 +882,9 @@ try {
       activeEnd: workerStats(),
       activeTransactions: 3200,
       activeElapsedMs,
-      clockTicksPerSecond: await command(["getconf", "CLK_TCK"]),
+      clockTicksPerSecond: Number(
+        (await command(["getconf", "CLK_TCK"])).trim(),
+      ),
     },
   }));
   pass(

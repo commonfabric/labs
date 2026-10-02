@@ -640,8 +640,28 @@ export class RoutedMemoryHost {
         principal: string;
         holdings: number;
         reservation: string;
+        priorReservation?: {
+          principal: string;
+          count: number;
+          holdings: number;
+        };
       }
     >();
+    const mutations = new Map<string, {
+      key: string;
+      session: {
+        space: string;
+        principal: string;
+        watches: Set<string>;
+        holdings: number;
+        views: number;
+      };
+      watches: Set<string>;
+      holdings: number;
+      views: number;
+      prior?: { principal: string; count: number; holdings: number };
+    }>();
+    const closes = new Map<string, string>();
     let chain = Promise.resolve();
     const nonce = crypto.getRandomValues(new Uint8Array(32));
     const issued = this.#now();
@@ -675,6 +695,27 @@ export class RoutedMemoryHost {
       if (message.type === "hello.ok") message.flags.routedAuthV1 = true;
       if (message.type === "response") {
         pending.delete(message.requestId);
+        const mutation = mutations.get(message.requestId);
+        mutations.delete(message.requestId);
+        if (mutation !== undefined) {
+          if (!sessions.has(mutation.key)) {
+            ticket!.context.watches.delete(mutation.key);
+          } else if (message.error !== undefined) {
+            if (mutation.prior === undefined) {
+              ticket!.context.watches.delete(mutation.key);
+            } else ticket!.context.watches.set(mutation.key, mutation.prior);
+          } else {
+            mutation.session.watches = mutation.watches;
+            mutation.session.holdings = mutation.holdings;
+            mutation.session.views = mutation.views;
+          }
+        }
+        const closed = closes.get(message.requestId);
+        closes.delete(message.requestId);
+        if (closed !== undefined && message.error === undefined) {
+          sessions.delete(closed);
+          ticket!.context.watches.delete(closed);
+        }
         const open = opens.get(message.requestId);
         if (open !== undefined) {
           this.#audit(
@@ -686,7 +727,14 @@ export class RoutedMemoryHost {
         }
         opens.delete(message.requestId);
         if (open !== undefined) {
-          ticket!.context.watches.delete(open.reservation);
+          if (
+            message.error !== undefined && open.priorReservation !== undefined
+          ) {
+            ticket!.context.watches.set(
+              open.reservation,
+              open.priorReservation,
+            );
+          } else ticket!.context.watches.delete(open.reservation);
         }
         if (
           open !== undefined && isPlainObject(message.ok) &&
@@ -893,6 +941,7 @@ export class RoutedMemoryHost {
           const reservation = prior === undefined
             ? `pending ${body.requestId}`
             : priorKey!;
+          const priorReservation = ticket.context.watches.get(reservation);
           ticket.context.watches.set(reservation, {
             principal: body.principal,
             count: (prior?.watches.size ?? 0) + (prior?.views ?? 0),
@@ -904,6 +953,7 @@ export class RoutedMemoryHost {
             principal: body.principal,
             holdings,
             reservation,
+            priorReservation,
           });
         } else {
           routedIdentifier(body.sessionId);
@@ -958,27 +1008,32 @@ export class RoutedMemoryHost {
               ? session.views
               : (body.views as unknown[]).length;
             requireRouted(views <= 64);
+            const priorUsage = ticket.context.watches.get(key);
             ticket.context.watches.set(key, {
               principal: session.principal,
               count: watches.size + views,
               holdings,
             });
             this.#quota(ticket.link, ticket.context);
-            session.watches = watches;
-            session.holdings = holdings;
-            session.views = views;
+            mutations.set(body.requestId, {
+              key,
+              session,
+              watches,
+              holdings,
+              views,
+              prior: priorUsage,
+            });
           }
         }
         // Retain the frame's queue budget until its protected Memory turn ends.
         // Control-link revocation can still close/fence that turn independently.
-        await backend.receive(parsed.payload);
         if (
           body.type === "session.close" && typeof body.sessionId === "string"
         ) {
           const key = `${parsed.space} ${body.sessionId}`;
-          sessions.delete(key);
-          ticket.context.watches.delete(key);
+          closes.set(body.requestId, key);
         }
+        await backend.receive(parsed.payload);
       }).catch(fail).finally(() => {
         pendingBytes -= frameBytes;
       });

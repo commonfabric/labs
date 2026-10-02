@@ -29,10 +29,12 @@ describe("routed untrusted parsers", () => {
         '{"__proto__":{}}',
         '{"constructor":1}',
         '"\\ud800"',
+        '"unterminated',
         '{"x":1e999}',
         "[".repeat(66) + "0" + "]".repeat(66),
       ]
     ) expect(() => parseRoutedJson(source)).toThrow();
+    expect(parseRoutedJson(' \n\t { "ok" : true } \r ')).toEqual({ ok: true });
   });
   it("checks DIDs rather than accepting a did:key prefix", () => {
     expect(isCanonicalEd25519DID(space)).toBe(true);
