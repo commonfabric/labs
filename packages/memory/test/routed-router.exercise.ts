@@ -659,6 +659,20 @@ try {
     Deno.chmodSync("/opt/memory-router/memory-router", 0o755);
     Deno.mkdirSync("/etc/memory-router", { recursive: true });
     Deno.copyFileSync(configPath, "/etc/memory-router/config.json");
+    Deno.copyFileSync(firewallPath, "/etc/memory-router/firewall.nft");
+    for (const folder of ["scripts", "deploy"]) {
+      Deno.mkdirSync(`/opt/memory-router/${folder}`, { recursive: true });
+    }
+    for (const file of ["network-guard.py", "network.py", "directory.py"]) {
+      Deno.copyFileSync(
+        `/infra/memory-router/scripts/${file}`,
+        `/opt/memory-router/scripts/${file}`,
+      );
+    }
+    Deno.copyFileSync(
+      "/infra/memory-router/deploy/users.conf",
+      "/opt/memory-router/deploy/users.conf",
+    );
     Deno.mkdirSync("/var/lib/memory-router-secrets", {
       recursive: true,
       mode: 0o700,
@@ -694,6 +708,144 @@ try {
     await command(["systemctl", "daemon-reload"]);
     await command(["systemctl", "start", "memory-router.target"]);
     await waitFile("/run/memory-router/link/agent.sock");
+    const start = () => command(["systemctl", "start", "memory-router.target"]);
+    const stop = () =>
+      command([
+        "systemctl",
+        "stop",
+        "memory-router.target",
+        "memory-router-network.service",
+      ]);
+    const table = () =>
+      command([
+        "nft",
+        "-n",
+        "-j",
+        "list",
+        "table",
+        "inet",
+        "memory_router",
+      ]);
+    const refusedStart = async (unit = "memory-router.target") => {
+      const result = await new Deno.Command("systemctl", {
+        args: ["start", unit],
+        stdout: "null",
+        stderr: "null",
+      }).output();
+      assert(!result.success, `${unit} started without its network gate`);
+    };
+    const noRoles = async () => {
+      for (const role of ["key", "link", "directory", "listener"]) {
+        const result = await new Deno.Command("systemctl", {
+          args: ["is-active", "--quiet", `memory-router-${role}.service`],
+          stdout: "null",
+          stderr: "null",
+        }).output();
+        assert(
+          !result.success,
+          `${role} started after a rejected network gate`,
+        );
+      }
+    };
+    // A boot loses the kernel table. Restarting the actual target must reload
+    // the persisted reviewed rules before any socket or role starts.
+    await stop();
+    await command(["nft", "delete", "table", "inet", "memory_router"]);
+    await start();
+    await command([
+      "python3",
+      "/opt/memory-router/scripts/network-guard.py",
+      "verify",
+    ]);
+    // During the same boot, role starts must verify rather than repair a
+    // missing or altered table while the loader remains active. Start the
+    // loader alone so these are real starts of the four production roles.
+    await stop();
+    await command(["systemctl", "start", "memory-router-network.service"]);
+    await command(["nft", "delete", "table", "inet", "memory_router"]);
+    for (const role of ["key", "link", "directory", "listener"]) {
+      await refusedStart(`memory-router-${role}.service`);
+    }
+    await noRoles();
+    await stop();
+    await command(["systemctl", "start", "memory-router-network.service"]);
+    await command([
+      "nft",
+      "insert",
+      "rule",
+      "inet",
+      "memory_router",
+      "output",
+      "meta",
+      "skuid",
+      "991",
+      "accept",
+    ]);
+    for (const role of ["key", "link", "directory", "listener"]) {
+      await refusedStart(`memory-router-${role}.service`);
+    }
+    await noRoles();
+    await stop();
+    await start();
+    pass(
+      "boot restores the exact firewall; missing or changed tables block role startup",
+    );
+
+    await stop();
+    const persisted = "/etc/memory-router/firewall.nft";
+    const reviewed = Deno.readTextFileSync(persisted);
+    Deno.renameSync(persisted, `${persisted}.saved`);
+    try {
+      await refusedStart();
+      await noRoles();
+    } finally {
+      Deno.renameSync(`${persisted}.saved`, persisted);
+    }
+    Deno.writeTextFileSync(persisted, reviewed + "# unreviewed edit\n");
+    try {
+      await refusedStart();
+      await noRoles();
+    } finally {
+      Deno.writeTextFileSync(persisted, reviewed);
+    }
+    pass(
+      "missing or changed persisted firewall inputs block every router role",
+    );
+
+    const before = await table();
+    for (
+      const [change, restore] of [
+        [["usermod", "-u", "1992", "memory-router-link"], [
+          "usermod",
+          "-u",
+          "992",
+          "memory-router-link",
+        ]],
+        [["groupmod", "-g", "1993", "memory-router-directory"], [
+          "groupmod",
+          "-g",
+          "993",
+          "memory-router-directory",
+        ]],
+      ]
+    ) {
+      await command(change);
+      try {
+        await refusedStart();
+        await noRoles();
+        assertEquals(
+          await table(),
+          before,
+          "identity refusal changed the firewall",
+        );
+      } finally {
+        await command(restore);
+      }
+    }
+    await start();
+    pass(
+      "mismatched existing role UIDs or GIDs refuse startup before firewall changes",
+    );
   } else {
     await startRouter();
   }
@@ -880,6 +1032,83 @@ finally:
   });
   assert(unknown.error !== undefined);
   pass("unknown space denied");
+  // Refuse only broker-created data sockets; the credentialed control link
+  // stays up. A retry must still receive a descriptor and fresh admission.
+  const retry = await new Client("127.0.0.33").start();
+  clients.push(retry);
+  await retry.authenticate(alice, 60, true);
+  await command([
+    "nft",
+    "insert",
+    "rule",
+    "inet",
+    "memory_router",
+    "output",
+    "meta",
+    "skuid",
+    "993",
+    "ip",
+    "daddr",
+    "127.0.0.1",
+    "tcp",
+    "dport",
+    "8444",
+    "reject",
+    "with",
+    "tcp",
+    "reset",
+    "comment",
+    '"memory-router-transient-dial"',
+  ]);
+  const firewall = JSON.parse(
+    await command([
+      "nft",
+      "-j",
+      "-n",
+      "list",
+      "chain",
+      "inet",
+      "memory_router",
+      "output",
+    ]),
+  ) as { nftables: { rule?: { comment?: string; handle: number } }[] };
+  const injected = firewall.nftables.flatMap(({ rule }) =>
+    rule?.comment === "memory-router-transient-dial" ? [rule.handle] : []
+  );
+  assertEquals(injected.length, 1);
+  try {
+    const refused = await retry.request({
+      type: "session.open",
+      space: spaces[0],
+      principal: alice.did(),
+      session: {},
+    });
+    assert(refused.error !== undefined);
+    assertEquals(retry.ws.readyState, WebSocket.OPEN);
+  } finally {
+    await command([
+      "nft",
+      "delete",
+      "rule",
+      "inet",
+      "memory_router",
+      "output",
+      "handle",
+      String(injected[0]),
+    ]);
+  }
+  assert(
+    (await retry.request({
+      type: "session.open",
+      space: spaces[0],
+      principal: alice.did(),
+      session: {},
+    })).ok,
+  );
+  retry.close();
+  pass(
+    "a transient broker dial failure permits retry on the same client socket",
+  );
   const quotaWatch = {
     id: "quota-old",
     kind: "graph",
