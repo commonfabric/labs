@@ -110,20 +110,28 @@ when it is disposed, so a storage manager that outlives the runtime keeps no
 hold on it.
 
 A client does not ask the memory server again about a space it was refused on
-its own, since the refusal turns on an access list it cannot read. A host with
-word that the principal has been granted access, such as a notice naming the
-space, asks again with `retrySpaceAccess(space)`, on `Runtime` or, across the
-worker boundary, on `RuntimeClient`. That opens the session once more through
-the memory server's ordinary admission, so it admits only what that admission
-would. An admission reaches the computations above through the same
-access-change observer, and repeats every load the refusal failed, so a
-computation that read a document of the space without calling
-`spaceAccess(target)` runs again too. A refusal leaves the answer `"none"`. It
-acts only on a space the runtime has opened, and asks for admission only while
-that space's session is refused, one attempt per call. A session that stands is
-left alone, except that loads a failed repeat left recorded are repeated. The
-session also opens again when something reads a document of that space that the
-replica has not asked for.
+its own, since the refusal turns on an access list it cannot read. It asks again
+with `retrySpaceAccess(space)`, on `Runtime` or, across the worker boundary, on
+`RuntimeClient`, when it has word that the principal has been granted access.
+The memory server sends that word itself where it can: when an access-list
+change gives the principal `READ` in a space it refused the principal on a
+connection, it sends that connection `session/admissible`, and the storage
+manager answers with the retry. The connection has to be open still for that: a
+shared connection, or the connection of a session the change revoked, but not
+the connection a connection-per-space client closes on its first refusal of a
+space. A host with other word, such as a notice naming the space, or a person
+asking it to try again, calls `retrySpaceAccess(space)` itself. The retry opens
+the session once more through the memory server's ordinary admission, so it
+admits only what that admission would. An admission reaches the computations
+above through the same access-change observer, and repeats every load the
+refusal failed, so a computation that read a document of the space without
+calling `spaceAccess(target)` runs again too. A refusal leaves the answer
+`"none"`. It acts only on a space the runtime has opened, and asks for admission
+only while that space's session is refused, one attempt per call. A session that
+stands is left alone, except that loads a failed repeat left recorded are
+repeated. The session also opens again when something reads a document of that
+space that the replica has not asked for.
+
 
 ## Changing the level
 
