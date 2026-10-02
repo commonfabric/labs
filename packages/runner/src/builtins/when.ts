@@ -1,6 +1,7 @@
 import { type Cell } from "../cell.ts";
 import { type Action } from "../scheduler.ts";
 import { type Runtime } from "../runtime.ts";
+import { readsTruthyAtRoot } from "../schema.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { resolveLink } from "../link-resolution.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
@@ -12,6 +13,9 @@ import { ContextualFlowControl } from "../cfc.ts";
 /**
  * when(condition, value) - && semantics
  * Returns value if condition is truthy, otherwise returns condition (falsy value)
+ *
+ * Truthiness is read from the condition's root (`readsTruthyAtRoot()`), so
+ * nothing below the root of a condition that is a record is read.
  */
 export function when(
   inputsCell: Cell<{ condition: any; value: any }>,
@@ -38,10 +42,14 @@ export function when(
     const resultWithLog = result.withTx(tx);
     const inputsWithLog = inputsCell.withTx(tx);
 
-    const condition = inputsWithLog.key("condition").get();
+    const truthy = readsTruthyAtRoot(
+      runtime,
+      tx,
+      conditionCell.getAsNormalizedFullLink(),
+    );
 
     // && semantics: if truthy, return value; if falsy, return condition
-    const ref = condition
+    const ref = truthy
       ? inputsWithLog.key("value").getAsLink({ base: result })
       : inputsWithLog.key("condition").getAsLink({ base: result });
     const resolvedRef = resolveLink(runtime, tx, parseLink(ref, result));

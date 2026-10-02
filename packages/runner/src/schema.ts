@@ -11,6 +11,7 @@ import {
   type FabricValue,
   hashStringOf,
   isDeepFrozen,
+  isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   shallowMutableClone,
 } from "@commonfabric/data-model";
@@ -1117,6 +1118,37 @@ function entrySelectorSchema(
   return combineSchemaForLink(travelingSchema, storedSchema);
 }
 
+/**
+ * Helper for `validateAndTransform()` and `readsTruthyAtRoot()`, which returns
+ * the schema a read carries once it has followed the write redirects at its
+ * entry: the reader's own `readerSchema` crossed with `redirectedSchema`, the
+ * schema the redirect chain resolved to, by reader precedence
+ * (`combineSchemaForLink()`), or whichever of the two is given. Both are
+ * resolved schemas.
+ */
+function readEntrySchema(
+  readerSchema: JSONSchema | undefined,
+  redirectedSchema: JSONSchema | undefined,
+): JSONSchema | undefined {
+  if (readerSchema === undefined) return redirectedSchema;
+  return redirectedSchema === undefined
+    ? readerSchema
+    : combineSchemaForLink(readerSchema, redirectedSchema);
+}
+
+/**
+ * Helper for `validateAndTransform()` and `readsTruthyAtRoot()`, which returns
+ * whether a read entering with `schema` hands back the schema-less query-result
+ * proxy: `schema` declares no handle, and what it says besides the handle
+ * constrains nothing — it is absent, `true`, or `{}`. `false` is not one of
+ * those: it constrains everything, and traversal is what honors it.
+ */
+function readsWithoutSchema(schema: JSONSchema | undefined): boolean {
+  const filtered = filterAsCell(schema);
+  return (schema === undefined || !SchemaObjectTraverser.hasAsCell(schema)) &&
+    filtered !== false && !isNontrivialSchema(filtered);
+}
+
 export interface ValidateAndTransformOptions {
   /** When true, also read into each Cell created for asCell fields to capture dependencies */
   traverseCells?: boolean;
@@ -1204,12 +1236,7 @@ export function validateAndTransform(
   ]);
 
   const resolvedLinkSchema = resolveSchema(resolvedLink.schema);
-  const effectiveSchema = resolvedSchema !== undefined
-    ? resolvedLinkSchema !== undefined
-      ? combineSchemaForLink(resolvedSchema, resolvedLinkSchema)
-      : resolvedSchema
-    : resolvedLinkSchema;
-  const filteredSchema = filterAsCell(effectiveSchema);
+  const effectiveSchema = readEntrySchema(resolvedSchema, resolvedLinkSchema);
   // The stored-metadata probe reads `<doc>/cfc`, and it belongs to the entry
   // point: an eager read runs it once for the document it was handed and never
   // for the documents its traversal reaches through links. A view re-enters
@@ -1235,17 +1262,7 @@ export function validateAndTransform(
     ...resolvedLink,
     ...(effectiveSchema !== undefined && { schema: effectiveSchema }),
   };
-  // A schema that constrains nothing — absent, `true`, or `{}` — and carries
-  // no asCell/asStream hands the read to the schema-less proxy. `false` is
-  // not one of those: it constrains everything, and traversal below is what
-  // honors it.
-  if (
-    (
-      effectiveSchema === undefined ||
-      !SchemaObjectTraverser.hasAsCell(effectiveSchema)
-    ) &&
-    filteredSchema !== false && !isNontrivialSchema(filteredSchema)
-  ) {
+  if (readsWithoutSchema(effectiveSchema)) {
     return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
   }
 
@@ -1649,6 +1666,69 @@ export function validateAndTransform(
   // we need some other way to indicate success to our caller. For now, I'm
   // still just returning undefined in the error case.
   return val;
+}
+
+/**
+ * Returns whether what `validateAndTransform()` returns for `link`, read
+ * through `tx`, is truthy, decided from the value's root without reading below
+ * it. A caller that decides on a value's truthiness and nothing else reads it
+ * this way, so that what it consumes and what it runs again on are the root's,
+ * not those of the whole value a schema describes.
+ *
+ * It resolves `link` the way that read does, following the write redirects at
+ * its entry and then every link to the value, so it consumes each hop. It then
+ * reads the value's root non-recursively, which observes whether the value
+ * exists and what kind of value it is, and consumes the labels covering the
+ * root.
+ *
+ * A root that is not a record or an array is the whole of its value, so the
+ * read of it reaches nothing below the root, and that read decides: a schema
+ * default standing in for an absent value, a type check on a scalar, and a
+ * value that has not arrived all come out as they do there. A record or an
+ * array is truthy whatever it holds, so what decides is whether the read's
+ * checks at the root admit it. A handle, or a read without a schema, admits
+ * any value; otherwise the schema the read validates against has to accept the
+ * container's type. What lies below the root is not read, and is taken to be
+ * valid: a container that fails its schema only below its root returns `true`
+ * here, where the read returns `undefined`.
+ */
+export function readsTruthyAtRoot(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): boolean {
+  const readerSchema = resolveSchema(link.schema);
+  const redirected = resolveLink(runtime, tx, link, "writeRedirect", {
+    markIfcCrossings: true,
+  });
+  const entrySchema = readEntrySchema(
+    readerSchema,
+    resolveSchema(redirected.schema),
+  );
+  const target = resolveLink(
+    runtime,
+    tx,
+    {
+      ...redirected,
+      ...(entrySchema !== undefined && { schema: entrySchema }),
+    },
+    "value",
+    { markIfcCrossings: true },
+  );
+  const root = tx.readValueOrThrow(target, { nonRecursive: true });
+  if (!isKeyableObjectOrArray(root)) {
+    return Boolean(validateAndTransform(runtime, tx, link));
+  }
+  if (
+    entrySchema === undefined || readsWithoutSchema(entrySchema) ||
+    SchemaObjectTraverser.hasAsCell(entrySchema)
+  ) {
+    return true;
+  }
+  return schemaAcceptsType(
+    entrySelectorSchema(readerSchema, entrySchema, target.schema),
+    Array.isArray(root) ? "array" : "object",
+  );
 }
 
 /**

@@ -7,6 +7,7 @@ import { parseLink } from "../link-utils.ts";
 import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
+import { readsTruthyAtRoot } from "../schema.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
 import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
@@ -24,7 +25,9 @@ import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
  * declared reads.
  *
  * `condition` stays a plain (value-read) input, so a condition change keeps
- * re-running ifElse.
+ * re-running ifElse. The action decides on its truthiness alone, which it reads
+ * from the condition's root (`readsTruthyAtRoot()`), so nothing below the root
+ * of a condition that is a record is read, consumed or re-run on.
  */
 export const IF_ELSE_ARGUMENT_SCHEMA = internSchema({
   type: "object",
@@ -51,11 +54,14 @@ export function ifElse(
       conditionCell.getAsNormalizedFullLink(),
     );
     const cell = runtime.getCellFromLink(resolvedCondition).withTx(tx);
-    return { cell, value: cell.get() };
+    return {
+      cell,
+      truthy: readsTruthyAtRoot(runtime, tx, resolvedCondition),
+    };
   };
 
   const action: Action = (tx: IExtendedStorageTransaction) => {
-    const { cell: conditionCell, value: condition } = readCondition(tx);
+    const { cell: conditionCell, truthy } = readCondition(tx);
     const resultScope = resolvedCellScope(runtime, tx, conditionCell);
     // Keyed on the output spot, never on the inputs document: every runtime
     // sharing the piece must mint this one store, whatever its vintage
@@ -72,7 +78,7 @@ export function ifElse(
     const resultWithLog = result.withTx(tx);
     const inputsWithLog = inputsCell.withTx(tx);
 
-    const ref = inputsWithLog.key(condition ? "ifTrue" : "ifFalse")
+    const ref = inputsWithLog.key(truthy ? "ifTrue" : "ifFalse")
       .getAsLink({ base: result });
     const resolvedRef = resolveLink(runtime, tx, parseLink(ref, result));
     // A stream is declared by its link's schema and holds no value, so the
