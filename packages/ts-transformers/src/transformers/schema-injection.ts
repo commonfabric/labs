@@ -2879,10 +2879,12 @@ function reportUnknownPatternResult(
 
 /**
  * Collects dotted paths to `unknown`-typed leaves within a result type node,
- * descending object literals, array element types, and tuple elements. A
- * tuple element's path is its index, written `[i...]` for a rest element,
- * whose own element is the one walked. A top-level `unknown` is handled by
- * the error path above, so this only sees nested occurrences.
+ * descending object literals, array element types, tuple elements, a
+ * `readonly` type's operand, and each member of a union, whose schema the
+ * output carries as one of its alternatives. A tuple element's path is its
+ * index, written `[i...]` for a rest element, whose own element is the one
+ * walked; a union member's path is the union's. A top-level `unknown` is
+ * handled by the error path above, so this only sees nested occurrences.
  */
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
   const paths: string[] = [];
@@ -2892,7 +2894,14 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
       paths.push(path || "(result)");
       return;
     }
-    if (ts.isTypeLiteralNode(unwrapped)) {
+    if (
+      ts.isTypeOperatorNode(unwrapped) &&
+      unwrapped.operator === ts.SyntaxKind.ReadonlyKeyword
+    ) {
+      walk(unwrapped.type, path);
+    } else if (ts.isUnionTypeNode(unwrapped)) {
+      for (const member of unwrapped.types) walk(member, path);
+    } else if (ts.isTypeLiteralNode(unwrapped)) {
       for (const member of unwrapped.members) {
         if (
           ts.isPropertySignature(member) && member.type && member.name &&
@@ -2931,8 +2940,8 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
  * result that stands as a placeholder printed from a type the checker prints
  * no node for. It descends an object type with no name, which a print writes
  * out as structure; an instance of a class expression with no name, which is
- * what leaves a type with no print; an array's element; and a tuple's
- * elements, along the paths the node walk gives them.
+ * what leaves a type with no print; an array's element; a tuple's elements;
+ * and each member of a union, along the paths the node walk gives them.
  */
 function collectUnknownResultTypePaths(
   type: ts.Type,
@@ -2950,7 +2959,9 @@ function collectUnknownResultTypePaths(
     }
     if (enclosing.has(current)) return;
     enclosing.add(current);
-    if (checker.isTupleType(current)) {
+    if (current.isUnion()) {
+      for (const member of current.types) walk(member, path);
+    } else if (checker.isTupleType(current)) {
       const tuple = current as ts.TypeReference;
       const { elementFlags } = tuple.target as ts.TupleType;
       checker.getTypeArguments(tuple).forEach((element, index) => {

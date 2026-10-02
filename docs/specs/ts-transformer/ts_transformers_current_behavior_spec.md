@@ -813,9 +813,10 @@ structurally representable.
 - direct top-level `any` / `unknown` result inference emits
   `pattern:any-result-schema`
 - individual inferred-result **fields** whose type is `unknown`, at any depth of
-  object types, array elements, and tuple elements, emit **Error**
-  `pattern-result:unknown-type`, naming the offending paths (`a.b`, `items[]`,
-  `pair[0]`, and `pair[1...]` for a tuple's rest element) — the schema would
+  object types, array elements, tuple elements, `readonly` types, and the
+  members of a union, emit **Error** `pattern-result:unknown-type`, naming the
+  offending paths (`a.b`, `items[]`, `pair[0]`, and `pair[1...]` for a tuple's
+  rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
   (`reportUnknownPatternResult()` in `schema-injection.ts`)
@@ -832,9 +833,10 @@ as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
 as that type (§12). Both checks above read such a placeholder by its type:
 whether the type is `any` or `unknown`, and which of its fields are `unknown`.
 The field walk descends each object type with no name, each instance of a class
-expression with no name, each array element, and each tuple element, as the
-node walk descends a printed type literal, array, and tuple. It skips a member schema generation leaves out
-of an object's schema, a symbol-keyed member or a cell's internal marker
+expression with no name, each array element, each tuple element, and each
+member of a union, as the node walk descends a printed type literal, array,
+tuple, union, and `readonly` operand. It skips a member schema generation leaves
+out of an object's schema, a symbol-keyed member or a cell's internal marker
 (`isInternalMemberName()` in the schema generator), since no consumer receives
 it as a field. It stops at a type it is already inside, since a type with no
 name can hold itself through `typeof`, and walks a type reached again by
