@@ -444,6 +444,11 @@ Rules:
   watch set if the session was reopened fresh — declaring its holdings on that
   `session.watch.set` (section 4.3.5) so the re-establishment carries the
   difference rather than the whole union
+- a retry after a failed handshake or session restoration discards the previous
+  transport connection before sending `hello` again. A connection accepts
+  `hello` only once; the fresh connection also supplies a new authentication
+  challenge. Mounted sessions retain their watch intent and unconfirmed commits
+  while they await restoration on that connection
 - a `session.open` denied with an `AuthorizationError` the server did NOT mark
   `retriable` is permanent: the client stops reopening that session and
   terminates it with the real error rather than retrying the identical handshake

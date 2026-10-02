@@ -18,9 +18,9 @@ of two kinds of reason:
 
 - **Recoverable (retriable).** The connection-challenge and invocation-freshness
   anti-replay checks: an expired, already-used, or mismatched challenge, or a
-  stale signed `exp`. Each reconnect runs a fresh `hello` that issues a new
-  challenge, so these do not recur — a token-refresh window or a challenge race
-  heals on the next attempt.
+  stale signed `exp`. Each reconnect attempt discards the failed transport
+  connection before running `hello` on a fresh one that issues a new challenge,
+  so a token-refresh window or a challenge race can heal on the next attempt.
 - **Permanent.** An audience or protocol mismatch, a malformed invocation, or an
   ACL capability shortfall (the principal lacks `READ`, a malformed or ownerless
   ACL, a genesis requirement). The same configuration or ACL state produces the

@@ -105,6 +105,15 @@ export type Transport = {
 
   send(payload: string): Promise<void>;
   close(): Promise<void>;
+
+  /**
+   * Discards the current connection without disposing the transport. The next
+   * send opens a fresh connection; frames from the discarded one are ignored.
+   * Reconnectable transports implement this so a failed session restoration
+   * can retry the handshake on a connection that has not accepted `hello`.
+   */
+  reset?(): void;
+
   setReceiver(receiver: (payload: string) => void): void;
   setCloseReceiver?(receiver: (error?: Error) => void): void;
 
@@ -1210,6 +1219,12 @@ export class Client {
             return;
           }
           this.#rejectPending(err);
+          for (const session of this.#spaces) {
+            session.handleDisconnect();
+          }
+          // A restore can fail after hello succeeded while the socket stays
+          // open. The next hello needs a new connection and auth challenge.
+          this.#transport.reset?.();
           await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
           attempt += 1;
         }
