@@ -164,9 +164,10 @@ string. Open this in a browser, signed in as the mailbox's account:
 https://accounts.google.com/o/oauth2/auth?client_id=<client id>&redirect_uri=http://localhost:8765&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent
 ```
 
-After consent the browser lands on `http://localhost:8765/?code=<code>&…`.
-Nothing has to be listening there: the page fails to load, and the code is in
-the address bar. Exchange it within a few minutes:
+After consent the browser lands on an address beginning
+`http://localhost:8765/?`, with a `code=<code>` parameter among the others in
+its query string. Nothing has to be listening there: the page fails to load,
+and the code is in the address bar. Exchange it within a few minutes:
 
 ```bash
 curl -s https://oauth2.googleapis.com/token \
