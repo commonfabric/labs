@@ -2637,6 +2637,29 @@ export class SchemaGenerator {
     type: ts.Type,
     typeNode: ts.TypeNode | undefined,
     context: GenerationContext,
+    reading: Map<ts.Type, Set<ts.TypeNode | undefined>> = new Map(),
+  ): Record<string, unknown> | undefined {
+    // A recursive type, `type Recursive = Cell<Recursive> | null`, reaches the
+    // type it is reading again at the same node. The recursion adds nothing to
+    // the labels being read, so the read stops there. Only the pairs being
+    // read count: a pair read again on another branch is read in full.
+    const nodes = reading.get(type) ?? new Set<ts.TypeNode | undefined>();
+    if (nodes.has(typeNode)) return undefined;
+    nodes.add(typeNode);
+    reading.set(type, nodes);
+    try {
+      return this.#readLabelsOf(type, typeNode, context, reading);
+    } finally {
+      nodes.delete(typeNode);
+    }
+  }
+
+  /** Helper for {@link #labelsOf}, which reads `type`'s labels once. */
+  #readLabelsOf(
+    type: ts.Type,
+    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
+    reading: Map<ts.Type, Set<ts.TypeNode | undefined>>,
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
     // A cell's labels are its value's, read at the value's own node.
@@ -2647,7 +2670,12 @@ export class SchemaGenerator {
       (wrapper.typeRef.typeArguments ??
         checker.getTypeArguments(wrapper.typeRef))[0];
     if (cell && valueType) {
-      return this.#labelsOf(valueType, cell.node.typeArguments?.[0], context);
+      return this.#labelsOf(
+        valueType,
+        cell.node.typeArguments?.[0],
+        context,
+        reading,
+      );
     }
     const written = typeNode && readAuthoredTypeNode(typeNode, checker);
     const paired = written && ts.isUnionTypeNode(written)
@@ -2671,7 +2699,7 @@ export class SchemaGenerator {
       return joinMemberIfcLabels(
         {},
         wholeNodes.map(({ type, node }) =>
-          this.#labelsOf(type, node, context) ?? {}
+          this.#labelsOf(type, node, context, reading) ?? {}
         ),
       );
     }
@@ -2682,7 +2710,7 @@ export class SchemaGenerator {
           checker.getTypeFromTypeNode(typeNode) === values[0]
         ? typeNode
         : memberNode(values[0]!);
-      return this.#labelsOf(values[0]!, valueNode, context);
+      return this.#labelsOf(values[0]!, valueNode, context, reading);
     }
     const whole = this.formatChildType(type, context, typeNode);
     const labels = declaredIfcLabels(whole, context.definitions);
@@ -2693,9 +2721,11 @@ export class SchemaGenerator {
         const wholeNodes = paired?.wholeNodes.get(member);
         return wholeNodes
           ? wholeNodes.map(({ node, type }) =>
-            this.#labelsOf(type, node, context) ?? {}
+            this.#labelsOf(type, node, context, reading) ?? {}
           )
-          : [this.#labelsOf(member, memberNode(member), context) ?? {}];
+          : [
+            this.#labelsOf(member, memberNode(member), context, reading) ?? {},
+          ];
       }),
     );
   }
