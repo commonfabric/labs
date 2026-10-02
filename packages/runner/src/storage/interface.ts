@@ -28,6 +28,7 @@ import type {
   CommitClass,
   CommitPrecondition,
   DeliveryFailureClass,
+  DocumentPath,
   EntityDocument,
   EntityIdListOptions,
   EntityIdListResult,
@@ -2940,6 +2941,14 @@ export type IMemorySpaceAddress = IMemoryAddress & {
   space: MemorySpace;
 };
 
+/**
+ * A memory address as the transaction journal records it: its path is rooted
+ * at the stored document, so user data sits under `value`.
+ */
+export type IMemorySpaceDocumentAddress = IMemorySpaceAddress & {
+  path: DocumentPath;
+};
+
 export type MemoryAddressPathComponent = string;
 
 export interface Assert {
@@ -3447,7 +3456,7 @@ export interface TransactionReactivityLog {
 }
 
 export interface TransactionWriteDetail {
-  address: IMemorySpaceAddress;
+  address: IMemorySpaceDocumentAddress;
   value?: FabricValue;
   previousValue?: FabricValue;
 
@@ -3505,10 +3514,10 @@ export interface NativeStorageCommit {
 
 export type Activity = Variant<{
   read: IReadActivity;
-  write: IMemorySpaceAddress;
+  write: IMemorySpaceDocumentAddress;
 }>;
 
-export interface IReadActivity extends IMemorySpaceAddress {
+export interface IReadActivity extends IMemorySpaceDocumentAddress {
   meta: Metadata;
   nonRecursive?: boolean;
 
@@ -3536,7 +3545,7 @@ export interface IReadActivity extends IMemorySpaceAddress {
  * the transaction inspection surface sees. `journalIndex` is the shared
  * activity clock (see {@link IReadActivity.journalIndex}).
  */
-export interface IWriteAttempt extends IMemorySpaceAddress {
+export interface IWriteAttempt extends IMemorySpaceDocumentAddress {
   journalIndex: number;
 }
 

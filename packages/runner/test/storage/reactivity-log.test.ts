@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 
 import { Runtime } from "../../src/runtime.ts";
 import { txToReactivityLog } from "../../src/scheduler.ts";
@@ -22,7 +23,7 @@ describe("reactivity-log", () => {
       space,
       scope: "space" as const,
       id: "of:test" as const,
-      path: ["value", "slot"],
+      path: toDocumentPath(["value", "slot"]),
     };
     for (const nonRecursive of [false, true]) {
       const log = reactivityLogFromActivities([{

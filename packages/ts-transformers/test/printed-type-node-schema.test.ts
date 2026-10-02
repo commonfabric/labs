@@ -692,6 +692,71 @@ export const f = lift((x: ReturnType<typeof makeObject>) => x.a);`,
     });
   });
 
+  describe("a pattern result holding `unknown` in a tuple, a `readonly` type, or a union", () => {
+    // Each `unknown` below lowers to `{ type: "unknown" }` somewhere in the
+    // schema, as a field typed `unknown` does, so it is reported the same
+    // way, whether the result is printed or read from a placeholder for a
+    // type with no print.
+
+    /**
+     * The diagnostics transforming a pattern over `u: unknown` whose callback
+     * returns `result`, beside a module-level `make()` returning an anonymous
+     * class instance.
+     */
+    async function diagnosticsFor(
+      result: string,
+    ): Promise<TransformationDiagnostic[]> {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      return diagnostics;
+    }
+
+    for (
+      const [reading, before] of [
+        ["printed", ""],
+        ["read from a placeholder for a type with no print", "a: make(), "],
+      ] as const
+    ) {
+      for (
+        const [value, field] of [
+          ["[u, 1] as [unknown, number]", "f[0]"],
+          ["[1, u] as [first: number, second: unknown]", "f[1]"],
+          ["[1, u] as [number, unknown?]", "f[1]"],
+          ["[1, u] as [number, ...unknown[]]", "f[1...]"],
+          ["[u, 1] as const", "f[0]"],
+          ["[[u], 1] as const", "f[0][0]"],
+          ["[u] as readonly unknown[]", "f[]"],
+          ["[1, { v: u }] as [number, { v: unknown }?]", "f[1].v"],
+          ["[1, [u]] as [number, unknown[]?]", "f[1][]"],
+          ["[1, [u]] as [number, [unknown]?]", "f[1][0]"],
+          ["{ v: u } as { v: unknown } | null", "f.v"],
+        ] as const
+      ) {
+        it(`reports \`pattern-result:unknown-type\` for \`${field}\` of \`${value}\` in a result ${reading}`, async () => {
+          const diagnostics = await diagnosticsFor(
+            `{ ${before}f: ${value} }`,
+          );
+
+          expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+            .toEqual([{
+              severity: "error",
+              type: "pattern-result:unknown-type",
+            }]);
+          expect(diagnostics[0]!.message).toContain(`field \`${field}\` has`);
+        });
+      }
+    }
+  });
+
   describe("a printed result type that holds CFC labels", () => {
     const policy = {
       type: "https://commonfabric.org/cfc/atom/Policy",

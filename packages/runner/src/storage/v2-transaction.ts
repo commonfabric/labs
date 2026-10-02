@@ -17,6 +17,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
   type SqliteOperation,
+  toDocumentPath,
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -1675,7 +1676,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         space: address.space,
         scope: normalizeCellScope(address.scope),
         id: address.id,
-        path: address.path,
+        path: toDocumentPath(address.path),
         meta: skipCommitPrecondition
           ? { ...readMeta, ...ignoreReadForCommit }
           : readMeta,
@@ -1959,7 +1960,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           space: address.space,
           scope,
           id: address.id,
-          path: paths[index],
+          path: toDocumentPath(paths[index]),
           meta: activityMeta,
           nonRecursive: true,
           journalIndex: this.#activityClock++,
@@ -1971,7 +1972,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           space: address.space,
           scope,
           id: address.id,
-          path: paths[index],
+          path: toDocumentPath(paths[index]),
           meta: activityMeta,
           journalIndex: this.#activityClock++,
         });
@@ -2412,7 +2413,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       space,
       scope: normalizeCellScope(address.scope),
       id: address.id,
-      path: address.path,
+      path: toDocumentPath(address.path),
       journalIndex: this.#activityClock++,
     });
     this.#upsertWriteDetail(
@@ -2438,7 +2439,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       space,
       scope: normalizeCellScope(address.scope),
       id: address.id,
-      path: address.path,
+      path: toDocumentPath(address.path),
     };
     const key = encodePointer(address.path);
     const existing = details.get(key);
