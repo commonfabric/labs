@@ -806,13 +806,12 @@ export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1EncodeOutcome {
   try {
     return { text: jsonFromFabricValue(value) };
   } catch (e) {
-    if (
+    return refusalOrRethrow(
+      e,
       (e instanceof Error && e.constructor === Error) ||
-      e instanceof ProblematicStateError
-    ) {
-      return { refused: "unencodable" };
-    }
-    throw e;
+        e instanceof ProblematicStateError,
+      { refused: "unencodable" },
+    );
   }
 }
 
@@ -829,12 +828,26 @@ export function fvj1DecodeOutcomeOf(text: string): Fvj1DecodeOutcome {
   try {
     decoded = fabricFromJsonValue(text);
   } catch (e) {
-    if (e instanceof ProblematicStateError) {
-      return { refused: decodeRefusalOf(text) };
-    }
-    throw e;
+    return refusalOrRethrow(e, e instanceof ProblematicStateError, {
+      refused: decodeRefusalOf(text),
+    });
   }
   return { value: fvj1DescriptorOf(decoded) };
+}
+
+/**
+ * Returns `refusal` when `isRefusal` says `thrown` is what the codec refuses
+ * with, and throws `thrown` otherwise, it then being a fault in the codec.
+ */
+function refusalOrRethrow<Refusal>(
+  thrown: unknown,
+  isRefusal: boolean,
+  refusal: Refusal,
+): Refusal {
+  if (!isRefusal) {
+    throw thrown;
+  }
+  return refusal;
 }
 
 /** Returns the fixture entry for one case. */
@@ -923,9 +936,10 @@ function fixtureEntryOf(
  * negative zero, a string, or an array or record of these, holding no hole and
  * no key starting with `/`. Returns `undefined` for anything else.
  *
- * This writes the text without the codec, sorting each record's keys by their
- * WTF-8 bytes as section 10 requires, so that the codec's key order is held
- * to a computation of its own rather than to text typed by hand.
+ * This writes the text without the codec, sorting the value's own keys with
+ * `utf8Compare()`, the canonical comparator section 10 names, so that the
+ * codec's key order is held to a computation from the case rather than to
+ * the codec's output or to text typed by hand.
  */
 function plainJsonTextOf(value: FabricValue): string | undefined {
   const body = plainJsonBodyOf(value);
@@ -953,9 +967,7 @@ function plainJsonBodyOf(value: FabricValue): string | undefined {
     }
     return `[${parts.join(",")}]`;
   } else if (isFabricPlainObject(value)) {
-    const keys = Object.keys(value).map((key) => ({ key, bytes: wtf8Of(key) }))
-      .sort((a, b) => compareBytes(a.bytes, b.bytes));
-    for (const { key } of keys) {
+    for (const key of Object.keys(value).sort(utf8Compare)) {
       const part = plainJsonBodyOf(value[key]);
       if (part === undefined || key.startsWith("/")) return undefined;
       parts.push(`${JSON.stringify(key)}:${part}`);
@@ -963,44 +975,6 @@ function plainJsonBodyOf(value: FabricValue): string | undefined {
     return `{${parts.join(",")}}`;
   }
   return undefined;
-}
-
-/**
- * Returns the WTF-8 bytes of `text`: UTF-8, with a lone surrogate written as
- * the three bytes its code unit's value would take.
- */
-function wtf8Of(text: string): number[] {
-  const bytes: number[] = [];
-  for (const char of text) {
-    const point = char.codePointAt(0)!;
-    if (point < 0x80) {
-      bytes.push(point);
-    } else if (point < 0x800) {
-      bytes.push(0xc0 | (point >> 6), 0x80 | (point & 0x3f));
-    } else if (point < 0x10000) {
-      bytes.push(
-        0xe0 | (point >> 12),
-        0x80 | ((point >> 6) & 0x3f),
-        0x80 | (point & 0x3f),
-      );
-    } else {
-      bytes.push(
-        0xf0 | (point >> 18),
-        0x80 | ((point >> 12) & 0x3f),
-        0x80 | ((point >> 6) & 0x3f),
-        0x80 | (point & 0x3f),
-      );
-    }
-  }
-  return bytes;
-}
-
-/** Compares two byte sequences as unsigned bytes, a prefix first. */
-function compareBytes(a: readonly number[], b: readonly number[]): number {
-  for (let index = 0; index < a.length && index < b.length; index++) {
-    if (a[index] !== b[index]) return a[index]! - b[index]!;
-  }
-  return a.length - b.length;
 }
 
 /**
@@ -1516,7 +1490,12 @@ function arrayOf(payload: Fvj1Descriptor): FabricValue[] {
   return result;
 }
 
-/** Returns the count of a `hole` entry, or `undefined` for any other entry. */
+/**
+ * Returns the count of a `hole` entry, or `undefined` for any other entry.
+ *
+ * @throws If a `hole` entry's count is not an integer of at least one, the
+ *   least run the wire format writes.
+ */
 function holeCountOf(entry: Fvj1Descriptor): number | undefined {
   if (entry === null || typeof entry !== "object" || isList(entry)) {
     return undefined;
@@ -1524,7 +1503,9 @@ function holeCountOf(entry: Fvj1Descriptor): number | undefined {
   const [kind, count] = soleEntryOf(entry);
   if (kind !== "hole") {
     return undefined;
-  } else if (!(typeof count === "number" && Number.isSafeInteger(count))) {
+  } else if (
+    !(typeof count === "number" && Number.isSafeInteger(count) && count >= 1)
+  ) {
     throw new Error(`Not a hole count: ${JSON.stringify(count)}`);
   }
   return count;
