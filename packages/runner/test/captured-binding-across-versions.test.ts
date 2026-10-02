@@ -153,7 +153,8 @@ describe("captured-binding-across-versions", () => {
   // Whether a trusted setup may re-point a captured slot when a pattern
   // version names another cell for the same binding is open. Until it is
   // settled, the slot keeps the cell it was first given, and re-pointing it
-  // is refused, as it is for a binding passed to a composed sub-pattern.
+  // is refused. A binding passed to a composed sub-pattern is re-pointed
+  // (see the last case).
   it("refuses to re-point each row's capture under a version that makes the captured cell another way", async () => {
     const { setupError, errors } = await upgradeTo("labels");
 

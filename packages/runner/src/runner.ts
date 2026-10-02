@@ -870,9 +870,9 @@ function describeSkippedSubPatternNode(
  * `ownCells`, the documents the setup creates for its piece, is the setup's own
  * initialization of that cell and records a setup projection. Any other
  * redirect names a cell the piece was handed, through its argument or through
- * the code setting it up, and records a capture of the slot holding it, as a
- * list builtin records its callback's captured bindings: the slot is
- * initialized once and compared by the cell it names, and the cell is not.
+ * the code setting it up, and records a binding of the slot holding it: the
+ * slot is compared by the cell it names, a later setup may re-point it, and
+ * the cell itself is not initialized.
  */
 const recordSetupProjectionPolicyInputs = (
   tx: IExtendedStorageTransaction,
@@ -902,7 +902,7 @@ const recordSetupProjectionPolicyInputs = (
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
   // setup-projection marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to. A capture of an alias would name a slot that
+  // a path nothing redirects to. A binding of an alias would name a slot that
   // never holds the link it records.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
@@ -2906,7 +2906,7 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a capture of the slot holding
+    // slots in. Each redirect it finds records a binding of the slot holding
     // it (`writeIsRuntimeInitialization` in cfc/prepare.ts), so the redirects
     // it walks are the ones this setup establishes rather than the ones the
     // document already held. The cell a redirect names receives no exemption:
@@ -3103,7 +3103,7 @@ export class Runner {
       // cells is the setup's own initialization of that cell. Those cells are
       // minted from the result cell's cause, so no one else names them; a
       // field naming any other cell, the piece's argument or a cell the code
-      // setting it up closed over, is a capture of the field alone.
+      // setting it up closed over, is a binding of the field alone.
       recordSetupProjectionPolicyInputs(
         tx,
         this.#runtime,
