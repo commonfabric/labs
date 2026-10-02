@@ -117,6 +117,7 @@ const REFERENCE_BINDING_SINKS: ReadonlyMap<string, ReadonlySet<string>> =
     ],
     ["cf-custody-answer", new Set(["terms", "policy", "output"])],
   ]);
+
 /**
  * The label a render decision was made on, as a denial reports it: a cell's
  * stored label, its schema's, a read's consumed labels, or none it could

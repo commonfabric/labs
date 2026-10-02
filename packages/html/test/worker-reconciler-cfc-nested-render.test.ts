@@ -39,15 +39,14 @@ import type { WorkerReconcilerOptions } from "../src/worker/types.ts";
 
 // `cf-render` shows a piece through renders of its own, each mounted from a
 // reference the way the shell mounts a piece opened by its address. Each step
-// builds
-// the reconciler as the worker builds one for a mount: the shell's default
-// display ceiling for the viewer, and the resolver, membership provider and
-// module policy source the worker derives from it. A piece opened directly is
-// mounted from its own reference. What a `cf-render` shows is mounted from the
-// reference its `$cell` binding handed over, as `cf-render` mounts it: the
-// bound cell itself at the full variant, the piece it currently names for a
-// tile, the piece's `[NAME]` for a chip with no view of its own, and an
-// exported `[TILE_UI]` or `[CHIP_UI]`. Every value a viewer may not see
+// builds the reconciler as the worker builds one for a mount: the shell's
+// default display ceiling for the viewer, and the resolver, membership
+// provider and module policy source the worker derives from it. A piece opened
+// directly is mounted from its own reference. What a `cf-render` shows is
+// mounted from the reference its `$cell` binding handed over, as `cf-render`
+// mounts it: the bound cell itself at the full variant, the piece it currently
+// names for a tile, the piece's `[NAME]` for a chip with no view of its own,
+// and an exported `[TILE_UI]` or `[CHIP_UI]`. Every value a viewer may not see
 // carries a string that appears nowhere else, so a search of the operations
 // for it is a search for the value having escaped.
 //
@@ -988,6 +987,40 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           }
         }
         expect(outcomes).toEqual(expected);
+
+        // The decision's read lands on the piece's own document whatever the
+        // stored schema, so a label written there after the binding is made
+        // removes the binding, here with a reference schema stored on the
+        // slot's link.
+        const relabeledValue = {
+          [NAME]: "Relabeled shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+        };
+        const relabeled = await write("stored-relabeled", relabeledValue);
+        const pins = await write("stored-relabeled-pins", {
+          element: {
+            cell: link(
+              relabeled.asSchema({ type: "unknown", asCell: ["cell"] }),
+            ),
+          },
+        });
+        const page = await mount(
+          createCellRef(
+            await tileView(
+              "stored-relabeled-view",
+              pins.key("element").key("cell").asSchema(true),
+            ),
+          ),
+          visitor,
+        );
+        try {
+          expect(page.bindings()).toHaveLength(1);
+          await write("stored-relabeled", relabeledValue, [[[], [sealedAtom]]]);
+          await t.settle();
+          expect(page.removed()).toBe(1);
+        } finally {
+          page.cancel();
+        }
       },
     );
   } finally {
