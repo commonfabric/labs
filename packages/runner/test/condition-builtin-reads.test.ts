@@ -255,19 +255,15 @@ describe("condition-builtin-reads", () => {
   };
 
   /**
-   * Runs `body` as {@link runPattern} does, and returns which of `ifElse`,
-   * `when` and `unless` committed a run that read `doc`. A scheduler run names
-   * its action on the transaction, and a builtin's action is named
-   * `raw:<builtin>:…`.
+   * Watches the runs of `ifElse`, `when` and `unless` committed until `stop()`
+   * is called: how many each committed, and which committed a run that read
+   * `doc`. A scheduler run names its action on the transaction, and a
+   * builtin's action is named `raw:<builtin>:…`.
    */
-  const conditionBuiltinsReading = async (
-    doc: Cell<unknown>,
-    cause: string,
-    body: (input: any) => Record<string, unknown>,
-    argument: Record<string, unknown> = {},
-  ): Promise<string[]> => {
+  const watchBuiltinRuns = (doc: Cell<unknown>) => {
     const { id } = doc.getAsNormalizedFullLink();
-    const reading = new Set<string>();
+    const runs: Record<Builtin, number> = { ifElse: 0, when: 0, unless: 0 };
+    const reading = new Set<Builtin>();
     const edit = runtime.edit;
     runtime.edit = (options) => {
       const tx = edit.call(runtime, options);
@@ -277,7 +273,11 @@ describe("condition-builtin-reads", () => {
         const [kind, builtin] = typeof action === "function"
           ? action.name.split(":")
           : [];
-        if (kind === "raw" && ["ifElse", "when", "unless"].includes(builtin)) {
+        if (
+          kind === "raw" &&
+          (builtin === "ifElse" || builtin === "when" || builtin === "unless")
+        ) {
+          runs[builtin]++;
           const { reads, shallowReads } = txToReactivityLog(tx);
           if ([...reads, ...shallowReads].some((read) => read.id === id)) {
             reading.add(builtin);
@@ -287,12 +287,32 @@ describe("condition-builtin-reads", () => {
       };
       return tx;
     };
+    return {
+      runs,
+      reading: () => [...reading].sort(),
+      stop: () => {
+        runtime.edit = edit;
+      },
+    };
+  };
+
+  /**
+   * Runs `body` as {@link runPattern} does, and returns which of `ifElse`,
+   * `when` and `unless` committed a run that read `doc`.
+   */
+  const conditionBuiltinsReading = async (
+    doc: Cell<unknown>,
+    cause: string,
+    body: (input: any) => Record<string, unknown>,
+    argument: Record<string, unknown> = {},
+  ): Promise<Builtin[]> => {
+    const watch = watchBuiltinRuns(doc);
     try {
       await runPattern(cause, body, argument);
     } finally {
-      runtime.edit = edit;
+      watch.stop();
     }
-    return [...reading].sort();
+    return watch.reading();
   };
 
   describe("labels", () => {
@@ -379,24 +399,6 @@ describe("condition-builtin-reads", () => {
         expect(holdsSealedClause(shown.confidentiality)).toBe(false);
       });
 
-      it("leaves the sealed clause off a title read through an `unless` output", async () => {
-        // A truthy condition is the output itself, so the read stops at the
-        // title rather than taking the found piece's view, which does hold
-        // the clause. That output is a link, which carries no flow stamp of
-        // its own; the case below is the one that sees what `unless` reads.
-        await pinPieceShowingSealedDoc();
-        const result = await runPattern("unless-wish", () => ({
-          shown: builder.unless(wishForSheet().result, "fallback"),
-        }));
-
-        const title = consumedBy((tx) =>
-          result.withTx(tx).key("shown").key("title").get()
-        );
-
-        expect(title.value).toBe("Sheet");
-        expect(holdsSealedClause(title.confidentiality)).toBe(false);
-      });
-
       it("reads nothing of the sealed document in the runs of `ifElse`, `when` and `unless`", async () => {
         const sealed = await pinPieceShowingSealedDoc();
 
@@ -408,6 +410,58 @@ describe("condition-builtin-reads", () => {
 
         expect(reading).toEqual([]);
       });
+    });
+
+    describe("a condition holding a sealed value below its root", () => {
+      // The condition is a record whose `secret` alone is sealed, typed so
+      // that its schema describes `secret`. Truthiness does not turn on it.
+
+      /** A record whose `secret` alone is sealed. */
+      const sealedBelowRoot = () =>
+        seededDoc("sealed-below", {
+          title: "plain",
+          secret: "sealed content",
+        }, [{
+          path: ["secret"],
+          label: { confidentiality: [sealedClause] },
+        }]);
+
+      /** An argument schema typing `flag` as the record, `secret` included. */
+      const flagSchema: JSONSchema = {
+        type: "object",
+        properties: {
+          flag: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              secret: { type: "string" },
+            },
+          },
+        },
+      };
+
+      for (const builtin of ["ifElse", "when"] as const) {
+        const article = builtin === "when" ? "a" : "an";
+        it(`leaves the sealed clause off ${article} \`${builtin}\` output`, async () => {
+          const result = await runPattern(
+            `${builtin}-below`,
+            ({ flag }) => ({
+              shown: builtin === "ifElse"
+                ? builder.ifElse(flag, "yes", "no")
+                : builder.when(flag, "yes"),
+            }),
+            { flag: await sealedBelowRoot() },
+            flagSchema,
+          );
+
+          const shown = consumedBy((tx) =>
+            result.withTx(tx).key("shown").get()
+          );
+
+          expect(shown.value).toBe("yes");
+          expect(holdsSealedClause(shown.confidentiality)).toBe(false);
+        });
+      }
     });
 
     describe("a condition whose root is sealed", () => {
@@ -881,6 +935,30 @@ describe("condition-builtin-reads", () => {
       seen.push(await branchesOf(result));
 
       expect(seen).toEqual([allTake(false), allTake(true), allTake(false)]);
+    });
+
+    it("runs none of `ifElse`, `when` and `unless` again when a value below the condition's root changes", async () => {
+      const flag = await plainDoc("record", { title: "first" });
+      const result = await runPattern(
+        "record-run",
+        allThree,
+        { flag },
+        flagTypedAs({
+          type: "object",
+          properties: { title: { type: "string" } },
+        }),
+      );
+      const watch = watchBuiltinRuns(flag);
+      try {
+        await write(flag.key("title"), "second");
+        await branchesOf(result);
+        await runtime.idle();
+      } finally {
+        watch.stop();
+      }
+
+      expect(watch.runs).toEqual({ ifElse: 0, when: 0, unless: 0 });
+      expect(await branchesOf(result)).toEqual(allTake(true));
     });
 
     it("takes the truthy branch once a condition that was not written yet arrives", async () => {
