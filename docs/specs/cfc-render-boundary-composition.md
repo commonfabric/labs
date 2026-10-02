@@ -30,7 +30,11 @@ Regression guard: "preserves an outer unlabeled-only boundary through an
 unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
 The ceiling in force at a node gates what reaches the page from that node by
-the same fit (`canRenderLabelUnderPolicy`). Each read that a value reaches the
+the same fit (`canRenderLabelUnderPolicy`). The fit is a set of functions in
+`packages/html/src/worker/display-fit.ts`, taking the policy and the sources a
+decision consults (the exchange-rule resolver, and the membership and
+module-policy providers a decision watches), so that every display sink in
+the worker decides by the same code. Each read that a value reaches the
 page through is decided on the labels of the cell the read starts from and on
 the labels the read consumed, and the ceiling has to admit each. The cell's
 labels are its own, which include a label its handle carries, and, when its
