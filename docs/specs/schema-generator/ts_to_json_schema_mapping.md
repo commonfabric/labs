@@ -787,13 +787,13 @@ Default paths of §7:
   `{ type: ["string","undefined"] }` (fixture `default-with-undefined-union`).
   Singletons unwrap.
 - **`widenLiterals`** additionally merges member schemas that differ only in
-  literal `enum` values, widening those to their base type, before the anyOf
-  pass (`mergeIdenticalSchemas`). It compares `type`, `properties`, `items`,
-  `required` and `additionalProperties`, and `asCell`, `ifc` and `scope`,
-  which the merged member keeps, so a cell and a plain value of one type, or
-  two cells under different labels, stay separate members. It compares no
-  other keyword and keeps none: two members differing only in `$ref` merge
-  into a schema without one. It does **not** reach the all-literal path:
+  their literal values, an `enum` or a `const` whose values share one base
+  type, widening those to that type, before the anyOf pass
+  (`mergeIdenticalSchemas`). Every other keyword, at any depth, must match
+  for members to merge, and the merged member keeps it: a cell and a plain
+  value of one type, two cells under different labels, two named types (two
+  `$ref`s), and literals of more than one type all stay separate members.
+  It does **not** reach the all-literal path:
   `"a" | "b"` still emits `{ enum: ["a","b"] }` under `widenLiterals: true`
   (probe; the all-literal `enum` branch runs first and never consults the
   flag).
@@ -1494,9 +1494,9 @@ declaration file is the default library's (the transformer supplies
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);
-(2) union members that differ only in literal `enum` values merge
-recursively, keeping `asCell`, `ifc` and `scope` (`union-formatter.ts`). It
-does **not** widen all-literal unions (§8) and has no other effects.
+(2) union members that differ only in their literal values merge
+recursively, keeping every other keyword (`union-formatter.ts`). It does
+**not** widen all-literal unions (§8) and has no other effects.
 `test/widen-literals.test.ts` pins the in-package behavior; consumer-side it is
 extracted from `toSchema` options and exercised via ts-transformers' injection
 paths (`ts-transformers/.../schema-generator.ts`).
@@ -1534,9 +1534,7 @@ synthetic node resolution failure → `any` → `true`
 (`schema-generator.ts`); unsupported intersections → permissive object
 + `$comment` (§9); the `{ type: "string", enum: ["unknown"] }` sentinel (§4);
 `applyWrapperSemantics` with an unmappable kind returns the schema unchanged
-(`common-fabric-formatter.ts`); under `widenLiterals`, union members differing
-only in a keyword the merge does not compare, such as `$ref`, merge into a
-schema without it (§8).
+(`common-fabric-formatter.ts`).
 
 ## 16. Known Limits And Observed Quirks
 

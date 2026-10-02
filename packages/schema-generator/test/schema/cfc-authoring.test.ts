@@ -3353,6 +3353,77 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
 
+    /**
+     * `SchemaRoot`'s schema, with `field` declared as `declaration` beside
+     * object types `A` and `B`, generated without and with widening.
+     */
+    const plainAndWidened = async (declaration: string) => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Confidential<T, X extends readonly unknown[]> =
+          Cfc<T, { confidentiality: X }>;
+        type A = { a: string };
+        type B = { b: number };
+        interface SchemaRoot { field: ${declaration} }
+      `,
+        "SchemaRoot",
+      );
+      const generator = new SchemaGenerator();
+      return [
+        asObjectSchema(generator.generateSchema(type, checker)),
+        asObjectSchema(
+          generator.generateSchema(type, checker, undefined, {
+            widenLiterals: true,
+          }),
+        ),
+      ];
+    };
+
+    it("keeps labeled cells over different payloads apart when widening literals", async () => {
+      const [plain, widened] = await plainAndWidened(
+        'Confidential<Cell<A>, readonly ["b"]> | Confidential<Cell<B>, readonly ["b"]> | undefined',
+      );
+      expect(widened).toEqual(plain);
+      expect(widened.properties?.field).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          {
+            $ref: "#/$defs/A",
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+          {
+            $ref: "#/$defs/B",
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+        ],
+      });
+    });
+
+    it("keeps labeled cells over different payload unions apart when widening literals", async () => {
+      const [plain, widened] = await plainAndWidened(
+        'Confidential<Cell<A | string>, readonly ["b"]> | Confidential<Cell<B | number>, readonly ["b"]> | undefined',
+      );
+      expect(widened).toEqual(plain);
+      expect(widened.properties?.field).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          {
+            anyOf: [{ type: "string" }, { $ref: "#/$defs/A" }],
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+          {
+            anyOf: [{ type: "number" }, { $ref: "#/$defs/B" }],
+            asCell: ["cell"],
+            ifc: { confidentiality: ["b"] },
+          },
+        ],
+      });
+    });
+
     it("reads an unlabeled cell beside `undefined` with no label", async () => {
       expect(await fieldSchema("Cell<string> | undefined")).toEqual({
         anyOf: [{ type: "undefined" }, { type: "string", asCell: ["cell"] }],
