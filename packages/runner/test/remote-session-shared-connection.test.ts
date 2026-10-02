@@ -73,7 +73,7 @@ describe("RemoteSessionFactory connection sharing", () => {
       return {
         socket: connected.socket,
         send: (frame) => {
-          if (typeof frame === "string") {
+          if (typeof frame === "string" && frame.startsWith("fvj1:")) {
             sent.push(decodeTrustedMemoryBoundary<ClientMessage>(frame));
           }
           return connected.send(frame);
