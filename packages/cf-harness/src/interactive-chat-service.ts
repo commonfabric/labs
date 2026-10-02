@@ -236,6 +236,13 @@ interface HarnessInteractiveChatEmitOptions {
 
   /** Naming checkpoint committed with the completed turn's transcript. */
   assignedPieces?: readonly HarnessAssignedPiece[];
+
+  /**
+   * Runs once the event is committed to the store and the in-memory log, and
+   * before it is delivered, so a caller can publish state the event's reader
+   * may act on during delivery.
+   */
+  onCommitted?: () => void;
 }
 
 /**
@@ -1749,6 +1756,13 @@ export class HarnessInteractiveChatService {
    * queue is never cut off mid-way) and the turn's abort signal, which covers
    * both a turn cancel and a session close. Each settlement, whatever its
    * cause, emits one `client_action_resolved`.
+   *
+   * The client may answer a request while that request's own event is still
+   * being delivered. That settlement records its outcome at once and queues
+   * its resolved event behind the delivery, but does not wait for the write:
+   * the event queue is held by the delivery, and a client that awaits its
+   * answer from inside the delivery would otherwise wait on itself. The call
+   * still awaits that write, so a failed one fails the call.
    */
   async #requestClientActions(
     record: HarnessInteractiveChatSessionRecord,
@@ -1780,6 +1794,8 @@ export class HarnessInteractiveChatService {
     // one that precedes its request, would leave the log disagreeing with
     // what the client was shown.
     const requested = new Set<string>();
+    // The id whose request is committed and still being delivered.
+    let delivering: string | undefined;
     let emitting = true;
     let remaining = entries.length;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1826,7 +1842,7 @@ export class HarnessInteractiveChatService {
       emitted.catch(() => undefined);
       emits.push(emitted);
       if (remaining === 0) finish();
-      return emitted;
+      return entry.actionId === delivering ? Promise.resolve() : emitted;
     };
     const onAbort = () => {
       // While requests are still being written the abort is applied once
@@ -1855,10 +1871,14 @@ export class HarnessInteractiveChatService {
             turnId,
             actionId,
             action,
+          }, {
+            onCommitted: () => {
+              requested.add(actionId);
+              delivering = actionId;
+            },
           });
         } finally {
-          // A delivery hook can throw after the event is committed.
-          if (this.#requestWasWritten(actionId)) requested.add(actionId);
+          delivering = undefined;
         }
       }
     } catch (error) {
@@ -1888,13 +1908,6 @@ export class HarnessInteractiveChatService {
       signal?.removeEventListener("abort", onAbort);
     }
     return entries.map((entry) => outcomes.get(entry.actionId)!);
-  }
-
-  /** Whether the log already holds this action's `client_action_requested`. */
-  #requestWasWritten(actionId: string): boolean {
-    return this.#events.some(({ event }) =>
-      event.kind === "client_action_requested" && event.actionId === actionId
-    );
   }
 
   async #disposeFabricRuntimes(
@@ -2673,6 +2686,7 @@ export class HarnessInteractiveChatService {
     if (record !== undefined && nextTurn !== undefined) {
       record.turns.set(nextTurn.turn.turnId, nextTurn);
     }
+    options.onCommitted?.();
     try {
       await this.#onEvent?.(envelope);
     } catch (error) {

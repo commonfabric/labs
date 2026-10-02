@@ -26,6 +26,7 @@ import {
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
+import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 import { weaverActionTool } from "../src/tools/weaver-action.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
@@ -226,14 +227,22 @@ const harness = (
   options: {
     idleMs?: number;
     calls?: unknown[];
-    /** Runs inside the service's event delivery; a throw is a delivery failure. */
-    deliver?: (event: HarnessChatEventEnvelope["event"]) => void;
+    /**
+     * Runs inside the service's event delivery, which waits for it; a throw is
+     * a delivery failure.
+     */
+    deliver?: (
+      event: HarnessChatEventEnvelope["event"],
+    ) => void | Promise<void>;
+    sessionStore?: HarnessChatSessionStore;
   } = {},
 ) => {
   const events: HarnessChatEventEnvelope[] = [];
   const toolResults: unknown[] = [];
   const toolErrors: unknown[] = [];
   const started = Promise.withResolvers<void>();
+  /** Resolves once every scripted call has returned or thrown. */
+  const callsDone = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const loopOptions: Record<string, unknown>[] = [];
   let ids = 0;
@@ -259,6 +268,7 @@ const harness = (
             toolErrors.push(error);
           }
         }
+        callsDone.resolve();
         await release.promise;
         return {
           model: "m",
@@ -274,11 +284,14 @@ const harness = (
   const service = new HarnessInteractiveChatService({
     createPromptLoop,
     randomUUID: () => `id-${++ids}`,
-    onEvent: (event) => {
+    onEvent: async (event) => {
       events.push(event);
-      options.deliver?.(event.event);
+      await options.deliver?.(event.event);
     },
     onEventDeliveryError: () => {},
+    ...(options.sessionStore !== undefined
+      ? { sessionStore: options.sessionStore }
+      : {}),
     ...(options.idleMs !== undefined
       ? { clientActionIdleTimeoutMs: options.idleMs }
       : {}),
@@ -321,6 +334,7 @@ const harness = (
     toolResults,
     toolErrors,
     release,
+    callsDone: callsDone.promise,
     loopOptions,
     events,
   };
@@ -847,4 +861,65 @@ Deno.test("a cancel while requests are being written stops writing and settles o
   }]);
   h.release.resolve();
   await h.service.waitForIdle();
+});
+
+Deno.test("an answer given while its request is still being delivered is kept, with one resolved event", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const store = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(path),
+  });
+  try {
+    // The client answers from inside the request's own delivery and waits
+    // for the response there, as a client reading its event stream may.
+    const answered = Promise.withResolvers<{ ok: boolean }>();
+    const h: ReturnType<typeof harness> = harness({
+      sessionStore: store,
+      deliver: async (e) => {
+        if (e.kind === "client_action_requested" && e.actionId === "id-1") {
+          answered.resolve(
+            await h.request("resolve_client_action", {
+              sessionId: "s",
+              actionId: "id-1",
+              outcome: "done",
+              result: "opened",
+            }),
+          );
+        }
+      },
+    });
+    await h.start();
+    await h.callsDone;
+    expect((await answered.promise).ok).toBe(true);
+    expect(h.toolResults).toEqual([{
+      outputId: "out-1",
+      status: "ok",
+      outcomes: [{ action: open, outcome: "done", result: "opened" }],
+    }]);
+    expect(resolvedIds(h)).toEqual([["id-1", "opened"]]);
+    h.release.resolve();
+    await h.service.waitForIdle();
+
+    // A restart finds the request closed, so it adds no `interrupted`.
+    const restored = new HarnessInteractiveChatService({
+      sessionStore: store,
+      createPromptLoop: () => ({
+        runTranscript: () => Promise.reject(new Error("no turn runs")),
+      }),
+    });
+    await restored.initializeFromStore();
+    expect(
+      (await store.listEvents({ sessionId: "s" }))
+        .map((e) => e.event)
+        .filter((e) => e.kind === "client_action_resolved"),
+    ).toEqual([{
+      kind: "client_action_resolved",
+      turnId: "t",
+      actionId: "id-1",
+      outcome: "done",
+      result: "opened",
+    }]);
+  } finally {
+    await store.close?.();
+    await Deno.remove(path).catch(() => undefined);
+  }
 });

@@ -33,6 +33,7 @@ import {
   runHarnessInteractiveChatStdioCli,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
+import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
 import { HarnessChatStoreHeldError } from "../src/session-store.ts";
 import {
@@ -955,6 +956,109 @@ Deno.test("interactive NDJSON transport validates method-specific params", async
   assertEquals(
     "ok" in response && response.ok === false ? response.error.code : "",
     "invalid_request",
+  );
+});
+
+Deno.test("interactive NDJSON transport keeps an answer that arrives while its request is still being written", async () => {
+  const action = {
+    kind: "open_loom",
+    loomId: "loom-0123456789abcdef",
+  } as const;
+  const output: string[] = [];
+  const requestWriting = Promise.withResolvers<string>();
+  const answerWritten = Promise.withResolvers<void>();
+  const outcomes = Promise.withResolvers<unknown>();
+  const line = (requestId: string, method: string, params: unknown) =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+  async function* lines() {
+    yield line("start", "start_session", {
+      sessionId: "s",
+      workspace: { hostPath: "/w" },
+      model: "m",
+      clientActions: true,
+    });
+    yield line("turn", "start_turn", {
+      sessionId: "s",
+      turnId: "t",
+      input: { text: "go" },
+    });
+    yield line("answer", "resolve_client_action", {
+      sessionId: "s",
+      actionId: await requestWriting.promise,
+      outcome: "done",
+      result: "opened",
+    });
+  }
+  let ids = 0;
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: lines(),
+    writeLine: async (text) => {
+      output.push(text);
+      const envelope = JSON.parse(text) as HarnessInteractiveChatOutputEnvelope;
+      if ("requestId" in envelope && envelope.requestId === "answer") {
+        answerWritten.resolve();
+      }
+      if (
+        "event" in envelope &&
+        envelope.event.kind === "client_action_requested"
+      ) {
+        // The request's write is still in flight when the client answers it.
+        requestWriting.resolve(envelope.event.actionId);
+        await answerWritten.promise;
+      }
+    },
+    createService: (onEvent, onEventDeliveryError) =>
+      new HarnessInteractiveChatService({
+        onEvent,
+        onEventDeliveryError,
+        randomUUID: () => `id-${++ids}`,
+        createPromptLoop: (options) => ({
+          runTranscript: async (run) => {
+            const request = (options as {
+              requestClientActions?: HarnessClientActionRequester;
+            }).requestClientActions!;
+            outcomes.resolve(await request([action], run.signal));
+            const finalMessage = {
+              role: "assistant" as const,
+              content: "done",
+            };
+            return {
+              model: "m",
+              finalAssistantText: "done",
+              transcript: [...run.transcript, finalMessage],
+              modelTurns: 1,
+              runState: {} as HarnessPromptLoopResult["runState"],
+            };
+          },
+        }),
+      }),
+  });
+
+  assertEquals(await outcomes.promise, [
+    { action, outcome: "done", result: "opened" },
+  ]);
+  const envelopes = decodeLines(output);
+  assertEquals(
+    envelopes.flatMap((envelope) =>
+      "requestId" in envelope && envelope.requestId === "answer"
+        ? [envelope.ok]
+        : []
+    ),
+    [true],
+  );
+  assertEquals(
+    envelopes.flatMap((envelope) =>
+      "event" in envelope && envelope.event.kind.startsWith("client_action_")
+        ? [envelope.event.kind]
+        : []
+    ),
+    ["client_action_requested", "client_action_resolved"],
   );
 });
 
