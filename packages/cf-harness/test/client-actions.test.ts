@@ -473,6 +473,9 @@ Deno.test("an idle call fails every unsettled action as timeout, and each settle
     outcome: "done",
   });
   await time.tickAsync(40);
+  // A deadline that passed in that tick has settled the call by the end of
+  // this drain: its continuation is all microtasks, with no store to wait on.
+  await time.runMicrotasks();
   assertEquals(h.toolResults.length, 0);
   await time.tickAsync(20);
   await h.callsDone;
