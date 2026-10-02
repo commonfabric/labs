@@ -613,11 +613,15 @@ export type WritePolicyInput =
      * Authority is carried by the runtime's private mark, never this record
      * alone. A `"capture"` initialization stages a link to a cell that exists
      * already into a slot, and none of what the cell holds, so its `value` is
-     * that link: a list's entry or the list itself handed to a sub-pattern, a
-     * binding a callback captures, or a binding a setup stages into an
-     * argument or a result field. It is matched by the cell the link names
-     * and by whether the link is a write redirect, not by the link's bytes,
-     * which can carry the binding's schema beside the address. A `"replay"` record
+     * that link: a list's entry or the list itself handed to a sub-pattern,
+     * or a binding a callback captures. It is matched by the cell the link
+     * names and by whether the link is a write redirect, not by the link's
+     * bytes, which can carry the binding's schema beside the address, and it
+     * never re-points a slot that held a link to another cell. A `"binding"`
+     * initialization is a binding a setup stages into an argument or a result
+     * field: matched the same way, but re-established on every setup, so a
+     * later setup may re-point it at the cell the pattern now names. A
+     * `"replay"` record
      * names an argument slot a runtime replaying a piece's setup carries over
      * from the stored argument document, with the bytes it holds; it permits
      * nothing but leaving those bytes as they are.
@@ -630,6 +634,7 @@ export type WritePolicyInput =
       | "default"
       | "projection"
       | "capture"
+      | "binding"
       | "replay";
   }
   | {

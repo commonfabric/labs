@@ -919,11 +919,12 @@ const recordSetupProjectionPolicyInputs = (
     );
     if (!own) {
       // A cell the piece was handed: staging the redirect initializes the
-      // slot and nothing of the cell, as a list builtin's captured binding
-      // does (`recordCapturedArgumentFields`).
+      // slot and nothing of the cell. Every setup stages it again, and a
+      // pattern version may name another cell for it, so a later setup may
+      // re-point the slot, which a list builtin's capture may not.
       tx.recordCfcWritePolicyInput({
         kind: "initialization",
-        mode: "capture",
+        mode: "binding",
         target: slot,
         value: projection,
       }, runtimeWritePolicyAuthorization);

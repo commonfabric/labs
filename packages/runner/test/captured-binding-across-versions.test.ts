@@ -49,6 +49,37 @@ function program(tagsCause: string) {
   };
 }
 
+/**
+ * A pattern that passes a writer-protected `tags` list, made with
+ * `.for(tagsCause)`, to a sub-pattern it composes, and re-exports the
+ * sub-pattern's view of it.
+ */
+function composing(tagsCause: string) {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: `/// <cts-enable />
+        import { handler, pattern, Writable, WriteAuthorizedBy } from "commonfabric";
+        const edit = handler<{ add: string }, { tags: Writable<string[]> }>(
+          (event, { tags }) => {
+            tags.set([...tags.get(), event.add]);
+          },
+        );
+        type Tags = WriteAuthorizedBy<string[], typeof edit>;
+        const Child = pattern<{ list: Writable<Tags> }, { list: Writable<Tags> }>(
+          ({ list }) => ({ list }),
+        );
+        export default pattern<Record<string, never>>(() => {
+          const tags = new Writable<Tags>([]).for("${tagsCause}");
+          const child = Child({ list: tags });
+          return { tags, childList: child.list, add: edit({ tags }) };
+        });
+      `,
+    }],
+  };
+}
+
 describe("captured-binding-across-versions", () => {
   let runtime: Runtime;
   let manager: ReturnType<typeof StorageManager.emulate>;
@@ -133,5 +164,50 @@ describe("captured-binding-across-versions", () => {
         "writeAuthorizedBy requires a trusted verified binding identity at /params/tags",
       );
     }
+  });
+
+  it("re-points a composed sub-pattern's binding under a version that makes the passed cell another way", async () => {
+    // Unlike a list builtin's capture, a binding a setup passes to a
+    // sub-pattern it composes follows the cell the version names.
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    const v1 = await runtime.patternManager.compilePattern(composing("tags"));
+    const tx = runtime.edit();
+    const result = runtime.run(
+      tx,
+      v1,
+      {},
+      runtime.getCell(space, "composed", v1.resultSchema, tx),
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    const cancel = result.sink(() => {});
+    await runtime.idle();
+    result.key("add").send({ add: "a" });
+    await runtime.idle();
+    await manager.synced();
+
+    const v2 = await runtime.patternManager.compilePattern(
+      composing("labels"),
+    );
+    const upgrade = runtime.edit();
+    runtime.run(
+      upgrade,
+      v2,
+      {},
+      runtime.getCell(space, "composed", v2.resultSchema, upgrade),
+    );
+    runtime.prepareTxForCommit(upgrade);
+    expect((await upgrade.commit()).error).toBeUndefined();
+    await runtime.idle();
+    await manager.synced();
+    result.key("add").send({ add: "after" });
+    await runtime.idle();
+    await manager.synced();
+
+    expect(await result.key("tags").pull()).toEqual(["after"]);
+    expect(await result.key("childList").pull()).toEqual(["after"]);
+    expect(errors).toEqual([]);
+    cancel();
   });
 });

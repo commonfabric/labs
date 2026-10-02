@@ -1590,7 +1590,7 @@ const slotHoldsInitialization = (
     ...document,
     path: [...input.target.path],
   }, { meta: INTERNAL_VERIFIER_META });
-  return input.mode === "capture"
+  return input.mode === "capture" || input.mode === "binding"
     ? linksNameSameCell(final, input.value, { ...document, path: [] })
     : valueEqual(final, input.value);
 };
@@ -1598,10 +1598,12 @@ const slotHoldsInitialization = (
 /**
  * A runtime initialization covers one absent slot and its exact final value.
  * A capture covers a slot that was absent or held a link to the same cell,
- * and ends holding a link to it, whatever schema each link carries. `waived` names the declaration the calling gate would waive
- * for it: one the stored envelope already makes on an absent slot keeps its
- * requirement, so installing a link waives only a declaration the candidate
- * schema introduces. A stored `writePolicyAnyOf` makes both declarations,
+ * and ends holding a link to it, whatever schema each link carries. A binding
+ * covers a slot that ends holding a link to the cell its setup staged,
+ * whatever the slot held before. `waived` names the declaration the calling
+ * gate would waive for it: one the stored envelope already makes on an absent
+ * slot keeps its requirement, so installing a link waives only a declaration
+ * the candidate schema introduces. A stored `writePolicyAnyOf` makes both declarations,
  * since each of its alternatives names a writer and may name a gesture.
  */
 const writeIsRuntimeInitialization = (
@@ -1622,13 +1624,18 @@ const writeIsRuntimeInitialization = (
     concretePathHasPrefix(path, input.target.path)
   );
   if (input?.kind !== "initialization") return false;
-  // A capture covers a link to a cell, redirect or not, and nothing the cell
-  // holds. The slot is what the capture installs; a write through a redirect
-  // there lands at the cell it names, and that cell's own policy decides it.
-  if (input.mode === "capture" && !isPrimitiveCellLink(input.value)) {
-    return false;
-  }
+  // A capture or a binding covers a link to a cell, redirect or not, and
+  // nothing the cell holds. The slot is what it installs; a write through a
+  // redirect there lands at the cell it names, and that cell's own policy
+  // decides it.
+  const staged = input.mode === "capture" || input.mode === "binding";
+  if (staged && !isPrimitiveCellLink(input.value)) return false;
   if (!slotHoldsInitialization(tx, target, input)) return false;
+  // A setup stages its bindings again on every run, and a pattern version
+  // may name another cell for one, so the slot ending at the cell this
+  // setup staged is all a binding asks; a write in the transaction that
+  // re-points the slot elsewhere leaves it holding another cell.
+  if (input.mode === "binding") return true;
   const addressPath = ["value", ...input.target.path];
   const details = tx.getWriteDetailsForTarget?.(target) ??
     tx.getWriteDetails?.(target.space) ?? [];
@@ -1639,7 +1646,7 @@ const writeIsRuntimeInitialization = (
   );
   // A link staged over the link the slot holds already lands no write there:
   // the slot keeps its link, so nothing is repointed.
-  if (input.mode === "capture" && covering.length === 0) return true;
+  if (staged && covering.length === 0) return true;
   // What one covering write's snapshot held at the slot, if it can tell.
   const previousAtSlot = (
     detail: (typeof covering)[number],
@@ -1691,8 +1698,8 @@ const writeIsRuntimeInitialization = (
 };
 
 /**
- * Whether `path` lies at or under a capture the runtime staged in this
- * transaction, with the slot still holding it. Staging writes nothing
+ * Whether `path` lies at or under a capture or binding the runtime staged in
+ * this transaction, with the slot still holding it. Staging writes nothing
  * the referenced value holds, so the integrity the receiving slot's schema
  * would add describes content the stager did not write and is not minted for
  * it.
@@ -1709,7 +1716,8 @@ const pathHoldsStagedReference = (
   const logicalPath = canonicalizeLogicalPath(path);
   const scope = normalizeCellScope(target.scope);
   return tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "initialization" && input.mode === "capture" &&
+    input.kind === "initialization" &&
+    (input.mode === "capture" || input.mode === "binding") &&
     tx.isRuntimeWritePolicyInput(input) &&
     input.target.space === target.space && input.target.id === target.id &&
     normalizeCellScope(input.target.scope) === scope &&

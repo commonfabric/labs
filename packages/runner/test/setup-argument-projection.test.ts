@@ -162,7 +162,7 @@ describe("setup-argument-projection", () => {
   }
 
   describe("the record", () => {
-    it("records a capture of the slot, naming the passed list, and no setup projection", async () => {
+    it("records a binding of the slot, naming the passed list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       const argument = await setUpChild(tx, binding(tx));
@@ -188,7 +188,7 @@ describe("setup-argument-projection", () => {
       });
 
       expect(records).toEqual([{
-        record: "capture",
+        record: "binding",
         path: ["list"],
         names: { id: list.id, path: list.path },
         runtime: true,
@@ -238,10 +238,9 @@ describe("setup-argument-projection", () => {
       expect(await commit(tx)).toContain(`${refusal} at /list`);
     });
 
-    it("refuses a later setup staging a redirect to another list over it", async () => {
-      // The slot keeps the cell it was first given, as a list builtin's
-      // captured binding does. Whether a trusted setup may re-point it when a
-      // pattern version names another cell is not settled.
+    it("accepts a later setup staging a redirect to another list over it, as a pattern version naming another cell does", async () => {
+      // A setup stages its bindings again on every run, so it may re-point
+      // the slot; a list builtin's captured binding may not.
       await initializeOwnersList();
       await initializeOwnersList("other");
       const first = runtime.edit();
@@ -251,7 +250,20 @@ describe("setup-argument-projection", () => {
       const later = runtime.edit();
       await setUpChild(later, binding(later, "other"));
 
-      expect(await commit(later)).toContain(`${refusal} at /list`);
+      expect(await commit(later)).toBeUndefined();
+    });
+
+    it("refuses a write at the argument's root that re-points it at another list in the transaction staging it", async () => {
+      // The setup staged the owner's list; the slot has to end holding it.
+      await initializeOwnersList();
+      await initializeOwnersList("other");
+      const tx = runtime.edit();
+      const argument = await setUpChild(tx, binding(tx));
+      tx.writeValueOrThrow(argument.getAsNormalizedFullLink(), {
+        list: binding(tx, "other"),
+      });
+
+      expect(await commit(tx)).toContain(`${refusal} at /list`);
     });
 
     it("refuses a relative write redirect over it in the transaction staging it, which names the child's own argument document rather than the list", async () => {

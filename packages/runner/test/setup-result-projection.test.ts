@@ -211,7 +211,7 @@ describe("setup-result-projection", () => {
       return resultCell;
     }
 
-    it("records a capture of the result field naming the list, and no setup projection", async () => {
+    it("records a binding of the result field naming the list, and no setup projection", async () => {
       await initializeOwnersList();
       const tx = runtime.edit();
       await setUpExporter(tx);
@@ -239,7 +239,7 @@ describe("setup-result-projection", () => {
       });
 
       expect(records).toEqual([{
-        record: "capture",
+        record: "binding",
         path: ["items"],
         names: { id: list.id, path: list.path },
       }]);
