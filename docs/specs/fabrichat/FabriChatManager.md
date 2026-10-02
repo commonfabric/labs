@@ -66,8 +66,6 @@ room roster and supplies no subsequent space-administration handlers.
 A notice has to reach a principal who may share no space with the sender.
 Nothing in this repository lets a pattern deliver one today:
 
-- DID inboxes ([`did-inboxes.md`](../../features/did-inboxes.md)) deliver to a
-  principal, but patterns can't reach them.
 - A profile's `inbox` field (`inbox.piece`,
   `packages/patterns/system/profile-home.tsx`) points at a receiving piece in a
   space of its own, which a host outside this repository provides. It is the

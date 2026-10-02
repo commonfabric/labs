@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
+import type { JSONSchemaObj } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
@@ -23,6 +24,7 @@ import {
   schemaRootKind,
   selectSourceSchema,
 } from "../lib/cell-selection.ts";
+import { externalizeSchema } from "../../runner/src/link-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -3863,6 +3865,67 @@ describe("cf cell get transforms", () => {
       } finally {
         await second.dispose();
       }
+    });
+  });
+
+  describe("a source whose schema states a writer claim by reference", () => {
+    // A stored schema can hold any position as a reference to a
+    // content-addressed document, and the claim a selection must not state
+    // on its own cells is then inside that document.
+
+    const label = { confidentiality: ["source-secret"] };
+    const claimed: JSONSchema = {
+      type: "string",
+      ifc: { ...label, writeAuthorizedBy: ["a-builtin-the-selection-is-not"] },
+    };
+
+    /**
+     * Reads `field` from a stored `{ name, other }` through `schema`. The
+     * value is stored through a schema stating the label alone, so nothing
+     * here has to be the writer the claim names.
+     */
+    async function selectThrough(
+      cause: string,
+      schema: JSONSchema,
+      field: string,
+    ): Promise<unknown> {
+      const setup = runtime.edit();
+      runtime.getCell(space, cause, {
+        type: "object",
+        properties: {
+          name: { type: "string", ifc: label },
+          other: { type: "string" },
+        },
+      }, setup).set({ name: "Ada", other: "not returned" });
+      setup.prepareCfc();
+      expect((await setup.commit()).ok).toBeDefined();
+      return await deriveSelectedValue(
+        runtime,
+        space,
+        runtime.getCell(space, cause, schema),
+        { projection: parseSelectProjection(field) },
+      );
+    }
+
+    it("returns a field whose own schema is a reference", async () => {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          name: externalizeSchema(claimed as JSONSchemaObj),
+          other: { type: "string" },
+        },
+      };
+      expect(await selectThrough("claim-by-reference-field", schema, "name"))
+        .toEqual({ name: "Ada" });
+    });
+
+    it("returns a field of a source whose whole schema is a reference", async () => {
+      const schema = externalizeSchema({
+        type: "object",
+        properties: { name: claimed, other: { type: "string" } },
+      });
+      expect(await selectThrough("claim-by-reference-root", schema, "name"))
+        .toEqual({ name: "Ada" });
     });
   });
 

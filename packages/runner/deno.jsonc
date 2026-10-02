@@ -36,7 +36,6 @@
   },
   "exports": {
     "./native-ui": "./src/native-ui.ts",
-    "./inbox": "./src/inbox.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",

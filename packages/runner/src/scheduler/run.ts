@@ -69,6 +69,7 @@ import {
   takeInvalidCauses,
 } from "./invalidation.ts";
 import type { NodeRegistry } from "./node-record.ts";
+import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import { txToReactivityLog } from "./reactivity.ts";
 import { RetryImmediately } from "./retry-immediately.ts";
 import { type ActionTimingState, recordActionTime } from "./timing.ts";
@@ -1239,11 +1240,12 @@ function finalizeReactiveActionCommit(
             args.retryRegistration.token &&
           (state.nodes.isEffect(args.action) ||
             state.nodes.isComputation(args.action)))),
-    awaitRetryReadiness: (error) =>
-      state.runtime.awaitCommitRetryReadiness(
+    awaitRetryReadiness: async (error) => {
+      await state.runtime.awaitCommitRetryReadiness(
         error,
         state.runtime.writeTeardownSignal,
-      ),
+      );
+    },
     action: args.action,
     tx: args.tx,
     log: committedLog,
@@ -1304,7 +1306,15 @@ function finalizeReactiveActionCommit(
   // idleWithPendingCommits cannot release in the window between a
   // rejection settling and its retry being requeued (the event path in
   // events.ts registers the same way).
-  state.runtime.storageManager.trackPendingCommit(handled);
+  state.runtime.storageManager.trackPendingCommit(handled, () => {
+    const allSpaces = new Set(committedLog.writes.map((write) => write.space));
+    const spaces = diagnosticPrefix(allSpaces);
+    return {
+      kind: "action-disposition",
+      spaces,
+      spacesOmitted: allSpaces.size - spaces.length,
+    };
+  });
 
   logger.debug("schedule-run-complete", () => [
     `[RUN] Action completed: ${args.actionId}`,

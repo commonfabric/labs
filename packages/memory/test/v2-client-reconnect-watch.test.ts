@@ -40,6 +40,7 @@ const graphWatch = (id: string) => ({
  * `session.watch.set` frame handed to one, in wire order.
  */
 function outageTransport(server: Server) {
+  let host = server;
   let active: Transport | null = loopback(server);
   let receiver = (_payload: string) => {};
   let disconnected = (_error?: Error) => {};
@@ -61,6 +62,12 @@ function outageTransport(server: Server) {
       onSend(message);
     },
     close: () => active?.close() ?? Promise.resolve(),
+    reset() {
+      if (active === null) return;
+      void active.close();
+      active = loopback(host);
+      active.setReceiver(receiver);
+    },
     setReceiver(next) {
       receiver = next;
       active?.setReceiver(next);
@@ -83,6 +90,7 @@ function outageTransport(server: Server) {
       disconnected(new Error("synthetic outage"));
     },
     comeBack(next: Server): void {
+      host = next;
       active = loopback(next);
       active.setReceiver(receiver);
     },

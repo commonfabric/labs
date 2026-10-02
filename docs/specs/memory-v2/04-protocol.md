@@ -444,13 +444,20 @@ Rules:
   watch set if the session was reopened fresh — declaring its holdings on that
   `session.watch.set` (section 4.3.5) so the re-establishment carries the
   difference rather than the whole union
+- a retry after a failed handshake or session restoration discards the previous
+  transport connection before sending `hello` again. A connection accepts
+  `hello` only once; the fresh connection also supplies a new authentication
+  challenge. Mounted sessions retain their watch intent and unconfirmed commits
+  while they await restoration on that connection. A transport that cannot
+  discard its failed connection stops recovery with the original failure,
+  rejecting pending writes and restoration waiters instead of repeating `hello`
 - a `session.open` denied with an `AuthorizationError` the server did NOT mark
   `retriable` is permanent: the client stops reopening that session and
   terminates it with the real error rather than retrying the identical handshake
   forever. A `retriable` authorization race (an expired, used, or mismatched
-  challenge; a stale signed `exp`) and every transport-level disconnect still
-  retry, so a transient blip or a fresh-challenge race heals. A permanent
-  protocol-flag mismatch at `hello` ends the whole connection the same way. See
+  challenge; a stale signed `exp`) or a transport-level disconnect can recover
+  through retries on a transport that can discard its failed connection. A
+  permanent protocol-flag mismatch at `hello` ends the whole connection. See
   [`../../features/authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md)
   for how the client, the runner storage layer, and the CLI act on this
   classification end to end.
@@ -1760,3 +1767,10 @@ rejoins every room the session was in, delivers the new snapshot — the server
 assigned a new participant id with the new connection — and republishes the
 last record at a fresh revision. A session that terminates ends its rooms with
 a `failure` event carrying the cause, and nothing follows it.
+
+## Routed public-stage Mode A
+
+The opt-in router path uses the dedicated [Mode A contract](routed-mode-a.md):
+router-audience client signatures, attested issuance and exact-byte receipt,
+single-use socket-bound tickets, durable replay custody and independent toolshed
+ACL/ownership checks. Direct Memory hosts keep the protocol described above.

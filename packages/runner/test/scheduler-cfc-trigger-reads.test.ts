@@ -219,6 +219,9 @@ describe("trigger reads follow the scheduling decision", () => {
     });
 
     it(`${mode}: a scheduling change records the trigger read`, () => {
+      // The change names the whole document; the cause is the action's read
+      // whose value changed, which is what scheduled it.
+
       const action: Action = () => {};
       const state = makeNotificationState({
         action,
@@ -232,7 +235,7 @@ describe("trigger reads follow the scheduling decision", () => {
       expect(causes[0]).toMatchObject({
         space,
         id: "of:cell",
-        path: [],
+        path: ["value"],
       });
     });
   }
