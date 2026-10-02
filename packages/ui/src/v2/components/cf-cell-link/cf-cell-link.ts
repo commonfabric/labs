@@ -143,6 +143,8 @@ export class CFCellLink extends BaseElement {
   override disconnectedCallback() {
     super.disconnectedCallback();
     this._cleanupSubscription();
+    // A resolution still in flight would follow the link again once it lands.
+    this._resolveCellGeneration++;
     this.#linkTarget.cancel();
     this._endDrag();
   }

@@ -268,10 +268,14 @@ describe("CFCellLink", () => {
     }
 
     /**
-     * A link whose target the test moves with `publish()`, and a promise
-     * settled when something first subscribes to it.
+     * A link whose target the test moves with `publish()`, a promise settled
+     * when something first subscribes to it, and a count of the subscriptions
+     * taken on it and released. Each resolution waits for `resolution`.
      */
-    function retargetableLink(initialTarget: CellHandle) {
+    function retargetableLink(
+      initialTarget: CellHandle,
+      { resolution = Promise.resolve() }: { resolution?: Promise<void> } = {},
+    ) {
       const link = createMockCellHandle({}, {
         id: "of:fid1:row-holder" as CellRef["id"],
         space: "did:key:test-space" as CellRef["space"],
@@ -280,8 +284,9 @@ describe("CFCellLink", () => {
       let currentTarget = initialTarget;
       const callbacks = new Set<(value: CellHandle) => void>();
       const subscribed = deferred<void>();
+      const counts = { subscribed: 0, unsubscribed: 0 };
       (link as unknown as { resolveAsCell(): Promise<CellHandle> })
-        .resolveAsCell = () => Promise.resolve(currentTarget);
+        .resolveAsCell = () => resolution.then(() => currentTarget);
       (link as unknown as {
         asSchema(): {
           sync(): Promise<CellHandle>;
@@ -292,15 +297,34 @@ describe("CFCellLink", () => {
         subscribe(callback) {
           callback(currentTarget);
           callbacks.add(callback);
+          counts.subscribed++;
           subscribed.resolve();
-          return () => callbacks.delete(callback);
+          return () => {
+            callbacks.delete(callback);
+            counts.unsubscribed++;
+          };
         },
       });
       const publish = (value: CellHandle) => {
         currentTarget = value;
         for (const callback of [...callbacks]) callback(value);
       };
-      return { link, publish, subscribed: subscribed.promise };
+      return { link, counts, publish, subscribed: subscribed.promise };
+    }
+
+    /** Disconnects `element`, giving it the slice of `document` that touches. */
+    function disconnect(element: any): void {
+      const globals = globalThis as { document?: unknown };
+      const had = Object.hasOwn(globals, "document");
+      const previous = globals.document;
+      globals.document = { removeEventListener() {} };
+      try {
+        markConnected(element, false);
+        element.disconnectedCallback();
+      } finally {
+        if (had) globals.document = previous;
+        else delete globals.document;
+      }
     }
 
     /** The piece ids navigated to while `act()` runs. */
@@ -348,6 +372,23 @@ describe("CFCellLink", () => {
         element._handleClick({ stopPropagation() {} })
       );
       expect(seen).toEqual(["of:fid1:second"]);
+    });
+
+    it("takes no subscription when it disconnects while resolving", async () => {
+      const resolution = deferred<void>();
+      const view = retargetableLink(roomCell("of:fid1:first"), {
+        resolution: resolution.promise,
+      });
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = view.link;
+      const resolving = element._resolveCell();
+      disconnect(element);
+      resolution.resolve();
+      await resolving;
+
+      expect(view.counts.subscribed).toBe(0);
+      expect(element._resolvedCell).toBeUndefined();
     });
 
     it("keeps its `$NAME` subscription when a link resolves again to the same target", async () => {
