@@ -893,6 +893,33 @@ export class CellHandle<T = unknown> {
     return new CellHandle<T>(this.#rt, response.cell);
   }
 
+  /**
+   * The fields this record cell holds, by name, each as a handle on the
+   * field within it, whose reads the worker decides one by one. Nothing a
+   * field holds is read to list them, so a record whose whole read is refused
+   * for one field the viewer may not see still lists every field. The names
+   * come from the record, not its schema.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses even the list, as
+   *   for a record whose own label the viewer may not see.
+   */
+  async fields(): Promise<Record<string, CellHandle<unknown>>> {
+    const response = await this.#enqueueOperation(() =>
+      this.#conn.request<RequestType.CellFields>({
+        type: RequestType.CellFields,
+        cell: this.ref(),
+      })
+    );
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
+    const fields: Record<string, CellHandle<unknown>> = {};
+    for (const [name, ref] of Object.entries(response.fields)) {
+      fields[name] = new CellHandle(this.#rt, ref);
+    }
+    return fields;
+  }
+
   async getCfcLabel(): Promise<CfcLabelView | undefined> {
     const response = await this.#enqueueOperation(() =>
       this.#conn.request<RequestType.CellGetCfcLabel>({

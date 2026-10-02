@@ -1074,6 +1074,40 @@ describe("cell-handle", () => {
 
       expect(cell.refusal).toEqual(refusal);
     });
+
+    it("lists the fields of a record whose whole read is refused, as handles the worker decides one by one", async () => {
+      const field = (name: string): CellRef => ({ ...ref, path: [name] });
+      const requests: unknown[] = [];
+      const runtime = {
+        [$conn]: () => ({
+          request: (request: unknown) => {
+            requests.push(request);
+            return Promise.resolve({
+              fields: { title: field("title"), auth: field("auth") },
+            });
+          },
+        }),
+      } as unknown as RuntimeClient;
+      const cell = new CellHandle<Record<string, string>>(runtime, ref);
+      cell[$onCellRefused](refusal);
+
+      const fields = await cell.fields();
+
+      expect(requests).toEqual([{ type: RequestType.CellFields, cell: ref }]);
+      expect(Object.keys(fields)).toEqual(["title", "auth"]);
+      expect(fields.title).toBeInstanceOf(CellHandle);
+      expect(fields.title.ref()).toEqual(field("title"));
+      expect(fields.auth.ref()).toEqual(field("auth"));
+    });
+
+    it("rejects a refused list of fields", async () => {
+      const cell = new CellHandle<Record<string, string>>(
+        makeRuntime({ refused: refusal }),
+        ref,
+      );
+
+      await expect(cell.fields()).rejects.toThrow(CellReadRefusedError);
+    });
   });
 
   describe("CellHandle update change detection", () => {

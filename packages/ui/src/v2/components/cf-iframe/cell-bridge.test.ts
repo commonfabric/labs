@@ -782,6 +782,42 @@ describe("cf-iframe cell bridge", () => {
       );
     });
 
+    it("resolves a refused context with an interned schema to the fields the worker lists", async () => {
+      const interned: CellRef = {
+        ...ref,
+        schema: { $ref: "cid:fid1:interned-context-schema" },
+      };
+      const listed = (name: string): CellRef => ({
+        id: ref.id,
+        space: ref.space,
+        scope: ref.scope,
+        path: [name],
+      });
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) =>
+            Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: request.cell }
+                : request.type === RequestType.CellFields
+                ? { fields: { notes: listed("notes"), count: listed("count") } }
+                : { refused: refusal },
+            ),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(
+        runtime,
+        interned,
+      );
+
+      const bridge = await resolveCellContextBridge(context);
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(["count", "notes"]);
+    });
+
     it("names the resources a refused context's schema declares", () => {
       const { runtime } = refusing();
       const context = new CellHandle<Record<string, unknown>>(runtime, ref);
