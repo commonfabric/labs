@@ -85,10 +85,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.CellResolveAsCell]: reference,
   [RequestType.CellGetCfcLabel]: DECIDED,
   [RequestType.CellFields]: DECIDED,
-  [RequestType.SnapshotSharePrepare]: {
-    kind: "trusted-operation",
-    why: "the snapshot the owner is asked to confirm sharing",
-  },
+  [RequestType.SnapshotSharePrepare]: DECIDED,
   [RequestType.SnapshotShareCommit]: reference,
   [RequestType.SnapshotShareCancel]: write,
   [RequestType.CustodySealPrepare]: {

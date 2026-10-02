@@ -277,7 +277,7 @@ import {
   type SlugResponse,
   type SnapshotShareCommitRequest,
   type SnapshotSharePrepareRequest,
-  type SnapshotSharePreview,
+  type SnapshotSharePrepareResponse,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
   type SpaceHostRegistrationResponse,
@@ -2157,7 +2157,7 @@ export class RuntimeProcessor {
   async handleSnapshotSharePrepare(
     request: SnapshotSharePrepareRequest,
     client: WorkerClient = ownerClient,
-  ): Promise<SnapshotSharePreview> {
+  ): Promise<SnapshotSharePrepareResponse> {
     if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
@@ -2182,17 +2182,26 @@ export class RuntimeProcessor {
       appendBooksTo?.recommended.sync(),
       appendBooksTo?.received.sync(),
     ]);
-    if (this.#isDisposed || this.#detachedClients.has(client)) {
-      throw new Error("Snapshot sharing is unavailable");
-    }
-    const prepared = prepareSnapshotShare(
-      source,
-      "user" in audience ? { user: audienceCell } : { space: audienceCell },
-      appendBooksTo,
-    );
-    const id = crypto.randomUUID();
-    this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
-    return { id, value: prepared.value, audience: prepared.audience };
+    // The preview shows the host the source's value, so it is decided as an
+    // answer built from the source is, and no consent is kept for one the
+    // display ceiling refuses.
+    return await this.#hostReadGate.fromCell(source, () => {
+      if (this.#isDisposed || this.#detachedClients.has(client)) {
+        throw new Error("Snapshot sharing is unavailable");
+      }
+      const prepared = prepareSnapshotShare(
+        source,
+        "user" in audience ? { user: audienceCell } : { space: audienceCell },
+        appendBooksTo,
+      );
+      const id = crypto.randomUUID();
+      this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
+      return Promise.resolve({
+        id,
+        value: prepared.value,
+        audience: prepared.audience,
+      });
+    });
   }
 
   /** Consumes one preview through the dedicated trusted host transport. */

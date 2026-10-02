@@ -1283,6 +1283,15 @@ export type SnapshotSharePreview = {
   audience: CfcAtom;
 };
 
+/**
+ * The answer to a {@link RequestType.SnapshotSharePrepare} request: the
+ * preview, which shows the host the source's value, or the refusal that
+ * stands in its place where the display ceiling refuses the source.
+ */
+export type SnapshotSharePrepareResponse =
+  & HostReadDecided
+  & (SnapshotSharePreview | CellRefusedAnswer);
+
 /** The {@link RequestType.SnapshotSharePrepare} request. */
 export type SnapshotSharePrepareRequest = BaseRequest & {
   type: RequestType.SnapshotSharePrepare;
@@ -4110,7 +4119,7 @@ export type RemoteResponse =
   | CellResponse
   | CfcLabelViewResponse
   | CellFieldsResponse
-  | SnapshotSharePreview
+  | SnapshotSharePrepareResponse
   | CustodySealPreview
   | CustodySealCommitResponse
   | CustodyAnswerPublishResponse
@@ -4341,7 +4350,7 @@ export type Commands = {
   };
   [RequestType.SnapshotSharePrepare]: {
     request: SnapshotSharePrepareRequest;
-    response: SnapshotSharePreview;
+    response: SnapshotSharePrepareResponse;
   };
   [RequestType.SnapshotShareCommit]: {
     request: SnapshotShareCommitRequest;

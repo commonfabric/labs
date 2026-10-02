@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
+import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -17,6 +18,25 @@ import { buildProcessor } from "./build-processor.ts";
 const identity = await Identity.fromPassphrase("snapshot share IPC");
 const first: WorkerClient = { id: 1, post: () => true };
 const second: WorkerClient = { id: 2, post: () => true };
+
+/**
+ * The preview a prepare request answered with, failing the case where it was
+ * refused, or where the answer is no preview.
+ */
+function previewOf(answer: unknown): SnapshotSharePreview {
+  if (
+    typeof answer !== "object" || answer === null || "refused" in answer ||
+    !("id" in answer) || typeof answer.id !== "string" ||
+    !("audience" in answer) || !("value" in answer)
+  ) {
+    throw new Error(`Not a snapshot preview: ${JSON.stringify(answer)}`);
+  }
+  return {
+    id: answer.id,
+    value: answer.value as never,
+    audience: answer.audience as never,
+  };
+}
 
 type Fixture = {
   processor: RuntimeProcessor;
@@ -122,11 +142,13 @@ describe("snapshot-share", () => {
   it("prepares an actor-private snapshot in an unbounded shell runtime", async () => {
     await withFixture(
       async ({ processor, sourceRef, destinationRef, runtime }) => {
-        const preview = await processor.handleSnapshotSharePrepare({
-          type: RequestType.SnapshotSharePrepare,
-          source: sourceRef,
-          audience: { space: destinationRef },
-        }, first);
+        const preview = previewOf(
+          await processor.handleSnapshotSharePrepare({
+            type: RequestType.SnapshotSharePrepare,
+            source: sourceRef,
+            audience: { space: destinationRef },
+          }, first),
+        );
         expect(preview.value).toEqual({ title: "Solaris" });
         expect(preview.audience).toEqual(cfcAtom.space(identity.did()));
         const shared = await processor.handleSnapshotShareCommit({
@@ -141,14 +163,55 @@ describe("snapshot-share", () => {
     );
   });
 
+  it("refuses the preview of a source the display ceiling refuses", async () => {
+    await withFixture(
+      async ({ processor, destinationRef, runtime }) => {
+        // A source holding a credential, which the default ceiling shows no
+        // one.
+        const tx = runtime.edit();
+        const secret = runtime.getCell<{ token: string }>(
+          identity.did(),
+          "credential-source",
+          {
+            type: "object",
+            properties: { token: { type: "string" } },
+            ifc: {
+              confidentiality: [
+                cfcAtom.resource("CredentialSecret", identity.did()),
+              ],
+            },
+          },
+          tx,
+        );
+        secret.set({ token: "credential-behind-the-seal" });
+        expect((await tx.commit()).error).toBeUndefined();
+        await secret.sync();
+        processor.accessForTestingOnly.renderConfidentialityCeiling =
+          defaultRenderConfidentialityCeiling(identity.did());
+
+        const answer = await processor.handleSnapshotSharePrepare({
+          type: RequestType.SnapshotSharePrepare,
+          source: createCellRef(secret),
+          audience: { space: destinationRef },
+        }, first);
+
+        expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        expect(JSON.stringify(answer)).not.toContain("behind-the-seal");
+      },
+      { bounded: false },
+    );
+  });
+
   it("keeps consent in the backend and admits one confirmation from its client", async () => {
     await withFixture(
       async ({ processor, sourceRef, destinationRef, runtime }) => {
-        const preview = await processor.handleRequest({
-          type: RequestType.SnapshotSharePrepare,
-          source: { ...sourceRef, schema: { default: { title: "forged" } } },
-          audience: { space: destinationRef },
-        }, first) as SnapshotSharePreview;
+        const preview = previewOf(
+          await processor.handleRequest({
+            type: RequestType.SnapshotSharePrepare,
+            source: { ...sourceRef, schema: { default: { title: "forged" } } },
+            audience: { space: destinationRef },
+          }, first),
+        );
         expect(Object.keys(preview).sort()).toEqual([
           "audience",
           "id",
@@ -182,11 +245,13 @@ describe("snapshot-share", () => {
   it("invalidates a changed preview and consumes the failed confirmation", async () => {
     await withFixture(
       async ({ processor, source, sourceRef, destinationRef, runtime }) => {
-        const preview = await processor.handleSnapshotSharePrepare({
-          type: RequestType.SnapshotSharePrepare,
-          source: sourceRef,
-          audience: { space: destinationRef },
-        }, first);
+        const preview = previewOf(
+          await processor.handleSnapshotSharePrepare({
+            type: RequestType.SnapshotSharePrepare,
+            source: sourceRef,
+            audience: { space: destinationRef },
+          }, first),
+        );
         const tx = runtime.edit();
         source.withTx(tx).set({ title: "Roadside Picnic" });
         expect((await tx.commit()).error).toBeUndefined();
@@ -211,13 +276,17 @@ describe("snapshot-share", () => {
         source: sourceRef,
         audience: { space: destinationRef },
       };
-      const departing = await processor.handleSnapshotSharePrepare(
-        request,
-        first,
+      const departing = previewOf(
+        await processor.handleSnapshotSharePrepare(
+          request,
+          first,
+        ),
       );
-      const retained = await processor.handleSnapshotSharePrepare(
-        request,
-        second,
+      const retained = previewOf(
+        await processor.handleSnapshotSharePrepare(
+          request,
+          second,
+        ),
       );
       processor.disposeClient(first);
       await expect(processor.handleSnapshotShareCommit({
@@ -259,11 +328,13 @@ describe("snapshot-share", () => {
 
   it("discards pending consent when the backend is disposed", async () => {
     await withFixture(async ({ processor, sourceRef, destinationRef }) => {
-      const preview = await processor.handleSnapshotSharePrepare({
-        type: RequestType.SnapshotSharePrepare,
-        source: sourceRef,
-        audience: { space: destinationRef },
-      }, first);
+      const preview = previewOf(
+        await processor.handleSnapshotSharePrepare({
+          type: RequestType.SnapshotSharePrepare,
+          source: sourceRef,
+          audience: { space: destinationRef },
+        }, first),
+      );
       await processor.dispose();
       await expect(processor.handleSnapshotShareCommit({
         type: RequestType.SnapshotShareCommit,
@@ -278,9 +349,11 @@ describe("snapshot-share", () => {
         source: sourceRef,
         audience: { space: destinationRef },
       };
-      const preview = await processor.handleSnapshotSharePrepare(
-        request,
-        first,
+      const preview = previewOf(
+        await processor.handleSnapshotSharePrepare(
+          request,
+          first,
+        ),
       );
       await processor.handleRequest({
         type: RequestType.SnapshotShareCancel,
@@ -292,11 +365,15 @@ describe("snapshot-share", () => {
           id: preview.id,
         }, first),
       ).toHaveProperty("cell");
-      const cancelled = await processor.handleSnapshotSharePrepare(
-        request,
-        first,
+      const cancelled = previewOf(
+        await processor.handleSnapshotSharePrepare(
+          request,
+          first,
+        ),
       );
-      const other = await processor.handleSnapshotSharePrepare(request, first);
+      const other = previewOf(
+        await processor.handleSnapshotSharePrepare(request, first),
+      );
       await processor.handleRequest({
         type: RequestType.SnapshotShareCancel,
         id: cancelled.id,

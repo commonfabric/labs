@@ -469,18 +469,29 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return this.#pendingWrites;
   }
 
-  /** Prepares the snapshot and audience the trusted host asks the user to share. */
+  /**
+   * Prepares the snapshot and audience the trusted host asks the user to share.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses the host a read of
+   *   the source, whose value the preview would show.
+   */
   async prepareSnapshotShare(
     source: CellRef,
     audience: SnapshotShareAudienceRef,
     appendBooksTo?: { recommended: CellRef; received: CellRef },
   ): Promise<SnapshotSharePreview> {
-    return await this.#conn.request<RequestType.SnapshotSharePrepare>({
+    const response = await this.#conn.request<
+      RequestType.SnapshotSharePrepare
+    >({
       type: RequestType.SnapshotSharePrepare,
       source,
       audience,
       appendBooksTo,
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
+    return response;
   }
 
   /** Commits a preview after the trusted host receives the user's confirmation. */
