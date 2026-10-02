@@ -11,12 +11,18 @@
  *   `.set(v)`, the parent's value is updated and its subscribers fire
  * - `pushUpdate(cell, value)` — simulate a backend push via `$onCellUpdate`,
  *   letting tests distinguish local writes from runtime-originated updates
+ * - `pushRefusal(cell)` — simulate the worker refusing the cell's read, via
+ *   `$onCellRefused`
+ * - `writesSent(cell)` — the writes the handle, or a handle reached from it
+ *   through `key()`, sent the mock runtime
  */
 
 import {
   $conn,
+  $onCellRefused,
   $onCellUpdate,
   CellHandle,
+  type CellReadRefusal,
   type CellRef,
   type InitializedRuntimeConnection,
   type RuntimeClient,
@@ -43,6 +49,9 @@ const DEFAULT_REF: CellRef = {
 class MockCellNetwork {
   /** Root handles keyed by "id:space" */
   #roots = new Map<string, CellHandle>();
+
+  /** Every write request sent through this network, in order. */
+  readonly writes: { type: string; cell?: CellRef; value?: unknown }[] = [];
 
   register(handle: CellHandle): void {
     this.#roots.set(this.#rootKey(handle.ref()), handle);
@@ -143,6 +152,9 @@ function createMockConnection(
 ): InitializedRuntimeConnection {
   return {
     request: (data: { type: string; cell?: CellRef; value?: unknown }) => {
+      if (data.type === "cell:set" || data.type === "cell:push") {
+        network.writes.push(data);
+      }
       if (data.type === "cell:set" && data.cell && data.value !== undefined) {
         network.handleCellSet(data.cell, data.value);
       }
@@ -199,7 +211,36 @@ export function createMockCellHandle<T>(
   const cellRef: CellRef = { ...DEFAULT_REF, ...ref };
   const handle = new CellHandle<T>(rt, cellRef, value);
   network.register(handle as CellHandle<unknown>);
+  networks.set(handle as CellHandle<unknown>, network);
   return handle;
+}
+
+/** The network each mock handle was made on. */
+const networks = new WeakMap<CellHandle<unknown>, MockCellNetwork>();
+
+/**
+ * The writes (`CellSet` and `CellPush` requests) sent on the network
+ * `handle` was made on, by it or by any handle reached from it.
+ */
+export function writesSent<T>(
+  handle: CellHandle<T>,
+): readonly { type: string; cell?: CellRef; value?: unknown }[] {
+  const network = networks.get(handle as CellHandle<unknown>);
+  if (network === undefined) {
+    throw new Error("writesSent() takes a handle createMockCellHandle() made");
+  }
+  return network.writes;
+}
+
+/**
+ * Simulate the worker refusing `handle`'s read, the path a refused
+ * subscription update takes.
+ */
+export function pushRefusal<T>(
+  handle: CellHandle<T>,
+  refusal: CellReadRefusal = { refusedBy: "display-ceiling" },
+): void {
+  handle[$onCellRefused](refusal);
 }
 
 /**

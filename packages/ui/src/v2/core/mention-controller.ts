@@ -10,6 +10,7 @@ import {
   MentionableArraySchema,
   MentionableSchema,
 } from "./mentionable.ts";
+import { shownValue } from "./shown-value.ts";
 
 /**
  * Configuration for the MentionController
@@ -152,7 +153,8 @@ export class MentionController implements ReactiveController {
       return [];
     }
 
-    const mentionableArray = handle.get();
+    // A list the worker refuses offers no mentions.
+    const mentionableArray = shownValue(handle);
     if (!Array.isArray(mentionableArray) || mentionableArray.length === 0) {
       return [];
     }
@@ -418,7 +420,8 @@ export class MentionController implements ReactiveController {
       return [];
     }
 
-    const mentionableArray = handle.get();
+    // A list the worker refuses offers no mentions.
+    const mentionableArray = shownValue(handle);
     if (!Array.isArray(mentionableArray) || mentionableArray.length === 0) {
       return [];
     }
@@ -452,9 +455,11 @@ export class MentionController implements ReactiveController {
       this._mentionableTyped = this._mentionable.asSchema<MentionableArray>(
         MentionableArraySchema,
       );
-      this._mentionableUnsubscribe = this._mentionableTyped.subscribe(() => {
-        this.host.requestUpdate();
-      });
+      const update = () => this.host.requestUpdate();
+      this._mentionableUnsubscribe = this._mentionableTyped.subscribe(
+        update,
+        { onRefused: update },
+      );
     }
   }
 

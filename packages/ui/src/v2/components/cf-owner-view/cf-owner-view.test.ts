@@ -553,7 +553,9 @@ describe("CFOwnerView", () => {
         path: [],
       };
       const valueOnly = new CellHandle(runtime, origin);
-      const stopValueOnly = valueOnly.subscribe(() => {});
+      const stopValueOnly = valueOnly.subscribe(() => {}, {
+        onRefused: () => {},
+      });
       const writes: (boolean | null)[] = [];
       const element = new HeadlessOwnerView();
       element.runtime = runtime;

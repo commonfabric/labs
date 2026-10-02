@@ -1,11 +1,13 @@
 import { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   CellHandle,
+  type CellReadRefusal,
   type CellRef,
   isCellHandle,
   type JSONSchema,
 } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { shownValue } from "./shown-value.ts";
 import {
   InputTimingController,
   type InputTimingOptions,
@@ -147,6 +149,14 @@ export class CellController<T> implements ReactiveController {
   private _subscribeEcho = false;
 
   /**
+   * The refusal of the bound handle's read, while it stands. The controller
+   * then holds nothing of the cell: it reads as its empty value, and it
+   * writes nothing, since a value made from that empty value (a toggle, a
+   * list with an item added or removed) would replace one never shown.
+   */
+  private _refusal: CellReadRefusal | undefined;
+
+  /**
    * Bumped when binding to a different persistent cell, so settle callbacks
    * from writes against a previous binding cannot release the new one.
    */
@@ -197,6 +207,7 @@ export class CellController<T> implements ReactiveController {
         this._lastKnownValue = undefined;
         this._bindingHydrated = false;
       }
+      this._refusal = undefined;
       this._cleanupCellSubscription();
       // Only apply the component's schema when the CellHandle doesn't already
       // have one. Pattern-compiled $bindings (e.g. $images, $files) arrive with
@@ -227,6 +238,11 @@ export class CellController<T> implements ReactiveController {
     if (this._currentValue === undefined || this._currentValue === null) {
       return undefined as T;
     }
+    // A refused read reads as the controller's empty value, as an unset
+    // plain value does, rather than throw from a render. `refusal` says why.
+    if (this._refusal !== undefined) {
+      return this.options.getValue(undefined as T);
+    }
     // A same-cell rebind can install a handle that has not hydrated yet
     // (get() still undefined). Keep showing the last known value until its
     // first real delivery arrives instead of repainting emptiness. Once the
@@ -235,7 +251,7 @@ export class CellController<T> implements ReactiveController {
     if (
       !this._bindingHydrated &&
       isCellHandle(this._currentValue) &&
-      (this._currentValue as CellHandle<T>).get() === undefined &&
+      shownValue(this._currentValue as CellHandle<T>) === undefined &&
       this._lastKnownValue !== undefined
     ) {
       return this._lastKnownValue as Readonly<T>;
@@ -244,10 +260,21 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * Set a new value, handling timing and transactions
+   * The refusal of the bound cell's read, while it stands: the controller
+   * then shows its empty value, which a component may replace with a
+   * placeholder, and {@link setValue} and the list operations write nothing.
+   */
+  get refusal(): CellReadRefusal | undefined {
+    return this._refusal;
+  }
+
+  /**
+   * Set a new value, handling timing and transactions. Nothing is written
+   * while the bound cell's read is refused ({@link refusal}).
    */
   setValue(newValue: T): void {
     if (this._currentValue === undefined || this._currentValue === null) return;
+    if (this._refusal !== undefined) return;
 
     const oldValue = this.getValue();
 
@@ -261,6 +288,12 @@ export class CellController<T> implements ReactiveController {
     }
 
     const performUpdate = () => {
+      // A refusal that arrived while the write waited on its timing stands
+      // against it as it would have against the call.
+      if (this._refusal !== undefined) {
+        this._localEdit = undefined;
+        return;
+      }
       this._applyingLocalWrite = true;
       try {
         this.options.setValue(this._currentValue!, newValue, oldValue);
@@ -366,7 +399,7 @@ export class CellController<T> implements ReactiveController {
 
   private defaultGetValue(value: CellHandle<T> | T): T {
     if (isCellHandle(value)) {
-      const cellValue = (value as CellHandle<T>).get();
+      const cellValue = shownValue(value as CellHandle<T>);
       return cellValue === undefined ? (cellValue as T) : cellValue;
     }
     return value as T;
@@ -403,9 +436,10 @@ export class CellController<T> implements ReactiveController {
    */
   private _releaseLocalEditAfterSettle(): void {
     if (this._localEdit === undefined) return;
-    const raw = isCellHandle(this._currentValue)
-      ? (this._currentValue as CellHandle<T>).get()
+    const read = isCellHandle(this._currentValue)
+      ? (this._currentValue as CellHandle<T>).lastRead()
       : undefined;
+    const raw = read !== undefined && "value" in read ? read.value : undefined;
     if (raw !== undefined && deepValueEqual(raw, this._localEdit.value)) {
       this._localEdit = undefined;
     } else {
@@ -418,11 +452,13 @@ export class CellController<T> implements ReactiveController {
       let previousValue: T | undefined;
       this._bindingHydrated = false;
       this._subscribeEcho = true;
+      this._refusal = undefined;
       try {
         this._cellUnsubscribe = this._currentValue.subscribe((newValue) => {
           // Call onChange when the cell value changes from the backend
           // This ensures components like cf-select can update their DOM state
           const typedNewValue = newValue as T | undefined;
+          this._refusal = undefined;
           if (!this._subscribeEcho) this._bindingHydrated = true;
           const suppressed = this._classifyDelivery(typedNewValue);
           // `Object.is`, not `!==`: an unchanged `NaN` must not re-announce,
@@ -441,6 +477,19 @@ export class CellController<T> implements ReactiveController {
           if (this.options.triggerUpdate) {
             this.host.requestUpdate();
           }
+        }, {
+          onRefused: (refusal) => {
+            // Nothing of the cell is held any longer: no pending edit to
+            // keep, and no last value to show in its place.
+            this._refusal = refusal;
+            this._localEdit = undefined;
+            this._settledAwaitingRelease = false;
+            this._lastKnownValue = undefined;
+            previousValue = undefined;
+            if (this.options.triggerUpdate) {
+              this.host.requestUpdate();
+            }
+          },
         });
       } finally {
         this._subscribeEcho = false;
@@ -559,7 +608,7 @@ export class StringCellController extends CellController<string> {
       ...options,
       getValue: options.getValue || ((value) => {
         if (isCellHandle(value)) {
-          return (value as CellHandle<string>).get() || "";
+          return shownValue(value as CellHandle<string>) || "";
         }
         // Handle empty strings explicitly - don't treat them as falsy
         return value === undefined || value === null ? "" : value as string;
@@ -581,7 +630,7 @@ export class BooleanCellController extends CellController<boolean> {
       ...options,
       getValue: options.getValue || ((value) => {
         if (isCellHandle(value)) {
-          return (value as CellHandle<boolean>).get() ?? false;
+          return shownValue(value as CellHandle<boolean>) ?? false;
         }
         return value as boolean || false;
       }),
@@ -609,7 +658,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
       ...options,
       getValue: options.getValue || ((value) => {
         if (isCellHandle(value)) {
-          return (value as CellHandle<T[]>).get() || [];
+          return shownValue(value as CellHandle<T[]>) || [];
         }
         return value as T[] || [];
       }),
@@ -620,6 +669,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
    * Add an item to the array
    */
   addItem(item: T): void {
+    if (this.refusal !== undefined) return;
     if (this.hasCell()) {
       const cell = this.getCell()!;
       cell.push(item);
@@ -647,6 +697,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
    * Update an item in the array
    */
   updateItem(oldItem: T, newItem: T): void {
+    if (this.refusal !== undefined) return;
     const currentArray = this.getValue();
     // As in `removeItem()`: match by `Object.is`, not `indexOf`'s `===`.
     const index = currentArray.findIndex((item) => Object.is(item, oldItem));

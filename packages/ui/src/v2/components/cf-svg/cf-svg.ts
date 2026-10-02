@@ -1,3 +1,4 @@
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
@@ -69,7 +70,8 @@ export class CFSvg extends BaseElement {
 
   private _getContentValue(): string {
     if (isCellHandle<string>(this.content)) {
-      return this.content.get() ?? "";
+      const read = this.content.lastRead();
+      return "refused" in read ? "" : read.value ?? "";
     }
     return this.content ?? "";
   }
@@ -89,8 +91,9 @@ export class CFSvg extends BaseElement {
 
       // Subscribe to new Cell if it's a Cell
       if (this.content && isCellHandle(this.content)) {
-        this._unsubscribe = this.content.subscribe(() => {
-          this.requestUpdate();
+        const update = () => this.requestUpdate();
+        this._unsubscribe = this.content.subscribe(update, {
+          onRefused: update,
         });
       }
     }
@@ -105,6 +108,15 @@ export class CFSvg extends BaseElement {
   }
 
   override render() {
+    // Markup the worker will not show is replaced by the placeholder a render
+    // shows in its place, as text rather than as an empty drawing.
+    if (
+      isCellHandle<string>(this.content) && this.content.refusal !== undefined
+    ) {
+      return html`
+        <div class="svg-content" part="content">${CFC_POLICY_PLACEHOLDER_TEXT}</div>
+      `;
+    }
     const contentValue = this._getContentValue();
 
     return html`

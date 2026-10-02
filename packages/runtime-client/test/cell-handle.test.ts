@@ -668,7 +668,7 @@ describe("cell-handle", () => {
       const calls: Array<[string | undefined, unknown]> = [];
       cell.subscribe((value, cfcLabel) => {
         calls.push([value, cfcLabel]);
-      }, { includeCfcLabel: true });
+      }, { includeCfcLabel: true, onRefused: () => {} });
 
       // Immediate call on subscribe with the current (empty) state.
       expect(calls).toEqual([[undefined, undefined]]);
@@ -694,7 +694,7 @@ describe("cell-handle", () => {
       const calls: Array<string | undefined> = [];
       cell.subscribe((value) => {
         calls.push(value);
-      }); // no includeCfcLabel
+      }, { onRefused: () => {} }); // no includeCfcLabel
 
       expect(cell.wantsCfcLabel).toBe(false);
       cell[$onCellUpdate]("v1", { cfcLabel: labelA });
@@ -706,7 +706,7 @@ describe("cell-handle", () => {
 
     it("leaves the cached label untouched on a value-only update", () => {
       const cell = new CellHandle<string>(makeRuntime(), ref);
-      cell.subscribe(() => {}, { includeCfcLabel: true });
+      cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
       cell[$onCellUpdate]("v1", { cfcLabel: labelA });
       expect(cell.cfcLabel).toEqual(labelA);
       // No `labelUpdate` arg = value-only update; label stays.
@@ -732,13 +732,13 @@ describe("cell-handle", () => {
       } as unknown as RuntimeClient;
       const cell = new CellHandle<string>(runtime, ref);
 
-      cell.subscribe(() => {}); // value-only first
+      cell.subscribe(() => {}, { onRefused: () => {} }); // value-only first
       expect(cell.wantsCfcLabel).toBe(false);
       expect(events).toEqual(["subscribe"]);
 
       // A label-aware subscription on the SAME handle re-opens the backend sub so
       // it carries labels (the old one was label-less and would be deduped away).
-      cell.subscribe(() => {}, { includeCfcLabel: true });
+      cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
       expect(cell.wantsCfcLabel).toBe(true);
       await Promise.resolve(); // let the unsubscribe().finally(subscribe) settle
       expect(events).toEqual(["subscribe", "unsubscribe", "subscribe"]);
@@ -849,7 +849,7 @@ describe("cell-handle", () => {
 
     it("drops the value and label it held, and throws from `get()`", () => {
       const cell = new CellHandle<string>(makeRuntime(), ref);
-      cell.subscribe(() => {}, { includeCfcLabel: true });
+      cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
       cell[$onCellUpdate]("shown before the seal", { cfcLabel: label });
 
       cell[$onCellRefused](refusal);
@@ -869,7 +869,7 @@ describe("cell-handle", () => {
       }, { onRefused: (heard) => refusals.push(heard) });
       cell.subscribe((value) => {
         values.push(value);
-      });
+      }, { onRefused: () => {} });
       cell[$onCellUpdate]("shown before the seal");
       const valuesBefore = values.length;
 
@@ -899,7 +899,7 @@ describe("cell-handle", () => {
       const values: Array<string | null | undefined> = [];
       cell.subscribe((value) => {
         values.push(value);
-      });
+      }, { onRefused: () => {} });
       cell[$onCellRefused](refusal);
 
       cell[$onCellUpdate](null);
@@ -914,7 +914,7 @@ describe("cell-handle", () => {
       const values: Array<string | undefined> = [];
       cell.subscribe((value) => {
         values.push(value);
-      });
+      }, { onRefused: () => {} });
       cell[$onCellUpdate]("the same value");
       cell[$onCellRefused](refusal);
       const before = values.length;
@@ -925,13 +925,85 @@ describe("cell-handle", () => {
       expect(cell.get()).toBe("the same value");
     });
 
-    it("holds the value the host writes, whatever was refused before", async () => {
-      const cell = new CellHandle<string>(makeRuntime({}), ref);
+    /** A runtime that keeps every request a handle sends it. */
+    const recording = () => {
+      const requests: unknown[] = [];
+      const runtime = {
+        [$conn]: () => ({
+          signal: new AbortController().signal,
+          request: (request: unknown) => {
+            requests.push(request);
+            return Promise.resolve({});
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+        }),
+      } as unknown as RuntimeClient;
+      return { runtime, requests };
+    };
+
+    it("sends no write made through it, and logs the refusal", async () => {
+      const { runtime, requests } = recording();
+      const cell = new CellHandle<boolean>(runtime, ref);
       cell[$onCellRefused](refusal);
+      const logged: unknown[][] = [];
+      const real = console.error;
+      console.error = (...args: unknown[]) => logged.push(args);
+      try {
+        // A toggle made from a value it could not see.
+        await cell.set(true);
+      } finally {
+        console.error = real;
+      }
+
+      expect(requests).toEqual([]);
+      expect(cell.refusal).toEqual(refusal);
+      expect(logged).toEqual([
+        ["[CellHandle] Write failed:", expect.any(CellReadRefusedError)],
+      ]);
+    });
+
+    it("rejects a strict write through it, and sends nothing", async () => {
+      const { runtime, requests } = recording();
+      const cell = new CellHandle<string>(runtime, ref);
+      cell[$onCellRefused](refusal);
+
+      await expect(cell.setStrict("written over the seal")).rejects.toThrow(
+        CellReadRefusedError,
+      );
+
+      expect(requests).toEqual([]);
+      expect(cell.refusal).toEqual(refusal);
+    });
+
+    for (const push of ["pushStrict", "pushAllStrict"] as const) {
+      it(`rejects \`${push}()\` through it, and sends nothing`, async () => {
+        const { runtime, requests } = recording();
+        const cell = new CellHandle<string[]>(runtime, ref);
+        cell[$onCellRefused](refusal);
+
+        await expect(
+          push === "pushStrict"
+            ? cell.pushStrict("an item")
+            : cell.pushAllStrict(["an item"]),
+        ).rejects.toThrow(CellReadRefusedError);
+
+        expect(requests).toEqual([]);
+        expect(cell.refusal).toEqual(refusal);
+      });
+    }
+
+    it("writes again once an admitted update ends the refusal", async () => {
+      const { runtime, requests } = recording();
+      const cell = new CellHandle<string>(runtime, ref);
+      cell[$onCellRefused](refusal);
+      cell[$onCellUpdate]("admitted again");
 
       await cell.set("written by the host");
 
-      expect(cell.refusal).toBeUndefined();
+      expect(requests).toEqual([
+        expect.objectContaining({ type: RequestType.CellSet }),
+      ]);
       expect(cell.get()).toBe("written by the host");
     });
 
@@ -999,7 +1071,7 @@ describe("cell-handle", () => {
       const calls: Array<number | undefined> = [];
       cell.subscribe((value) => {
         calls.push(value);
-      });
+      }, { onRefused: () => {} });
 
       cell[$onCellUpdate](NaN);
       const after = calls.length;
@@ -1012,7 +1084,7 @@ describe("cell-handle", () => {
       const calls: Array<unknown> = [];
       cell.subscribe((value) => {
         calls.push(value);
-      });
+      }, { onRefused: () => {} });
 
       cell[$onCellUpdate]({ x: NaN });
       const after = calls.length;
@@ -1029,7 +1101,7 @@ describe("cell-handle", () => {
       const calls: Array<unknown> = [];
       cell.subscribe((value) => {
         calls.push(value);
-      });
+      }, { onRefused: () => {} });
 
       cell[$onCellUpdate](new FabricBytes(new Uint8Array([1])));
       const after = calls.length;
@@ -1045,7 +1117,7 @@ describe("cell-handle", () => {
       // after it needs no arm of its own.
 
       const cell = new CellHandle<unknown>(makeRuntime(), ref);
-      cell.subscribe(() => {});
+      cell.subscribe(() => {}, { onRefused: () => {} });
       const link = new FabricLink(
         Object.freeze({ id: "of:fid1:refusal", path: [] }),
       );
@@ -1064,7 +1136,7 @@ describe("cell-handle", () => {
       const calls: Array<unknown> = [];
       cell.subscribe((value) => {
         calls.push(value);
-      });
+      }, { onRefused: () => {} });
       const inner = new CellHandle(makeRuntime(), {
         ...ref,
         id: "of:other-cell" as CellRef["id"],
@@ -1085,7 +1157,7 @@ describe("cell-handle", () => {
       const calls: Array<number | undefined> = [];
       cell.subscribe((value) => {
         calls.push(value);
-      });
+      }, { onRefused: () => {} });
 
       cell[$onCellUpdate](0);
       cell[$onCellUpdate](-0);
@@ -1097,7 +1169,7 @@ describe("cell-handle", () => {
       const calls: CellHandle[] = [];
       cell.subscribe((value) => {
         if (isCellHandle(value)) calls.push(value);
-      });
+      }, { onRefused: () => {} });
       const link = (scope: "space" | "user") => ({
         "/": {
           "link@1": {
@@ -1218,7 +1290,7 @@ describe("cell-handle", () => {
       const updates: unknown[] = [];
       const unsubscribe = cell.subscribe((value) => {
         updates.push(value);
-      });
+      }, { onRefused: () => {} });
       updates.length = 0;
 
       await expect(cell.setStrict({ n: 1 })).rejects.toThrow("aborted");
@@ -1390,7 +1462,7 @@ describe("cell-handle", () => {
       const updates: unknown[] = [];
       const unsubscribe = cell.subscribe((value) => {
         updates.push(value);
-      });
+      }, { onRefused: () => {} });
       updates.length = 0;
 
       await cell.setStrict({ n: 1 });
@@ -1542,7 +1614,7 @@ describe("cell-handle", () => {
       const updates: Array<{ n: number } | undefined> = [];
       const cancel = cell.subscribe((value) => {
         updates.push(value);
-      });
+      }, { onRefused: () => {} });
       updates.length = 0;
 
       const first = cell.set({ n: 1 });
@@ -1999,7 +2071,7 @@ describe("cell-handle", () => {
       const published: Array<readonly number[] | undefined> = [];
       cell.subscribe((value) => {
         published.push(value);
-      });
+      }, { onRefused: () => {} });
 
       cell.push(1);
       const replacing = cell.setStrict([9]);
@@ -2786,7 +2858,7 @@ describe("cell-handle", () => {
       const seen: unknown[] = [];
       cell.subscribe((value) => {
         seen.push(value);
-      });
+      }, { onRefused: () => {} });
 
       // `subscribe()` calls back immediately with the current value, which is
       // the `undefined` this handle starts at.
@@ -2810,7 +2882,7 @@ describe("cell-handle", () => {
       const seen: unknown[] = [];
       cell.subscribe((value) => {
         seen.push(value);
-      });
+      }, { onRefused: () => {} });
 
       const uncrossable = Object.create(FabricBytes.prototype);
       await expect(cell.pushStrict(uncrossable)).rejects.toThrow(Error);

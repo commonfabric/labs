@@ -4,6 +4,7 @@ import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { shownValue } from "../../core/shown-value.ts";
 import {
   applyThemeToElement,
   type CFTheme,
@@ -17,7 +18,9 @@ export function unwrapThemeCellValues(
   seen = new WeakSet<object>(),
 ): unknown {
   if (isCellHandle(value)) {
-    return value.get();
+    // A theme value the worker will not show is left out, so the default
+    // takes its place.
+    return shownValue(value);
   }
 
   if (!value || typeof value !== "object") {
@@ -51,13 +54,14 @@ export function subscribeToThemeCellValues(
     if (isCellHandle(current)) {
       const cellVal = current as CellHandle<unknown>;
       let didReceiveInitialValue = false;
-      const off = cellVal.subscribe(() => {
+      const changed = () => {
         if (!didReceiveInitialValue) {
           didReceiveInitialValue = true;
           return;
         }
         onChange();
-      });
+      };
+      const off = cellVal.subscribe(changed, { onRefused: changed });
       unsubs.push(off);
       return;
     }

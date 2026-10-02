@@ -1,3 +1,4 @@
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
@@ -73,9 +74,8 @@ export class CFWebhook extends BaseElement {
     this._configUnsub?.();
     this._configUnsub = undefined;
     if (this.config?.subscribe) {
-      this._configUnsub = this.config.subscribe(() => {
-        this.requestUpdate();
-      });
+      const update = () => this.requestUpdate();
+      this._configUnsub = this.config.subscribe(update, { onRefused: update });
     }
   }
 
@@ -187,6 +187,14 @@ export class CFWebhook extends BaseElement {
   }
 
   override render() {
+    // A configuration the worker will not show is not one that is absent:
+    // offering to create a webhook in its place would replace one that may
+    // exist.
+    if (this.config?.refusal !== undefined) {
+      return html`
+        <div class="webhook-setup">${CFC_POLICY_PLACEHOLDER_TEXT}</div>
+      `;
+    }
     const configData = this._getConfig();
     const hasWebhook = configData?.url && configData?.secret;
 

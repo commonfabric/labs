@@ -79,6 +79,24 @@ export type CellHandleRead<T> =
   | { readonly value: Readonly<T> | undefined }
   | { readonly refused: CellReadRefusal };
 
+/** How a subscriber to a handle hears what the handle holds of its cell. */
+export type CellSubscribeOptions = {
+  /** Whether to hear the cell's display label with each value. */
+  includeCfcLabel?: boolean;
+
+  /**
+   * Hears each refusal of the handle's read, which the value callback does
+   * not: a refusal carries nothing of the cell, so it is never handed to the
+   * value callback as a value. It runs at once when the handle's last read
+   * was refused, as the value callback does for a value.
+   *
+   * Every subscriber gives one, so that each says what it shows while its
+   * cell is withheld. One that heard nothing would go on showing the last
+   * value it was given, which the worker may now refuse.
+   */
+  onRefused: (refusal: CellReadRefusal) => void;
+};
+
 /**
  * Thrown by a read of a handle whose read the worker refused, and the
  * rejection of `sync()`, `pull()` and `initialize()` when the worker refuses
@@ -143,7 +161,7 @@ export class CellHandle<T = unknown> {
     number,
     {
       onValue: (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void;
-      onRefused?: (refusal: CellReadRefusal) => void;
+      onRefused: (refusal: CellReadRefusal) => void;
     }
   >();
   #nextCallbackId = 0;
@@ -247,10 +265,17 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Set the cell's value locally, as well as in the runtime.
+   * Set the cell's value locally, as well as in the runtime. A failure is
+   * logged rather than returned, the refusal of a write through a handle
+   * whose read is refused ({@link refusal}) among them.
    */
   async set(value: T): Promise<void> {
     this.#requireSchema("set");
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) {
+      console.error("[CellHandle] Write failed:", refused);
+      return;
+    }
     // A plain set is a blind last-write-wins overwrite (CellSet).
     const serialized = this.#serializeWrite(value);
     const snapshot = applyValue(
@@ -274,9 +299,14 @@ export class CellHandle<T = unknown> {
     });
   }
 
-  /** Set the cell's value and reject when the runtime refuses the write. */
+  /**
+   * Set the cell's value and reject when the runtime refuses the write, or
+   * when this handle's read is refused ({@link refusal}).
+   */
   async setStrict(value: T): Promise<void> {
     this.#requireSchema("setStrict");
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) throw refused;
     const serialized = this.#serializeWrite(value);
     const snapshot = applyValue(
       CellHandle.#serialize(value as ClientCellValue, "sigil"),
@@ -353,6 +383,21 @@ export class CellHandle<T = unknown> {
     const current = read.value as T;
     if (latest) this.#publishValue(current);
     return current as Readonly<T>;
+  }
+
+  /**
+   * The error a write through this handle fails with while its read is
+   * refused, or `undefined` when none stands. Such a handle holds nothing of
+   * its cell, so a value written through it was made from nothing it could
+   * see: a toggle of a value it read as absent, a list with one item removed
+   * from a list it read as empty. Writing it would replace a value the host
+   * was never shown. A handle reached through `key()` makes reads of its own,
+   * and is not held to its parent's refusal.
+   */
+  #writeRefusal(): CellReadRefusedError | undefined {
+    return this.#refusal === undefined
+      ? undefined
+      : new CellReadRefusedError(this.#refusal);
   }
 
   #enqueueOperation<R>(
@@ -447,8 +492,8 @@ export class CellHandle<T = unknown> {
 
   #publishValue(value: T): void {
     this.#value = value;
-    // The handle now holds the value the host wrote, whatever the worker
-    // refused before.
+    // A write is published only while no refusal stands, and an
+    // initialization publishes what an admitted read found, which ends one.
     this.#refusal = undefined;
     for (const { onValue } of this.#callbacks.values()) {
       try {
@@ -469,7 +514,7 @@ export class CellHandle<T = unknown> {
     this.#cfcLabel = undefined;
     this.#refusal = refusal;
     for (const { onRefused } of this.#callbacks.values()) {
-      onRefused?.(refusal);
+      onRefused(refusal);
     }
   }
 
@@ -576,6 +621,8 @@ export class CellHandle<T = unknown> {
   }
 
   #pushValues(values: readonly unknown[]): Promise<void> {
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) return Promise.reject(refused);
     const serializedValues = values.map((value) =>
       CellHandle.serialize(value as ClientCellValue)
     );
@@ -662,17 +709,7 @@ export class CellHandle<T = unknown> {
       value: T | undefined,
       cfcLabel?: CfcLabelView | undefined,
     ) => Cancel | undefined | void,
-    options: {
-      includeCfcLabel?: boolean;
-
-      /**
-       * Hears each refusal of the handle's read, which `callback` does not:
-       * a refusal carries nothing of the cell, so it is never handed to
-       * `callback` as a value. It runs at once when the handle's last read
-       * was refused, as `callback` does for a value.
-       */
-      onRefused?: (refusal: CellReadRefusal) => void;
-    } = {},
+    options: CellSubscribeOptions,
   ): Cancel {
     this.#requireSchema("subscribe");
     // If a label-aware subscription is added AFTER a value-only one already
@@ -711,15 +748,13 @@ export class CellHandle<T = unknown> {
     const onRefused = options.onRefused;
     this.#callbacks.set(callbackId, {
       onValue: wrappedCallback,
-      ...(onRefused === undefined ? {} : {
-        onRefused: (refusal: CellReadRefusal) => {
-          try {
-            onRefused(refusal);
-          } catch (error) {
-            console.error("[CellHandle] Callback error:", error);
-          }
-        },
-      }),
+      onRefused: (refusal: CellReadRefusal) => {
+        try {
+          onRefused(refusal);
+        } catch (error) {
+          console.error("[CellHandle] Callback error:", error);
+        }
+      },
     });
     if (upgradeToCfcLabel) {
       // Tear down the label-less backend sub, then re-open it label-aware.
@@ -735,7 +770,7 @@ export class CellHandle<T = unknown> {
     if (this.#refusal === undefined) {
       wrappedCallback(this.#value, this.#cfcLabel);
     } else {
-      this.#callbacks.get(callbackId)?.onRefused?.(this.#refusal);
+      this.#callbacks.get(callbackId)?.onRefused(this.#refusal);
     }
 
     return () => {
@@ -811,16 +846,18 @@ export class CellHandle<T = unknown> {
       updateGeneration === this.#updateGeneration &&
       authoritative;
     if ("refused" in read) {
-      if (latest) {
-        this.#value = undefined;
-        this.#cfcLabel = undefined;
-        this.#refusal = read.refused;
-      }
+      // Subscribers hear it, as they hear a refused update.
+      if (latest) this.#refuse(read.refused);
       throw new CellReadRefusedError(read.refused);
     }
     if (latest) {
-      this.#value = read.value as T | undefined;
-      this.#refusal = undefined;
+      if (this.#refusal === undefined) {
+        this.#value = read.value as T | undefined;
+      } else {
+        // A read that ends a refusal is news to the subscribers that heard
+        // it, so they hear the value it found.
+        this.#publishValue(read.value as T);
+      }
     }
     return read.value;
   }

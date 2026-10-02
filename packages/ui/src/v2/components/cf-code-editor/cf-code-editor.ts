@@ -75,6 +75,7 @@ import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
+import { shownValue } from "../../core/shown-value.ts";
 import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   dedupeByDestination,
@@ -567,7 +568,8 @@ export class CFCodeEditor extends BaseElement {
 
   /** The reference map's current contents. */
   private _refMap(): MentionRefMap {
-    return (this.references?.get() ?? {}) as MentionRefMap;
+    return ((this.references ? shownValue(this.references) : undefined) ??
+      {}) as MentionRefMap;
   }
 
   /**
@@ -759,7 +761,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return [];
 
-    const rows = (handle.get() ?? []) as MentionableArray;
+    const rows = (shownValue(handle) ?? []) as MentionableArray;
     const matches: Array<[CellHandle<Mentionable>, number, string]> = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -823,7 +825,7 @@ export class CFCodeEditor extends BaseElement {
       return [];
     }
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
 
     if (mentionableData.length === 0) {
       return [];
@@ -870,7 +872,9 @@ export class CFCodeEditor extends BaseElement {
     query: string,
     match: "contains" | "exact" = "contains",
   ): boolean {
-    const mentionableData = (this.mentionable?.get() ?? []) as MentionableArray;
+    const mentionableData =
+      ((this.mentionable ? shownValue(this.mentionable) : undefined) ??
+        []) as MentionableArray;
     const queryLower = query.toLowerCase();
     return mentionableData.some((mention, index) => {
       if (!this._isIndexRow(index) || this._resolvedPieceIds.has(index)) {
@@ -925,7 +929,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
 
     const queryLower = query.toLowerCase();
 
@@ -1516,7 +1520,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
 
     if (mentionableData.length === 0) return null;
 
@@ -1552,7 +1556,9 @@ export class CFCodeEditor extends BaseElement {
    * surfaces withhold it rather than mint an id naming the row.
    */
   private _isIndexRow(index: number): boolean {
-    const item = ((this.mentionable?.get() ?? []) as MentionableArray)[index];
+    const item =
+      (((this.mentionable ? shownValue(this.mentionable) : undefined) ??
+        []) as MentionableArray)[index];
     return item != null && Object.hasOwn(item, "piece");
   }
 
@@ -1593,7 +1599,7 @@ export class CFCodeEditor extends BaseElement {
 
     this._mentionResolutionPending = true;
 
-    const mentionableData = (handle.get() ?? []) as MentionableArray;
+    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
 
     // Keep a reference to the current mentionable to detect a rebind, and a
     // generation to detect a newer pass over the SAME handle: contents can
@@ -1783,14 +1789,17 @@ export class CFCodeEditor extends BaseElement {
     if (this._cellController.hasCell()) {
       const cell = this._cellController.getCell();
       if (cell) {
-        this._cellSyncUnsub = cell.subscribe(() => {
+        // A refusal empties the editor, as the controller reads a refused
+        // cell, and the controller writes nothing back over it.
+        const sync = () => {
           // First update the editor content
           this._updateEditorFromCellValue();
           // Then trigger component update if originally enabled
           if (originalTriggerUpdate) {
             this.requestUpdate();
           }
-        });
+        };
+        this._cellSyncUnsub = cell.subscribe(sync, { onRefused: sync });
       }
     }
   }
@@ -2218,16 +2227,19 @@ export class CFCodeEditor extends BaseElement {
     // this.mentionable is already wrapped with asSchema(MentionableArraySchema)
     // in willUpdate, so the runtime resolves @link indirection before
     // delivering values to subscribers.
-    const unsubscribe = this.mentionable
-      .subscribe((_value) => {
-        // Clear stale resolved IDs and re-resolve asynchronously. The
-        // $mentioned reconciliation waits for the resolution pass (which
-        // runs it on publish): against cleared maps an index-row backlink
-        // has no id, and reconciling in that window would transiently drop
-        // its edge only to re-add it moments later.
-        this._forgetResolvedPieces();
-        this._resolvePieceIds();
-      });
+    // A refused list reads as one with nothing in it.
+    const resolve = () => {
+      // Clear stale resolved IDs and re-resolve asynchronously. The
+      // $mentioned reconciliation waits for the resolution pass (which
+      // runs it on publish): against cleared maps an index-row backlink
+      // has no id, and reconciling in that window would transiently drop
+      // its edge only to re-add it moments later.
+      this._forgetResolvedPieces();
+      this._resolvePieceIds();
+    };
+    const unsubscribe = this.mentionable.subscribe(resolve, {
+      onRefused: resolve,
+    });
     this._mentionableUnsub = unsubscribe;
   }
 
@@ -2244,11 +2256,10 @@ export class CFCodeEditor extends BaseElement {
     if (!this.mentioned) return;
     // this.mentioned is already wrapped with asSchema(MentionableArraySchema)
     // in willUpdate.
-    const unsubscribe = this.mentioned
-      .subscribe((_value) => {
-        // Re-sync piece name subscriptions when mentioned list changes externally
-        this._setupPieceNameSubscriptions();
-      });
+    // Re-sync piece name subscriptions when mentioned list changes externally,
+    // or is refused, which reads as a list with nothing in it.
+    const resync = () => this._setupPieceNameSubscriptions();
+    const unsubscribe = this.mentioned.subscribe(resync, { onRefused: resync });
     this._mentionedUnsub = unsubscribe;
   }
 
@@ -2266,7 +2277,8 @@ export class CFCodeEditor extends BaseElement {
     if (!this.references) return;
     // this.references is already wrapped with asSchema(MentionRefMapSchema)
     // in willUpdate.
-    this._referencesUnsub = this.references.subscribe(() => {
+    // A refused map reads as one that resolves no key.
+    const sync = () => {
       this._publishKnownRefKeys();
       // A reference the map has just made visible was not there to be tracked
       // when the document loaded. Without this, its first label edit reads as
@@ -2274,6 +2286,9 @@ export class CFCodeEditor extends BaseElement {
       this._seedRefLabelBaseline();
       this._setupRefDestinationSubscriptions();
       this._updateMentionedFromContent();
+    };
+    this._referencesUnsub = this.references.subscribe(sync, {
+      onRefused: sync,
     });
   }
 
@@ -3250,12 +3265,14 @@ export class CFCodeEditor extends BaseElement {
     const mentionedHandle = this.mentioned;
     if (!mentionedHandle) return curIds;
 
-    const currentSource = (mentionedHandle.get() ?? []) as MentionableArray;
+    const currentSource =
+      (shownValue(mentionedHandle) ?? []) as MentionableArray;
 
     const mentionableHandle = this.mentionable;
     if (!mentionableHandle) return curIds;
 
-    const mentionableData = (mentionableHandle.get() ?? []) as MentionableArray;
+    const mentionableData =
+      (shownValue(mentionableHandle) ?? []) as MentionableArray;
 
     // For each current mentioned value, find its ID by matching in mentionable
     for (const mentionedValue of currentSource) {
@@ -3302,6 +3319,9 @@ export class CFCodeEditor extends BaseElement {
       // Subscribe with changeGroup so our own edits are filtered out
       const unsub = titleCell.subscribe(() => {
         void this._handleExternalTitleChange(pieceId, pieceCell);
+      }, {
+        // A title the worker will not show leaves the link text as written.
+        onRefused: () => {},
       });
 
       this._pieceNameSubscriptions.set(pieceId, unsub);
@@ -3581,6 +3601,10 @@ export class CFCodeEditor extends BaseElement {
           queueMicrotask(() =>
             void this._handleExternalRefTitleChange(key, name)
           );
+        }, {
+          // A name the worker will not show leaves the reference's text as
+          // written.
+          onRefused: () => {},
         }),
       });
     }
@@ -3625,7 +3649,9 @@ export class CFCodeEditor extends BaseElement {
     // nothing to name.
     if (!this.references) return {};
 
-    const rows = (this.mentionable?.get() ?? []) as MentionableArray;
+    const rows =
+      ((this.mentionable ? shownValue(this.mentionable) : undefined) ??
+        []) as MentionableArray;
     const namesByPiece = new Map<string, string>();
     for (let index = 0; index < rows.length; index++) {
       const pieceCell = this._resolvedPieceCells.get(index);

@@ -288,7 +288,7 @@ describe("connection", () => {
       const second = new CellHandle<string>(runtime, ref);
       const heard: unknown[] = [];
       first.subscribe(() => {}, { onRefused: (r) => heard.push(r) });
-      second.subscribe(() => {});
+      second.subscribe(() => {}, { onRefused: () => {} });
       transport.emit("message", posted({ value: "shown before the seal" }));
 
       transport.emit("message", posted({ refused: refusal }));
@@ -305,11 +305,11 @@ describe("connection", () => {
       const connection = await initializedConnection(transport);
       const runtime = { [$conn]: () => connection } as unknown as RuntimeClient;
       const first = new CellHandle<string>(runtime, ref);
-      first.subscribe(() => {});
+      first.subscribe(() => {}, { onRefused: () => {} });
       transport.emit("message", posted({ refused: refusal }));
 
       const later = new CellHandle<string>(runtime, ref);
-      later.subscribe(() => {});
+      later.subscribe(() => {}, { onRefused: () => {} });
 
       expect(later.refusal).toEqual(refusal);
       await connection.dispose();

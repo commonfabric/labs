@@ -11,7 +11,9 @@ import type { ReactiveControllerHost } from "lit";
 
 import {
   createMockCellHandle,
+  pushRefusal,
   pushUpdate,
+  writesSent,
 } from "../test-utils/mock-cell-handle.ts";
 import {
   ArrayCellController,
@@ -54,7 +56,7 @@ describe("createMockCellHandle", () => {
     const values: (string | undefined)[] = [];
     h.subscribe((v) => {
       values.push(v);
-    });
+    }, { onRefused: () => {} });
     await h.set("b");
     expect(h.get()).toBe("b");
     expect(values).toEqual(["a", "b"]); // initial + update
@@ -72,7 +74,7 @@ describe("createMockCellHandle", () => {
     let received: string | undefined;
     h.subscribe((v) => {
       received = v;
-    });
+    }, { onRefused: () => {} });
     expect(received).toBe("now");
   });
 
@@ -81,7 +83,7 @@ describe("createMockCellHandle", () => {
     const values: unknown[] = [];
     parent.subscribe((v) => {
       values.push(structuredClone(v));
-    });
+    }, { onRefused: () => {} });
 
     const child = parent.key("name");
     await child.set("Bob");
@@ -104,7 +106,7 @@ describe("createMockCellHandle", () => {
     const received: (string | undefined)[] = [];
     cell.subscribe((v) => {
       received.push(v);
-    });
+    }, { onRefused: () => {} });
     received.length = 0; // clear initial
 
     pushUpdate(cell, "from-backend");
@@ -117,7 +119,7 @@ describe("createMockCellHandle", () => {
     let callCount = 0;
     cell.subscribe(() => {
       callCount++;
-    });
+    }, { onRefused: () => {} });
     const afterSubscribe = callCount;
 
     pushUpdate(cell, 42); // same value
@@ -575,6 +577,144 @@ describe("ArrayCellController", () => {
     ctrl.updateItem("y", "Y");
     // With parent-child propagation, the child's set() updates the parent
     expect(cell.get()).toEqual(["x", "Y", "z"]);
+  });
+});
+
+//
+// A refused read
+//
+
+describe("CellController — a cell whose read the worker refuses", () => {
+  // A refused handle holds nothing of its cell. A controller over one reads
+  // as its empty value without throwing from a render, and writes nothing:
+  // each value below would be made from that empty value and replace one the
+  // host was never shown.
+  const refusal = { refusedBy: "display-ceiling" } as const;
+
+  it("reads as each controller's empty value, and names the refusal", () => {
+    const host = createMockHost();
+    const cases = [
+      [new CellController<string>(host), "a secret", undefined],
+      [new StringCellController(host), "a secret", ""],
+      [new BooleanCellController(host), true, false],
+      [new ArrayCellController<string>(host), ["a secret"], []],
+    ] as const;
+    for (const [ctrl, value, empty] of cases) {
+      const cell = createMockCellHandle<unknown>(value);
+      (ctrl as CellController<unknown>).bind(cell);
+
+      pushRefusal(cell, refusal);
+
+      expect(ctrl.getValue()).toEqual(empty);
+      expect(ctrl.refusal).toEqual(refusal);
+    }
+  });
+
+  it("writes nothing for `removeItem()`, which would write the rest of an empty list", () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle(["kept", "removed"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    ctrl.removeItem("removed");
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("writes nothing for `toggle()`, which would write `true` over an unseen value", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(true);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    ctrl.toggle();
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("writes nothing for a selection added to an empty list, as a multi-select makes", () => {
+    const ctrl = new CellController<string[]>(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle(["chosen before"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    ctrl.setValue([...(ctrl.getValue() ?? []), "chosen now"]);
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("writes nothing for `addItem()` or `updateItem()`", () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle(["an item"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    ctrl.addItem("added");
+    ctrl.updateItem("an item", "updated");
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("writes again, and shows the value, once an admitted update arrives", () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle(["kept", "removed"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    pushUpdate(cell, ["kept", "removed"]);
+    ctrl.removeItem("removed");
+
+    expect(ctrl.refusal).toBeUndefined();
+    expect(writesSent(cell)).toEqual([
+      expect.objectContaining({ value: ["kept"] }),
+    ]);
+  });
+
+  it("asks its host to render again when a refusal arrives", () => {
+    let updates = 0;
+    const host = {
+      ...createMockHost(),
+      requestUpdate: () => {
+        updates++;
+      },
+    };
+    const ctrl = new StringCellController(host);
+    const cell = createMockCellHandle("shown before the seal");
+    ctrl.bind(cell);
+    const before = updates;
+
+    pushRefusal(cell, refusal);
+
+    expect(updates).toBe(before + 1);
+    expect(ctrl.getValue()).toBe("");
+  });
+});
+
+describe("CellController — a refusal that arrives while a write waits", () => {
+  let time: FakeTime;
+
+  beforeEach(() => {
+    time = new FakeTime();
+  });
+  afterEach(() => {
+    time.restore();
+  });
+
+  it("drops the debounced write and the pending edit", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "debounce", delay: 200 },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    ctrl.setValue("typed");
+
+    pushRefusal(cell, { refusedBy: "display-ceiling" });
+    time.tick(200);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe("");
   });
 });
 

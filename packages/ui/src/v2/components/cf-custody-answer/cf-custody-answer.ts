@@ -10,6 +10,7 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { shownValue } from "../../core/shown-value.ts";
 import { runtimeContext } from "../../runtime-context.ts";
 
 /**
@@ -179,10 +180,23 @@ export class CFCustodyAnswer extends BaseElement {
       if (!subscribing) startOver();
       void this.#publish();
     };
-    const cancelTerms = terms.subscribe(onBinding);
-    const cancelPolicy = policy.subscribe(onBinding);
+    // Terms or a policy the worker will not show name no instance this
+    // element may publish for: what it showed goes, and nothing is asked.
+    const onRefusedBinding = () => {
+      if (!subscribing) startOver();
+    };
+    const cancelTerms = terms.subscribe(onBinding, {
+      onRefused: onRefusedBinding,
+    });
+    const cancelPolicy = policy.subscribe(onBinding, {
+      onRefused: onRefusedBinding,
+    });
     const cancelOutput = output.subscribe(() => {
       void this.#publish();
+    }, {
+      // The output is not read here: it is the worker's to release, so its
+      // refusal changes nothing this element asks.
+      onRefused: () => {},
     });
     subscribing = false;
     this.#unsubscribe = () => {
@@ -217,7 +231,8 @@ export class CFCustodyAnswer extends BaseElement {
     // A room that has not proposed yet has no terms, and so no instance to
     // publish for: nothing to ask, and nothing to say. The terms
     // subscription asks once they are written.
-    const proposed = terms.get();
+    // Terms the worker will not show read as none proposed.
+    const proposed = shownValue(terms);
     if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) {
       if (this.#error) {
         this.#error = "";

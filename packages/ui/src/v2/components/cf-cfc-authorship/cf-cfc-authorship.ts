@@ -1,4 +1,5 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import type { CellSubscribeOptions } from "@commonfabric/runtime-client";
 import {
   authorPrincipalCandidates,
   PRINCIPAL_CLAIM_KINDS,
@@ -24,7 +25,7 @@ type CfcLabelResolvableValue = {
 type CfcLabelSubscribableValue = {
   subscribe(
     callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
-    options?: { includeCfcLabel?: boolean },
+    options: CellSubscribeOptions,
   ): () => void;
 };
 
@@ -687,7 +688,17 @@ export class CFCFCAuthorship extends BaseElement {
     // the new label.
     this._unsubscribeValue = value.subscribe(() => {
       void this.refreshLabel();
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A value the worker will not show carries no attestation here, and
+      // none is read for it.
+      onRefused: () => {
+        this._labelRequestId++;
+        const previous = this.cfcLabel;
+        this.cfcLabel = undefined;
+        this.requestUpdate("cfcLabel", previous);
+      },
+    });
     return true;
   }
 
@@ -718,7 +729,16 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = claim;
       this.requestUpdate("author", previous);
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // An author the worker will not show makes no claim here.
+      onRefused: () => {
+        this._authorRequestId++;
+        const previous = this._authorClaim;
+        this._authorClaim = undefined;
+        this.requestUpdate("author", previous);
+      },
+    });
     return true;
   }
 
@@ -848,7 +868,13 @@ export class CFCFCAuthorship extends BaseElement {
         watch.loaded = true;
         refresh();
       }
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A refused cell loads nothing the host may read, so the watch ends.
+      onRefused: () => {
+        if (this.#labelWatches[source] === watch) this.#endLabelWatch(source);
+      },
+    });
     // The first delivery is synchronous, and may already have ended the watch.
     if (this.#labelWatches[source] === watch) {
       watch.cancel = cancel;
