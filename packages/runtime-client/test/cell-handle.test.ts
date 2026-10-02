@@ -909,6 +909,22 @@ describe("cell-handle", () => {
       expect(values.at(-1)).toBeNull();
     });
 
+    it("notifies its subscribers when the value it was refused is admitted again unchanged", () => {
+      const cell = new CellHandle<string>(makeRuntime(), ref);
+      const values: Array<string | undefined> = [];
+      cell.subscribe((value) => {
+        values.push(value);
+      });
+      cell[$onCellUpdate]("the same value");
+      cell[$onCellRefused](refusal);
+      const before = values.length;
+
+      cell[$onCellUpdate]("the same value");
+
+      expect(values.length).toBe(before + 1);
+      expect(cell.get()).toBe("the same value");
+    });
+
     it("holds the value the host writes, whatever was refused before", async () => {
       const cell = new CellHandle<string>(makeRuntime({}), ref);
       cell[$onCellRefused](refusal);
