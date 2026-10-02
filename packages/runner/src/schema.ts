@@ -1118,60 +1118,6 @@ function entrySelectorSchema(
   return combineSchemaForLink(travelingSchema, storedSchema);
 }
 
-/**
- * Helper for `validateAndTransform()` and `readsTruthyAtRoot()`, which returns
- * the schema a read carries once it has followed the write redirects at its
- * entry: the reader's own `readerSchema` crossed with `redirectedSchema`, the
- * schema the redirect chain resolved to, by reader precedence
- * (`combineSchemaForLink()`), or whichever of the two is given. Both are
- * resolved schemas.
- */
-function readEntrySchema(
-  readerSchema: JSONSchema | undefined,
-  redirectedSchema: JSONSchema | undefined,
-): JSONSchema | undefined {
-  if (readerSchema === undefined) return redirectedSchema;
-  return redirectedSchema === undefined
-    ? readerSchema
-    : combineSchemaForLink(readerSchema, redirectedSchema);
-}
-
-/**
- * Helper for `validateAndTransform()` and `readsTruthyAtRoot()`, which returns
- * whether a read entering with `schema` hands back the schema-less query-result
- * proxy: `schema` declares no handle, and what it says besides the handle
- * constrains nothing — it is absent, `true`, or `{}`. `false` is not one of
- * those: it constrains everything, and traversal is what honors it.
- */
-function readsWithoutSchema(schema: JSONSchema | undefined): boolean {
-  const filtered = filterAsCell(schema);
-  return (schema === undefined || !SchemaObjectTraverser.hasAsCell(schema)) &&
-    filtered !== false && !isNontrivialSchema(filtered);
-}
-
-/**
- * Helper for `validateAndTransform()` and `readsTruthyAtRoot()`, which marks
- * `tx` cfc-relevant for a read of `linkId` entering with `entrySchema` across
- * the write redirects that resolved to `redirected`: where either schema
- * carries `ifc`, or, when `probeStoredMetadata` is set, where `redirected`'s
- * document carries stored CFC metadata that applies to its path.
- */
-function markReadEntryCfcRelevant(
-  tx: IExtendedStorageTransaction,
-  linkId: string,
-  entrySchema: JSONSchema | undefined,
-  redirected: NormalizedFullLink,
-  probeStoredMetadata: boolean,
-): void {
-  if (
-    schemaHasIfc(entrySchema) ||
-    schemaHasIfc(resolveSchema(redirected.schema)) ||
-    (probeStoredMetadata && storedCfcMetadataAppliesToPath(tx, redirected))
-  ) {
-    tx.markCfcRelevant(`schema-ifc-read:${linkId}`);
-  }
-}
-
 export interface ValidateAndTransformOptions {
   /** When true, also read into each Cell created for asCell fields to capture dependencies */
   traverseCells?: boolean;
@@ -1192,6 +1138,16 @@ export interface ValidateAndTransformOptions {
    * stored CFC metadata probe — does not run again per property.
    */
   viewChild?: boolean;
+
+  /**
+   * Set by a reader that uses only whether the result is truthy, such as a
+   * builtin branching on a condition. A record or an array is then read at its
+   * root alone, and the read returns `true` where the schema it validates
+   * against declares a handle or accepts the container's type, and `undefined`
+   * where it refuses it. Every other value reads as it does without the
+   * option.
+   */
+  rootOnly?: boolean;
 }
 
 export function validateAndTransform(
@@ -1259,7 +1215,12 @@ export function validateAndTransform(
   ]);
 
   const resolvedLinkSchema = resolveSchema(resolvedLink.schema);
-  const effectiveSchema = readEntrySchema(resolvedSchema, resolvedLinkSchema);
+  const effectiveSchema = resolvedSchema !== undefined
+    ? resolvedLinkSchema !== undefined
+      ? combineSchemaForLink(resolvedSchema, resolvedLinkSchema)
+      : resolvedSchema
+    : resolvedLinkSchema;
+  const filteredSchema = filterAsCell(effectiveSchema);
   // The stored-metadata probe reads `<doc>/cfc`, and it belongs to the entry
   // point: an eager read runs it once for the document it was handed and never
   // for the documents its traversal reaches through links. A view re-enters
@@ -1271,20 +1232,31 @@ export function validateAndTransform(
   // precedence (`combineSchemaForLink`) keeps a shaped reader's combined
   // schema free of the link's `ifc` — the marking must not depend on which
   // side won the combination.
-  markReadEntryCfcRelevant(
-    tx,
-    link.id,
-    effectiveSchema,
-    resolvedLink,
-    options?.viewChild !== true,
-  );
+  if (
+    schemaHasIfc(effectiveSchema) ||
+    schemaHasIfc(resolvedLinkSchema) ||
+    (options?.viewChild !== true &&
+      storedCfcMetadataAppliesToPath(tx, resolvedLink))
+  ) {
+    tx.markCfcRelevant(`schema-ifc-read:${link.id}`);
+  }
 
   // Unlike the original, we have kept the asCell markers in the schema
   link = {
     ...resolvedLink,
     ...(effectiveSchema !== undefined && { schema: effectiveSchema }),
   };
-  if (readsWithoutSchema(effectiveSchema)) {
+  // A schema that constrains nothing — absent, `true`, or `{}` — and carries
+  // no asCell/asStream hands the read to the schema-less proxy. `false` is
+  // not one of those: it constrains everything, and traversal below is what
+  // honors it.
+  if (
+    (
+      effectiveSchema === undefined ||
+      !SchemaObjectTraverser.hasAsCell(effectiveSchema)
+    ) &&
+    filteredSchema !== false && !isNontrivialSchema(filteredSchema)
+  ) {
     return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
   }
 
@@ -1490,6 +1462,27 @@ export function validateAndTransform(
       path: doc.address.path,
       schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
     };
+    // The schema an eager read validates the value against where the value
+    // selects no handle branch of its own.
+    const eagerSchema = (): JSONSchema =>
+      entrySelectorSchema(
+        resolvedSchema,
+        link.schema!,
+        resolvedValueLink.schema,
+      );
+    // A record or an array read for its truthiness alone is truthy whatever it
+    // holds, so only the eager read's check at its root decides, and nothing
+    // below the root is read. The branch a value selects for itself is chosen
+    // by what lies below the root, so it plays no part here. Any other value
+    // is the whole of what it is, and reads on as it would anyway.
+    if (options?.rootOnly === true && isKeyableObjectOrArray(value)) {
+      tx.readValueOrThrow(resolvedValueLink, { nonRecursive: true });
+      const schema = eagerSchema();
+      return SchemaObjectTraverser.hasAsCell(schema) ||
+          schemaAcceptsType(schema, Array.isArray(value) ? "array" : "object")
+        ? true
+        : undefined;
+    }
     if (tx.isLazyMaterialize()) {
       // Crossing the last link is a hop the eager traverser combines schemas
       // across (`linkHopSelector`), because a link's own schema describes the
@@ -1596,11 +1589,7 @@ export function validateAndTransform(
       }
       selector.schema = viewSchema;
     } else if (valueSelectedSchema === undefined) {
-      selector.schema = entrySelectorSchema(
-        resolvedSchema,
-        link.schema!,
-        resolvedValueLink.schema,
-      );
+      selector.schema = eagerSchema();
     }
   }
 
@@ -1691,58 +1680,16 @@ export function validateAndTransform(
 }
 
 /**
- * Returns whether what `validateAndTransform()` returns for `link`, read
- * through `tx`, is truthy, deciding it from the value's root without reading
- * below it.
- *
- * It resolves `link` as that read does, consuming each hop, and reads the root
- * non-recursively. A root that is not a record or an array is the whole of its
- * value, so the read itself decides, defaults and values not yet arrived
- * included. A record or an array is truthy unless the schema the read
- * validates against refuses its type at the root. One that fails only below
- * its root, a `oneOf` more than one of whose branches admits it among them,
- * returns `true` here, where the read returns `undefined`.
+ * Returns whether the value at `link`, read through `tx`, is truthy, as
+ * `validateAndTransform()` reads it with `rootOnly` set.
  */
 export function readsTruthyAtRoot(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
 ): boolean {
-  const readerSchema = resolveSchema(link.schema);
-  const redirected = resolveLink(runtime, tx, link, "writeRedirect", {
-    markIfcCrossings: true,
-  });
-  const entrySchema = readEntrySchema(
-    readerSchema,
-    resolveSchema(redirected.schema),
-  );
-  markReadEntryCfcRelevant(tx, link.id, entrySchema, redirected, true);
-  // A handle is truthy whatever it points at, and the read hands one back
-  // without reading the value.
-  if (SchemaObjectTraverser.hasAsCell(entrySchema)) return true;
-  const target = resolveLink(
-    runtime,
-    tx,
-    {
-      ...redirected,
-      ...(entrySchema !== undefined && { schema: entrySchema }),
-    },
-    "value",
-    { markIfcCrossings: true },
-  );
-  const root = tx.readValueOrThrow(target, { nonRecursive: true });
-  if (!isKeyableObjectOrArray(root)) {
-    return Boolean(validateAndTransform(runtime, tx, link));
-  }
-  if (entrySchema === undefined || readsWithoutSchema(entrySchema)) {
-    return true;
-  }
-  if (schemaHasIfc(target.schema)) {
-    tx.markCfcRelevant(`schema-ifc-read:${link.id}`);
-  }
-  return schemaAcceptsType(
-    entrySelectorSchema(readerSchema, entrySchema, target.schema),
-    Array.isArray(root) ? "array" : "object",
+  return Boolean(
+    validateAndTransform(runtime, tx, link, [], { rootOnly: true }),
   );
 }
 
