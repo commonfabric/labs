@@ -1,6 +1,8 @@
 /** Trusted owner predicate derived from runtime identity and origin attestation. */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import { cfcLabelViewsEqual } from "@commonfabric/runner/cfc/label-view-core";
+import type { JSONSchema } from "@commonfabric/runner/shared";
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
@@ -9,6 +11,18 @@ import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { runtimeContext } from "../../runtime-context.ts";
 import { attestedOwnerPrincipal } from "./owner-predicate.ts";
+
+/**
+ * The schema the element subscribes to its origin under. It accepts any value,
+ * and the element reads none. A schema of its own gives the element a
+ * subscription of its own: the client shares one subscription among the
+ * handles on one cell and schema, and the first of them decides whether it
+ * carries labels, so a handle that subscribed first for the value alone would
+ * keep label-only changes from this element.
+ */
+const ORIGIN_LABEL_SCHEMA = {
+  description: "The origin whose label cf-owner-view follows.",
+} as const satisfies JSONSchema;
 
 /** Publishes a presentation predicate after checking a runtime-attested owner. */
 export class CFOwnerView extends BaseElement {
@@ -27,8 +41,11 @@ export class CFOwnerView extends BaseElement {
   #generation = 0;
   /** Whether the current binding's reset has landed, so it may be decided. */
   #reset = false;
-  /** The value last written to `result`, or undefined when it is unknown. */
-  #published: boolean | null | undefined;
+  /**
+   * The label the current binding last wrote a decision for, or undefined
+   * when none stands. The reset stands for the decision no label makes.
+   */
+  #decidedFrom: { label: CfcLabelView | undefined } | undefined;
   #followed: CellHandle | undefined;
   #stopFollowing: (() => void) | undefined;
   /** The label the followed origin's subscription last delivered. */
@@ -81,7 +98,7 @@ export class CFOwnerView extends BaseElement {
     const generation = ++this.#generation;
     const { result } = this;
     this.#reset = false;
-    this.#published = undefined;
+    this.#decidedFrom = undefined;
     this.#follow(this.isConnected ? this.originator : undefined);
     if (!result) return;
     try {
@@ -92,7 +109,7 @@ export class CFOwnerView extends BaseElement {
     }
     if (generation !== this.#generation) return;
     this.#reset = true;
-    this.#published = null;
+    this.#decidedFrom = { label: undefined };
     await this.#decideFrom(generation, this.#label);
   }
 
@@ -103,7 +120,8 @@ export class CFOwnerView extends BaseElement {
     this.#followed = originator;
     this.#label = undefined;
     if (typeof originator?.subscribe !== "function") return;
-    this.#stopFollowing = originator.subscribe((_value, cfcLabel) => {
+    const labelled = originator.asSchema(ORIGIN_LABEL_SCHEMA);
+    this.#stopFollowing = labelled.subscribe((_value, cfcLabel) => {
       this.#label = cfcLabel;
       if (this.#reset) void this.#decideFrom(++this.#generation, cfcLabel);
     }, { includeCfcLabel: true });
@@ -130,9 +148,10 @@ export class CFOwnerView extends BaseElement {
   }
 
   /**
-   * Writes the decision `label` supports, unless it is the one this binding
-   * last wrote. A decision is written once until the label or the binding
-   * changes it, whatever happens to `result` meanwhile. A label from an
+   * Writes the decision `label` supports, once for each label this binding
+   * decides from, whatever happens to `result` meanwhile: a label equal to
+   * the one the standing decision came from writes nothing, and a changed one
+   * writes its decision even when it is the same as before. A label from an
    * origin other than the bound one, as an update the old origin delivers
    * before the element follows a new one, decides nothing.
    */
@@ -140,8 +159,12 @@ export class CFOwnerView extends BaseElement {
     const { runtime, originator, result } = this;
     if (
       !runtime || !originator || !result || !this.isConnected ||
-      generation !== this.#generation || originator !== this.#followed
+      generation !== this.#generation || originator !== this.#followed ||
+      (this.#decidedFrom !== undefined &&
+        cfcLabelViewsEqual(this.#decidedFrom.label, label))
     ) return;
+    const decidedFrom = { label };
+    this.#decidedFrom = decidedFrom;
     let decision: boolean | null = null;
     try {
       const owner = attestedOwnerPrincipal(label);
@@ -150,11 +173,10 @@ export class CFOwnerView extends BaseElement {
     } catch {
       // Missing or unreadable attestation keeps the presentation closed.
     }
-    if (decision === this.#published) return;
-    this.#published = decision;
     result.setStrict(decision).catch(() => {
-      // The next update decides again from whatever the cell holds.
-      if (this.#published === decision) this.#published = undefined;
+      // A refused write stands for no decision, so the origin's next update
+      // decides again.
+      if (this.#decidedFrom === decidedFrom) this.#decidedFrom = undefined;
     });
   }
 

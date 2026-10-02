@@ -1,10 +1,34 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  CellHandle,
+  type CellRef,
+  type CellUpdateNotification,
+  EventEmitter,
+  type InitializationData,
+  type IPCClientMessage,
+  type IPCClientNotification,
+  NotificationType,
+  RequestType,
+  type RuntimeClient,
+  RuntimeConnection,
+  type RuntimeTransport,
+  type RuntimeTransportEvents,
+} from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import type { PropertyValues } from "lit";
 
 import { CFOwnerView } from "./index.ts";
+
+/**
+ * Gives a stand-in origin the `asSchema()` the element subscribes through,
+ * answering with the stand-in itself.
+ */
+const asOrigin = (origin: object): CellHandle => {
+  const handle = { ...origin, asSchema: () => handle };
+  return handle as unknown as CellHandle;
+};
 
 class HeadlessOwnerView extends CFOwnerView {
   override get isConnected(): boolean {
@@ -86,7 +110,9 @@ describe("CFOwnerView", () => {
     } as unknown as CellHandle<boolean | null>;
 
     await element.refresh();
-    expect(writes).toEqual([null]);
+    // The ambiguous label decides `null` once, as any label read after the
+    // reset decides once.
+    expect(writes).toEqual([null, null]);
   });
 
   it("does not verify a visitor when the reset is refused", async () => {
@@ -181,7 +207,7 @@ describe("CFOwnerView", () => {
       element.runtime = {
         actingPrincipalDid: () => "did:key:bob",
       } as unknown as RuntimeClient;
-      element.originator = {
+      element.originator = asOrigin({
         getCfcLabel: () => {
           const read = Promise.resolve(label);
           reads.push(read);
@@ -196,7 +222,7 @@ describe("CFOwnerView", () => {
             notify = undefined;
           };
         },
-      } as unknown as CellHandle;
+      });
       element.result = {
         setStrict: (value: boolean | null) => {
           writes.push(value);
@@ -287,6 +313,32 @@ describe("CFOwnerView", () => {
       expect(origin.writes).toEqual([null, false]);
     });
 
+    it("writes a changed label's decision even when it decides the same", async () => {
+      // A write of the earlier decision may have been rolled back since, and
+      // the changed label writes it again.
+      const element = new HeadlessOwnerView();
+      const origin = followedOrigin(element);
+      await element.refresh();
+      origin.arrive(aliceAttestation);
+
+      origin.arrive(attestationOf("did:key:carol"));
+
+      expect(origin.writes).toEqual([null, false, false]);
+    });
+
+    it("writes nothing for a label it has already decided from", async () => {
+      const element = new HeadlessOwnerView();
+      const origin = followedOrigin(element);
+      await element.refresh();
+      origin.arrive(aliceAttestation);
+
+      origin.arrive(aliceAttestation);
+      origin.arrive(aliceAttestation, false);
+      await origin.lastRead();
+
+      expect(origin.writes).toEqual([null, false]);
+    });
+
     it("ignores an update from an origin it is no longer bound to", async () => {
       // The binding changes when the property is set, and the element
       // follows the new origin only once the update that follows runs. An
@@ -300,10 +352,10 @@ describe("CFOwnerView", () => {
         callback(undefined, aliceAttestation);
         return () => {};
       };
-      element.originator = {
+      element.originator = asOrigin({
         getCfcLabel: () => Promise.resolve(aliceAttestation),
         subscribe: aliceLabel,
-      } as unknown as CellHandle;
+      });
 
       origin.arrive(attestationOf("did:key:bob"));
       await element.refresh();
@@ -317,7 +369,7 @@ describe("CFOwnerView", () => {
     // is written once until the label or the binding changes it.
 
     const originDelivering = (subject: string) =>
-      ({
+      asOrigin({
         getCfcLabel: () =>
           Promise.resolve({
             version: 1,
@@ -342,7 +394,7 @@ describe("CFOwnerView", () => {
           });
           return () => {};
         },
-      }) as unknown as CellHandle;
+      });
 
     // A `result` cell whose subscribers see each write as soon as it is made,
     // the way storage applies a commit locally. Once `refuseWrites` is
@@ -425,6 +477,104 @@ describe("CFOwnerView", () => {
       await visited.refresh();
 
       expect(result.writes).toEqual([null, true, null, false]);
+    });
+  });
+  describe("an origin another handle subscribed to first for its value", () => {
+    // The client shares one subscription among the handles on one cell and
+    // schema, and the first of them decides whether it carries labels. The
+    // stand-in worker below answers the connection as the worker does: a
+    // change to the label alone reaches only the subscriptions that asked
+    // for labels.
+
+    const attestation: CfcLabelView = {
+      version: 1,
+      entries: [{
+        path: [],
+        label: {
+          integrity: [{
+            kind: "represents-principal",
+            subject: "did:key:alice",
+          }],
+        },
+      }],
+    };
+
+    class StandInWorker extends EventEmitter<RuntimeTransportEvents>
+      implements RuntimeTransport {
+      #label: CfcLabelView | undefined;
+      readonly #labelled: CellRef[] = [];
+
+      send(message: IPCClientMessage | IPCClientNotification): void {
+        if (!("msgId" in message)) return;
+        const request = message.data;
+        if (request.type === RequestType.CellSubscribe) {
+          if (request.includeCfcLabel) this.#labelled.push(request.cell);
+        }
+        const data = request.type === RequestType.CellGetCfcLabel
+          ? { cfcLabel: this.#label }
+          : undefined;
+        queueMicrotask(() => {
+          this.emit("message", { msgId: message.msgId, data });
+        });
+      }
+
+      /** Changes the origin's label and nothing else. */
+      relabel(label: CfcLabelView): void {
+        this.#label = label;
+        for (const cell of this.#labelled) {
+          const update: CellUpdateNotification = {
+            type: NotificationType.CellUpdate,
+            cell,
+            value: {},
+            cfcLabel: label,
+          };
+          this.emit("message", update);
+        }
+      }
+
+      dispose(): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+
+    it("decides from a change to the label alone", async () => {
+      const worker = new StandInWorker();
+      const connection = new RuntimeConnection(worker);
+      await connection.initialize({} as InitializationData);
+      const runtime = {
+        [$conn]: () => connection,
+        actingPrincipalDid: () => "did:key:bob",
+      } as unknown as RuntimeClient;
+      const origin: CellRef = {
+        space: "did:key:space",
+        id: "of:origin",
+        scope: "space",
+        path: [],
+      };
+      const valueOnly = new CellHandle(runtime, origin);
+      const stopValueOnly = valueOnly.subscribe(() => {});
+      const writes: (boolean | null)[] = [];
+      const element = new HeadlessOwnerView();
+      element.runtime = runtime;
+      element.originator = new CellHandle(runtime, origin);
+      element.result = {
+        setStrict: (value: boolean | null) => {
+          writes.push(value);
+          return Promise.resolve();
+        },
+      } as unknown as CellHandle<boolean | null>;
+      try {
+        await element.refresh();
+        expect(writes).toEqual([null]);
+
+        worker.relabel(attestation);
+
+        expect(writes).toEqual([null, false]);
+      } finally {
+        element.disconnectedCallback();
+        stopValueOnly();
+        await connection.dispose();
+      }
     });
   });
 });
