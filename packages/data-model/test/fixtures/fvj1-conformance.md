@@ -32,9 +32,6 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
   outcomes, computed by the generator rather than written by hand, and
   `divergence.encode` and `divergence.decode` are this package's, given only
   where they differ. `divergence.note` says what the format requires.
-- `unspecified`: present where the spec does not settle the case. The outcome
-  recorded is this package's, and the note says what is open. An implementation
-  may differ from it without failing to conform.
 
 An entry has `encode`, `decode`, or both. A value whose text decodes back to it
 has both, with the same value and text. A text that is not the canonical form of
@@ -101,13 +98,3 @@ Strings inside the class descriptors are string descriptors. `name` in an
 `Error` is the error's name even where the wire writes `null` for a name equal
 to the type, and an `Unavailable` holds an `errorMessage` only where one is
 stored, a kind's default message not being one.
-
-## Open questions
-
-The cases marked `unspecified` are questions for the owner of the format, each
-recorded with this package's current answer:
-
-1. Whether a base64url state with nonzero bits after its last whole byte, such
-   as `AR`, is refused. One byte takes two base64url characters, twelve bits of
-   which the byte fills eight, and `AQ` and `AR` differ only in the four left
-   over, so both read as the byte `0x01`.

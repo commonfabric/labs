@@ -13,8 +13,7 @@
  *
  * Where the formal spec says outright that this package falls short of it, the
  * case says so: the fixture records the spec's outcome, and this package's
- * beside it as a divergence. Where the spec does not settle a case, the case
- * records this package's outcome as unspecified. Generating the fixture fails
+ * beside it as a divergence. Generating the fixture fails
  * when a case's declared divergence does not hold, so that a fix here retires
  * the mark rather than leaving it to mislead.
  *
@@ -100,14 +99,12 @@ export type Fvj1DecodeOutcome =
  * value, it is the text {@link plainJsonTextOf} computes, so a divergence can
  * only be declared for a value that function writes. For a text, it is that
  * the text is refused, the format refusing every text this package
- * over-accepts. `unspecified` is a note on what the format leaves open, for a
- * case whose outcome is recorded without being claimed as required.
+ * over-accepts.
  */
 export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
-    readonly unspecified?: string;
     readonly divergence?: string;
   }
   & (
@@ -494,9 +491,9 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bytes state with nonzero trailing bits",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AR"}',
-    unspecified: "Section 3 does not say whether a decoder refuses nonzero " +
-      "bits after the last whole byte. This implementation ignores them, " +
-      "reading `AR` as the byte `AQ` writes.",
+    divergence: "A base64url state whose bits after its last whole byte are " +
+      "not all zero is refused. This implementation ignores them, reading " +
+      "`AR` as the byte `AQ` writes.",
   },
 
   // Nesting, and values beyond the class examples.
@@ -839,7 +836,7 @@ function refusalOrRethrow<Refusal>(
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
 ): Record<string, Fvj1Descriptor> {
-  const { name, section, unspecified, divergence } = conformanceCase;
+  const { name, section, divergence } = conformanceCase;
   const entry: Record<string, Fvj1Descriptor> = { name, section };
   const implementation: Record<string, Fvj1Descriptor> = {};
 
@@ -910,9 +907,6 @@ function fixtureEntryOf(
       );
     }
     entry.divergence = { note: divergence, ...implementation };
-  }
-  if (unspecified !== undefined) {
-    entry.unspecified = unspecified;
   }
 
   return entry;

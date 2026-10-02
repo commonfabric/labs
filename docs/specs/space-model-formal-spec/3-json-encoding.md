@@ -97,7 +97,9 @@ round-trip correctly.
 > **must accept** both padded and unpadded input for compatibility;
 > standard-base64 characters (`+`, `/`) are still invalid and must be rejected,
 > as is whitespace, or any other character outside the alphabet and the
-> trailing padding.
+> trailing padding. Every bit the characters carry past the last whole byte
+> must be zero, so that `AQ` is the one spelling of the byte `0x01` and `AR`
+> is refused.
 > This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
 > `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, to the
 > `hash` field of `Hash@1` state, and to the `publicKey` and `privateKey` fields
