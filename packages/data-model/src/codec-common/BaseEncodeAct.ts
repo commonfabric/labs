@@ -217,6 +217,10 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
    * @throws If `key` is one this runtime reserves.
    */
   protected static assertEncodableKey(key: string): void {
+    // TODO(danfuzz): Encode such a key, the format letting a record carry
+    // any key, once records are no longer rebuilt by assignment. The cases
+    // `record with key __proto__` and `record with key constructor` in
+    // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
     if (isUnsafeObjectKey(key)) {
       throw new Error(
         `Cannot encode an object with a key this runtime reserves: ${

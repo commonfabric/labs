@@ -132,6 +132,13 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     }
 
     // Primitives pass through.
+    //
+    // TODO(danfuzz): Refuse the JSON number `-0`, negative zero being written
+    // only as `SpecialNumber@1`, and refuse a number a double cannot
+    // represent, which `JSON.parse()` has already turned into an infinity by
+    // the time it arrives here. The cases `number literal negative zero` and
+    // `number literal past the largest double` in
+    // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
     if (
       data === null || typeof data === "boolean" ||
       typeof data === "number" || typeof data === "string"
@@ -237,6 +244,12 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       // becoming a property. Such a record cannot have been written by this
       // implementation, whose write path refuses it, so report it rather than
       // decoding something the bytes do not say.
+      //
+      // TODO(danfuzz): Decode such a record, the format letting a record
+      // carry any key, once the copy loops no longer rebuild records by
+      // assignment. The cases `record with key __proto__` and
+      // `record with key constructor` in
+      // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
       if (isUnsafeObjectKey(key)) {
         return this.reportReservedKey(key, data);
       }
