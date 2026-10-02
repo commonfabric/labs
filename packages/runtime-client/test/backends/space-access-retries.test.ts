@@ -66,10 +66,10 @@ describe("SpaceAccessRetries", () => {
         const inFlight = retries.retry(SPACE);
         expect(heard).toEqual([SPACE]);
         retries.dispose();
-        await retries.retry(OTHER);
+        const afterDispose = retries.retry(OTHER);
         expect(calls).toEqual([SPACE]);
-        gates[0].resolve();
-        await inFlight;
+        for (const gate of gates) gate.resolve();
+        await Promise.all([inFlight, afterDispose]);
         expect(heard).toEqual([SPACE]);
       });
     });

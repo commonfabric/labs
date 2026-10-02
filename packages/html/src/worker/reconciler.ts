@@ -1524,9 +1524,7 @@ export class WorkerReconciler {
         name: "button",
         props: {
           type: "button",
-          // Names the space, so that a control for another space is another
-          // child to the keyed diff, carrying its own handler.
-          "data-space-access-retry": space,
+          "data-space-access-retry": "true",
           onClick: retry,
         },
         children: ["Retry"],
