@@ -66,6 +66,7 @@ import {
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
+import { holdsUnreadMetadataLabel } from "./unread-label-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
@@ -315,7 +316,10 @@ function unionArms(
  * The labels of the value `schema` denotes, which may be any arm of it
  * (`unionArms()`): those declared along each reference chain on the way to an
  * arm (`declaredIfcLabels()`), a union's joined with those of its arms
- * (`joinMemberIfcLabels()`).
+ * (`joinMemberIfcLabels()`). A union is labeled by every label it and its
+ * arms declare read in full (`holdsUnreadArmLabel()`), or not at all, as a
+ * union read by type is: a label read in part could claim what its author
+ * never wrote together, and a join leaves out what an unread one held.
  */
 function armLabels(
   schema: MutableJSONSchema,
@@ -326,12 +330,31 @@ function armLabels(
   if (!isObjectOrArray(resolved) || !Array.isArray(resolved.anyOf)) {
     return labels;
   }
+  if (holdsUnreadArmLabel(schema, context)) return undefined;
   return joinMemberIfcLabels(
     labels ?? {},
     (resolved.anyOf as MutableJSONSchema[]).map((arm) =>
       armLabels(arm, context) ?? {}
     ),
   );
+}
+
+/**
+ * Whether a label declared along `schema`'s reference chain, or along any
+ * arm's of a union `schema` is, holds an atom the lowering could not read in
+ * full (`holdsUnreadMetadataLabel()`).
+ */
+function holdsUnreadArmLabel(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): boolean {
+  const labels = declaredIfcLabels(schema, context.definitions);
+  if (labels && holdsUnreadMetadataLabel(labels)) return true;
+  const resolved = resolveLocalRef(schema, context);
+  return isObjectOrArray(resolved) && Array.isArray(resolved.anyOf) &&
+    (resolved.anyOf as MutableJSONSchema[]).some((arm) =>
+      holdsUnreadArmLabel(arm, context)
+    );
 }
 
 /**

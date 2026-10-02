@@ -2058,6 +2058,42 @@ type Outer<T extends { x: string }> = Confidential<{ inner: ${inner} }, readonly
             }
           });
         }
+
+        for (
+          const argument of [
+            "Integrity<One, readonly [string]>",
+            "Confidential<One, readonly [string]>",
+          ]
+        ) {
+          it(`reads \`Pick<T | Sec<Two>, "x">\` in a payload read under bindings unlabeled, \`T\` bound to \`${argument}\`, on both sides`, async () => {
+            // A member's label the lowering cannot read leaves every member
+            // unread, as the members' labels are read in full or not at all.
+            const { input, output } = await schemasOf(
+              `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Outer<T extends { x: string }> = Confidential<{ inner: Pick<T | Sec<Two>, "x"> }, readonly ["outer"]>;`,
+              `Outer<${argument}>`,
+            );
+            for (const side of [input, output]) {
+              expect(
+                ((side as Schema).properties as Record<string, Schema>).inner,
+              ).toEqual(value);
+            }
+          });
+        }
+
+        it("reads `View<unknown>`, where `View<T>` is `Omit<T | Sec<Two>, never>`, as the alias written out, on both sides", async () => {
+          // `unknown` absorbs every other member of a union.
+          const declarations = `${DECLARATIONS}
+type View<T> = Omit<T | Sec<Two>, never>;`;
+          const read = await schemasOf(declarations, "View<unknown>");
+          expect(read).toEqual(
+            await schemasOf(declarations, "Omit<unknown | Sec<Two>, never>"),
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toBeUndefined();
+          }
+        });
       });
     });
 

@@ -2971,6 +2971,40 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const [alias, argument] of [
+        [
+          'Pick<T | Sec<{ x: string; z: 1 }>, "x">',
+          "Integrity<{ x: string }, readonly [string]>",
+        ],
+        [
+          'Pick<T | Sec<{ x: string; z: 1 }>, "x">',
+          "Confidential<{ x: string }, readonly [string]>",
+        ],
+        [
+          'Pick<Integrity<T, readonly [string]>, "x">',
+          "{ x: string } | { x: string; z: 1 }",
+        ],
+      ] as const
+    ) {
+      it(`reads \`${alias}\` under bindings unlabeled, \`T\` bound to \`${argument}\`, a label it cannot read`, async () => {
+        // The members' labels are read in full, or none of them is.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<${argument}> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+        });
+        expect(diagnostics.map((diagnostic) => diagnostic.type)).toContain(
+          "cfc-label:unread",
+        );
+      });
+    }
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;
@@ -3433,6 +3467,11 @@ describe("Schema: CFC authoring aliases", () => {
         type SelectOrIntegrity<T extends { x?: string }> =
           Pick<T | Integrity<Two, readonly ["i"]>, "x">;
         type SelectSecOr<T extends { x?: string }> = SelectSec<T | Two>;
+        type View<T> = Omit<T | Sec<Two>, never>;
+        type OmitSec<T> = Omit<Sec<T>, never>;
+        type OmitSecOr<T> = OmitSec<T | Confidential<Two, readonly ["b"]>>;
+        type OmitSecEither<T, U> =
+          OmitSec<T | U | Confidential<Two, readonly ["b"]>>;
         type ReadonlyUnion<T, U> = Readonly<Sec<T> | Sec<U>>;
       `;
 
@@ -3546,6 +3585,12 @@ describe("Schema: CFC authoring aliases", () => {
             { integrity: ["i"] },
           ],
           ["SelectSecOr<any>", 'Pick<Sec<any | Two>, "x">', undefined],
+          ["View<unknown>", "Omit<unknown | Sec<Two>, never>", undefined],
+          [
+            "OmitSecOr<unknown>",
+            'Omit<Sec<unknown | Confidential<Two, readonly ["b"]>>, never>',
+            secret,
+          ],
           [
             "ReadonlyUnion<string, null>",
             "Readonly<Sec<string> | Sec<null>>",
@@ -3561,6 +3606,21 @@ describe("Schema: CFC authoring aliases", () => {
           expect(read.diagnostics).toEqual([]);
         });
       }
+
+      it("reads a union argument that holds `unknown` before `any` unlabeled, as the `any` makes it", async () => {
+        // `any` absorbs every member of a union, `unknown` among them.
+        const read = await generate(
+          "OmitSecEither<unknown, any>",
+          DECLARATIONS,
+        );
+        const direct = await generate(
+          'Omit<Sec<unknown | any | Confidential<Two, readonly ["b"]>>, never>',
+          DECLARATIONS,
+        );
+        expect((read.schema as Record<string, unknown>).ifc).toBeUndefined();
+        expect((direct.schema as Record<string, unknown>).ifc).toBeUndefined();
+        expect(read.diagnostics).toEqual([]);
+      });
     });
   });
 });

@@ -2155,8 +2155,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * type a default-library alias mapping an object's members is given, may
    * be under `bound`, and the payload the value is where the operand is one
    * member whose payload is a primitive; `undefined` where `operand` is
-   * `any`, which holds no labels. A type parameter `bound` binds is its
-   * argument. A union has the members each of its own has, and is no
+   * `any` or `unknown`, which hold no labels, or a union holding either,
+   * which the checker reduces to it. A type parameter `bound` binds is its
+   * argument. Any other union has the members each of its own has, and is no
    * primitive, since the checker distributes an alias that leaves one as it
    * is over a union; `never` has none. An intersection of CFC metadata
    * carriers and one other member has the members its carriers label
@@ -2172,7 +2173,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (argument) {
       return this.#operandView(argument.type, argument.bound, context);
     }
-    if ((operand.flags & ts.TypeFlags.Any) !== 0) return undefined;
+    if ((operand.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) {
+      return undefined;
+    }
     if ((operand.flags & ts.TypeFlags.Never) !== 0) {
       return { members: [], primitive: undefined };
     }
@@ -2224,8 +2227,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * `undefined` where it is `any`, which makes the operand `any`. A type
    * parameter `bound` binds is its argument, which the checker folds into the
    * operand's intersection, as it folds any type in. So the intersection
-   * distributes over a union, each member of which is read on its own; it is
-   * `never` for a type that leaves it nothing (`vanishesUnderCarrier()`),
+   * distributes over a union, each member of which is read on its own,
+   * except that a union holding `any` is `any` and one holding `unknown` is
+   * `unknown`, one member adding no carrier; it is `never` for a type that
+   * leaves it nothing (`vanishesUnderCarrier()`),
    * which has no members; and a type that is itself labeled folds its
    * carriers in (`#carriedMembers()`). Any other type is one member adding no
    * carrier.
@@ -2243,12 +2248,19 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (vanishesUnderCarrier(payload)) return [];
     if (payload.isUnion()) {
       const members: LabeledMember[] = [];
+      let unknown: LabeledMember | undefined;
       for (const member of payload.types) {
         const read = this.#payloadParts(member, bound, context);
         if (!read) return undefined;
-        for (const part of read) members.push(part);
+        for (const part of read) {
+          if ((part.payload.flags & ts.TypeFlags.Unknown) !== 0) {
+            unknown = part;
+          } else {
+            members.push(part);
+          }
+        }
       }
-      return members;
+      return unknown ? [unknown] : members;
     }
     const carried = cfcCarriedParts(payload, context.typeChecker);
     return carried
