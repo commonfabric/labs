@@ -18,12 +18,16 @@
             "description": "The origin of the host serving the offered thing's space, if the sender\nnamed one.",
             "type": "string"
           },
+          "id": {
+            "description": "The offer's id: the event key of the event that delivered it, which\ndiffers for every other delivery and which nothing in the event's payload\ncan choose. Every run of one delivery stamps the same id.",
+            "type": "string"
+          },
           "kind": {
             "description": "What is offered, as lowercase words joined by hyphens, such as\n`fabrichat-room`. A reader acts only on the kinds it knows.",
             "type": "string"
           },
           "receivedAt": {
-            "description": "When the inbox received the offer, in milliseconds since the epoch.",
+            "description": "When the inbox received the offer, in milliseconds since the epoch. A\nhandler's clock reads to the second, so two offers can share it; `id`\ntells them apart.",
             "type": "number"
           },
           "space": {
@@ -38,6 +42,7 @@
         "required": [
           "kind",
           "from",
+          "id",
           "receivedAt"
         ],
         "type": "object"
@@ -110,12 +115,16 @@
             "description": "The origin of the host serving the offered thing's space, if the sender\nnamed one.",
             "type": "string"
           },
+          "id": {
+            "description": "The offer's id: the event key of the event that delivered it, which\ndiffers for every other delivery and which nothing in the event's payload\ncan choose. Every run of one delivery stamps the same id.",
+            "type": "string"
+          },
           "kind": {
             "description": "What is offered, as lowercase words joined by hyphens, such as\n`fabrichat-room`. A reader acts only on the kinds it knows.",
             "type": "string"
           },
           "receivedAt": {
-            "description": "When the inbox received the offer, in milliseconds since the epoch.",
+            "description": "When the inbox received the offer, in milliseconds since the epoch. A\nhandler's clock reads to the second, so two offers can share it; `id`\ntells them apart.",
             "type": "number"
           },
           "space": {
@@ -130,6 +139,7 @@
         "required": [
           "kind",
           "from",
+          "id",
           "receivedAt"
         ],
         "type": "object"

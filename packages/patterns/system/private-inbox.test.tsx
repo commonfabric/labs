@@ -101,6 +101,32 @@ export default pattern(() => {
     inbox.offers[1]?.host === undefined
   );
 
+  // Two offers in one action land in the same second, and one names an `id`
+  // of its own.
+  const forged = {
+    kind: "fabrichat-room",
+    space: ROOM_SPACE,
+    title: "Second",
+    id: "forged-id",
+  };
+  const action_receive_two_in_one_second = action(() => {
+    inbox.receive.send({
+      kind: "fabrichat-room",
+      space: ROOM_SPACE,
+      title: "First",
+    });
+    inbox.receive.send(forged);
+  });
+  const assert_each_offer_has_its_own_id = assert(() =>
+    inbox.offers.length === 4 &&
+    inbox.offers[2]?.from === inbox.offers[3]?.from &&
+    typeof inbox.offers[2]?.id === "string" &&
+    inbox.offers[2]?.id !== "" &&
+    inbox.offers[2]?.id !== inbox.offers[3]?.id &&
+    inbox.offers[3]?.id !== "forged-id" &&
+    new Set(inbox.offers.map((each) => each?.id)).size === 4
+  );
+
   // Pointing profiles at an inbox: one profile already points at another
   // inbox, and one points at nothing.
   const pointed = ProfileHome({ initialName: "Pointed" });
@@ -140,9 +166,9 @@ export default pattern(() => {
     inbox.receive.send({ kind: "fabrichat-room", title: "Nowhere" });
   });
   const assert_entry_only_offer_kept_without_space = assert(() =>
-    inbox.offers.length === 3 &&
-    inbox.offers[2]?.space === undefined &&
-    equals(inbox.offers[2]?.entry, elsewhere.get().piece) &&
+    inbox.offers.length === 5 &&
+    inbox.offers[4]?.space === undefined &&
+    equals(inbox.offers[4]?.entry, elsewhere.get().piece) &&
     !inbox.offers.some((each) => each?.title === "Nowhere")
   );
 
@@ -160,6 +186,8 @@ export default pattern(() => {
       { assertion: assert_malformed_offers_dropped },
       { action: action_receive_long_title },
       { assertion: assert_long_title_cut },
+      { action: action_receive_two_in_one_second },
+      { assertion: assert_each_offer_has_its_own_id },
       { action: action_create_inboxes },
       { assertion: assert_inboxes_created },
       { action: action_point_one_elsewhere },

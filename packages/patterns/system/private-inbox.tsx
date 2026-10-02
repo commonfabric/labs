@@ -21,6 +21,7 @@ import {
   type CurrentPrincipal,
   currentPrincipal,
   Default,
+  eventKey,
   handler,
   isWellFormedDID,
   NAME,
@@ -123,7 +124,18 @@ export interface Offer {
    */
   from: string;
 
-  /** When the inbox received the offer, in milliseconds since the epoch. */
+  /**
+   * The offer's id: the event key of the event that delivered it, which
+   * differs for every other delivery and which nothing in the event's payload
+   * can choose. Every run of one delivery stamps the same id.
+   */
+  id: string;
+
+  /**
+   * When the inbox received the offer, in milliseconds since the epoch. A
+   * handler's clock reads to the second, so two offers can share it; `id`
+   * tells them apart.
+   */
   receivedAt: number;
 }
 
@@ -192,8 +204,8 @@ function isOfferHost(host: unknown): boolean {
 }
 
 /**
- * Appends the offer `event` describes, stamped with the event's actor and the
- * time. An event with no actor, with a malformed `kind` or `host`, with a
+ * Appends the offer `event` describes, stamped with the event's actor, its
+ * event key as the offer's id, and the time. An event with no actor, with a malformed `kind` or `host`, with a
  * `space` that is not a DID, or with neither a `space` nor an `entry`, appends
  * nothing.
  */
@@ -219,6 +231,7 @@ const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
       ...(event.entry !== undefined ? { entry: event.entry } : {}),
       ...(title !== undefined ? { title } : {}),
       from,
+      id: eventKey(),
       receivedAt: Date.now(),
     });
   },
