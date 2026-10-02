@@ -57,6 +57,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
+  CFC_POLICY_PLACEHOLDER_TEXT,
   getBindingPropName,
   getEventType,
   isBindingProp,
@@ -1578,7 +1579,7 @@ export class WorkerReconciler {
       children: [
         integrityBlocked
           ? CFC_TEXT_INTEGRITY_PLACEHOLDER
-          : "Content hidden by policy",
+          : CFC_POLICY_PLACEHOLDER_TEXT,
       ],
     };
   }
@@ -3477,7 +3478,7 @@ export class WorkerReconciler {
     const integrityBlocked = reason === "integrity";
     const text = integrityBlocked
       ? CFC_TEXT_INTEGRITY_PLACEHOLDER
-      : "Content hidden by policy";
+      : CFC_POLICY_PLACEHOLDER_TEXT;
     if (integrityBlocked) {
       this.#markTextIntegrityBlocked(policy);
     }
