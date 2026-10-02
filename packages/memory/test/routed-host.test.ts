@@ -62,6 +62,8 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
     acl: { mode: "enforce" },
     ownsSpace: (did) => did === space.did(),
     requireExplicitAcl: true,
+    authorizeSessionOpen: undefined,
+    sessionOpenAuth: undefined,
   });
   const host = new RoutedMemoryHost({
     server,

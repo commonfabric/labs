@@ -4,7 +4,7 @@ The opt-in private listener implements the public-stage forwarding contract. The
 Rust router lives in `commonfabric/infra/memory-router`; its companion revision
 selects this Labs implementation. Both repositories and their main-built
 artifacts must pass the deployment gates before public exposure. Mode B and
-attestation are separate proposed phases.
+remote workload attestation are separate proposed phases.
 
 The direct protocol in [04-protocol.md](04-protocol.md) stays unchanged. Routed
 clients use its `hello`, `connection.challenge`, `connection.auth`,
