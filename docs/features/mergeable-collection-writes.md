@@ -452,8 +452,12 @@ first, since the op carries only the delta.
   read is not particular to this fallback: every whole-document `set` the
   commit computes from a document's absence goes out with it, a plain
   `key("count").set(1)` from a session that has not loaded the document
-  included. A write to the document root, a whole-document or authoritative
-  transaction, and a blind UI-input write carry no such read. The cost is
+  included. A write to the document root, and a whole-document or
+  authoritative transaction, carry no such read. A blind UI-input write does
+  carry it: the blind treatment covers the reads its assignment makes, and
+  ends before the commit is built, so a typed value that would replace a
+  document the session has not loaded is refused and lands on the retry
+  beside what the store held. The cost is
   that the push creating a list is not conflict-free when it carries another
   write to that document; two sessions creating it at once conflict, and the
   one refused retries onto the list the other created.

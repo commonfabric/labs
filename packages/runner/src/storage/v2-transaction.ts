@@ -1585,12 +1585,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       // A `set` that the diff above fell through to, for a document with no
       // base, replaces the whole of a document the transaction saw as
       // absent. It goes out with a read of the document root, so that the
-      // store refuses it where it holds the document. A blind UI-input write
-      // carries no read of its own making, and this is no exception.
-      if (
-        diffed && doc.initial.value === undefined &&
-        !isUiInputBlindWriteTx(this)
-      ) {
+      // store refuses it where it holds the document.
+      if (diffed && doc.initial.value === undefined) {
         this.#recordDocumentRootRead(space, id, scope, doc);
       }
       operations.push({
