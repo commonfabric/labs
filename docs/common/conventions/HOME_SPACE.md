@@ -167,7 +167,7 @@ The piece holds two things:
   before the request is staged.
 
 Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
-Self, and Chats. Each row shows its task, state, age, and available token usage.
+and Self. Each row shows its task, state, age, and available token usage.
 Reported cost and estimated cost have separate labels; an unavailable estimate
 shows the harness's withheld reason when supplied. Missing counters and costs
 remain unavailable rather than displaying zero. Relative ages share a one-minute
@@ -202,8 +202,9 @@ requests produced for a client to deliver. It creates each room in
 a space of its own. Everything it holds is private to the user, as the home
 space is.
 
-Home's **Chats** tab renders it: the user's rooms, the room chosen among them,
-and the controls that start a direct or a group chat.
+Home holds it but renders it nowhere of its own: a page shows it at its path
+in home's result, `chatManager`, with the user's rooms, the room chosen among
+them, and the controls that start a direct or a group chat.
 
 ## Custom Home Pattern
 
