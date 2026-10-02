@@ -178,6 +178,27 @@ export function subscribeToDrag(listener: DragListener): () => void {
   };
 }
 
+/**
+ * Swallows the `click` a browser dispatches when the pointer that ended a drag
+ * of `element` is released over it, so that dragging does not also activate
+ * what the drag started on. The next `pointerdown` on `element` ends the
+ * suppression when no such click comes, as when the pointer was released over
+ * something else.
+ */
+export function suppressClickAfterDrag(element: HTMLElement): void {
+  const swallow = (event: Event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    end();
+  };
+  const end = () => {
+    element.removeEventListener("click", swallow, true);
+    element.removeEventListener("pointerdown", end, true);
+  };
+  element.addEventListener("click", swallow, true);
+  element.addEventListener("pointerdown", end, true);
+}
+
 /** A drag preview element and, when it renders a piece, its teardown. */
 export interface DragPreview {
   /** The preview element (not yet added to the DOM). */

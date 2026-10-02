@@ -21,6 +21,7 @@ import {
   createDragPreview,
   endDrag,
   startDrag,
+  suppressClickAfterDrag,
   updateDragPointer,
 } from "../../core/drag-state.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
@@ -142,6 +143,7 @@ export class CFCellLink extends BaseElement {
     if (this._isDragging) {
       endDrag();
       this.classList.remove("dragging");
+      suppressClickAfterDrag(this);
     }
 
     this._isDragging = false;
@@ -380,7 +382,6 @@ export class CFCellLink extends BaseElement {
   }
 
   private _handleClick(e: MouseEvent) {
-    if (this._isDragging) return;
     e.stopPropagation();
     if (this._resolvedCell) {
       const { scope, path } = this._resolvedCell.ref();
