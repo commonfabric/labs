@@ -34,6 +34,7 @@ import {
   getSpaceLifetimeChannelCount,
   getSpaceRegistrationIndex,
   type IngestRegistration,
+  ingestUrl,
   isValidRequestId,
   isValidSegment,
   LifetimeChannelCapError,
@@ -418,7 +419,7 @@ const persist = async (
     status: 200,
     body: {
       id: registration.id,
-      url: `${deps.apiUrl}/api/ingest/${registration.id}`,
+      url: ingestUrl(deps.apiUrl, registration.space, registration.id),
       space: registration.space,
       causePrefix: registration.causePrefix,
       installId: registration.installId,
@@ -580,11 +581,11 @@ const peekReplay = async (
 export async function processRotate(
   deps: ControlDeps,
   callerDid: string,
-  input: { id: string; requestId: string; ttlDays?: number },
+  input: { id: string; requestId: string; ttlDays?: number; space?: string },
 ): Promise<ControlResult<MintedChannel>> {
   if (!isValidRequestId(input.requestId)) return bad("Invalid requestId");
 
-  const existing = await loadOwned(deps, callerDid, input.id);
+  const existing = await loadOwned(deps, callerDid, input.id, input.space);
   if (!existing.ok) return existing.result;
 
   // The SAME takeover protocol mint enforces. `loadOwned` only proves the
@@ -625,11 +626,16 @@ export async function processRotate(
 export async function processRevoke(
   deps: ControlDeps,
   callerDid: string,
-  input: { id: string; requestId: string; expectedRevision: number },
+  input: {
+    id: string;
+    requestId: string;
+    expectedRevision: number;
+    space?: string;
+  },
 ): Promise<ControlResult<{ id: string; revokedAt: string; revision: number }>> {
   if (!isValidRequestId(input.requestId)) return bad("Invalid requestId");
 
-  const existing = await loadOwned(deps, callerDid, input.id);
+  const existing = await loadOwned(deps, callerDid, input.id, input.space);
   if (!existing.ok) return existing.result;
 
   // The caller must name the generation they looked at. This is enforced again
@@ -846,11 +852,17 @@ export async function processList(
  * authorizing against any caller-supplied space while acting on a
  * caller-supplied id would be a one-line confused deputy. A missing
  * registration answers exactly like an unowned one.
+ *
+ * `addressedSpace` is the space a request was addressed to, for a caller that
+ * has one. It narrows and never widens: a channel writing into any other
+ * space answers exactly like a missing one, and the authorization is still
+ * made against the stored space.
  */
-const loadOwned = async (
+export const loadOwned = async (
   deps: ControlDeps,
   callerDid: string,
   id: string,
+  addressedSpace?: string,
 ): Promise<
   | { ok: true; registration: IngestRegistration }
   | { ok: false; result: ControlResult<never> }
@@ -873,6 +885,11 @@ const loadOwned = async (
     };
   }
   if (!registration) return { ok: false, result: forbidden() };
+  // Ahead of the authorization, so that a request addressed to the wrong
+  // space reads no access list at all.
+  if (addressedSpace !== undefined && registration.space !== addressedSpace) {
+    return { ok: false, result: forbidden() };
+  }
 
   const authority = await authorize(deps, registration.space, callerDid);
   if (!authority.ok) return { ok: false, result: fromAuthority(authority) };

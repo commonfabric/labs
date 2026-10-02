@@ -15,8 +15,6 @@ import { isDID } from "@commonfabric/identity/did";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { loadIdentity } from "./identity.ts";
 
-const BASE = "/api/ingest-channels";
-
 /**
  * Join the control-plane path onto the configured API base, KEEPING the base's
  * own path.
@@ -25,10 +23,22 @@ const BASE = "/api/ingest-channels";
  * against the origin and silently drops `/fabric`, so a deployment served under
  * a path prefix has every command addressed at the wrong endpoint — and it
  * fails as a 404 from somewhere else, not as a configuration error.
+ *
+ * A verb that acts on one space names it in the path, which is what lets a
+ * server dispatch the request by space without reading the body. Without
+ * `space` the URL is the one for the caller's own list, the only verb that
+ * names none.
  */
-export const controlPlaneUrl = (apiUrl: URL, verb: string): URL => {
+export const controlPlaneUrl = (
+  apiUrl: URL,
+  verb: string,
+  space?: string,
+): URL => {
+  const base = space === undefined
+    ? "/api/ingest-channels"
+    : `/api/spaces/${space}/ingest-channels`;
   const url = new URL(apiUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}${BASE}/${verb}`;
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${base}/${verb}`;
   return url;
 };
 
@@ -86,8 +96,9 @@ async function call<T>(
   config: ChannelConfig,
   verb: string,
   payload: Record<string, unknown>,
+  space?: string,
 ): Promise<T> {
-  const url = controlPlaneUrl(config.apiUrl, verb);
+  const url = controlPlaneUrl(config.apiUrl, verb, space);
   const identity = await loadIdentity(config.identityPath);
   // The proof commits to the body hash, so the bytes signed and the bytes sent
   // must be identical — serialize once.
@@ -138,7 +149,8 @@ export function mintChannel(
     requestId: string;
   },
 ): Promise<MintedChannel> {
-  return call<MintedChannel>(config, "mint", input);
+  const { space, ...payload } = input;
+  return call<MintedChannel>(config, "mint", payload, space);
 }
 
 /**
@@ -154,25 +166,72 @@ export async function listChannels(
   const { channels } = await call<{ channels: ChannelSummary[] }>(
     config,
     "list",
-    input,
+    {},
+    input.space,
   );
   return channels;
 }
 
+/** Mints a new token for channel `input.id`, which writes into `input.space`. */
 export function rotateChannel(
   config: ChannelConfig,
-  input: { id: string; ttlDays?: number; requestId: string },
+  input: { space: string; id: string; ttlDays?: number; requestId: string },
 ): Promise<MintedChannel> {
-  return call<MintedChannel>(config, "rotate", input);
+  const { space, ...payload } = input;
+  return call<MintedChannel>(config, "rotate", payload, space);
 }
 
+/** Disables channel `input.id`, which writes into `input.space`. */
 export function revokeChannel(
   config: ChannelConfig,
-  input: { id: string; requestId: string; expectedRevision: number },
+  input: {
+    space: string;
+    id: string;
+    requestId: string;
+    expectedRevision: number;
+  },
 ): Promise<{ id: string; revokedAt: string; revision: number }> {
+  const { space, ...payload } = input;
   return call<{ id: string; revokedAt: string; revision: number }>(
     config,
     "revoke",
-    input,
+    payload,
+    space,
+  );
+}
+
+/**
+ * Binds channel `input.id`, which writes into `input.space`, to the Gmail
+ * mailbox `input.accessToken` reads, so that Gmail push notifications for the
+ * mailbox are appended to the channel's journal. The server uses the token
+ * for one profile lookup and does not keep it.
+ */
+export function bindGmail(
+  config: ChannelConfig,
+  input: { space: string; id: string; accessToken: string; requestId: string },
+): Promise<{ id: string; emailAddress: string }> {
+  const { space, ...payload } = input;
+  return call<{ id: string; emailAddress: string }>(
+    config,
+    "gmail-bind",
+    payload,
+    space,
+  );
+}
+
+/**
+ * Unbinds channel `input.id`, which writes into `input.space`, from its Gmail
+ * mailbox, if it is bound to one.
+ */
+export function unbindGmail(
+  config: ChannelConfig,
+  input: { space: string; id: string; requestId: string },
+): Promise<{ id: string; unbound: boolean }> {
+  const { space, ...payload } = input;
+  return call<{ id: string; unbound: boolean }>(
+    config,
+    "gmail-unbind",
+    payload,
+    space,
   );
 }

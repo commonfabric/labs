@@ -1566,13 +1566,16 @@ the per-epic implementation notes).
   ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
   `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
 - **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the `/api/ingest-channels` control plane, through which a
+- **Purpose.** Gates the ingest-channel control plane
+  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+  through which a
   user holding their own identity key mints, lists, rotates, and revokes ingest
   channels for spaces they own — without an operator. When off, the router
   [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
   before the body limit, the rate limiter, or signature verification runs, so a
   deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/ingest/:id`) and the operator provisioning scripts are
+  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
+  operator provisioning scripts are
   unaffected by the flag.
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust

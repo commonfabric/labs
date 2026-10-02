@@ -1,5 +1,10 @@
 import { sha256 } from "@commonfabric/content-hash";
-import type { JSONSchema, MemorySpace, Runtime } from "@commonfabric/runner";
+import type {
+  IExtendedStorageTransaction,
+  JSONSchema,
+  MemorySpace,
+  Runtime,
+} from "@commonfabric/runner";
 import { isLink } from "@commonfabric/runner";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -342,6 +347,16 @@ export function channelId(space: string, installId: string): string {
   return `ing_${hashSecret(`${space}\n${installId}`)}`;
 }
 
+/**
+ * Builds the URL a device POSTs records to for channel `id`, which writes
+ * into `space`. The space is in the path so that whatever dispatches requests
+ * by space can send the write to the deployment holding that space; it grants
+ * nothing, since the bearer token is the credential.
+ */
+export function ingestUrl(apiUrl: string, space: string, id: string): string {
+  return `${apiUrl}/api/spaces/${space}/ingest/${id}`;
+}
+
 export function generateIngestSecret(): { secret: string; secretHash: string } {
   const secret = `ingsec_${randomBase62(INGEST_SECRET_BYTES)}`;
   return { secret, secretHash: hashSecret(secret) };
@@ -617,6 +632,58 @@ const liveClaims = (
     .filter((entry) => now - entry.at < CLAIM_RETENTION_MS)
     .map((entry) => ({ id: entry.id, at: entry.at, channel: entry.channel }));
 
+/** What checking a request claim inside a transaction found. */
+export type ClaimCheck =
+  /** The id is unused. `record()` writes the claim into the transaction. */
+  | { kind: "fresh"; record: () => void }
+  /** The id was already used, for `channel`. */
+  | { kind: "used"; channel: string }
+  /** The caller has as many live claims as the store retains. */
+  | { kind: "full" };
+
+/**
+ * Prepares the claim of a request id, for a write that has to be at most once.
+ * The caller syncs `cell` before its transaction, calls `check()` inside it
+ * ahead of any write, and calls `record()` on a fresh result once every other
+ * check has passed, so that an id is consumed only by a write that lands.
+ *
+ * `check()` reads through the transaction, which is what puts the claims in
+ * its read set and makes two concurrent uses of one id conflict.
+ */
+export function requestClaim(
+  runtime: Runtime,
+  serviceSpace: string,
+  claim: ClaimRequest,
+): {
+  cell: ReturnType<typeof mintRequestCell>;
+  check: (tx: IExtendedStorageTransaction) => ClaimCheck;
+} {
+  const cell = mintRequestCell(runtime, serviceSpace, claim.owner);
+  return {
+    cell,
+    check(tx) {
+      const bound = cell.withTx(tx);
+      const now = claim.now ?? Date.now();
+      const live = liveClaims(bound.get(), now);
+      const seen = live.find((entry) => entry.id === claim.requestId);
+      // The channel the claim was MADE for, not the one now being asked for.
+      if (seen !== undefined) return { kind: "used", channel: seen.channel };
+      // Full: refuse rather than evict. Dropping the oldest entry would discard
+      // a claim still inside the replay window — the entry that proves a replay
+      // — so a flood of fresh ids would buy a second live token for a used id.
+      if (live.length >= MAX_RETAINED_CLAIMS) return { kind: "full" };
+      return {
+        kind: "fresh",
+        record: () =>
+          bound.set([
+            ...live,
+            { id: claim.requestId, at: now, channel: claim.channel },
+          ]),
+      };
+    },
+  };
+}
+
 /**
  * The channel a request id was already used for, or `null` if it is unused.
  *
@@ -777,9 +844,10 @@ export async function saveRegistration(
   const month = auditMonth(registration.createdAt);
   const auditIndex = auditShardCell(runtime, serviceSpace, month);
   const shardList = auditShardListCell(runtime, serviceSpace);
-  const claimsCell = claim === undefined
+  const pendingClaim = claim === undefined
     ? undefined
-    : mintRequestCell(runtime, serviceSpace, claim.owner);
+    : requestClaim(runtime, serviceSpace, claim);
+  const claimsCell = pendingClaim?.cell;
   const ownerIndex = registration.owner === undefined
     ? undefined
     : ownerIndexCell(runtime, serviceSpace, registration.owner);
@@ -825,29 +893,18 @@ export async function saveRegistration(
     // closure did to the transaction, so a write followed by an early return
     // still lands — which would consume a request id on a write that was then
     // refused, the exact failure this atomicity exists to prevent.
-    let pendingClaim:
-      | { id: string; at: number; channel: string }[]
-      | undefined;
-    if (claim !== undefined && claimsCell !== undefined) {
-      const now = claim.now ?? Date.now();
-      const live = liveClaims(claimsCell.withTx(tx).get(), now);
-      const seen = live.find((entry) => entry.id === claim.requestId);
-      if (seen !== undefined) {
-        // The channel the claim was MADE for, not the one now being asked for.
-        claimedBy = seen.channel;
+    let recordClaim: (() => void) | undefined;
+    if (pendingClaim !== undefined) {
+      const checked = pendingClaim.check(tx);
+      if (checked.kind === "used") {
+        claimedBy = checked.channel;
         return;
       }
-      // Full: refuse rather than evict. Dropping the oldest entry would discard
-      // a claim still inside the replay window — the entry that proves a replay
-      // — so a flood of fresh ids would buy a second live token for a used id.
-      if (live.length >= MAX_RETAINED_CLAIMS) {
+      if (checked.kind === "full") {
         claimsFull = true;
         return;
       }
-      pendingClaim = [
-        ...live,
-        { id: claim.requestId, at: now, channel: claim.channel },
-      ];
+      recordClaim = checked.record;
     }
 
     const bound = cell.withTx(tx);
@@ -916,9 +973,7 @@ export async function saveRegistration(
       }
     }
 
-    if (pendingClaim !== undefined && claimsCell !== undefined) {
-      claimsCell.withTx(tx).set(pendingClaim);
-    }
+    recordClaim?.();
 
     if (acquiring && lifetimeCell !== undefined) {
       const ever = (lifetimeCell.withTx(tx).get() as number | undefined) ?? 0;
@@ -1038,10 +1093,54 @@ export async function appendToJournal(
   return records.length;
 }
 
+/**
+ * Why a stored channel may not take writes right now: `revoked` for one that
+ * is disabled or revoked, `expired` for one past its `expiresAt`, or `null`
+ * for a live channel. An unparseable `expiresAt` reads as expired.
+ */
+export function channelRefusal(
+  registration: IngestRegistration,
+  now: number = Date.now(),
+): "revoked" | "expired" | null {
+  if (!registration.enabled || registration.revoked) return "revoked";
+  if (registration.expiresAt !== undefined) {
+    // Fail CLOSED on an unparseable value. `Date.parse` returns NaN for garbage
+    // and every comparison against NaN is false, so the natural spelling
+    // (`parsed <= now`) would treat a corrupted expiry as "not expired" and
+    // silently grant an unbounded token — the exact opposite of this field's
+    // purpose.
+    const expiresAt = Date.parse(registration.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) return "expired";
+  }
+  return null;
+}
+
+/**
+ * Stamps the channel's last-seen time with the current time, so an operator
+ * can see a source that has gone quiet. Best-effort: a failure is logged and
+ * never thrown, because it is status bookkeeping rather than the ingest
+ * itself, and carries no ExternalIngest mark.
+ */
+export async function recordLastSeen(
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+  logger?: IngestLogger,
+): Promise<void> {
+  try {
+    const seen = lastSeenCell(runtime, serviceSpace, id);
+    await seen.sync();
+    await runtime.storageManager.synced();
+    await durableSet(seen, new Date().toISOString());
+  } catch (error) {
+    logger?.error({ error, id }, "ingest: failed to bump last-seen");
+  }
+}
+
 const DUMMY_HASH = hashSecret("");
 
-/** A minimal logger shape so processIngest is testable without a pino instance. */
-interface IngestLogger {
+/** A minimal logger shape so the ingest paths are testable without pino. */
+export interface IngestLogger {
   error: (obj: unknown, msg: string) => void;
   info: (obj: unknown, msg: string) => void;
 }
@@ -1058,6 +1157,10 @@ export type IngestResult =
  * 400, batch cap) is unit-testable against a real runtime. `rawBody` is the raw
  * request body text; it is parsed only AFTER auth succeeds, so a bad/unknown/
  * disabled/wrong-sink token gets a uniform 401 regardless of body validity.
+ *
+ * `addressedSpace` is the space the request named in its path, for a request
+ * that named one. A channel writing into any other space answers exactly like
+ * an unknown channel, whatever token came with it.
  */
 export async function processIngest(
   runtime: Runtime,
@@ -1066,6 +1169,7 @@ export async function processIngest(
   token: string,
   rawBody: string,
   logger?: IngestLogger,
+  addressedSpace?: string,
 ): Promise<IngestResult> {
   // Storage errors must 502, not masquerade as 401.
   let registration: IngestRegistration | null;
@@ -1081,8 +1185,12 @@ export async function processIngest(
 
   // EXACTLY TWO compares on every path — current, then previous-or-dummy — so
   // unknown / wrong / rotated are indistinguishable by timing. A missing
-  // channel burns both against the dummy.
-  if (!registration) {
+  // channel burns both against the dummy, and so does one addressed through a
+  // space it does not write into.
+  if (
+    !registration ||
+    (addressedSpace !== undefined && registration.space !== addressedSpace)
+  ) {
     verifyIngestSecret(token, DUMMY_HASH);
     verifyIngestSecret(token, DUMMY_HASH);
     return { status: 401, body: { error: "Invalid request" } };
@@ -1121,7 +1229,8 @@ export async function processIngest(
   // "re-pair me" from "server is broken", so it either drops buffered records
   // or retries forever. This is the one deliberate departure from the blanket
   // 401 equalization, and it is confined to correct-token cases.
-  if (!registration.enabled || registration.revoked) {
+  const refusal = channelRefusal(registration);
+  if (refusal === "revoked") {
     // Logged, not silent: a mass retirement (scripts/retire-ingest-channels.ts)
     // shows up here as a burst, and an operator needs to be able to see which
     // devices are still presenting retired tokens — and that the refusals are
@@ -1135,19 +1244,11 @@ export async function processIngest(
       body: { error: "Channel revoked or rotated — re-pair this device" },
     };
   }
-  if (registration.expiresAt !== undefined) {
-    // Fail CLOSED on an unparseable value. `Date.parse` returns NaN for garbage
-    // and every comparison against NaN is false, so the natural spelling
-    // (`parsed <= now`) would treat a corrupted expiry as "not expired" and
-    // silently grant an unbounded token — the exact opposite of this field's
-    // purpose.
-    const expiresAt = Date.parse(registration.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      return {
-        status: 403,
-        body: { error: "Channel expired — re-pair this device" },
-      };
-    }
+  if (refusal === "expired") {
+    return {
+      status: 403,
+      body: { error: "Channel expired — re-pair this device" },
+    };
   }
 
   // Parse the body only AFTER auth — a bad token must stay opaque (uniform 401)
@@ -1199,16 +1300,7 @@ export async function processIngest(
       partition,
       records as Record<string, unknown>[],
     );
-    // Best-effort last-seen bump (operator status, not ingest — no mark) so a
-    // dead beacon is visible. Failure must not fail the POST.
-    try {
-      const seen = lastSeenCell(runtime, serviceSpace, id);
-      await seen.sync();
-      await runtime.storageManager.synced();
-      await durableSet(seen, new Date().toISOString());
-    } catch (error) {
-      logger?.error({ error, id }, "ingest: failed to bump last-seen");
-    }
+    await recordLastSeen(runtime, serviceSpace, id, logger);
     logger?.info({ id, partition, appended }, "ingest: appended records");
     // received === appended in v1 (no server dedup); `appended` is a distinct
     // field only to leave room for a future dedup story without a wire change.
