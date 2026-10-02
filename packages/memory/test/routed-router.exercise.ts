@@ -1,4 +1,5 @@
 /** Disposable Linux acceptance against a compiled Rust router and real SQLite toolsheds. */
+import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { assert, assertEquals } from "@std/assert";
 // @ts-types="@types/ws"
@@ -15,8 +16,11 @@ import {
   routedBase64,
   routedStatementPayload,
 } from "../v2/routed-wire.ts";
-import { startRoutedToolshed } from "./support/routed-toolshed.ts";
 
+// Routed toolsheds require the modern cell encoding, and the SDK's hello
+// advertises this process's setting. Toolsheds now run as child processes, so
+// this process no longer inherits it from them.
+setModernCellRepConfig(true);
 const binary = Deno.env.get("MEMORY_ROUTER_BINARY");
 if (
   binary === undefined || Deno.build.os !== "linux" ||
@@ -111,7 +115,41 @@ const sheds = await Promise.all(
     (await Identity.fromRaw(new Uint8Array(32).fill(seed))).did()
   ),
 );
-const publicTls = await certificate("public", 22);
+// The public certificate uses ECDSA P-256: browsers never offer Ed25519 in TLS
+// and public CAs do not issue Ed25519 server certificates.
+async function ecdsaCertificate(name: string) {
+  const key = `${root}/${name}.pem`, cert = `${root}/${name}.crt`;
+  await command([
+    "openssl",
+    "genpkey",
+    "-algorithm",
+    "EC",
+    "-pkeyopt",
+    "ec_paramgen_curve:P-256",
+    "-out",
+    key,
+  ]);
+  await command([
+    "openssl",
+    "req",
+    "-new",
+    "-x509",
+    "-key",
+    key,
+    "-out",
+    cert,
+    "-days",
+    "1",
+    "-subj",
+    "/CN=localhost",
+    "-addext",
+    "subjectAltName=DNS:localhost",
+    "-addext",
+    "basicConstraints=critical,CA:FALSE",
+  ]);
+  return { key, cert };
+}
+const publicTls = await ecdsaCertificate("public");
 const privateTls = await Promise.all(
   [11, 12].map((seed, i) => certificate(`toolshed-${i}`, seed)),
 );
@@ -134,12 +172,15 @@ Deno.writeTextFileSync(
   }),
 );
 for (
-  const [name, seed, uid] of [["router", 21, 992], ["tls", 22, 991]] as const
+  const [name, seed, uid] of [["router", 21, 992]] as const
 ) {
   const path = `${root}/${name}.seed`;
   Deno.writeFileSync(path, new Uint8Array(32).fill(seed), { mode: 0o400 });
   Deno.chownSync(path, uid, uid);
 }
+Deno.copyFileSync(publicTls.key, `${root}/tls.key`);
+Deno.chmodSync(`${root}/tls.key`, 0o400);
+Deno.chownSync(`${root}/tls.key`, 991, 991);
 for (
   const [name, uid] of [["key", 991], ["link", 992], [
     "directory",
@@ -162,9 +203,9 @@ Deno.writeTextFileSync(
     host: "localhost:8443",
     directory,
     public_certificate: publicTls.cert,
-    tls_seed: systemd
-      ? "/run/credentials/memory-router-key.service/tls-seed"
-      : `${root}/tls.seed`,
+    tls_key: systemd
+      ? "/run/credentials/memory-router-key.service/tls-key"
+      : `${root}/tls.key`,
     router_seed: systemd
       ? "/run/credentials/memory-router-link.service/router-seed"
       : `${root}/router.seed`,
@@ -193,7 +234,91 @@ Deno.writeTextFileSync(
 await command(["nft", "-f", firewallPath]);
 const processes: Deno.ChildProcess[] = [];
 const listenerLogs: Promise<void>[] = [];
-const hosts: Awaited<ReturnType<typeof startRoutedToolshed>>[] = [];
+/** A real toolshed in a child process, so gates can stall, stop and restart it. */
+class Toolshed {
+  child?: Deno.ChildProcess;
+  #writer?: WritableStreamDefaultWriter<Uint8Array>;
+  #lines: string[] = [];
+  #wake?: () => void;
+  constructor(readonly index: number) {}
+  async start() {
+    const i = this.index;
+    const config = `${root}/toolshed-${i}.json`;
+    Deno.writeTextFileSync(
+      config,
+      JSON.stringify({
+        port: 8444 + i,
+        seed: 11 + i,
+        certificate: privateTls[i].cert,
+        key: privateTls[i].key,
+        directory,
+        store: `${root}/store-${i}`,
+        router: router.did(),
+        space: spaces[i],
+        principals: [i === 0 ? alice.did() : bob.did()],
+      }),
+    );
+    this.child = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        `--config=${new URL("../../../deno.jsonc", import.meta.url).pathname}`,
+        "-A",
+        new URL("./support/routed-toolshed.ts", import.meta.url).pathname,
+        config,
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "inherit",
+    }).spawn();
+    this.#writer = this.child.stdin.getWriter();
+    this.#lines = [];
+    void (async () => {
+      let held = "";
+      for await (
+        const chunk of this.child!.stdout.pipeThrough(new TextDecoderStream())
+      ) {
+        held += chunk;
+        let newline: number;
+        while ((newline = held.indexOf("\n")) >= 0) {
+          this.#lines.push(held.slice(0, newline));
+          held = held.slice(newline + 1);
+          this.#wake?.();
+        }
+      }
+    })();
+    await this.#line((line) => line.includes('"ready":true'));
+  }
+  async #line(match: (line: string) => boolean) {
+    const end = Date.now() + 30000;
+    while (Date.now() < end) {
+      const i = this.#lines.findIndex(match);
+      if (i >= 0) return this.#lines.splice(0, i + 1).pop()!;
+      await new Promise<void>((resolve) => {
+        this.#wake = resolve;
+        setTimeout(resolve, 100);
+      });
+    }
+    throw new Error(`toolshed ${this.index} did not answer`);
+  }
+  async command(command: Record<string, unknown>) {
+    await this.#writer!.write(
+      new TextEncoder().encode(`${JSON.stringify(command)}\n`),
+    );
+    await this.#line((line) => line.includes('"acknowledged":true'));
+  }
+  signal(signal: Deno.Signal) {
+    this.child!.kill(signal);
+  }
+  async stop() {
+    if (this.child === undefined) return;
+    try {
+      this.child.kill("SIGKILL");
+    } catch { /* Already stopped. */ }
+    await this.child.status;
+    this.child = undefined;
+  }
+}
+const toolsheds: Toolshed[] = [];
 const clients: Client[] = [];
 const gates: string[] = [];
 function pass(name: string) {
@@ -257,36 +382,103 @@ function deadline(ms: number): Promise<never> {
     throw new Error("exercise deadline");
   });
 }
-async function until(predicate: () => boolean) {
-  const end = Date.now() + 6000;
+async function until(predicate: () => boolean, ms = 6000) {
+  const end = Date.now() + ms;
   while (!predicate()) {
     if (Date.now() >= end) throw new Error("cleanup deadline");
     await pause(10);
   }
+}
+/** Starts the router roles as separate processes (direct exercise only). */
+async function startRouter() {
+  for (const name of ["key", "link", "directory"]) {
+    // A killed role leaves its non-activated socket path behind.
+    try {
+      Deno.removeSync(`${root}/ipc/${name}/agent.sock`);
+    } catch { /* Not present. */ }
+  }
+  for (
+    const [role, uid] of [["key-agent", 991], ["link-agent", 992], [
+      "directory",
+      993,
+    ]] as const
+  ) {
+    const child = new Deno.Command("setpriv", {
+      args: [
+        `--reuid=${uid}`,
+        `--regid=${uid}`,
+        "--clear-groups",
+        binary!,
+        role,
+        configPath,
+      ],
+      stdout: "inherit",
+      stderr: "inherit",
+    }).spawn();
+    processes.push(child);
+    await Promise.race([
+      waitFile(
+        `${root}/ipc/${
+          role === "key-agent"
+            ? "key"
+            : role === "link-agent"
+            ? "link"
+            : "directory"
+        }/agent.sock`,
+      ),
+      child.status.then(() => {
+        throw new Error(`role exited before readiness: ${role}`);
+      }),
+    ]);
+  }
+  const listener = new Deno.Command(binary!, {
+    args: ["listener", configPath],
+    stdout: "inherit",
+    stderr: "piped",
+  }).spawn();
+  processes.push(listener);
+  await listenerReady(listener);
+}
+async function restartRouter() {
+  if (systemd) {
+    await command(["systemctl", "restart", "memory-router.target"]);
+    return;
+  }
+  for (const child of processes.splice(0).reverse()) {
+    try {
+      child.kill("SIGTERM");
+    } catch { /* Already stopped. */ }
+    await child.status;
+  }
+  await startRouter();
 }
 class Client {
   ws: WebSocket;
   messages: Record<string, unknown>[] = [];
   sequence = 0;
   closed = Promise.withResolvers<void>();
+  binaryFrames = 0;
   hello!: Record<string, unknown>;
-  constructor(localAddress = "127.0.0.1") {
+  /** `deflate` offers permessage-deflate, as every browser does. */
+  constructor(localAddress = "127.0.0.1", deflate = false) {
     this.ws = new WebSocket("wss://localhost:8443/api/storage/memory", {
       ca: Deno.readTextFileSync(publicTls.cert),
-      perMessageDeflate: false,
+      perMessageDeflate: deflate,
       family: 4,
       localAddress,
       headers: { Origin: "https://stage.example" },
     });
     this.ws.on(
       "message",
-      (bytes, binary) =>
+      (bytes, binary) => {
+        if (binary) this.binaryFrames++;
         this.messages.push(
           decodeRoutedFrame(
             binary ? new Uint8Array(bytes as ArrayBuffer) : bytes.toString(),
             true,
           ).body,
-        ),
+        );
+      },
     );
     this.ws.on("close", () => this.closed.resolve());
     this.ws.on("error", () => this.closed.resolve());
@@ -335,6 +527,10 @@ class Client {
     const requestId = `r${++this.sequence}`;
     this.ws.send(`fvj1:${JSON.stringify({ ...body, requestId })}`);
     return requestId;
+  }
+  requestWithId(requestId: string, body: Record<string, unknown>) {
+    this.ws.send(`fvj1:${JSON.stringify({ ...body, requestId })}`);
+    return this.take((m) => m.requestId === requestId);
   }
   request(body: Record<string, unknown>) {
     const id = this.send(body);
@@ -416,19 +612,8 @@ function workerStats() {
 }
 try {
   for (let i = 0; i < 2; i++) {
-    hosts.push(
-      await startRoutedToolshed({
-        port: 8444 + i,
-        seed: 11 + i,
-        certificate: privateTls[i].cert,
-        key: privateTls[i].key,
-        directory,
-        store: `${root}/store-${i}`,
-        router: router.did(),
-        space: spaces[i],
-        principals: [i === 0 ? alice.did() : bob.did()],
-      }),
-    );
+    toolsheds.push(new Toolshed(i));
+    await toolsheds[i].start();
   }
   if (systemd) {
     Deno.mkdirSync("/opt/memory-router", { recursive: true });
@@ -441,7 +626,7 @@ try {
       mode: 0o700,
     });
     for (
-      const [name, source] of [["tls-seed", `${root}/tls.seed`], [
+      const [name, source] of [["tls-key", `${root}/tls.key`], [
         "router-seed",
         `${root}/router.seed`,
       ]]
@@ -472,47 +657,7 @@ try {
     await command(["systemctl", "start", "memory-router.target"]);
     await waitFile("/run/memory-router/link/agent.sock");
   } else {
-    for (
-      const [role, uid] of [["key-agent", 991], ["link-agent", 992], [
-        "directory",
-        993,
-      ]] as const
-    ) {
-      const child = new Deno.Command("setpriv", {
-        args: [
-          `--reuid=${uid}`,
-          `--regid=${uid}`,
-          "--clear-groups",
-          binary,
-          role,
-          configPath,
-        ],
-        stdout: "inherit",
-        stderr: "inherit",
-      }).spawn();
-      processes.push(child);
-      await Promise.race([
-        waitFile(
-          `${root}/ipc/${
-            role === "key-agent"
-              ? "key"
-              : role === "link-agent"
-              ? "link"
-              : "directory"
-          }/agent.sock`,
-        ),
-        child.status.then(() => {
-          throw new Error(`role exited before readiness: ${role}`);
-        }),
-      ]);
-    }
-    const listener = new Deno.Command(binary, {
-      args: ["listener", configPath],
-      stdout: "inherit",
-      stderr: "piped",
-    }).spawn();
-    processes.push(listener);
-    await listenerReady(listener);
+    await startRouter();
   }
   const client = await new Client().start();
   clients.push(client);
@@ -897,9 +1042,315 @@ try {
   );
   for (const entry of pool.slice(1)) entry.client.close();
   await until(() => workerStats().length === 1);
-  hosts[0].host.revokeRouter(router.did());
+
+  // Each gate below covers a failure found by probing the router.
+  const signerFor = (index: number) => index === 0 ? alice : bob;
+  const newestWorker = () =>
+    workerStats().reduce<ReturnType<typeof workerStats>[number] | undefined>(
+      (newest, w) => newest === undefined || w.uid > newest.uid ? w : newest,
+      undefined,
+    );
+  /** A new client with one session, retried while a toolshed link recovers. */
+  const opened = async (source: string, index: number, ms = 20000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const c = new Client(source);
+      clients.push(c);
+      try {
+        await c.start();
+        await c.authenticate(signerFor(index), 300, true);
+        const r = await c.request({
+          type: "session.open",
+          space: spaces[index],
+          principal: signerFor(index).did(),
+          session: {},
+        });
+        if (r.ok !== undefined) {
+          return {
+            client: c,
+            session: (r.ok as { sessionId: string }).sessionId,
+          };
+        }
+      } catch { /* Retried below. */ }
+      c.close();
+      if (Date.now() >= end) throw new Error(`toolshed ${index} unavailable`);
+      // Stays under the per-source admission rate.
+      await pause(500);
+    }
+  };
+
+  await command([
+    "python3",
+    "-c",
+    "import socket, struct\n" +
+    "s = socket.socket()\n" +
+    "s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))\n" +
+    "s.connect(('127.0.0.1', 8443))\n" +
+    "s.close()",
+  ]);
+  await pause(1000);
+  assert(client.ws.readyState === WebSocket.OPEN, "a reset stopped the router");
+  await opened("127.0.0.20", 0);
+  pass("a connection reset before handoff drops only that connection");
+
+  const browserLike = new Client("127.0.0.21", true);
+  clients.push(browserLike);
+  await browserLike.start();
+  await browserLike.authenticate(alice, 60, true);
+  const chromeAlgorithms = [
+    "ecdsa_secp256r1_sha256",
+    "rsa_pss_rsae_sha256",
+    "rsa_pkcs1_sha256",
+    "ecdsa_secp384r1_sha384",
+    "rsa_pss_rsae_sha384",
+    "rsa_pkcs1_sha384",
+    "rsa_pss_rsae_sha512",
+    "rsa_pkcs1_sha512",
+  ].join(":");
+  const handshake = await command([
+    "bash",
+    "-c",
+    `openssl s_client -connect 127.0.0.1:8443 -servername localhost -tls1_3 ` +
+    `-sigalgs ${chromeAlgorithms} -CAfile ${publicTls.cert} ` +
+    `-verify_return_error </dev/null 2>&1`,
+  ]);
+  assert(handshake.includes("Verify return code: 0 (ok)"), handshake);
+  pass(
+    "browser handshake: Chrome's signature algorithms and a permessage-deflate offer",
+  );
+
+  const compressing = new Client("127.0.0.22");
+  clients.push(compressing);
+  await compressing.start({
+    ...getMemoryProtocolFlags(),
+    modernCellRep: true,
+    connectionAuth: true,
+    routedAuthV1: true,
+    messageCompressionV1: true,
+  });
+  assertEquals(
+    (compressing.hello.flags as Record<string, unknown>).messageCompressionV1,
+    true,
+  );
+  await compressing.authenticate(alice, 120, true);
+  const compressedOpen = await compressing.request({
+    type: "session.open",
+    space: spaces[0],
+    principal: alice.did(),
+    session: {},
+  });
+  const compressedSession =
+    (compressedOpen.ok as { sessionId: string }).sessionId;
+  const large = Array.from(
+    { length: 400 },
+    (_, i) => `routed compression entry ${i}`,
+  ).join(" ");
+  assert(
+    (await compressing.request({
+      type: "transact",
+      space: spaces[0],
+      sessionId: compressedSession,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: "of:compressed",
+          value: { value: large },
+        }],
+      },
+    })).ok !== undefined,
+  );
+  await compressing.request({
+    type: "session.watch.set",
+    space: spaces[0],
+    sessionId: compressedSession,
+    watches: [{
+      id: "large",
+      kind: "graph",
+      query: {
+        roots: [{ id: "of:compressed", selector: { path: [], schema: false } }],
+      },
+    }],
+  });
+  await until(() => compressing.binaryFrames > 0);
+  pass("a client that negotiated compression receives compressed frames");
+  // The toolshed answers each of these, so the ID was in flight and retired.
+  for (let i = 0; i < 2; i++) {
+    const reply = await compressing.requestWithId("reused", {
+      type: "session.watch.set",
+      space: spaces[0],
+      sessionId: compressedSession,
+      watches: [],
+    });
+    assert(reply.ok !== undefined, JSON.stringify(reply));
+  }
+  pass("a request ID can be reused once the toolshed has answered it");
+
+  const steady = new Client("127.0.0.23");
+  clients.push(steady);
+  await steady.start();
+  await steady.authenticate(alice, 300, true);
+  await steady.authenticate(bob, 300);
+  const steadySessions: string[] = [];
+  for (const index of [0, 1]) {
+    // This client's first open on toolshed 1 takes a ticket over its link
+    // moments before the stall, so the link's idle heartbeat (after 15 quiet
+    // seconds) cannot fall inside it.
+    const r = await steady.request({
+      type: "session.open",
+      space: spaces[index],
+      principal: signerFor(index).did(),
+      session: {},
+    });
+    steadySessions.push((r.ok as { sessionId: string }).sessionId);
+  }
+  toolsheds[1].signal("SIGSTOP");
+  const stalledWatch = steady.send({
+    type: "session.watch.set",
+    space: spaces[1],
+    sessionId: steadySessions[1],
+    watches: [],
+  });
+  const renewal = steady.send({ type: "connection.challenge" });
+  await pause(6500);
+  toolsheds[1].signal("SIGCONT");
+  assert(
+    (await steady.take((m) => m.requestId === stalledWatch, 10000)).ok !==
+      undefined,
+  );
+  assert(
+    (await steady.take((m) => m.requestId === renewal, 10000)).ok !== undefined,
+  );
+  assert(
+    (await steady.request({
+      type: "session.watch.set",
+      space: spaces[0],
+      sessionId: steadySessions[0],
+      watches: [],
+    })).ok !== undefined,
+  );
+  pass("a renewal while a toolshed stalls waits instead of closing the socket");
+
+  const silent = await opened("127.0.0.24", 1);
+  const silentWorker = newestWorker()!;
+  // Stop reading: the router's pings go unanswered, as for a closed laptop.
+  (silent.client.ws as unknown as { _socket: { pause(): void } })._socket
+    .pause();
+  await until(
+    () => !workerStats().some((w) => w.pid === silentWorker.pid),
+    60000,
+  );
+  pass("a client that stops answering pings loses its worker within a minute");
+
+  const otherShed = new Client("127.0.0.25");
+  clients.push(otherShed);
+  await otherShed.start();
+  await otherShed.authenticate(alice, 300, true);
+  await otherShed.authenticate(bob, 300);
+  const otherSession = await otherShed.request({
+    type: "session.open",
+    space: spaces[0],
+    principal: alice.did(),
+    session: {},
+  });
+  const restartedUser = await opened("127.0.0.26", 1);
+  await toolsheds[1].stop();
+  // Opening on the stopped toolshed refuses that open only.
+  const refusedOpen = await otherShed.request({
+    type: "session.open",
+    space: spaces[1],
+    principal: bob.did(),
+    session: {},
+  });
+  assert(refusedOpen.error !== undefined, JSON.stringify(refusedOpen));
+  assert(
+    (await otherShed.request({
+      type: "session.watch.set",
+      space: spaces[0],
+      sessionId: (otherSession.ok as { sessionId: string }).sessionId,
+      watches: [],
+    })).ok !== undefined,
+  );
+  pass("an open on a stopped toolshed is refused without closing the client");
+  await toolsheds[1].start();
+  await Promise.race([restartedUser.client.closed.promise, deadline(10000)]);
+  pass("a toolshed restart closes the clients with sessions there");
+  await opened("127.0.0.27", 1);
+  pass("a restarted toolshed serves new clients without a router restart");
+  assert(
+    (await otherShed.request({
+      type: "session.watch.set",
+      space: spaces[0],
+      sessionId: (otherSession.ok as { sessionId: string }).sessionId,
+      watches: [],
+    })).ok !== undefined,
+  );
+  // Bob signed before toolshed 1 relinked, so he signs again before opening there.
+  const heldOpen = otherShed.send({
+    type: "session.open",
+    space: spaces[1],
+    principal: bob.did(),
+    session: {},
+  });
+  const pushedChallenge = await otherShed.take(
+    (m) => m.type === "connection/challenge",
+  );
+  await otherShed.authenticate(bob, 300, false, pushedChallenge);
+  assert(
+    (await otherShed.take((m) => m.requestId === heldOpen, 10000)).ok !==
+      undefined,
+  );
+  pass(
+    "other clients stay connected and sign again before opening on the relinked toolshed",
+  );
+
+  const staller = new Client("127.0.0.28");
+  clients.push(staller);
+  await staller.start();
+  await staller.authenticate(bob, 120, true);
+  toolsheds[1].signal("SIGSTOP");
+  const stalledOpen = staller.send({
+    type: "session.open",
+    space: spaces[1],
+    principal: bob.did(),
+    session: {},
+  });
+  // While that open waits on toolshed 1's link, a client of toolshed 0 is
+  // not delayed by it.
+  await pause(500);
+  const challenged = performance.now();
+  const challengeId = otherShed.send({ type: "connection.challenge" });
+  assert(
+    (await otherShed.take((m) => m.requestId === challengeId, 3000)).ok !==
+      undefined,
+  );
+  assert(
+    performance.now() - challenged < 2000,
+    "a stalled toolshed delayed an unrelated client",
+  );
+  pass("a stalled toolshed does not delay clients of other toolsheds");
   await Promise.race([
-    client.closed.promise,
+    staller.closed.promise,
+    staller.take((m) => m.requestId === stalledOpen, 15000).catch(() => {}),
+  ]);
+  toolsheds[1].signal("SIGCONT");
+  await opened("127.0.0.29", 1, 30000);
+  pass("a link stalled past its request deadline is replaced and recovers");
+
+  await toolsheds[0].stop();
+  await opened("127.0.0.30", 1);
+  pass("authentication does not depend on toolshed 0");
+  await restartRouter();
+  await opened("127.0.0.31", 1, 30000);
+  pass("the router starts while a toolshed is down");
+  await toolsheds[0].start();
+  const revokee = await opened("127.0.0.32", 0, 30000);
+  pass("a toolshed down at router start joins once it is up");
+
+  await toolsheds[0].command({ revoke: router.did() });
+  await Promise.race([
+    revokee.client.closed.promise,
     pause(6000).then(() => {
       throw new Error("router revocation did not close client");
     }),
@@ -916,6 +1367,6 @@ try {
     await child.status;
   }
   await Promise.all(listenerLogs);
-  for (const host of hosts) await host.close();
+  for (const shed of toolsheds) await shed.stop();
   Deno.removeSync(root, { recursive: true });
 }
