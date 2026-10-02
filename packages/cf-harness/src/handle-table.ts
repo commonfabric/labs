@@ -299,9 +299,16 @@ const referentIdentityKey = (
     referent.label,
     referent.labelSource,
     // Only a command result carries provenance, so every other referent keeps
-    // the identity it was minted under.
+    // the identity it was minted under. Absent fields are dropped, so a
+    // provenance reads as the same identity before and after it is persisted.
     ...(referent.provenance !== undefined
-      ? [{ ...referent.provenance } as Record<string, string | number>]
+      ? [
+        Object.fromEntries(
+          Object.entries(referent.provenance).filter(([, field]) =>
+            field !== undefined
+          ),
+        ) as Record<string, string | number>,
+      ]
       : []),
   ]);
 
@@ -357,6 +364,18 @@ export const mintReferentHandle = async (
   options: { hasher?: HandleTokenHasher } = {},
 ): Promise<{ table: HarnessHandleTable; token: string }> => {
   const hasher = options.hasher ?? sha256Hasher;
+  // The table check refuses a command result without provenance and
+  // provenance on anything else, so neither is minted.
+  if (
+    referent.kind === "document" &&
+    (referent.labelSource === "command"
+      ? readHarnessCommandResultProvenance(referent.provenance) === undefined
+      : referent.provenance !== undefined)
+  ) {
+    throw new Error(
+      "a command result is minted with well-formed provenance, and nothing else carries provenance",
+    );
+  }
   const referents = table.referents ?? [];
   const key = referentIdentityKey(referent);
   const existing = referents.find((held) => referentIdentityKey(held) === key);

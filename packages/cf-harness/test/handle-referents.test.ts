@@ -285,6 +285,49 @@ describe("referent handles", () => {
       }
     });
 
+    it("refuses to mint a command result without its provenance", async () => {
+      await expect(
+        mintReferentHandle(createHarnessHandleTable("run-referents"), {
+          ...ROW,
+          labelSource: "command",
+        }),
+      ).rejects.toThrow(/provenance/);
+      await expect(
+        mintReferentHandle(createHarnessHandleTable("run-referents"), {
+          ...ROW,
+          provenance: { command: "loom.inspect", actor: "agent" },
+        }),
+      ).rejects.toThrow(/provenance/);
+    });
+
+    it("gives a command result one identity whether or not it was persisted", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("run-referents"),
+        {
+          ...ROW,
+          labelSource: "command",
+          provenance: {
+            command: "loom.inspect",
+            actor: "agent",
+            loomId: undefined,
+          },
+        },
+      );
+      const persisted = JSON.parse(JSON.stringify(minted.table));
+      expect(() => assertValidHarnessHandleTable(persisted)).not.toThrow();
+      const again = await mintReferentHandle(persisted, {
+        ...ROW,
+        labelSource: "command",
+        provenance: {
+          command: "loom.inspect",
+          actor: "agent",
+          loomId: undefined,
+        },
+      });
+      expect(again.token).toBe(minted.token);
+      expect(again.table.referents).toHaveLength(1);
+    });
+
     it("keeps the identity of a referent minted without provenance", async () => {
       const first = await mintReferentHandle(
         createHarnessHandleTable("run-referents"),

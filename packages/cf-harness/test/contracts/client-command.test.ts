@@ -6,13 +6,16 @@ import {
   effectiveHarnessCommandApproval,
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_BODY_MAX_BYTES,
+  harnessClientProtocolEcho,
   harnessCommandActorFor,
   legacyOutcomeOfHarnessCommandSettlement,
   readHarnessClientProtocolDeclaration,
   readHarnessCommandCatalog,
+  readHarnessCommandCatalogRequest,
   readHarnessCommandInvocation,
   readHarnessCommandOutcome,
   readHarnessCommandResolveBody,
+  readHarnessCommandResultProvenance,
   readHarnessCommandSettlement,
   readHarnessCommandSettlementRecord,
   readHarnessTypedClientAction,
@@ -288,6 +291,15 @@ describe("client command contract", () => {
       ).toBeUndefined();
     });
 
+    it("refuses a retained body over the body limit whatever size it claims", () => {
+      expect(
+        readHarnessCommandOutcome({
+          ...success,
+          body: { text: "x".repeat(HARNESS_COMMAND_BODY_MAX_BYTES) },
+        }),
+      ).toBeUndefined();
+    });
+
     it("refuses an omitted body that would have fit", () => {
       const { body: _body, ...rest } = success;
       expect(readHarnessCommandOutcome({ ...rest, bodyOmitted: true }))
@@ -314,6 +326,31 @@ describe("client command contract", () => {
       expect(readHarnessCommandOutcome(loomWithout)).toBeUndefined();
       expect(readHarnessCommandOutcome({ ...success, executor: "weaver" }))
         .toBeUndefined();
+    });
+
+    it("refuses displaced components larger than the summary bound", () => {
+      expect(
+        readHarnessCommandOutcome({
+          ...success,
+          displaced: ["x".repeat(HARNESS_COMMAND_BODY_MAX_BYTES)],
+        }),
+      ).toBeUndefined();
+    });
+
+    it("refuses a summary that contradicts the body it was lifted from", () => {
+      const conflict = (fixture("resolve-executed-version-conflict")
+        .settlement as { outcome: Record<string, unknown> }).outcome;
+      const { code: _code, error: _error, ...rest } = conflict;
+      expect(readHarnessCommandOutcome({ ...rest, ok: true }))
+        .toBeUndefined();
+      expect(readHarnessCommandOutcome({ ...conflict, code: "store-error" }))
+        .toBeUndefined();
+      expect(readHarnessCommandOutcome({ ...conflict, id: "loom.add" }))
+        .toBeUndefined();
+      const landed = (fixture("resolve-executed-may-have-landed")
+        .settlement as { outcome: Record<string, unknown> }).outcome;
+      const { mayHaveLanded: _landed, ...unsure } = landed;
+      expect(readHarnessCommandOutcome(unsure)).toBeUndefined();
     });
 
     it("reads a version conflict as an executed command", () => {
@@ -345,6 +382,210 @@ describe("client command contract", () => {
       >;
       const { attribution: _attribution, ...rest } = lost;
       expect(readHarnessCommandSettlement(rest)).toBeUndefined();
+    });
+  });
+  describe("malformed input", () => {
+    type Json = Record<string, unknown>;
+    const settlementOf = (name: string): Json =>
+      fixture(name).settlement as Json;
+    const executed = settlementOf("resolve-executed-success");
+    const attribution = executed.attribution as Json;
+    const outcome = executed.outcome as Json;
+    const catalog = settlementOf("resolve-executed-catalog").catalog as {
+      entries: Json[];
+    };
+    const [entry] = catalog.entries;
+    const lost = settlementOf("resolve-failed-to-deliver");
+    const declined = settlementOf("resolve-declined");
+    const resolve = fixture("resolve-executed-success");
+    const record = (fixture("resolved-event-executed").event as Json)
+      .settlement as Json;
+    const query = { command: "loom.inspect", args: {}, approval: "automatic" };
+    let deep: unknown = {};
+    for (let depth = 0; depth < 70; depth += 1) deep = { deep };
+
+    const refusals: Record<string, [(value: unknown) => unknown, unknown[]]> = {
+      "protocol declaration": [readHarnessClientProtocolDeclaration, [
+        null,
+        [],
+        { protocolVersion: 1 },
+        { protocolVersion: 1, requires: [], extra: true },
+        { protocolVersion: 1.5, requires: [] },
+        { protocolVersion: 1, requires: "client_actions" },
+        { protocolVersion: 1, requires: [""] },
+        { protocolVersion: 1, requires: [7] },
+        { protocolVersion: 1, requires: ["x".repeat(65)] },
+        { protocolVersion: 1, requires: Array(17).fill("client_actions") },
+      ]],
+      "typed action": [readHarnessTypedClientAction, [
+        "invoke_command",
+        { kind: "command", line: "/inspect" },
+        { kind: "invoke_command", invocation: query, extra: true },
+        { kind: "invoke_command", invocation: { ...query, approval: "any" } },
+        { kind: "list_commands" },
+        { kind: "list_commands", request: { detail: "loom.inspect" } },
+      ]],
+      "invocation": [readHarnessCommandInvocation, [
+        [],
+        { command: "loom.inspect", args: {} },
+        { ...query, args: [] },
+        { ...query, args: { at: () => 0 } },
+        { ...query, args: { n: Number.NaN } },
+        { ...query, args: deep },
+        { ...query, target: [] },
+        { ...query, target: { loomId: "loom-0123456789abcdef", extra: 1 } },
+        {
+          ...query,
+          target: { loomId: "loom-0123456789abcdef", expectedVersion: -1 },
+        },
+        { ...query, command: `a${".b".repeat(64)}` },
+      ]],
+      "catalog request": [readHarnessCommandCatalogRequest, [
+        null,
+        { detail: [], extra: true },
+        { detail: ["Loom.Inspect"] },
+        { detail: Array(17).fill("loom.inspect") },
+      ]],
+      "catalog": [readHarnessCommandCatalog, [
+        null,
+        { entries: [], extra: true },
+        { entries: {} },
+        { entries: Array(257).fill(entry) },
+        { entries: [null] },
+        { entries: [{ ...entry, extra: true }] },
+        { entries: [{ ...entry, scope: "page" }] },
+        { entries: [{ ...entry, effect: "write" }] },
+        { entries: [{ ...entry, summary: "x".repeat(501) }] },
+        { entries: [{ ...entry, inputSchema: [] }] },
+        { entries: [{ ...entry, description: "x".repeat(8001) }] },
+      ]],
+      "outcome": [readHarnessCommandOutcome, [
+        null,
+        { ...outcome, extra: true },
+        { ...outcome, executor: "cli" },
+        { ...outcome, ok: "yes" },
+        { ...outcome, bodyBytes: -1 },
+        { ...outcome, transportStatus: 99 },
+        { ...outcome, code: 409 },
+        { ...outcome, error: "x".repeat(2001) },
+        { ...outcome, quiet: "yes" },
+        { ...outcome, mayHaveLanded: 1 },
+        { ...outcome, outputs: [] },
+        { ...outcome, outputs: { text: "x".repeat(8 * 1024) } },
+        { ...outcome, completed: "op-1" },
+        { ...outcome, completed: [1] },
+        { ...outcome, completed: Array(257).fill("op-1") },
+        { ...outcome, displaced: {} },
+        { ...outcome, displaced: [undefined] },
+        { ...outcome, bodyOmitted: true },
+        { ...outcome, body: [] },
+        { ...outcome, body: undefined, bodyOmitted: false },
+      ]],
+      "settlement": [readHarnessCommandSettlement, [
+        null,
+        { status: "done" },
+        { status: "executed", catalog, extra: true },
+        { status: "executed", catalog: { entries: {} } },
+        { ...executed, extra: true },
+        { status: "executed", attribution },
+        { ...executed, attribution: { ...attribution, extra: true } },
+        { ...executed, attribution: { ...attribution, service: "" } },
+        { ...executed, attribution: { ...attribution, loomActor: "agent" } },
+        { ...executed, attribution: { ...attribution, originLoomId: "x" } },
+        { ...executed, attribution: [] },
+        { ...executed, outcome: { ...outcome, ok: 1 } },
+        { ...executed, receipt: "x".repeat(2001) },
+        { ...declined, extra: true },
+        { ...declined, reason: 7 },
+        { status: "declined" },
+        { ...lost, extra: true },
+        { ...lost, reason: 7 },
+        { ...lost, landed: "yes" },
+        { ...lost, attribution: { ...attribution, actor: "user" } },
+        { status: "interrupted", reason: "lost" },
+        { status: "interrupted", reason: "restart", extra: true },
+      ]],
+      "resolve body": [readHarnessCommandResolveBody, [
+        null,
+        { ...resolve, extra: true },
+        { ...resolve, sessionId: "" },
+        { ...resolve, actionId: "x".repeat(257) },
+        { ...resolve, settlement: { status: "done" } },
+      ]],
+      "settlement record": [readHarnessCommandSettlementRecord, [
+        null,
+        { status: "executed", catalogEntries: 257 },
+        { status: "executed", catalogEntries: 3, extra: true },
+        { ...record, extra: true },
+        { status: "executed", outcome: record.outcome },
+        { ...record, handle: "cfh:k7m2q" },
+        { ...record, receipt: "x".repeat(2001) },
+        { ...record, outcome: null },
+        { ...record, outcome: { ...(record.outcome as Json), body: {} } },
+        { ...record, outcome: { ...(record.outcome as Json), ok: "yes" } },
+        { ...record, attribution: { ...attribution, actor: "user" } },
+        { status: "declined" },
+      ]],
+      "result provenance": [readHarnessCommandResultProvenance, [
+        null,
+        { command: "loom.inspect" },
+        { command: "loom.inspect", actor: "agent", extra: true },
+        { command: "loom.inspect", actor: "person" },
+        { command: "loom.inspect", actor: "agent", loomId: "loom-1" },
+        { command: "loom.inspect", actor: "agent", version: 1.5 },
+        { command: "loom.inspect", actor: "agent", originLoomId: 7 },
+      ]],
+    };
+
+    for (const [reader, [read, values]] of Object.entries(refusals)) {
+      it(`refuses every malformed ${reader}`, () => {
+        for (const value of values) {
+          expect({ value, read: read(value) }).toEqual({
+            value,
+            read: undefined,
+          });
+        }
+      });
+    }
+
+    it("reads an omitted body's record, a bare catalog request, and a bare declaration", () => {
+      const omitted = (fixture("resolve-executed-body-omitted")
+        .settlement as Json).outcome as Json;
+      const { body: _body, ...rest } = omitted;
+      expect(
+        readHarnessCommandSettlementRecord({
+          ...record,
+          outcome: {
+            executor: rest.executor,
+            transportStatus: rest.transportStatus,
+            ok: rest.ok,
+            bodyBytes: rest.bodyBytes,
+            bodyOmitted: true,
+          },
+        }),
+      ).toBeDefined();
+      expect(readHarnessCommandCatalogRequest({})).toEqual({});
+      expect(
+        readHarnessClientProtocolDeclaration({
+          protocolVersion: 1,
+          requires: [],
+        }),
+      ).toEqual({ protocolVersion: 1, requires: [] });
+      expect(checkHarnessClientProtocol({ protocolVersion: 1, requires: [] }))
+        .toEqual({ ok: true, protocol: harnessClientProtocolEcho() });
+    });
+
+    it("shows a reader that knows three words each settlement's word", () => {
+      expect(legacyOutcomeOfHarnessCommandSettlement({ status: "declined" }))
+        .toBe("declined");
+      expect(
+        legacyOutcomeOfHarnessCommandSettlement({
+          status: "failed_to_deliver",
+        }),
+      ).toBe("failed");
+      expect(
+        legacyOutcomeOfHarnessCommandSettlement({ status: "interrupted" }),
+      ).toBe("failed");
     });
   });
 });

@@ -1971,3 +1971,57 @@ Deno.test("interactive NDJSON transport refuses a protocol mismatch before the s
     ),
   ]);
 });
+
+Deno.test("interactive NDJSON transport starts a session whose protocol it serves and refuses a turn whose protocol it does not", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "start_session",
+        params: {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+          model: "gpt-test",
+          protocol: { protocolVersion: 1, requires: ["client_actions"] },
+        },
+      }),
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-2",
+        method: "start_turn",
+        params: {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Hello" },
+          protocol: { protocolVersion: 1, requires: ["typed_commands"] },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+    createService: (onEvent) => new HarnessInteractiveChatService({ onEvent }),
+  });
+
+  const responses = decodeLines(output).filter((envelope) => "ok" in envelope);
+  assertEquals(
+    responses.map((envelope) =>
+      "ok" in envelope
+        ? [
+          envelope.requestId,
+          envelope.ok,
+          envelope.ok ? undefined : envelope.error.code,
+        ]
+        : undefined
+    ),
+    [["request-1", true, undefined], [
+      "request-2",
+      false,
+      "protocol_mismatch",
+    ]],
+  );
+});

@@ -215,6 +215,9 @@ export const HARNESS_COMMAND_LIST_LIMIT = 256;
 /** Largest `outputs` summary, as UTF-8 bytes of its JSON text. */
 export const HARNESS_COMMAND_OUTPUTS_MAX_BYTES = 8 * 1024;
 
+/** Largest `displaced` summary, as UTF-8 bytes of its JSON text. */
+export const HARNESS_COMMAND_DISPLACED_MAX_BYTES = 8 * 1024;
+
 /** Most entries one catalog may hold. */
 export const HARNESS_COMMAND_CATALOG_LIMIT = 256;
 
@@ -812,9 +815,21 @@ const OUTCOME_KEYS = [
 ] as const;
 
 /**
+ * Summary fields an outcome lifts from the executor's body, beside the body
+ * key each is lifted from.
+ */
+const BODY_MIRRORED_FIELDS = [
+  ["ok", "ok"],
+  ["id", "id"],
+  ["code", "code"],
+  ["mayHaveLanded", "may_have_landed"],
+] as const;
+
+/**
  * Reads an outcome, or undefined when malformed or over a bound. A retained
  * body must fit {@link HARNESS_COMMAND_BODY_MAX_BYTES}; an omitted one must be
- * marked and its size must exceed it.
+ * marked and its size must exceed it. Where a retained body carries `ok`,
+ * `id`, `code` or `may_have_landed`, the summary must say the same.
  */
 export const readHarnessCommandOutcome = (
   value: unknown,
@@ -889,22 +904,38 @@ export const readHarnessCommandOutcome = (
   if (
     displaced !== undefined &&
     (!Array.isArray(displaced) ||
-      displaced.length > HARNESS_COMMAND_LIST_LIMIT || !isJsonValue(displaced))
+      displaced.length > HARNESS_COMMAND_LIST_LIMIT ||
+      !isJsonValue(displaced) ||
+      harnessCommandJsonBytes(displaced) > HARNESS_COMMAND_DISPLACED_MAX_BYTES)
   ) {
     return undefined;
   }
   const body = field("body");
   const bodyOmitted = field("bodyOmitted");
   if (body !== undefined) {
+    // The bound holds on the body itself, not only on the size it claims.
     if (
       bodyOmitted !== undefined || !isJsonObject(body) ||
-      (bodyBytes as number) > HARNESS_COMMAND_BODY_MAX_BYTES
+      (bodyBytes as number) > HARNESS_COMMAND_BODY_MAX_BYTES ||
+      harnessCommandJsonBytes(body) > HARNESS_COMMAND_BODY_MAX_BYTES
     ) {
       return undefined;
     }
   } else if (
     bodyOmitted !== true ||
     (bodyBytes as number) <= HARNESS_COMMAND_BODY_MAX_BYTES
+  ) {
+    return undefined;
+  }
+  // The summary is lifted from the body, so where the retained body carries
+  // one of these fields the summary says the same; a weaver-local body that
+  // names none of them is not compared.
+  if (
+    body !== undefined &&
+    BODY_MIRRORED_FIELDS.some(([summaryKey, bodyKey]) => {
+      const answered = own(body as Record<string, unknown>, bodyKey);
+      return answered !== undefined && answered !== field(summaryKey);
+    })
   ) {
     return undefined;
   }
