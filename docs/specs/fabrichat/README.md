@@ -343,7 +343,7 @@ from this design, as below.
   [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
   creator to send on, and shows each room offered to its own user with "Add to
-  my chats" and "Dismiss". An offer's key is `[from, receivedAt]` as JSON. And a room shows a viewer whose manager
+  my chats" and "Dismiss". An offer's key is the `id` its inbox chose when it received it. And a room shows a viewer whose manager
   doesn't list it a control that asks the manager to `accept` it, so
   whoever opens the room's link can add it to their chats.
 - **Request ids.** A rendered control sends no `requestId`, and the room and

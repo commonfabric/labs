@@ -122,8 +122,9 @@ in it needs to be `PerUser` or `PerSession`.
 - **`offers`** holds each room offered to this user through the private inbox
   their profile points at that they have neither accepted nor dismissed, and
   that isn't in `rooms` (see [offers](#offers)). Each is named by a `key`,
-  which `accept` and `dismissOffer` take, and says who offered it: `from`, the
-  sender the inbox recorded.
+  the id its inbox chose when it received it, which `accept` and
+  `dismissOffer` take, and says who offered it: `from`, the sender the inbox
+  recorded.
 
 ## Streams
 

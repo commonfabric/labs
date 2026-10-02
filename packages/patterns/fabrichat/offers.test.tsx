@@ -5,7 +5,8 @@
  * queued for her all the same. Alice's manager lists the offer, from Bob as
  * her inbox recorded him, and adding it to her chats accepts the room. An
  * offer of another kind is not listed, nor is one whose `entry` isn't a room
- * its sender created, and a dismissed offer is listed no more. Each person writes their own profile here, so its label names them,
+ * its sender created, and a dismissed offer is listed no more, though another
+ * that arrived with it is. Each person writes their own profile here, so its label names them,
  * as a Fabric profile's does.
  */
 import {
@@ -45,8 +46,8 @@ import {
   type ChatInbox,
   type ChatIndexEntry,
   type ChatManagerNotice,
+  type ChatManagerProfile,
   type ChatOfferHandling,
-  type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomLink,
 } from "./schemas.tsx";
@@ -72,7 +73,7 @@ const typed = (text: string) => ({ type: "click", target: { value: text } });
  */
 type OwnProfile = RepresentsCurrentUser<
   TrustedActionWrite<
-    ChatProfile,
+    ChatManagerProfile,
     typeof writeOwnProfile,
     typeof PROFILE_ACTION,
     typeof PROFILE_SURFACE
@@ -116,7 +117,7 @@ function entryOf(link: unknown): unknown {
 }
 
 /** A person's own profile, as the profile an event names. */
-function profileOf(profile: unknown): Cell<ChatProfile>;
+function profileOf(profile: unknown): Cell<ChatManagerProfile>;
 function profileOf(profile: unknown): unknown {
   return profile;
 }
@@ -241,6 +242,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       kind: "fabrichat-room",
       entry: notARoom.get().piece?.resolveAsCell(),
     });
+    // The same room twice, in the same second: two offers all the same.
+    inbox.receive.send({ kind: "fabrichat-room", entry: entryOf(own) });
     inbox.receive.send({ kind: "fabrichat-room", entry: entryOf(own) });
   });
 
@@ -281,22 +284,27 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { action: action_forget_own },
       { assertion: assert(() => rooms.get().length === 1) },
       { action: action_create_not_a_room },
-      // Of the three offers, only the room's is listed, until it is
-      // dismissed.
+      // Of the four offers, the room's two are listed, each until it is
+      // dismissed, though they arrived together from one sender.
       { action: action_receive_others },
       {
         assertion: assert(() =>
-          manager.offers.length === 1 &&
-          manager.offers[0]?.from === setup.aliceDid.get() &&
-          equals(manager.offers[0]?.room, held.get().room)
+          manager.offers.length === 2 &&
+          manager.offers.every((offer) =>
+            offer?.from === setup.aliceDid.get() &&
+            equals(offer?.room, held.get().room)
+          ) &&
+          manager.offers[0]?.key !== manager.offers[1]?.key
         ),
       },
+      { action: action(() => clickButton(manager[UI], "Dismiss")) },
+      { assertion: assert(() => manager.offers.length === 1) },
       { action: action(() => clickButton(manager[UI], "Dismiss")) },
       {
         assertion: assert(() =>
           manager.offers.length === 0 && rooms.get().length === 1 &&
           Object.values(handledOffers.get()).sort().join() ===
-            "accepted,dismissed"
+            "accepted,dismissed,dismissed"
         ),
       },
       { label: "alice-done" },

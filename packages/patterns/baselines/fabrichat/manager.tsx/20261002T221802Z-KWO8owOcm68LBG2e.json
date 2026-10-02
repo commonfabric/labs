@@ -352,19 +352,19 @@
             "description": "The DID of the principal who sent the offer, as the inbox recorded it.",
             "type": "string"
           },
+          "id": {
+            "description": "The offer's id, unique in its inbox, which the inbox chose when it\nreceived the offer.",
+            "type": "string"
+          },
           "kind": {
             "description": "What is offered; a room's offer is `fabrichat-room`.",
             "type": "string"
-          },
-          "receivedAt": {
-            "description": "When the inbox received the offer, in milliseconds since the epoch.",
-            "type": "number"
           }
         },
         "required": [
           "kind",
-          "from",
-          "receivedAt"
+          "id",
+          "from"
         ],
         "type": "object"
       },
@@ -438,7 +438,7 @@
         ],
         "type": "object"
       },
-      "ChatProfile": {
+      "ChatManagerProfile": {
         "properties": {
           "avatar": {
             "description": "The person's avatar: a URL or a glyph, if they have set one.",
@@ -749,7 +749,7 @@
             "type": "string"
           },
           "profile": {
-            "$ref": "#/$defs/ChatProfile",
+            "$ref": "#/$defs/ChatManagerProfile",
             "description": "A direct room's other member's profile, through whose private inbox a new\nroom is offered to them."
           },
           "requestId": {

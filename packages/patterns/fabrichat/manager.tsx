@@ -49,14 +49,14 @@ import {
   type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatManagerOffer,
+  type ChatManagerProfile,
   type ChatOfferHandling,
-  type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
   epochNsecFromMsec,
+  type ManagerProfileCell,
   nsecOf,
-  type ProfileCell,
 } from "./schemas.tsx";
 
 /** The manager's rooms, in the order it recorded them. */
@@ -113,7 +113,7 @@ export interface ManagerStreamEvent {
    * A direct room's other member's profile, through whose private inbox a new
    * room is offered to them.
    */
-  profile?: Cell<ChatProfile>;
+  profile?: Cell<ChatManagerProfile>;
 
   /** The DIDs of a new group room's other members. */
   members?: string[];
@@ -165,7 +165,7 @@ export interface ManagerActState {
   act: ManagerAct;
 
   /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
+  myProfile: ManagerProfileCell | undefined;
 
   /** The rooms this user belongs to. */
   rooms: RoomsCell;
@@ -266,13 +266,6 @@ const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
   );
 
 /**
- * The key an offer is named by: who sent it, and when the inbox received it,
- * which together pick out one offer in one inbox.
- */
-const offerKeyOf = (offer: ChatInboxOffer): string =>
-  JSON.stringify([offer.from, offer.receivedAt]);
-
-/**
  * A profile's inbox pointer, as the cell of the inbox it names. A profile
  * types the pointer as a link, and a link's target is reached as a cell.
  */
@@ -290,7 +283,7 @@ export interface OfferRoomEvent {
   room: Cell<ChatRoomLink>;
 
   /** The profiles of the members to offer it to. */
-  profiles: Cell<ChatProfile>[];
+  profiles: Cell<ChatManagerProfile>[];
 }
 
 /**
@@ -354,7 +347,7 @@ interface RoomOptions {
   joinableByLink?: boolean;
 
   /** The profiles of the other members to offer the room to. */
-  offerTo?: readonly Cell<ChatProfile>[];
+  offerTo?: readonly Cell<ChatManagerProfile>[];
 }
 
 /**
@@ -756,7 +749,7 @@ interface ShownEntry {
 export interface FabriChatManagerCoreInput
   extends Required<FabriChatManagerInput> {
   /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
+  myProfile: ManagerProfileCell | undefined;
 }
 
 /**
@@ -830,11 +823,12 @@ export const FabriChatManagerCore = pattern<
       return received.flatMap((offer): ChatManagerOffer[] => {
         if (
           offer?.kind !== CHAT_ROOM_OFFER_KIND || offer.entry === undefined ||
-          typeof offer.from !== "string"
+          typeof offer.id !== "string" || typeof offer.from !== "string"
         ) {
           return [];
         }
-        const key = offerKeyOf(offer);
+        // An offer is named by the id its inbox chose, which no sender can.
+        const key = offer.id;
         return handled[key] !== undefined || lists(rooms, offer.entry) ||
             principalOf(aboutRecordOf(offer.entry), "authored-by") !==
               offer.from
@@ -1029,7 +1023,7 @@ const FabriChatManager = pattern<
   FabriChatManagerInput,
   FabriChatManagerOutput
 >((input) => {
-  const profileWish = wish<ChatProfile>({ query: "#profile" });
+  const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
   const core = FabriChatManagerCore(
     {
       myProfile: profileWish.result,

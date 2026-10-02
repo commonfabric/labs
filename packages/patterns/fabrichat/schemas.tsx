@@ -101,7 +101,7 @@ export const compareTimes = (a: FabricEpochNsec, b: FabricEpochNsec): number =>
 //
 
 /**
- * The part of a person's profile FabriChat reads. It is a view of the person's
+ * The part of a person's profile a room reads. It is a view of the person's
  * shared profile, reached through a link, and never a copy.
  */
 export interface ChatProfile {
@@ -110,7 +110,17 @@ export interface ChatProfile {
 
   /** The person's avatar: a URL or a glyph, if they have set one. */
   avatar?: string;
+}
 
+/** A live link to a person's profile. */
+export type ProfileCell = Cell<ChatProfile>;
+
+/**
+ * The part of a person's profile a manager reads: what a room reads, and
+ * where to offer the person a room. Only a manager reads the inbox pointer,
+ * so the inbox's shape is part of no room's contract.
+ */
+export interface ChatManagerProfile extends ChatProfile {
   /**
    * Where the person's offers are delivered: a link to their private inbox,
    * absent while they have none.
@@ -118,8 +128,8 @@ export interface ChatProfile {
   inbox?: { piece?: Cell<ChatInbox> };
 }
 
-/** A live link to a person's profile. */
-export type ProfileCell = Cell<ChatProfile>;
+/** A live link to a person's profile, as a manager reads it. */
+export type ManagerProfileCell = Cell<ChatManagerProfile>;
 
 //
 // Room records
@@ -432,11 +442,14 @@ export interface ChatInboxOffer {
   /** The piece offered, if the sender named one. */
   entry?: Cell<ChatRoomLink>;
 
+  /**
+   * The offer's id, unique in its inbox, which the inbox chose when it
+   * received the offer.
+   */
+  id: string;
+
   /** The DID of the principal who sent the offer, as the inbox recorded it. */
   from: string;
-
-  /** When the inbox received the offer, in milliseconds since the epoch. */
-  receivedAt: number;
 }
 
 /**
