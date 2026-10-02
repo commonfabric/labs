@@ -246,8 +246,10 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       // decoding something the bytes do not say.
       //
       // TODO(danfuzz): Decode such a record, the format letting a record
-      // carry any key, once the copy loops no longer rebuild records by
-      // assignment. The cases `record with key __proto__` and
+      // carry any key, once every boundary preserves both names: the copy
+      // loops rebuild records by assignment, which loses `__proto__`, and
+      // other boundaries refuse or drop `constructor`, which assignment
+      // copies faithfully. The cases `record with key __proto__` and
       // `record with key constructor` in
       // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
       if (isUnsafeObjectKey(key)) {

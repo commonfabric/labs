@@ -319,7 +319,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
   {
     name: "record naming a key twice",
-    section: SECTION_KEY_ORDER,
+    section: SECTION_PREFIX,
     text: 'fvj1:{"a":1,"a":2}',
     divergence: "A record naming one key twice is refused. This " +
       "implementation keeps the last.",

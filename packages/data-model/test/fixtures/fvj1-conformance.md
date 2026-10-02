@@ -28,11 +28,10 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
   and `malformed` for any other form the format does not allow. The spec settles
   all three alike, so a decoder need only refuse; the kind says why.
 - `divergence`: present where this package falls short of the format, as the
-  spec states it or as the format's owner has ruled. The `encode` and `decode`
-  beside it are then the format's outcomes, computed by the generator rather
-  than written by hand, and `divergence.encode` and `divergence.decode` are this
-  package's, given only where they differ. `divergence.note` says what the
-  format requires.
+  spec states it. The `encode` and `decode` beside it are then the format's
+  outcomes, computed by the generator rather than written by hand, and
+  `divergence.encode` and `divergence.decode` are this package's, given only
+  where they differ. `divergence.note` says what the format requires.
 - `unspecified`: present where the spec does not settle the case. The outcome
   recorded is this package's, and the note says what is open. An implementation
   may differ from it without failing to conform.
