@@ -271,8 +271,9 @@ describe("CFCellLink", () => {
      * A link whose target the test moves with `publish()`, a promise settled
      * when something first subscribes to it, and a count of the subscriptions
      * taken on it and released. The link is held by the cell `holderId`. Each
-     * resolution waits for `resolution`, and lands on `chainEnd` where the
-     * link's target is itself a link.
+     * resolution waits for `resolution`, lands on `chainEnd` where the link's
+     * target is itself a link, and runs `afterResolve` once it has read where
+     * it lands.
      */
     function retargetableLink(
       initialTarget: CellHandle,
@@ -280,10 +281,12 @@ describe("CFCellLink", () => {
         holderId = "of:fid1:row-holder",
         resolution = Promise.resolve(),
         chainEnd,
+        afterResolve = () => {},
       }: {
         holderId?: string;
         resolution?: Promise<void>;
         chainEnd?: CellHandle;
+        afterResolve?: () => void;
       } = {},
     ) {
       const link = createMockCellHandle({}, {
@@ -296,7 +299,12 @@ describe("CFCellLink", () => {
       const subscribed = deferred<void>();
       const counts = { subscribed: 0, unsubscribed: 0 };
       (link as unknown as { resolveAsCell(): Promise<CellHandle> })
-        .resolveAsCell = () => resolution.then(() => chainEnd ?? currentTarget);
+        .resolveAsCell = () =>
+          resolution.then(() => {
+            const landed = chainEnd ?? currentTarget;
+            afterResolve();
+            return landed;
+          });
       (link as unknown as {
         asSchema(): {
           sync(): Promise<CellHandle>;
@@ -467,6 +475,36 @@ describe("CFCellLink", () => {
         console.error = logError;
       }
       expect(replaced.counts).toEqual({ subscribed: 1, unsubscribed: 1 });
+    });
+
+    it("navigates to a target the link moved to between resolving and subscribing", async () => {
+      let moved = false;
+      const view = retargetableLink(roomCell("of:fid1:first"), {
+        afterResolve: () => {
+          if (moved) return;
+          moved = true;
+          view.publish(roomCell("of:fid1:second"));
+        },
+      });
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = view.link;
+      await element._resolveCell();
+
+      const seen = navigations(() =>
+        element._handleClick({ stopPropagation() {} })
+      );
+      expect(seen).toEqual(["of:fid1:second"]);
+    });
+
+    it("takes no subscription when it resolves while disconnected", async () => {
+      const view = retargetableLink(roomCell("of:fid1:first"));
+      const element = new CFCellLink() as any;
+      markConnected(element, false);
+      element.cell = view.link;
+      await element._resolveCell();
+
+      expect(view.counts.subscribed).toBe(0);
     });
 
     it("takes no subscription when it disconnects while resolving", async () => {

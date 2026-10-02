@@ -27,19 +27,6 @@ import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 
 /**
- * Returns the cell a pill shows, given its link's current `target` and the
- * cell `resolved` at the end of the link's chain. A link watch reports the
- * link's first hop, which is itself a link wherever links chain;
- * `resolveAsCell()` follows the chain to its end.
- */
-function chainEnd(
-  target: CellHandle | undefined,
-  resolved: CellHandle,
-): CellHandle | undefined {
-  return target === undefined ? undefined : resolved;
-}
-
-/**
  * CFCellLink - Renders a link or cell as a clickable, draggable pill
  *
  * Every cell link is a drag source by default. Set `static` to suppress
@@ -124,6 +111,8 @@ export class CFCellLink extends BaseElement {
    * navigates to where the link points now.
    */
   #linkTarget = new LinkTargetWatch({
+    // A detached element follows nothing; reconnecting resolves again.
+    isCurrent: () => this.isConnected,
     // Resolving again reads the element's current input, so a watch left on
     // a cell it has since replaced cannot install that cell's target, and a
     // resolution still in flight is dropped for the newer one.
@@ -222,11 +211,8 @@ export class CFCellLink extends BaseElement {
     if (cell) {
       this._prepareSubscriptionTarget(this._cellKey(cell));
       try {
-        const resolvedCell = await cell.resolveAsCell();
-        if (generation !== this._resolveCellGeneration) return;
-        const target = await this.#linkTarget.watch(cell, resolvedCell);
-        if (generation !== this._resolveCellGeneration) return;
-        this._setResolvedCell(chainEnd(target, resolvedCell));
+        const followed = await this.#follow(cell, generation);
+        if (followed) this._setResolvedCell(followed.cell);
       } catch (e) {
         if (generation !== this._resolveCellGeneration) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -252,11 +238,8 @@ export class CFCellLink extends BaseElement {
         }
         const linkedCell = runtime.getCellFromRef(parsedLink as CellRef);
         this._prepareSubscriptionTarget(this._cellKey(linkedCell));
-        const resolvedCell = await linkedCell.resolveAsCell();
-        if (generation !== this._resolveCellGeneration) return;
-        const target = await this.#linkTarget.watch(linkedCell, resolvedCell);
-        if (generation !== this._resolveCellGeneration) return;
-        this._setResolvedCell(chainEnd(target, resolvedCell));
+        const followed = await this.#follow(linkedCell, generation);
+        if (followed) this._setResolvedCell(followed.cell);
       } catch (e) {
         if (generation !== this._resolveCellGeneration) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -273,6 +256,32 @@ export class CFCellLink extends BaseElement {
       this._prepareSubscriptionTarget(undefined);
       this._setResolvedCell(undefined);
     }
+  }
+
+  /**
+   * Helper for `_resolveCell()`, which resolves `source`, follows its link,
+   * and returns the cell to show: `undefined` where the link names nothing
+   * readable. Returns `undefined` in place of the result once a later
+   * resolution or a disconnect supersedes the one numbered `generation`.
+   */
+  async #follow(
+    source: CellHandle,
+    generation: number,
+  ): Promise<{ cell: CellHandle | undefined } | undefined> {
+    const superseded = () => generation !== this._resolveCellGeneration;
+    let resolved = await source.resolveAsCell();
+    if (superseded()) return undefined;
+    const target = await this.#linkTarget.watch(source, resolved);
+    if (superseded()) return undefined;
+    if (target === undefined) return { cell: undefined };
+    if (!target.equals(resolved)) {
+      // The watch reports every move from here on. A first hop other than the
+      // first resolution means the link moved before the watch began, or
+      // leads through further links, so resolving again finds where it ends.
+      resolved = await source.resolveAsCell();
+      if (superseded()) return undefined;
+    }
+    return { cell: resolved };
   }
 
   private _updateSubscription() {
