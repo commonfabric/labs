@@ -30,9 +30,11 @@ if (
   Deno.env.get("ROUTER_DISPOSABLE_EXERCISE") !== "yes"
 ) throw new Error("Set MEMORY_ROUTER_BINARY on disposable Linux");
 const systemd = Deno.env.get("ROUTER_SYSTEMD_EXERCISE") === "yes";
+// Under systemd the units have private /tmp, and the listener unit sees an
+// empty /run, so the fixture files live where every unit can read them.
 const root = Deno.makeTempDirSync({
   prefix: "memory-router-exercise-",
-  ...(systemd ? { dir: "/run" } : {}),
+  ...(systemd ? { dir: "/var/lib" } : {}),
 });
 Deno.chmodSync(root, 0o755);
 const pause = (ms: number) =>
@@ -624,24 +626,26 @@ function exited(error: unknown) {
     (error instanceof Error &&
       error.message.startsWith("No such process (os error 3):"));
 }
-/** Resident KiB of the router process serving `role`. */
-function roleRssKb(role: string) {
+/** PID of the router process serving `role`. */
+function rolePid(role: string) {
   for (const entry of Deno.readDirSync("/proc")) {
     if (!/^\d+$/.test(entry.name)) continue;
     try {
-      const path = `/proc/${entry.name}`;
-      if (Deno.readTextFileSync(`${path}/cmdline`).split("\0")[1] !== role) {
-        continue;
-      }
-      return Number(
-        Deno.readTextFileSync(`${path}/status`).match(/^VmRSS:\s+(\d+)/m)
-          ?.[1],
-      );
+      const cmdline = Deno.readTextFileSync(`/proc/${entry.name}/cmdline`);
+      if (cmdline.split("\0")[1] === role) return Number(entry.name);
     } catch (error) {
       if (!exited(error)) throw error;
     }
   }
   throw new Error(`no ${role} process`);
+}
+/** Resident KiB of the router process serving `role`. */
+function roleRssKb(role: string) {
+  return Number(
+    Deno.readTextFileSync(`/proc/${rolePid(role)}/status`).match(
+      /^VmRSS:\s+(\d+)/m,
+    )?.[1],
+  );
 }
 const agentRssKb = () => roleRssKb("link-agent") + roleRssKb("directory");
 try {
@@ -708,7 +712,70 @@ try {
     pass(
       "actual systemd role units, activation descriptor custody and encrypted credentials",
     );
+    // The spawner keeps UID 0, and systemd and D-Bus authorize a UID 0 caller
+    // with no capabilities as root. From the spawner's mount namespace,
+    // systemd-run must find no socket to ask; the namespace itself is entered,
+    // since the agent sockets are visible there.
+    const inSpawnerMounts = (...args: string[]) =>
+      new Deno.Command("nsenter", {
+        args: ["-t", String(rolePid("spawner")), "-m", ...args],
+        stdout: "null",
+        stderr: "null",
+      }).output();
+    assert((await inSpawnerMounts("test", "-d", "/run/memory-router")).success);
+    assert(
+      !(await inSpawnerMounts(
+        "systemd-run",
+        "--quiet",
+        "--unit=memory-router-escalation-probe",
+        "/bin/true",
+      )).success,
+      "the spawner's mount namespace can start systemd units",
+    );
+    pass("the listener unit cannot ask systemd or D-Bus to run anything");
   }
+  // A process with an agent's UID and GID, which a compromised spawner could
+  // become without its filter, must not read that agent's memory or
+  // environment. /proc/PID/environ needs only the same IDs and a dumpable
+  // target, so this does not depend on Yama's ptrace_scope.
+  for (const role of ["key-agent", "link-agent", "directory"]) {
+    const pid = rolePid(role);
+    const status = Deno.readTextFileSync(`/proc/${pid}/status`);
+    const id = (field: string) =>
+      Number(status.match(new RegExp(`^${field}:\\s+(\\d+)`, "m"))?.[1]);
+    const readAs = (path: string) =>
+      new Deno.Command("setpriv", {
+        args: [
+          `--reuid=${id("Uid")}`,
+          `--regid=${id("Gid")}`,
+          "--clear-groups",
+          "head",
+          "-c",
+          "1",
+          path,
+        ],
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+    // The same probe reads its own environment, so a refusal below comes
+    // from the agent's protection, not a broken probe.
+    assert((await readAs("/proc/self/environ")).success, `${role} probe`);
+    const read = await readAs(`/proc/${pid}/environ`);
+    assert(
+      !read.success &&
+        new TextDecoder().decode(read.stderr).includes("Permission denied"),
+      `${role} is readable by UID ${id("Uid")}`,
+    );
+  }
+  // The spawner is forked before the listener installs its own filter, so
+  // their filter counts match only if the spawner installs one too. systemd
+  // adds filters to both, so `Seccomp: 2` alone would not show it.
+  const filters = (role: string) =>
+    Deno.readTextFileSync(`/proc/${rolePid(role)}/status`).match(
+      /^Seccomp_filters:\s+(\d+)/m,
+    )?.[1];
+  assertEquals(filters("spawner"), filters("listener"));
+  pass("agents are non-dumpable and the spawner runs under a syscall filter");
   const first = await client.request({
     type: "session.open",
     space: spaces[0],
