@@ -82,13 +82,20 @@ retaining their queue budget until it ends.
 
 The durable ledger exclusively locks a separate inode, fsyncs authority changes
 before acknowledging them and fsyncs the parent directory on creation or atomic
-compaction. Each principal/challenge and exact client digest binds to one
+compaction. A link epoch cannot be reused while it is recorded: while its link
+lives, for 3,780 seconds after the link closes (the longest lease plus the
+challenge lifetime and clock skew), and while any unexpired claim names it.
+Links do not survive a restart, so a restart retires every live epoch. After
+that period every proof bound to the epoch has expired, so forgetting it frees
+the 1,024-epoch bound without reviving authority.
+
+Each principal/challenge and exact client digest binds to one
 router, deployment, epoch and context. Exact repeats within the same active
 context are idempotent. Re-signed router evidence cannot move them to another
 context or epoch. Release tombstones prevent replay from reinstating new-open
 authority; a fresh client signature can reauthorize. Closed contexts cannot
 reopen under the same link ID, and their proofs are tombstoned through expiry.
-Epoch reuse and key revocation remain permanently denied after toolshed restart.
+Key revocation remains permanently denied after toolshed restart.
 
 Release leaves existing sessions on their original lease. Renewal with a fresh
 challenge extends current principal sessions; replaying an old statement cannot

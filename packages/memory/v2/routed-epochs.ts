@@ -17,13 +17,22 @@ type Claim = {
 };
 const MAX_BYTES = 32 * 1024 * 1024;
 const MAX_CLAIMS = 8192;
+const MAX_EPOCHS = 1024;
+/**
+ * How long a closed link's epoch stays recorded: the longest statement lease
+ * (one hour) plus the challenge lifetime and positive clock skew. Every proof
+ * bound to the epoch has expired by then, so forgetting it cannot revive one,
+ * and a router that relinks after toolshed restarts never exhausts its bound.
+ */
+const EPOCH_RETENTION_SECONDS = 3600 + 60 + 120;
 
 /** Exclusive toolshed-local ledger; every authority change is fsynced first. */
 export class RoutedEpochStore {
   #file!: Deno.FsFile;
   #lock: Deno.FsFile;
   #path: string;
-  #epochs = new Map<string, Set<string>>();
+  /** Router -> epoch -> when its link closed; undefined while it is live. */
+  #epochs = new Map<string, Map<string, number | undefined>>();
   #revoked = new Set<string>();
   #claims = new Map<string, Claim>();
   #closed = false;
@@ -56,7 +65,19 @@ export class RoutedEpochStore {
             record.length === 3 && typeof record[2] === "string" &&
               /^[0-9a-f]{32}$/.test(record[2]),
           );
-          this.#remember(record[1], record[2]);
+          // The bound applies after loading, once retired epochs are dropped.
+          // A repeated line is an epoch consumed again after it was forgotten;
+          // compaction has not yet removed its earlier lines.
+          const known = this.#epochs.get(record[1]);
+          if (known?.has(record[2])) known.set(record[2], undefined);
+          else this.#remember(record[1], record[2], false);
+        } else if (record[0] === "retire") {
+          requireRouted(
+            record.length === 4 && typeof record[2] === "string" &&
+              Number.isSafeInteger(record[3]) && record[3] > 0 &&
+              this.#epochs.get(record[1])?.has(record[2]),
+          );
+          this.#epochs.get(record[1])!.set(record[2], record[3]);
         } else if (record[0] === "revoke") {
           requireRouted(record.length === 3 && record[2] === "permanent");
           this.#revoked.add(record[1]);
@@ -111,6 +132,18 @@ export class RoutedEpochStore {
         }
       }
       requireRouted(this.#claims.size <= MAX_CLAIMS);
+      // No link survives a restart: every epoch still marked live closed now.
+      const loaded = Math.floor(Date.now() / 1000);
+      for (const epochs of this.#epochs.values()) {
+        for (const [epoch, retired] of epochs) {
+          if (retired === undefined) epochs.set(epoch, loaded);
+        }
+      }
+      this.#forget(loaded);
+      requireRouted(
+        this.#epochs.size <= 16 &&
+          [...this.#epochs.values()].every((e) => e.size <= MAX_EPOCHS),
+      );
     } catch (error) {
       this.#file?.close();
       this.#lock.close();
@@ -155,15 +188,35 @@ export class RoutedEpochStore {
       c.released,
     ];
   }
-  #remember(router: string, epoch: string): void {
+  #remember(router: string, epoch: string, bounded = true): void {
     let epochs = this.#epochs.get(router);
     if (epochs === undefined) {
-      requireRouted(this.#epochs.size < 16);
-      epochs = new Set();
+      requireRouted(!bounded || this.#epochs.size < 16);
+      epochs = new Map();
       this.#epochs.set(router, epochs);
     }
-    requireRouted(!epochs.has(epoch) && epochs.size < 1024);
-    epochs.add(epoch);
+    requireRouted(!epochs.has(epoch) && (!bounded || epochs.size < MAX_EPOCHS));
+    epochs.set(epoch, undefined);
+  }
+  /**
+   * Drops epochs whose link closed more than the retention period ago and
+   * that no unexpired claim names. The file keeps them until compaction.
+   */
+  #forget(now: number): void {
+    const named = new Set(
+      [...this.#claims.values()]
+        .filter((claim) => claim.exp > now)
+        .map((claim) => `${claim.router} ${claim.epoch}`),
+    );
+    for (const [router, epochs] of this.#epochs) {
+      for (const [epoch, retired] of epochs) {
+        if (
+          retired !== undefined && retired + EPOCH_RETENTION_SECONDS <= now &&
+          !named.has(`${router} ${epoch}`)
+        ) epochs.delete(epoch);
+      }
+      if (epochs.size === 0) this.#epochs.delete(router);
+    }
   }
   #write(file: Deno.FsFile, record: unknown[]): void {
     const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n`);
@@ -187,9 +240,13 @@ export class RoutedEpochStore {
         mode: 0o600,
       });
     try {
+      this.#forget(now);
       for (const [router, epochs] of this.#epochs) {
-        for (const epoch of epochs) {
+        for (const [epoch, retired] of epochs) {
           this.#write(file, ["epoch", router, epoch]);
+          if (retired !== undefined) {
+            this.#write(file, ["retire", router, epoch, retired]);
+          }
         }
       }
       for (const router of this.#revoked) {
@@ -218,18 +275,34 @@ export class RoutedEpochStore {
       throw error;
     }
   }
-  /** Permanently consumes each link epoch before acknowledging its handshake. */
-  consume(router: string, epoch: string): void {
+  /**
+   * Consumes a link epoch before acknowledging its handshake. It cannot be
+   * reused while recorded: while its link lives, then for the retention
+   * period after `retire`, and while any unexpired claim names it.
+   */
+  consume(
+    router: string,
+    epoch: string,
+    now = Math.floor(Date.now() / 1000),
+  ): void {
     requireRouted(!this.revoked(router));
+    this.#forget(now);
     const held = this.#epochs.get(router);
     requireRouted(
-      !held?.has(epoch) && (held?.size ?? 0) < 1024 &&
+      !held?.has(epoch) && (held?.size ?? 0) < MAX_EPOCHS &&
         (held !== undefined || this.#epochs.size < 16),
     );
     // Compaction must see only previously persisted epochs. A pending epoch
     // enters memory after its append/fsync, so it is serialized exactly once.
-    this.#append(["epoch", router, epoch]);
+    this.#append(["epoch", router, epoch], now);
     this.#remember(router, epoch);
+  }
+  /** Records that an epoch's link closed; its retention period starts now. */
+  retire(router: string, epoch: string, now: number): void {
+    const epochs = this.#epochs.get(router);
+    if (epochs?.has(epoch) !== true || epochs.get(epoch) !== undefined) return;
+    this.#append(["retire", router, epoch, now], now);
+    epochs.set(epoch, now);
   }
   /** Claims exact client bytes for one context; re-attestation cannot move them. */
   claim(input: Omit<Claim, "released">, now: number): void {

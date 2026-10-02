@@ -241,6 +241,15 @@ export class RoutedMemoryHost {
     for (const context of [...link.contexts.values()]) {
       this.#closeContext(link, context);
     }
+    try {
+      this.#options.epochs.retire(
+        link.router,
+        routedHex(link.epoch),
+        this.#now(),
+      );
+    } catch {
+      // The ledger latches unhealthy, so later admissions fail closed.
+    }
     safeClose(link.socket);
     if (this.#links.get(link.router) === link) this.#links.delete(link.router);
   }
