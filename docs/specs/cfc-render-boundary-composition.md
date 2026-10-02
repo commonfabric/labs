@@ -91,48 +91,64 @@ own, each mounted from the cell's reference under the root ceiling, the way the
 shell mounts a piece opened by its address. What reaches the page through it
 passes the same confidentiality gates as opening the piece, the blocked
 placeholder included, with the exceptions listed below. Such a binding is a
-nested render root: the component read-contract registry lists it in
-`nestedRenderReadContracts` (`packages/runner/src/component-read-contract.ts`),
-with how the component reads the binding, and the reconciler decides the
-binding on those reads. For `cf-render` that is a read with
-`NestedRenderReferenceSchema` (`{ asCell: ["cell"] }`), which `cf-render` also
-uses to follow its cell. The read follows the reference's links to the document
-it lands on, consuming the label of every document they pass through and of the
-one they land on, and reads none of that document's contents, which are left to
-the nested render; a schema stored on a link along the way does not change it.
-A component qualifies for the registry when its own reads of the binding go no
-further than the document its reference lands on, and everything it shows from
-beyond it comes through a render mounted from the reference. The entry is
-reviewed like the component itself.
+nested render root. The component read contract
+(`packages/runner/src/component-read-contract.ts`) gives each bound property a
+`schema`, the read the component makes of it, and for a nested render root
+`renders`, the paths from the bound value to the references the component
+mounts a render from. A path is a list of steps, each a property name or `"*"`
+for every element of an array, and the empty path names the binding itself:
 
-A nested render root can instead name a list, from each element of which the
-component mounts a render. `cf-picker` reads its `items` binding with
-`pieceListSchema`, which reads each item as a reference, and hands each item's
-reference to a `cf-render` of its own. Its entry gives that schema and, as
-`elements`, the schema each element is read with, `NestedRenderReferenceSchema`.
-The reconciler decides such a binding on the read of the list and on a read of
-each element, decided as `cf-render`'s `cell` is. Each element is read at the
-slot holding it in the document the list's links land on, so a schema stored on
-a link to the list, which can declare its elements references, does not end the
-read at an element's own link. One refused element withholds the whole binding,
-which hands the component one handle to the whole list; the reconciler has no
-binding that hands over part of a list. A list that cannot be read, or does not
-resolve, withholds the binding as any read that cannot complete does, rather
-than counting as a list of no elements. A label the list's schema declares for
-its elements is fitted on the read of the list, and so decides wherever that
-read consumes no stored label, even for an element whose own document carries
+| Component and property | `renders` |
+| --- | --- |
+| `cf-render` `cell` | `[[]]` |
+| `cf-picker` `items` | `[["*"]]` |
+| `cf-map` `value` | `[["markers", "*", "popup"], ["circles", "*", "popup"]]` |
+
+The reconciler decides such a binding on the read the component makes of it,
+`schema` as `componentReadSchema()` resolves it against the schema the bound
+handle carries, and on a read of each reference at a path in `renders`, which
+is read as `cf-render` reads its cell, with `NestedRenderReferenceSchema`
+(`{ asCell: ["cell"] }`). That read follows the reference's links to the
+document it lands on, consuming the label of every document they pass through
+and of the one they land on, and reads none of that document's contents, which
+are left to the nested render; a schema stored on a link along the way does not
+change it. `cf-render` reads its own cell that way. `cf-picker` reads its list
+with `pieceListSchema`, each item a reference. `cf-map` reads its value under
+the schema its binding stores, so a value whose schema reads each popup as a
+reference is decided popup by popup, and a value read under `any` is decided on
+everything its popups reach.
+
+Each reference is read at the slot holding it in the document the links on the
+way resolve to, so a schema stored on one of those links, which can declare the
+reference a reference, does not end the read at the reference's own link. One
+refused reference withholds the whole binding, which hands the component one
+handle to the whole value; the reconciler has no binding that hands over part
+of one. A value that cannot be read, a link on the way that does not resolve,
+and a position on the way that the component's read holds as a reference each
+withhold the binding as any read that cannot complete does, rather than
+counting as a value with no references. A label the value's schema declares for
+its references is fitted on the read of the value, and so decides wherever that
+read consumes no stored label, even for a reference whose own document carries
 one.
 
-The exceptions hold for `cf-render` and for each item of a `cf-picker`:
+A component qualifies for `renders` when its own reads of the binding go no
+further than its `schema` and the documents its references land on, and
+everything it shows from beyond them comes through a render mounted from a
+reference. The entry is reviewed like the component itself. The replication
+walk reads a property by its `schema` and does not read the empty path, which
+is the nested render's to read.
+
+The exceptions hold for every reference a nested render root decides:
 
 - The binding is withheld while the ceiling refuses the reference: when the
   viewer may not see the entry holding it, when a document along its chain of
   links is refused, and when the piece's own document is refused, because
   resolving the reference reads that document's label, a conservative
   over-approximation (CFC §8.2.5). A label the slot's schema declares decides
-  only where the read consumed no stored label. A `cf-render` whose binding is
-  withheld shows nothing, as does a `cf-picker` whose binding is withheld,
-  where opening a refused piece shows the placeholder.
+  only where the read consumed no stored label. A `cf-render` or `cf-picker`
+  whose binding is withheld shows nothing, and a `cf-map` whose binding is
+  withheld shows no value, where opening a refused piece shows the
+  placeholder.
 - A nested render applies the root ceiling, and none of the declassification
   or text-integrity requirement of a boundary around the component. A
   boundary that only declassifies admits more than the root, so there the
@@ -145,10 +161,11 @@ The exceptions hold for `cf-render` and for each item of a `cf-picker`:
   the element's ceiling refuses shows nothing. That read fits confidentiality
   only: under an authorship boundary, a piece whose text carries no
   endorsement still binds, and its nested render shows that text.
-- `cf-render`'s `cell` and `cf-picker`'s `items` are also remote loads
-  (`REMOTE_LOAD_PROPS`), so the reads that decide the binding are fitted on
-  the fetch ceiling as well, and the nested render keeps what a caveated view
-  inside the piece would load from loading, as opening the piece does.
+- `cf-render`'s `cell`, `cf-picker`'s `items` and `cf-map`'s `value` are also
+  remote loads (`REMOTE_LOAD_PROPS`), so the reads that decide the binding are
+  fitted on the fetch ceiling as well, and the nested render keeps what a
+  caveated view inside the piece would load from loading, as opening the piece
+  does.
 - The component's own reads through the bound handle, such as the piece menu's
   Data panel, are answered without the ceiling, as for every binding.
 
