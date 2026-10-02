@@ -232,13 +232,6 @@ type SinkOptions = {
    * reached re-fires the sink. Off by default.
    */
   includeConsumedLabel?: boolean;
-
-  /**
-   * Read the value as a renderer mounts it; see
-   * `ValidateAndTransformOptions.renderRead`. Off by default.
-   * @internal
-   */
-  renderRead?: boolean;
 };
 
 /** The labels a sink's read consumed; see `SinkOptions.includeConsumedLabel`. */
@@ -766,17 +759,6 @@ declare module "@commonfabric/api" {
 
   interface ICreatable<C extends AnyBrandedCell<any>> {
     for(cause: unknown, allowIfSet?: boolean): C;
-  }
-
-  interface IReadable<T> {
-    /**
-     * Like the public `get()`, except that it also takes `renderRead`, which
-     * reads the value as a renderer mounts it; see
-     * `ValidateAndTransformOptions.renderRead`.
-     */
-    get(
-      options?: { traverseCells?: boolean; renderRead?: boolean },
-    ): Readonly<StripDefaultBrand<T>>;
   }
 }
 
@@ -1572,9 +1554,7 @@ export class CellImpl<T extends FabricValue>
     return marker === true;
   }
 
-  get(
-    options?: { traverseCells?: boolean; renderRead?: boolean },
-  ): Readonly<StripDefaultBrand<T>> {
+  get(options?: { traverseCells?: boolean }): Readonly<StripDefaultBrand<T>> {
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
 
     // Per-transaction read cache: within one ready transaction, repeatedly
@@ -1595,8 +1575,7 @@ export class CellImpl<T extends FabricValue>
       // invalidation is load-bearing: bypass the cache so a post-prepare read
       // still goes through readOrThrow() and invalidates the prepared digest.
       tx.getCfcState().prepare.status !== "prepared";
-    const variant = `${options?.traverseCells ?? false}|` +
-      `${options?.renderRead ?? false}|${this.#synced}`;
+    const variant = `${options?.traverseCells ?? false}|${this.#synced}`;
     const cacheKey = cacheable ? this.#viewRefHash() : undefined;
     if (cacheable) {
       const cached = tx.getCachedReadResult!(cacheKey!, variant);
@@ -2124,6 +2103,7 @@ export class CellImpl<T extends FabricValue>
           // intents: an event queued offline is an unacked write.
           this.#runtime.storageManager.trackPendingCommit(
             outcome as Promise<unknown>,
+            () => ({ kind: "event-intent", spaces: [space] }),
           );
           // The durable-ack coupling (verdict blocker, 2026-08-12): the
           // caller's settle callback must NEVER settle from the
@@ -4672,7 +4652,6 @@ function subscribeToReferencedDocs<T>(
       // nested sinks reuse the root query instead of opening one per cut point.
       const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
         synced: true,
-        renderRead: options.renderRead,
       });
       if (needsTraversal && newValue !== undefined && newValue !== null) {
         deepTraverse(newValue);

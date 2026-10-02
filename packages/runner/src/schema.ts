@@ -64,6 +64,7 @@ import {
   createQueryResultProxy,
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
+import { getReaderSchemaPrecedenceConfig } from "./reader-schema-precedence-config.ts";
 import type { Runtime } from "./runtime.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
 import { markIfcBearingLinkCrossing, schemaHasIfc } from "./schema-ifc.ts";
@@ -1073,6 +1074,49 @@ function readValueAtResolvedLink(
   return typeof parent === "string" ? parent.length : value;
 }
 
+/**
+ * Helper for `validateAndTransform()`, which returns the schema a read
+ * addressed at a slot holding a link projects the link's target by. That
+ * crossing is resolved by the same reader precedence as every hop the
+ * traversal crosses (`combineSchemaForLink()`): a shaped reader stands, and an
+ * agnostic one — `true`, `{}`, or a flag-only wrapper — adopts the stored
+ * schema. `docs/specs/link-schema-precedence.md`, "The read entry", states the
+ * rule.
+ *
+ * `readerSchema` is the schema the read carried in, `travelingSchema` what it
+ * resolved to across any write redirect, and `storedSchema` what value
+ * resolution hands back: the nearest stored schema that constrains, or the
+ * traveling schema where none does.
+ *
+ * Four cases keep the stored schema whatever the reader declared: a stored
+ * `false`, which selects nothing; a stored `unknown`, which holds the read to
+ * a reference; a reader typed `unknown`, which adopts what the stored schema
+ * says the target is; and the strict rollback of `readerSchemaPrecedence`,
+ * under which the entry follows link resolution's rule.
+ */
+function entrySelectorSchema(
+  readerSchema: JSONSchema | undefined,
+  travelingSchema: JSONSchema,
+  storedSchema: JSONSchema | undefined,
+): JSONSchema {
+  if (storedSchema === undefined) return travelingSchema;
+  const stored = resolveSchema(storedSchema);
+  const isUnknown = (schema: JSONSchema | undefined) =>
+    isObjectOrArray(schema) && schema.type === "unknown";
+  if (
+    !getReaderSchemaPrecedenceConfig() ||
+    readerSchema === undefined ||
+    ContextualFlowControl.isTrueSchema(readerSchema) ||
+    isUnknown(readerSchema) ||
+    stored === undefined ||
+    ContextualFlowControl.isFalseSchema(stored) ||
+    isUnknown(stored)
+  ) {
+    return storedSchema;
+  }
+  return combineSchemaForLink(travelingSchema, storedSchema);
+}
+
 export interface ValidateAndTransformOptions {
   /** When true, also read into each Cell created for asCell fields to capture dependencies */
   traverseCells?: boolean;
@@ -1093,16 +1137,6 @@ export interface ValidateAndTransformOptions {
    * stored CFC metadata probe — does not run again per property.
    */
   viewChild?: boolean;
-
-  /**
-   * Set by a render read, which mounts a value under the renderer's own
-   * schema. At the read's entry, the stored schema of a link the read crosses
-   * combines with the reader's under reader precedence, as it does at a hop,
-   * rather than replacing it: a link typed by a narrow view of a piece still
-   * renders the piece's `[UI]`. See "The read entry" in
-   * `docs/specs/link-schema-precedence.md`.
-   */
-  renderRead?: boolean;
 }
 
 export function validateAndTransform(
@@ -1411,14 +1445,11 @@ export function validateAndTransform(
       ? asCellCompoundSchemaForValue(effectiveSchema, value)
       : undefined;
     // If we have a ref with a schema, use that; otherwise, use the link's
-    // schema. A render read keeps its own schema across the entry crossing,
-    // combining the way a hop does.
-    const entrySchema = options?.renderRead === true
-      ? combineOptionalSchema(effectiveSchema, resolvedValueLink.schema)
-      : resolvedValueLink.schema;
+    // schema. An eager read then resolves that crossing by reader precedence
+    // below, and a view combines the two its own way.
     selector = {
       path: doc.address.path,
-      schema: valueSelectedSchema ?? entrySchema ?? link.schema!,
+      schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
     };
     if (tx.isLazyMaterialize()) {
       // Crossing the last link is a hop the eager traverser combines schemas
@@ -1525,6 +1556,12 @@ export function validateAndTransform(
         );
       }
       selector.schema = viewSchema;
+    } else if (valueSelectedSchema === undefined) {
+      selector.schema = entrySelectorSchema(
+        resolvedSchema,
+        link.schema!,
+        resolvedValueLink.schema,
+      );
     }
   }
 

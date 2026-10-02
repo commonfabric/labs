@@ -40,6 +40,10 @@ import type {
   HarnessModelTurnResult,
 } from "./client.ts";
 import {
+  assertOpenAIReasoningEffortSupported,
+  supportedOpenAIReasoningEfforts,
+} from "./openai-reasoning.ts";
+import {
   normalizeOpenAIUsage,
   withEstimatedOpenAIModelUsageCost,
 } from "./usage.ts";
@@ -225,15 +229,7 @@ const assertSupportedToolCombination = (
   }
 };
 
-const GPT_5_6_REASONING_EFFORTS = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
+/** Requires Responses routing and a supported model effort before dispatch. */
 const assertReasoningEffortSupported = (
   model: string,
   nativeModelToolIds: readonly HarnessNativeModelToolId[],
@@ -245,16 +241,7 @@ const assertReasoningEffortSupported = (
       `reasoning effort ${effort} requires a model routed through the Responses API; received ${model}`,
     );
   }
-  if (
-    model.startsWith("gpt-5.6") &&
-    !GPT_5_6_REASONING_EFFORTS.includes(
-      effort as typeof GPT_5_6_REASONING_EFFORTS[number],
-    )
-  ) {
-    throw new Error(
-      `reasoning effort ${effort} is not supported by ${model}`,
-    );
-  }
+  assertOpenAIReasoningEffortSupported(model, effort);
 };
 
 /**
@@ -607,9 +594,7 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
         inputModalities: item.capabilities?.images === true
           ? ["text", "image"]
           : ["text"],
-        supportedReasoningEfforts: item.id.startsWith("gpt-5.6")
-          ? GPT_5_6_REASONING_EFFORTS
-          : [],
+        supportedReasoningEfforts: supportedOpenAIReasoningEfforts(item.id),
         supportsParallelToolCalls: false,
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

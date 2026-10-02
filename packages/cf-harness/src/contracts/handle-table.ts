@@ -219,9 +219,15 @@ export interface HarnessHandleEntry {
 }
 
 /**
- * The session-local handle table. `salt` is the owning run's id, fixed at
- * creation, so token derivation is deterministic within a run and disjoint
- * across runs. The version stays `1` across the optional
+ * The session-local handle table. `salt` is the id of the run that created
+ * the table, fixed for the table's life: every token minted into it derives
+ * from that salt, so derivation is deterministic within the table and
+ * disjoint across tables. A table outlives the run that created it where a
+ * session carries it on — an interactive session's next turn is a fresh run
+ * that starts from the table the session kept, still under its first salt —
+ * so the salt names the table's origin, not the run that holds it now. Two
+ * tables merge only when their salts agree, which is what says both grew
+ * from one table. The version stays `1` across the optional
  * {@link HarnessHandleEntry.schema}: an entry without one is well-formed, so
  * a table persisted before schemas were captured loads unchanged. The same
  * holds for {@link HarnessHandleTable.referents}.

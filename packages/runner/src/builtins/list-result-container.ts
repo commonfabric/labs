@@ -1,6 +1,6 @@
 import type { Cell } from "../cell.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type {
   ListSetupRollback,
   SetupRecord,
@@ -8,9 +8,8 @@ import type {
 
 /**
  * Issue the writes that make a list coordinator's result container reachable:
- * the container's `result` meta, the link the coordinator hands to its output
- * binding, and the container's `pattern` meta when the parent carries a pattern
- * to name — a parent with none leaves nothing to write and nothing owed.
+ * the container's `result` meta and the link the coordinator hands to its
+ * output binding.
  *
  * A coordinator mints a container and then keeps it in memory across reconciles,
  * so these writes are setup in the same sense an element's pattern run is: the
@@ -30,7 +29,6 @@ export function issueResultContainerSetup(
   setup: SetupRecord,
 ): void {
   setResultCell(container, parentCell);
-  setPatternCell(container, parentCell.key("pattern"));
   sendResult(tx, container);
   rollback.setupIssued(setup);
 }

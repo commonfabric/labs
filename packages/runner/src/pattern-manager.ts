@@ -2565,15 +2565,15 @@ export class PatternManager {
     const entry = sourceDocs.get(entryIdentity);
     if (entry === undefined) return undefined;
     const moduleDelegations = moduleDelegationsFromDocs(sourceDocs);
-    const sourceRoots = sourcePackagePaths(
-      entry,
-      sourceDocs,
-      SOURCE_ROOT_SPECIFIER,
+    const sourcePackages = [...sourceDocs.values()].map((doc) => ({
+      entryPath: doc.filename,
+      rootPaths: sourcePackagePaths(doc, sourceDocs, SOURCE_ROOT_SPECIFIER),
+      dataPaths: sourcePackagePaths(doc, sourceDocs, DATA_FILE_SPECIFIER),
+    })).filter((sourcePackage) =>
+      sourcePackage.rootPaths.length > 0 || sourcePackage.dataPaths.length > 0
     );
-    const dataFiles = sourcePackagePaths(
-      entry,
-      sourceDocs,
-      DATA_FILE_SPECIFIER,
+    const dataFiles = sourcePackages.flatMap((sourcePackage) =>
+      sourcePackage.dataPaths
     );
 
     const sourceFiles: Source[] = [...sourceDocs.values()].map((doc) => ({
@@ -2589,8 +2589,7 @@ export class PatternManager {
         {
           fabricImports: { space },
           ...(patternCoverage ? { patternCoverage } : {}),
-          ...(sourceRoots.length === 0 ? {} : { sourceRoots }),
-          ...(dataFiles.length === 0 ? {} : { dataFiles }),
+          sourcePackages,
         },
       );
       if (compiled.entryIdentity !== entryIdentity) {

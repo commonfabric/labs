@@ -299,7 +299,7 @@ Headless wish's shared resolver is limited to home-independent, space-scoped
 searches. Home-dependent wishes use the demanding transaction directly. The
 wish builder describes its actual `WishState` container, and internal derived
 cells retain declared user/session scope through child-path bindings. Scoped
-wish state also carries its owning result and pattern links for served demand.
+wish state also carries its owning result link for served demand.
 A final `PerUser<>` annotation alone is insufficient evidence of isolation;
 compiled and served regressions exercise the complete chain.
 
