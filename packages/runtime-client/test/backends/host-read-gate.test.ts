@@ -144,9 +144,6 @@ async function shelf() {
     { token: CREDENTIAL, account: "owner account" },
     [[["token"], [cfcAtom.resource("CredentialSecret")]], [[], [ownerOnly]]],
   );
-  const openPath = runtime.getCell(space, "importer-open-path", {
-    asCell: ["stream"],
-  });
   const sidebar = await write("importer-sidebar", {
     type: "vnode",
     name: "div",
@@ -155,7 +152,7 @@ async function shelf() {
   }, [[[], [ownerOnly]]]);
   const exportsOf = {
     [NAME]: "Importer",
-    openPath: link(openPath),
+    openPath: { $stream: true },
     sidebarUI: link(sidebar),
   };
   const importer = await write("importer", {
@@ -426,7 +423,12 @@ describe("HostReadGate", () => {
     // credential elsewhere in the piece does not refuse it.
     const openPathRead = {
       type: "object",
-      properties: { openPath: { asCell: ["stream"] } },
+      properties: {
+        openPath: {
+          type: "object",
+          properties: { $stream: { type: "boolean" } },
+        },
+      },
     } as const;
     const sidebarRead = {
       type: "object",
@@ -455,17 +457,24 @@ describe("HostReadGate", () => {
         const openPath = gate.read(docs[piece].asSchema(openPathRead));
         const sidebar = gate.read(docs[piece].asSchema(sidebarRead));
 
-        expect(openPath).toEqual({
-          value: {
-            openPath: expect.objectContaining({ "/": expect.anything() }),
-          },
-        });
+        expect(openPath).toEqual({ value: { openPath: { $stream: true } } });
         expect(sidebar).toEqual({
           value: { sidebarUI: expect.objectContaining({ name: "div" }) },
         });
         expect(holds([openPath, sidebar], CREDENTIAL)).toBe(false);
       });
     }
+
+    it("answers both reads of a piece that exports neither with neither", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, visitor);
+
+      for (const schema of [openPathRead, sidebarRead]) {
+        expect(gate.read(docs.publicPiece.asSchema(schema))).toEqual({
+          value: {},
+        });
+      }
+    });
 
     it("refuses a visitor the same reads of the owner's piece", async () => {
       await using docs = await shelf();
