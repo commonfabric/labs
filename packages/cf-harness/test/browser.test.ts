@@ -33,6 +33,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import {
+  browserTool,
   type BrowserToolErrorOutput,
   type BrowserToolInput,
   type BrowserToolSuccessOutput,
@@ -144,6 +145,40 @@ describe("browser", () => {
         .toBe("ref does not apply to the open action");
       expect(errorOf({ action: "press", key: "Enter", value: "x" }))
         .toBe("value does not apply to the press action");
+    });
+
+    it("refuses what only a browser host offers, naming the lease", () => {
+      const lease =
+        "needs a browser host, such as the Weaver; this run's browser is a Browser Access lease";
+
+      for (const action of ["back", "forward", "reload", "screenshot"]) {
+        expect(errorOf({ action })).toBe(`the ${action} action ${lease}`);
+      }
+      expect(errorOf({ action: "handoff", reason: "sign-in" })).toBe(
+        `the handoff action ${lease}`,
+      );
+      expect(errorOf({ action: "click", x: 10, y: 20 })).toBe(
+        `a click at a point ${lease}`,
+      );
+    });
+
+    it("offers a lease run the lease's actions and a host run the host's", () => {
+      const run = { cfcEnforcementMode: "observe" as const };
+      const actionsOf = (browserHost: boolean): unknown =>
+        browserTool.descriptorForRuntime?.(
+          new FakeSandboxRuntime().describe(),
+          { ...run, browserHost },
+        ).inputSchema;
+      const lease = JSON.stringify(actionsOf(false));
+      const host = JSON.stringify(actionsOf(true));
+
+      expect(lease).not.toContain('"handoff"');
+      expect(lease).not.toContain('"reason"');
+      expect(lease).toContain("cfh:a:");
+      expect(host).toContain('"handoff"');
+      expect(host).toContain('"reason"');
+      expect(host).toContain("cfh:v:");
+      expect(host).not.toContain('"ms"');
     });
 
     it("plans open for an http(s) URL only", () => {

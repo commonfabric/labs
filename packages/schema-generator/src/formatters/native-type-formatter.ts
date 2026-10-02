@@ -3,6 +3,7 @@ import type { MutableJSONSchema } from "@commonfabric/api";
 import { fabricPrimitiveClassesByName } from "@commonfabric/data-model/fabric-primitives";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
+import { declaresFabricPrimitiveBrand } from "../typescript/fabric-primitive-brand.ts";
 
 const NATIVE_TYPE_SCHEMAS: Record<string, MutableJSONSchema> = {
   // This schema is embedded in the code, so we can have simpler links.
@@ -132,7 +133,7 @@ export class NativeTypeFormatter implements TypeFormatter {
       return NativeTypeFormatter.#hasLibraryDeclaration(type, context);
     }
     if (NativeTypeFormatter.isFabricPrimitiveTypeName(typeName)) {
-      return NativeTypeFormatter.declaresFabricPrimitiveBrand(type);
+      return declaresFabricPrimitiveBrand(type);
     }
     return true;
   }
@@ -213,27 +214,6 @@ export class NativeTypeFormatter implements TypeFormatter {
     typeName: string | undefined,
   ): boolean {
     return typeName !== undefined && FABRIC_PRIMITIVE_TYPE_NAMES.has(typeName);
-  }
-
-  /**
-   * Whether the type carries the `FabricPrimitive` nominal brand (directly or
-   * by inheritance). This is what makes a type named e.g. `FabricBytes`
-   * actually BE the `FabricPrimitive` class rather than an unrelated user type
-   * that happens to share the name. Both this formatter's `supportsType` and
-   * named-type hoisting (`getNamedTypeKey`, `type-utils.ts`) classify by it,
-   * so an unbranded name-sharer keeps its structural schema AND its normal
-   * `$defs` hoisting.
-   *
-   * The brand is keyed by the `FABRIC_PRIMITIVE_BRAND` symbol, whose property
-   * TypeScript names `__@FABRIC_PRIMITIVE_BRAND@<id>`; the name of the
-   * constant is what identifies it, as with the other symbol-keyed markers.
-   */
-  public static declaresFabricPrimitiveBrand(type: ts.Type): boolean {
-    return type.getProperties().some((prop) =>
-      String(prop.escapedName as string).startsWith(
-        "__@FABRIC_PRIMITIVE_BRAND@",
-      )
-    );
   }
 
   /**

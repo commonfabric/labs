@@ -15,14 +15,12 @@ import { unwrapExpression } from "../utils/expression.ts";
 import {
   cloneKeyExpression,
   getCommonFabricKeyName,
-  isCommonFabricKeyExpression,
 } from "../utils/reactive-keys.ts";
 import {
   collectDestructureBindings,
-  createKeyCall,
+  createPathRead,
   type DefaultDestructureBinding,
   type DestructureBinding,
-  type PathSegment,
 } from "./destructuring-lowering.ts";
 import {
   createReactiveWrapperForExpression,
@@ -130,14 +128,6 @@ function calleeMethodName(call: ts.CallExpression): string | undefined {
   return undefined;
 }
 
-function isSelfPathSegment(
-  segment: PathSegment,
-  context: TransformationContext,
-): boolean {
-  return typeof segment !== "string" &&
-    isCommonFabricKeyExpression(segment, context, "SELF");
-}
-
 /** Carries the source-map range and inferred type to a semantic replacement. */
 function registerReplacement(
   replacement: ts.Node,
@@ -166,6 +156,28 @@ export function reportComputationError(
     type: "pattern-context:computation",
     message,
     node,
+  });
+}
+
+/**
+ * Reports a spread the pattern context cannot lower, at most once per spread.
+ * Two stages can report one spread: the closure stage, for a capture a
+ * reactive collection callback cannot write out (`captured-object-spread.ts`),
+ * and this stage's pattern-context check, when the operand is a tracked
+ * opaque value. Both report through here, under their own messages, and the
+ * earlier report stands. Only spread reports share the key, so any other
+ * computation error on the same range is still made.
+ */
+export function reportSpreadError(
+  context: TransformationContext,
+  spread: ts.Node,
+  message: string,
+): void {
+  context.reportDiagnosticOnce({
+    severity: "error",
+    type: "pattern-context:computation",
+    message,
+    node: spread,
   });
 }
 
@@ -292,7 +304,7 @@ function rewriteTrackedOpaquePatternBody(
   };
   const reportOnce = (
     node: ts.Node,
-    type: "computation" | "receiver-method",
+    type: "computation" | "spread" | "receiver-method",
     message: string,
   ): void => {
     const diagnosticNode = resolveDiagnosticNode(node);
@@ -306,6 +318,8 @@ function rewriteTrackedOpaquePatternBody(
     }
     if (type === "computation") {
       reportComputationError(context, diagnosticNode, message);
+    } else if (type === "spread") {
+      reportSpreadError(context, diagnosticNode, message);
     } else {
       reportReceiverMethodError(context, diagnosticNode, message);
     }
@@ -374,7 +388,7 @@ function rewriteTrackedOpaquePatternBody(
       return dataFlow;
     }
 
-    const expression = createKeyCall(
+    const expression = createPathRead(
       context.factory.createIdentifier(info.root),
       info.path,
       context.factory,
@@ -446,12 +460,13 @@ function rewriteTrackedOpaquePatternBody(
     expression: ts.Expression | undefined,
     diagnosticNode: ts.Node,
     message: string,
+    type: "computation" | "spread" = "computation",
   ): void => {
     if (!expression || !getTrackedOpaqueAccessInfo(expression)) {
       return;
     }
 
-    reportOnce(diagnosticNode, "computation", message);
+    reportOnce(diagnosticNode, type, message);
   };
 
   const registerOpaqueBindingState = (
@@ -685,7 +700,7 @@ function rewriteTrackedOpaquePatternBody(
         } else if (binding.path.length === 0) {
           loweredInitializer = rootIdentifier;
         } else {
-          loweredInitializer = createKeyCall(
+          loweredInitializer = createPathRead(
             rootIdentifier,
             binding.path,
             context.factory,
@@ -821,8 +836,10 @@ function rewriteTrackedOpaquePatternBody(
       // dynamic-wrap heuristic: when the root is a known opaque binding and
       // the access argument resolves to a static path segment (including
       // well-known CF computed keys like UI/NAME/SELF/FS), the canonical
-      // form is `root.key(...)` in-place, regardless of whether the
-      // expression lives inside a JSX slot. Falling into
+      // form is an in-place read, regardless of whether the expression lives
+      // inside a JSX slot: `root.key(...)`, or `root[SELF]` and then
+      // `root[SELF].key(...)` for a path that starts with `SELF` (see
+      // `createPathRead()`). Falling into
       // `maybeWrapDynamicJsxAccess` here would produce an unnecessary
       // lift-applied wrapper around what is already a reactive expression.
       const hasTrackedStaticAccess = !!info?.root && !info.dynamic;
@@ -871,7 +888,7 @@ function rewriteTrackedOpaquePatternBody(
           }
 
           const receiverPath = info.path.slice(0, -1);
-          const rewrittenReceiver = createKeyCall(
+          const rewrittenReceiver = createPathRead(
             context.factory.createIdentifier(info.root),
             receiverPath,
             context.factory,
@@ -902,17 +919,8 @@ function rewriteTrackedOpaquePatternBody(
         }
       }
 
-      const firstPathSegment = info.path[0];
-      if (
-        info.path.length === 1 &&
-        firstPathSegment &&
-        isSelfPathSegment(firstPathSegment, context)
-      ) {
-        return visited;
-      }
-
       if (info.path.length > 0) {
-        const rewritten = createKeyCall(
+        const rewritten = createPathRead(
           context.factory.createIdentifier(info.root),
           info.path,
           context.factory,
@@ -971,6 +979,7 @@ function rewriteTrackedOpaquePatternBody(
         visited.expression,
         visited,
         "Spread traversal of opaque pattern values is not lowerable. Move this expression into computed().",
+        "spread",
       );
     }
 

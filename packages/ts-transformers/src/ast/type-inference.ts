@@ -1,3 +1,10 @@
+/**
+ * Reads the types the transformer lowers: classifies a type as `any` or
+ * `unknown`, cell-like, or a collection; infers a callback's parameter, return,
+ * and array element types; prints a type as a type node; and registers the
+ * type a synthesized node stands for.
+ */
+
 import { getCellWrapperInfo } from "@commonfabric/schema-generator/cell-brand";
 import ts from "typescript";
 import type { CrossStageState } from "../core/mod.ts";
@@ -8,12 +15,16 @@ import {
 } from "./utils.ts";
 
 /**
- * Type inference utilities for function signatures
- * Used primarily by schema-injection to infer types for lift/handler
+ * Flags for printing a type as a type node. Without `AllowEmptyTuple` the
+ * checker prints nothing at all for a type that holds `[]` anywhere — an alias
+ * given `readonly []`, or `Default<[]>`, which resolves to `[] & brand` — and
+ * the caller is left with a type it cannot print. `NoTruncation` keeps a long
+ * type whole, and `UseStructuralFallback` writes a function's type as its
+ * signature where the function is not in scope to be named with `typeof`.
  */
-
-const TYPE_NODE_FLAGS = ts.NodeBuilderFlags.NoTruncation |
-  ts.NodeBuilderFlags.UseStructuralFallback;
+export const TYPE_NODE_FLAGS = ts.NodeBuilderFlags.NoTruncation |
+  ts.NodeBuilderFlags.UseStructuralFallback |
+  ts.NodeBuilderFlags.AllowEmptyTuple;
 
 /**
  * Check if a type is 'any', 'unknown', or an uninstantiated type parameter.

@@ -1790,6 +1790,57 @@ describe("runtime-processor", () => {
       expect(calls).toEqual([[pieceCell, true]]);
       expect(result.piece.cell).toMatchObject(resultRef);
     });
+
+    it("returns a redirect's target as a cell when its document carries a `pattern` field and no `patternIdentity`", async () => {
+      // `patternIdentity` alone names a piece's pattern. A `pattern` field,
+      // which documents in older spaces can carry, names nothing the runtime
+      // can start.
+
+      const targetRef: CellRef = {
+        id: "of:fid1-pattern-field-only" as CellRef["id"],
+        space,
+        scope: "space",
+        path: [],
+      };
+      const slugRef: CellRef = {
+        id: "of:fid1-slug-doc" as CellRef["id"],
+        space,
+        scope: "space",
+        path: [],
+      };
+      const targetCell = mockCell(targetRef, {
+        patternLink: cellRefToSigilLink({
+          ...targetRef,
+          id: "of:fid1-pattern-document" as CellRef["id"],
+        }),
+      });
+      const slugCell = mockCell(slugRef, { raw: redirectRaw(targetRef) });
+      const pieces = {
+        getSpace: () => space,
+        getPieceCell: () => {
+          throw new Error(
+            "a document without `patternIdentity` should not load as a piece",
+          );
+        },
+      };
+      const processor = buildProcessor({
+        runtime: {
+          getCellFromEntityId: () => slugCell,
+          getCellFromLink: () => targetCell,
+        },
+        cc: pieces,
+        space,
+      });
+
+      const result = await processor.handlePieceGet({
+        type: RequestType.PieceGet,
+        pieceId: fid("slug-doc"),
+        space,
+        runIt: true,
+      });
+
+      expect(result.piece.cell).toMatchObject(targetRef);
+    });
   });
 
   describe("piece-addressed request scopes", () => {

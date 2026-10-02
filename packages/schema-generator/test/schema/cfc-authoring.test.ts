@@ -10,6 +10,41 @@ import {
   getTypeFromFiles,
 } from "../utils.ts";
 
+/**
+ * Aliases whose label spreads a parameter, and the confidentiality each
+ * spelling of them lowers to: a spread stands for the elements of the list
+ * its operand reads as.
+ */
+const SPREAD_LABELS = `
+  type Tail<L extends readonly unknown[]> = Confidential<string, readonly [...L, "b"]>;
+  type Lead<L extends readonly unknown[]> = Confidential<string, readonly ["b", ...L]>;
+  type Two<L extends readonly unknown[], M extends readonly unknown[]> =
+    Confidential<string, readonly [...L, ...M]>;
+  type Named<L extends readonly unknown[]> =
+    Confidential<string, readonly [...rest: L, last: "b"]>;
+  type Forward<L extends readonly unknown[]> = Tail<L>;
+  type ForwardMore<L extends readonly unknown[]> = Tail<readonly [...L, "e"]>;
+  type Alternatives<L extends readonly unknown[]> =
+    Confidential<string, readonly [AnyOf<readonly [...L, "b"]>]>;
+  type CD = readonly ["c", "d"];
+  type Label<T> = T extends string ? "reader" : "admin";
+`;
+
+const SPREAD_CASES = [
+  ['Tail<readonly ["c", "d"]>', ["c", "d", "b"]],
+  ["Tail<readonly []>", ["b"]],
+  ['Lead<readonly ["c", "d"]>', ["b", "c", "d"]],
+  ['Two<readonly ["c"], readonly ["d"]>', ["c", "d"]],
+  ['Named<readonly ["c", "d"]>', ["c", "d", "b"]],
+  ['Forward<readonly ["c", "d"]>', ["c", "d", "b"]],
+  ['ForwardMore<readonly ["c", "d"]>', ["c", "d", "e", "b"]],
+  ['Alternatives<readonly ["c", "d"]>', [{ anyOf: ["c", "d", "b"] }]],
+  [
+    "Confidential<string, readonly [...CD, Label<string>]>",
+    ["c", "d", "reader"],
+  ],
+] as const;
+
 describe("Schema: CFC authoring aliases", () => {
   it("pairs local alias arguments with their declared parameters", async () => {
     const { checker, sourceFile } = await createTestProgram(`
@@ -1561,6 +1596,74 @@ describe("Schema: CFC authoring aliases", () => {
       expect(passed.schema.ifc).toEqual({ confidentiality: [] });
       expect(defaulted.schema.ifc).toEqual({ confidentiality: [] });
     });
+
+    for (const [value, confidentiality] of SPREAD_CASES) {
+      it(`reads the spread in the label of \`${value}\` as the elements of the list it spreads`, async () => {
+        const { schema, diagnostics } = await generate(
+          SPREAD_LABELS + `interface Holder { value: ${value} }`,
+        );
+        expect(schema).toEqual({ type: "string", ifc: { confidentiality } });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+  });
+
+  describe("an authored alias that shares a label operator's name", () => {
+    // `AnyOf` and `PolicyOf` are read as label operators only where the alias
+    // a label names is their brand. One an author declares under the same
+    // name is read as the type it is, from its syntax as from its type.
+
+    for (
+      const [declarations, value, confidentiality] of [
+        [
+          'type AnyOf<T> = "original";',
+          'Confidential<string, readonly [...CD, AnyOf<readonly ["reader"]>]>',
+          ["c", "d", "original"],
+        ],
+        [
+          'type AnyOf<T> = "original";',
+          'Confidential<string, readonly [AnyOf<readonly ["reader"]>]>',
+          ["original"],
+        ],
+        [
+          'type PolicyOf<T> = "plain";',
+          "Confidential<string, readonly [PolicyOf<typeof rules>]>",
+          ["plain"],
+        ],
+        [
+          `type AnyOf<T> = "original";
+            type Tail<L extends readonly unknown[]> =
+              Confidential<string, readonly [...L, AnyOf<readonly ["reader"]>]>;`,
+          'Tail<readonly ["c"]>',
+          ["c", "original"],
+        ],
+      ] as const
+    ) {
+      it(`reads \`${value}\` with the alias its author declared`, async () => {
+        const { type, checker } = await getTypeFromCode(
+          `
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+            type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+            type CD = readonly ["c", "d"];
+            const rules = { name: "r" } as const;
+            ${declarations}
+            interface Holder { value: ${value} }
+          `,
+          "Holder",
+        );
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
+        const schema = asObjectSchema(
+          new SchemaGenerator().generateSchema(type, checker, undefined, {
+            onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+          }),
+        );
+        expect(schema.properties?.value).toEqual({
+          type: "string",
+          ifc: { confidentiality },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
   });
 
   describe("a label the lowering cannot read", () => {
@@ -1609,6 +1712,16 @@ describe("Schema: CFC authoring aliases", () => {
         }
       `);
       expect(messages).toHaveLength(1);
+    });
+
+    it("reports a label that spreads an array type, which no list of atoms spells", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Confidential<string, readonly [...string[], "b"]>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain('`readonly [...string[], "b"]`');
     });
 
     it("reports a label argument that is not a tuple", async () => {
@@ -1792,10 +1905,14 @@ describe("Schema: CFC authoring aliases", () => {
 
   describe("a union member that stands for several members", () => {
     /**
-     * The schema of `SchemaRoot`'s `field`, declared as `declaration`, and
-     * the diagnostics its generation reports.
+     * The schema of `SchemaRoot`'s `field`, declared as `declaration`, with
+     * its definitions and diagnostics. `additionalDeclarations` extends the
+     * program containing the field.
      */
-    const generated = async (declaration: string) => {
+    const generated = async (
+      declaration: string,
+      additionalDeclarations = "",
+    ) => {
       const { type, checker } = await getTypeFromCode(
         `
         type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -1816,6 +1933,7 @@ describe("Schema: CFC authoring aliases", () => {
         interface Host { name?: string }
         const DEFAULT_HOST: Host = {};
         type HostValue = Host | Default<typeof DEFAULT_HOST>;
+        ${additionalDeclarations}
         interface SchemaRoot { field: ${declaration} }
       `,
         "SchemaRoot",
@@ -1826,7 +1944,11 @@ describe("Schema: CFC authoring aliases", () => {
           onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
         }),
       );
-      return { field: schema.properties?.field, diagnostics };
+      return {
+        field: schema.properties?.field,
+        definitions: schema.$defs,
+        diagnostics,
+      };
     };
 
     /** The schema of `SchemaRoot`'s `field`, declared as `declaration`. */
@@ -1881,6 +2003,89 @@ describe("Schema: CFC authoring aliases", () => {
       ).toEqual({
         anyOf: [{ type: "null" }, alternative(POLICY_2), alternative(POLICY)],
       });
+    });
+
+    for (const payload of ["A", "A | B"]) {
+      for (const nullable of [false, true]) {
+        it(`keeps both policies of ${payload}${nullable ? " beside null" : " without null"}`, async () => {
+          const labeled = (binding: string) =>
+            `Confidential<${payload}, readonly [PolicyOf<typeof ${binding}>]>`;
+          const alternative = (policy: typeof POLICY) => ({
+            ...(payload === "A"
+              ? { $ref: "#/$defs/A" }
+              : { anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }] }),
+            ifc: { confidentiality: [policy] },
+          });
+          for (
+            const [first, second] of [["rules", "rules2"], ["rules2", "rules"]]
+          ) {
+            const schema = await fieldSchema(
+              `${labeled(first!)} | ${labeled(second!)}${
+                nullable ? " | null" : ""
+              }`,
+            );
+            expect(schema).toEqual({
+              anyOf: [
+                ...(nullable ? [{ type: "null" }] : []),
+                alternative(first === "rules" ? POLICY : POLICY_2),
+                alternative(second === "rules" ? POLICY : POLICY_2),
+              ],
+            });
+          }
+        });
+      }
+    }
+
+    it("preserves both policy alternatives through an alias and a recursive payload", async () => {
+      const { field, definitions, diagnostics } = await generated(
+        "Choice",
+        `
+        type Choice =
+          | Confidential<A, readonly [PolicyOf<typeof rules>]>
+          | Confidential<A, readonly [PolicyOf<typeof rules2>]>;
+        interface A { next?: Choice }
+      `,
+      );
+      const alternatives = [POLICY, POLICY_2].map((policy) => ({
+        $ref: "#/$defs/A",
+        ifc: { confidentiality: [policy] },
+      }));
+      expect(field).toEqual({ $ref: "#/$defs/Choice" });
+      expect(definitions?.Choice).toEqual({ anyOf: alternatives });
+      expect(definitions?.A).toEqual({
+        type: "object",
+        properties: {
+          a: { type: "string" },
+          next: { $ref: "#/$defs/Choice" },
+        },
+        required: ["a"],
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("keeps distinct policy alternatives inline when their payload recurs through the same union", async () => {
+      const union =
+        "Confidential<A, [PolicyOf<typeof rules>]> | Confidential<A, [PolicyOf<typeof rules2>]>";
+      const { field, definitions, diagnostics } = await generated(
+        union,
+        `interface A { next?: ${union} }`,
+      );
+      const alternatives = [POLICY, POLICY_2].map((policy) => ({
+        $ref: "#/$defs/A",
+        ifc: { confidentiality: [policy] },
+      }));
+      expect(field).toEqual({ anyOf: alternatives });
+      expect(definitions).toEqual({
+        A: {
+          type: "object",
+          properties: {
+            a: { type: "string" },
+            next: { anyOf: alternatives },
+          },
+          required: ["a"],
+        },
+      });
+      expect(diagnostics).toEqual([]);
     });
 
     it("reads each member of a union an alias writes at its own node", async () => {
@@ -2846,6 +3051,17 @@ describe("Schema: CFC authoring aliases", () => {
       });
       expect(diagnostics).toEqual([]);
     });
+
+    for (const [value, confidentiality] of SPREAD_CASES) {
+      it(`reads the spread in the label of \`${value}\` as the elements of the list it spreads`, async () => {
+        const { value: read, diagnostics } = await generate(
+          "type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };" +
+            SPREAD_LABELS + `interface Holder { value: ${value} }`,
+        );
+        expect(read).toEqual({ type: "string", ifc: { confidentiality } });
+        expect(diagnostics).toEqual([]);
+      });
+    }
   });
 
   describe("a default-library alias mapping a labelled type's members", () => {

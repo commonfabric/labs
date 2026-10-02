@@ -13,6 +13,7 @@ declare global {
   var $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: string | undefined;
   var $EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: string | undefined;
   var $EXPERIMENTAL_READER_SCHEMA_PRECEDENCE: string | undefined;
+  var $EXPERIMENTAL_SHARED_MEMORY_CONNECTION: string | undefined;
 }
 
 const ENVIRONMENT_DEFINE = typeof $ENVIRONMENT === "string"
@@ -84,6 +85,11 @@ export const EXPERIMENTAL = {
   webViewScopedReplication: flagValue(
     typeof $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION === "string"
       ? $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION
+      : undefined,
+  ),
+  sharedMemoryConnection: flagValue(
+    typeof $EXPERIMENTAL_SHARED_MEMORY_CONNECTION === "string"
+      ? $EXPERIMENTAL_SHARED_MEMORY_CONNECTION
       : undefined,
   ),
   // Server-execution v2 (docs/specs/server-side-execution/): the

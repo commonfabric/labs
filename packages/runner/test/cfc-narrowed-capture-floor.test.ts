@@ -244,6 +244,45 @@ describe("cfc-narrowed-capture-floor", () => {
     });
   });
 
+  describe("a lift reading a union whose policy alternatives share a type", () => {
+    for (const payload of ["Secret", "Secret | Other"]) {
+      for (const nullable of [false, true]) {
+        for (const whole of [false, true]) {
+          it(`keeps both policies of ${payload}${nullable ? " beside null" : " without null"} read ${whole ? "whole" : "by a property"}`, async () => {
+            const labeled = (binding: string) =>
+              `Confidential<${payload}, [PolicyOf<typeof ${binding}>]>`;
+            for (
+              const [first, second] of [["readers", "writers"], [
+                "writers",
+                "readers",
+              ]]
+            ) {
+              const [label] = await declaredLabelsOfOut(
+                `secret: ${labeled(first!)} | ${labeled(second!)}${
+                  nullable ? " | null" : ""
+                }`,
+                whole
+                  ? 'JSON.stringify(secret) ? secret?.a ?? "" : ""'
+                  : 'secret?.a ?? ""',
+              );
+              expect(label?.confidentiality).toEqual(expect.arrayContaining([
+                expect.objectContaining({
+                  policyRefKind: "module",
+                  symbol: "readers",
+                }),
+                expect.objectContaining({
+                  policyRefKind: "module",
+                  symbol: "writers",
+                }),
+              ]));
+              expect(label?.confidentiality).toHaveLength(2);
+            }
+          });
+        }
+      }
+    }
+  });
+
   describe("a lift reading whole an optional value whose annotation writes a union", () => {
     const WHOLE = 'JSON.stringify(secret) ? secret?.a ?? "" : ""';
     const POLICY = [{

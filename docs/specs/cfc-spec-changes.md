@@ -1615,3 +1615,55 @@ a separate intent atom (the registered and unminted `UserSurfaceInput`) as
 what a reader would consult for a gesture. Implemented in
 `packages/runner/src/cfc/prepare.ts` (`currentPrincipalIntegrityReason`);
 described in [`current-principal.md`](../features/current-principal.md).
+
+## From the display ceiling's prompt-caveat family (2026-10-01)
+
+**SC-54 [normative] The default display ceiling admits the prompt-caveat
+family — §8.10.6, §10.1.** `open`. §8.10.6 admits caveat kinds from a
+deployment's allow-list that "SHOULD start from the influence-class caveat
+kinds" and keeps material-risk kinds "subject to their ordinary discharge
+evidence", so a value carrying `prompt-injection-risk-unscreened` could not
+be shown even to its own owner until a screener had run. Since the renderer
+began deciding text children on the labels their read consumed (#8264), that
+reading withholds every unscreened imported message body from its owner. The
+CFC spec owner ruled on 2026-10-01 that a prompt caveat says only that the
+content must not be trusted as instructions to a model, so it has nothing to
+do with a display, and that the ceiling should admit the whole family rather
+than a list of kinds. Proposed edit: §8.10.6 admits every prompt-caveat kind
+§10.1 lists (the screening-gradient tiers and `prompt-influence`) by family,
+keeps an enumerated, deployment-declared allow-list for other caveat kinds,
+and says admission is not discharge: the caveat stays on the value. That
+alone makes no other sink refuse it: labs' llm sinks are ungated today
+([llm-sink admission](../plans/cfc-llm-sink-admission.md)), so until this
+change the display ceiling was where the unscreened caveat changed an
+outcome. This entry is the new release judgment §8.10.6's tighten-only bullet
+requires for admitting a caveat kind.
+§10.1 gains a line saying a display boundary admits the family, which leaves
+its `InjectionSafe` requirement for discharge untouched. A channel that reads
+rendered output back into a model (a screenshot, an accessibility tree, the
+page's text) is a model sink and a new boundary context (§8.10.5.2), not a
+display. Implemented in `packages/runner/src/cfc/prompt-caveat-kinds.ts`
+(`PROMPT_CAVEAT_FAMILY_KINDS`), which `defaultRenderConfidentialityCeiling` in
+`packages/lib-shell/src/runtime.ts` admits: the family expands into the
+ceiling's enumerated `caveatKinds` from that one constant, so the wire carries
+kinds, not a family token. Labs admits the screening-gradient tiers and
+`prompt-influence` in both spellings, and not the unsuffixed
+`prompt-injection-risk` form §10.1 still lists as legacy, which labs retired
+(#5661); the spec edit should say whether §10.1 retires it too.
+
+What the change exposes, for the spec edit and as follow-up work:
+
+- **URL-loading render is network egress, not display.** An `<img src>`, a
+  markdown image (`cf-markdown` loads any http(s) image URL) or a link preview
+  that fetches its `url` makes a request when it renders. Model output that
+  read injected text and the owner's data carries both labels; once the
+  display admits the caveat, such output can put the owner's data in a URL a
+  render fetches. Those props need gating as network sinks, at the
+  public-only ceiling the fetch sinks already use, rather than admission as
+  display.
+- **Rendered output read back into a model is a model sink.** cf-harness's
+  `browser` tool returns a page's snapshot and text into an agent's context
+  with no label check; a page in the shell can now show it unscreened text.
+- **A clause of alternatives fails closed.** The allow-list admits a single
+  caveat atom, so a clause holding a tier upgrade's alternatives (unscreened
+  or ingress-screened) is refused. Nothing stores that shape today.

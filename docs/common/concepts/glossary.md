@@ -33,14 +33,17 @@ There are a few more specific terms for cells within the piece:
 - Result Cell -- This is the main piece cell. The UI will be built here.
 - Argument Cell -- This holds some of the inputs of the piece.
 - Internal Cell -- This is a temporary cell, but it holds the working state of the piece.
-- Pattern Cell -- Contains the pattern source code.
+- Pattern Source -- The pattern's authored modules, stored in the space as
+  `pattern:<identity>` documents. The result cell names its pattern by
+  `patternIdentity` metadata, a `{ identity, symbol }` reference rather than a
+  link.
 
 ```mermaid
 flowchart TD
     A["Result Cell"]
     A --argument--> B["Argument Cell"]
     A --internal manifest--> C@{ shape: procs, label: "Internal Cells}"
-    A --pattern--> D["Pattern Cell"]
+    A -.patternIdentity.-> D["Pattern Source"]
     B --result--> A
     C --result--> A
     E@{ shape: procs, label: "Data Cells"} --result--> A

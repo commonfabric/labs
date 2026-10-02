@@ -331,7 +331,9 @@ serialTest("memory websocket negotiates a session", async () => {
 
     assertEquals(message.type, "hello.ok");
     assertEquals(message.protocol, MEMORY_PROTOCOL);
-    assertEquals(message.flags, getMemoryProtocolFlags());
+    // The route's server advertises what its host configured, which for
+    // `connectionAuth` is what the `sharedMemoryConnection` flag says.
+    assertEquals(message.flags, memoryServer.memoryProtocolFlags());
     assert(message.sessionOpen.audience.length > 0);
     assert(message.sessionOpen.challenge.value.length > 0);
 

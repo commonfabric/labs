@@ -288,6 +288,36 @@ export default pattern<{ ${declaration} }>(
       }
     });
 
+    for (const payload of ["Secret", "Secret | Other"]) {
+      for (const nullable of [false, true]) {
+        it(`reads both policies of ${payload}${nullable ? " beside null" : " without null"}`, async () => {
+          const labeled = (binding: string) =>
+            `Confidential<${payload}, [PolicyOf<typeof ${binding}>]>`;
+          const policy = (binding: string) => ({
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: { file: "/rules.ts", path: [binding] },
+          });
+          for (
+            const [first, second] of [["readers", "writers"], [
+              "writers",
+              "readers",
+            ]]
+          ) {
+            expect(
+              await policyCapture(
+                `secret: ${labeled(first!)} | ${labeled(second!)}${
+                  nullable ? " | null" : ""
+                }`,
+                "interface Other { a: string; c: number; }",
+              ),
+            ).toMatchObject({
+              ifc: { confidentiality: [policy(first!), policy(second!)] },
+            });
+          }
+        });
+      }
+    }
+
     it("reads the policy of a value an alias of a nullable union names", async () => {
       expect(
         await policyCapture(

@@ -970,14 +970,14 @@ Deno.test("projectMonthly: >=2-week (or month-to-date) window, spilling into las
   assertEquals(projectMonthly(0, 0, 31, []), 0);
 });
 
-Deno.test("settled: a day is known once it has a figure, or once billing has had time", () => {
+Deno.test("settled: a day is known once billing has had time to finish it", () => {
   const L = GITHUB_LAG_DAYS; // 2
   // Day 15 of the month. Spend every day through the 15th: the last two days have
-  // figures, so they are known despite being inside the lag.
+  // figures, but billing is still adding to them, so they are not known yet.
   assertEquals(
     settled(Array.from({ length: 31 }, (_, i) => (i < 15 ? 10 : 0)), 15, L)
       .length,
-    15,
+    13,
   );
   // Nothing since the 5th. The days that carried spend stop at 5, but by the 15th
   // billing has settled everything up to the 13th, so those quiet days are known.

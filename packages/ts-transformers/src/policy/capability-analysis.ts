@@ -50,6 +50,15 @@ export interface CapabilityAnalysisOptions {
   readonly inProgress?: WeakSet<ts.Node>;
 
   /**
+   * Whether the function is the callback of a `pattern()` call, however the
+   * call names it. Its first parameter is then the pattern's input, on which
+   * `SELF` names the pattern's own result rather than any of the input's data,
+   * so the summary leaves out every path under `SELF` on that parameter. Left
+   * unset, `x[SELF]` on any parameter is the path `$SELF`.
+   */
+  readonly patternCallback?: boolean;
+
+  /**
    * Transformer-known types for nodes the checker can't resolve. Required for
    * synthetic callbacks (e.g. the destructure-lowered lift-applied param, whose
    * bindings type as `any`): without it, type-based heuristics like
@@ -1751,6 +1760,9 @@ function buildCapabilityParamSummary(
   };
 }
 
+/** Path segment that a `SELF` key denotes in a recorded path. */
+const SELF_PATH_SEGMENT = "$SELF";
+
 export function analyzeFunctionCapabilities(
   fn: CapabilityAnalyzableFunction,
   options?: CapabilityAnalysisOptions,
@@ -1840,11 +1852,20 @@ export function analyzeFunctionCapabilities(
       return state;
     };
 
+    // On a pattern's input, `SELF` names the pattern's own result rather than
+    // any of the input's data, so a use through it records nothing against
+    // the input: no path, and no flag a path would set.
+    const isPatternCallback = !!options?.patternCallback;
+    const isSelfReference = (name: string, path: readonly string[]): boolean =>
+      isPatternCallback && name === parameterStateKeys[0] &&
+      path[0] === SELF_PATH_SEGMENT;
+
     const trackRead = (
       name: string,
       path: readonly string[],
       options?: { identityOnly?: boolean },
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.reads.add(encodePath(path));
       if (options?.identityOnly) {
@@ -1855,6 +1876,7 @@ export function analyzeFunctionCapabilities(
     };
 
     const trackWrite = (name: string, path: readonly string[]): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.writes.add(encodePath(path));
       state.hasNonIdentityUse = true;
@@ -1864,6 +1886,7 @@ export function analyzeFunctionCapabilities(
       name: string,
       path: readonly string[],
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.fullShapeReads.add(encodePath(path));
       state.hasNonIdentityUse = true;
@@ -1873,6 +1896,7 @@ export function analyzeFunctionCapabilities(
       name: string,
       path: readonly string[] = [],
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.wildcard = true;
       state.wildcardPaths.add(encodePath(path));
@@ -1904,6 +1928,7 @@ export function analyzeFunctionCapabilities(
     };
 
     const markOpaqueUse = (name: string, path: readonly string[]): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.hasNonIdentityUse = true;
       if (path.length === 0) {
@@ -1915,6 +1940,7 @@ export function analyzeFunctionCapabilities(
       name: string,
       path: readonly string[],
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       state.rawOpaquePaths.add(encodePath(path));
       state.hasNonIdentityUse = true;
@@ -1928,6 +1954,7 @@ export function analyzeFunctionCapabilities(
       path: readonly string[],
       options?: { cellLike?: boolean },
     ): void => {
+      if (isSelfReference(name, path)) return;
       const state = ensureState(name);
       const encoded = encodePath(path);
       state.rawIdentityPaths.add(encoded);
@@ -1942,6 +1969,7 @@ export function analyzeFunctionCapabilities(
       path: readonly string[],
       options?: { cellLike?: boolean },
     ): void => {
+      if (isSelfReference(name, path)) return;
       recordIdentityPath(name, path, options);
       const state = ensureState(name);
       const encoded = encodePath(path);

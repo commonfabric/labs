@@ -824,6 +824,12 @@ export type InitializationData = {
     webViewScopedReplication?: boolean;
 
     /**
+     * Whether the memory sessions of one host share a connection, which
+     * each key authenticates on once.
+     */
+    sharedMemoryConnection?: boolean;
+
+    /**
      * Whether a link writer emits `cid:` schema-document references, each
      * closure materialized in the carrying transaction. Default on; an
      * explicit `false` is the rollback override.
@@ -908,7 +914,7 @@ export type InitializationData = {
   /**
    * The confidentiality a display surface admits by default: exact `atoms`,
    * which is where an acting user's identity atoms go, plus the Caveat
-   * `caveatKinds` a display can discharge. Absent means no ceiling.
+   * `caveatKinds` a display admits. Absent means no ceiling.
    */
   renderConfidentialityCeiling?: {
     /**
@@ -918,8 +924,9 @@ export type InitializationData = {
     atoms?: readonly CfcConfClause[];
 
     /**
-     * The kinds of Caveat a display surface can discharge, named rather
-     * than carried, so a label bearing only these is still displayable.
+     * The kinds of Caveat a display surface admits, named rather than
+     * carried, so a label bearing only these is still displayable. Admitting
+     * a caveat is not discharging it: it stays on the value.
      */
     caveatKinds?: readonly string[];
   };

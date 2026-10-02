@@ -511,12 +511,13 @@ Deno.test("github spend: early in the month the rate comes from last month's tai
     [usagePath(2025, 12)]: { usageItems: days(2025, 12, 1, 31, 10) },
     [usagePath(2025, 11)]: { usageItems: days(2025, 11, 1, 30, 10) },
   });
-  // Window = $40 over 2 days here + $120 over the last 12 of December = $160/14
-  // days -> $354 across 31. Rating the two days alone would claim $620.
-  assertEquals(v.value, "~$354/mo");
+  // The 2-day lag has settled only the 1st. Window = $20 over that day + $130
+  // over the last 13 of December = $150/14 days -> $332 across 31. Rating the
+  // settled day alone would claim $620.
+  assertEquals(v.value, "~$332/mo");
   assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
   // November is fetched only to fill the chart, which spans at most 45 days back
-  // from the last day with a figure (January 2nd).
+  // from the newest settled day (January 1st).
   assertEquals(v.duration, 45 * D);
 });
 
@@ -569,7 +570,45 @@ Deno.test("github spend: an unavailable prior month is not zero-spend history", 
   assertEquals(v.value, "~$620/mo");
   assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
   assertEquals(v.status, "bad");
-  assertEquals(v.duration, 2 * D);
+  assertEquals(v.duration, 1 * D); // the settled 1st only
+});
+
+Deno.test("github spend: with no settled day and no prior month, the projection is the month to date", async () => {
+  // The 2nd, with December unreadable. The 2-day lag has settled no January
+  // day, so there is no rate to project from and no day to chart.
+  const v = await view("2026-01-02T09:00:00Z", {
+    [usagePath(2026, 1)]: { usageItems: days(2026, 1, 1, 2, 20) },
+    [budgetsPath()]: { budgets: [productBudget("actions", 30)] },
+  });
+  assertEquals(v.value, "~$40/mo");
+  assertEquals(v.aside, '<span class="hfacet" title="$40 MTD">$40 MTD</span>');
+  // The budgeted projection holds the same $40 against the $30 budget.
+  assertEquals(v.status, "bad");
+  assertEquals(v.extra?.includes("<polyline"), false);
+  assertEquals(v.duration, 0);
+});
+
+Deno.test("github spend: a day still being reported is left out of the chart and the rate", async () => {
+  // The report already carries rows for the 19th and for today, the 20th,
+  // while both days are still being written: today has so far reached $3 of a
+  // $20 day.
+  const v = await view("2026-01-20T09:00:00Z", {
+    [usagePath(2026, 1)]: {
+      usageItems: [...days(2026, 1, 1, 19, 20), item("2026-01-20", 3)],
+    },
+  });
+  // The month to date counts every row.
+  assertEquals(v.aside, '<span class="hfacet" title="$383 MTD">$383 MTD</span>');
+  // The rate is $360 over the 18 settled days, so the projection is a steady
+  // $20/day across 31. Counting the partial days would project $594.
+  assertEquals(v.value, "~$620/mo");
+  // The line ends on the settled 18th, level with the days before it, rather
+  // than dropping to today's partial $3.
+  assertEquals(v.duration, 18 * D);
+  const base = (v.extra ?? "").match(/<polyline points="([^"]+)"/)?.[1] ?? "";
+  const heights = base.split(" ").map((pair) => pair.split(",")[1]);
+  assertEquals(heights.length, 18);
+  assertEquals(new Set(heights).size, 1);
 });
 
 Deno.test("github spend: a prior month that 404s leaves a hole in the chart, not zeros", async () => {

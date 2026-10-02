@@ -90,7 +90,6 @@ import { pattern } from "./pattern.ts";
 import { principalOf } from "./principal-of.ts";
 import { spaceAccess } from "./space-access.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
-import { noticeSpaceAccess } from "./space-access-notice.ts";
 import type {
   BuilderFunctionsAndConstants,
   ToSchemaFunction,
@@ -311,7 +310,6 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccess,
     grantSpaceAccess,
     revokeSpaceAccess,
-    noticeSpaceAccess,
 
     // Entity utilities
     getEntityId,

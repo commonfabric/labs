@@ -19,6 +19,7 @@ import {
   ensureTypeNodeRegistered,
   inferWidenedTypeFromExpression,
   isUnknownType,
+  TYPE_NODE_FLAGS,
   unwrapCellLikeType,
 } from "./type-inference.ts";
 import {
@@ -361,17 +362,13 @@ export function qualifyCommonFabricTypeRefs(
 }
 
 /**
- * Common flags for type-to-typenode conversion.
- * NoTruncation: Prevents type strings from being truncated
- * UseStructuralFallback: Falls back to structural types when nominal types aren't available
- * UseAliasDefinedOutsideCurrentScope: Prefer existing aliases (e.g. `Cell<T>`
- *   imported at module scope) over their canonical qualified forms (e.g.
- *   `import("commonfabric").Cell<T>`). Without this flag, type-arg
- *   annotations on synthesized helper calls print the import-qualified form
- *   even when an alias is in scope (CT-1615 Berni review on PR #3676).
+ * Flags for printing a type as an annotation the transformer emits:
+ * `TYPE_NODE_FLAGS`, and `UseAliasDefinedOutsideCurrentScope`, which prints an
+ * alias in scope where the type is printed, such as `Cell<T>` imported at
+ * module scope, by its name rather than in its import-qualified form,
+ * `import("commonfabric").Cell<T>`.
  */
-export const DEFAULT_TYPE_NODE_FLAGS = ts.NodeBuilderFlags.NoTruncation |
-  ts.NodeBuilderFlags.UseStructuralFallback |
+export const DEFAULT_TYPE_NODE_FLAGS = TYPE_NODE_FLAGS |
   ts.NodeBuilderFlags.UseAliasDefinedOutsideCurrentScope;
 
 export interface TypeLiteralRegistrationContext {
@@ -399,8 +396,8 @@ export function typeToTypeNodeWithRegistry(
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
 ): ts.TypeNode {
-  // Without `AllowEmptyTuple` the checker prints nothing at all for a type
-  // that holds `[]` anywhere, as `Default<[]>` resolves to `[] & brand`.
+  // `flags` may leave out `AllowEmptyTuple`, which every print needs, as
+  // `TYPE_NODE_FLAGS` says.
   const rawNode = context.checker.typeToTypeNode(
     type,
     context.sourceFile,

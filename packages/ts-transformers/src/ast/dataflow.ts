@@ -14,6 +14,7 @@ import {
   unwrapTransparentWrapperOnce,
 } from "../utils/expression.ts";
 import { isSafeIdentifierText } from "../utils/identifiers.ts";
+import { getCommonFabricKeyName } from "../utils/reactive-keys.ts";
 import {
   detectCallKind,
   isReactiveValueExpression,
@@ -578,6 +579,14 @@ export function createDataFlowAnalyzer(
         ts.isNoSubstitutionTemplateLiteral(argumentExpression));
   };
 
+  // Helper: Check if an element access expression is keyed by `SELF`. On a
+  // pattern's input, `input[SELF]` names the pattern's own result, which the
+  // pattern body reads in place as it reads a destructured `[SELF]` binding.
+  const isSelfElementAccess = (
+    expression: ts.ElementAccessExpression,
+  ): boolean =>
+    getCommonFabricKeyName(expression.argumentExpression, checker) === "SELF";
+
   const isStructuralOpaqueTargetExpression = (
     expression: ts.Expression,
     seenSymbols = new Set<ts.Symbol>(),
@@ -1033,7 +1042,8 @@ export function createDataFlowAnalyzer(
         ? analyzeExpression(argumentExpression, scope, context)
         : emptyAnalysis();
 
-      const isStaticIndex = isStaticElementAccess(expression);
+      const isStaticIndex = isStaticElementAccess(expression) ||
+        isSelfElementAccess(expression);
 
       if (isStaticIndex) {
         const result = mergeAnalyses(target, argument);

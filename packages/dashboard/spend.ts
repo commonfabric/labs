@@ -2,11 +2,12 @@
  * Projects and charts daily spend for every one of the dashboard's spend
  * tiles. A monthly estimate uses every settled day in the current month, and
  * until that supplies two weeks it fills the rate window from the end of the
- * prior month. A chart line ends on the day its source is known through — its
- * last reported day, or the newest day its reporting lag has settled — even
- * when another source's line runs further. A line skips the days its source
- * has no report to draw on, breaking across the hole rather than charting
- * zeros.
+ * prior month. A chart line ends on the newest day its source's reporting lag
+ * has settled, even when another source's line runs further. A source can
+ * carry rows for a day it has not finished reporting, today included, so a
+ * row inside the lag says nothing about the day being complete. A line skips
+ * the days its source has no report to draw on, breaking across the hole
+ * rather than charting zeros.
  *
  * A settled day with no report counts as a real $0, which holds only while the
  * source is still reporting. A tile establishes that from the newest day its
@@ -58,15 +59,16 @@ export interface SpendChartSource {
   knownMonths?: ReadonlySet<string>;
 }
 
+/**
+ * The days of `daily` the source's reporting lag has settled, out of the
+ * `elapsedDays` the calendar has reached.
+ */
 export function settled(
   daily: number[],
   elapsedDays: number,
   lagDays: number,
 ): number[] {
-  let withData = daily.length;
-  while (withData > 0 && daily[withData - 1] === 0) withData--;
-  const known = Math.max(withData, elapsedDays - lagDays);
-  return daily.slice(0, Math.max(0, Math.min(daily.length, known)));
+  return daily.slice(0, Math.max(0, elapsedDays - lagDays));
 }
 
 /**
@@ -111,7 +113,7 @@ export function calendarMonth(
 }
 
 function monthlyProjection(
-  mtd: number,
+  spent: number,
   coveredThis: number,
   daysInMonth: number,
   lastMonthDaily: number[],
@@ -122,8 +124,8 @@ function monthlyProjection(
   );
   const tail = needFromLast > 0 ? lastMonthDaily.slice(-needFromLast) : [];
   const days = coveredThis + tail.length;
-  if (days <= 0) return { projected: mtd, days: 0 };
-  const windowSpend = mtd +
+  if (days <= 0) return { projected: spent, days: 0 };
+  const windowSpend = spent +
     tail.reduce((sum, daily) => sum + daily, 0);
   return {
     projected: (windowSpend / days) * daysInMonth,
@@ -132,13 +134,13 @@ function monthlyProjection(
 }
 
 export function projectMonthly(
-  mtd: number,
+  spent: number,
   coveredThis: number,
   daysInMonth: number,
   lastMonthDaily: number[],
 ): number {
   return monthlyProjection(
-    mtd,
+    spent,
     coveredThis,
     daysInMonth,
     lastMonthDaily,
@@ -182,7 +184,7 @@ export function summarizeDailySpend(
     month0,
     thisMonth.length,
   );
-  const coveredThis = Math.max(0, settledThis.length - currentStart);
+  const coveredDays = settledThis.slice(currentStart);
   const previousMonth = month0 === 0 ? 11 : month0 - 1;
   const previousYear = month0 === 0 ? year - 1 : year;
   const previous = calendarMonth(byDay, previousYear, previousMonth);
@@ -204,15 +206,19 @@ export function summarizeDailySpend(
   const daysInMonth = new Date(
     Date.UTC(year, month0 + 1, 0),
   ).getUTCDate();
+  // Rated over the settled days, plus whatever the measured total carries that
+  // no day does. Spend on the days still being reported is part of the month
+  // to date, but it is a partial figure for those days.
   const projection = monthlyProjection(
-    mtd,
-    coveredThis,
+    coveredDays.reduce((sum, amount) => sum + amount, mtd - dailyMtd),
+    coveredDays.length,
     daysInMonth,
     lastMonthDaily,
   );
   return {
     mtd,
-    projected: projection.projected,
+    // With no settled day to rate, the month to date is the only figure.
+    projected: projection.days > 0 ? projection.projected : mtd,
     estimateDays: projection.days,
   };
 }
@@ -239,10 +245,10 @@ export function spendChart(
   // those days are left out of the line entirely.
   const reports = (source: SpendChartSource, day: string) =>
     !source.knownMonths || source.knownMonths.has(day.slice(0, 7));
-  // A source is known through its last reported day or through the newest day
-  // its reporting lag has settled, whichever is later. A settled day with no
-  // report is a real $0; a day past that horizon has no figure yet, and the
-  // source's line stops there rather than drawing the missing days as zero.
+  // A source is known through the newest day its reporting lag has settled. A
+  // settled day with no report is a real $0. A day past that horizon has no
+  // complete figure yet, even when the source already carries rows for it, so
+  // the source's line stops there rather than drawing a partial day.
   const today = Date.UTC(
     now.getUTCFullYear(),
     now.getUTCMonth(),
@@ -258,12 +264,10 @@ export function spendChart(
     while (known >= earliest && !reports(source, dayAt(known))) {
       known -= DAY_MS;
     }
-    for (const day of source.spend.byDay.keys()) {
-      known = Math.max(known, timeOf(day));
-    }
     knownThrough.set(source, known);
   }
   const end = maxOf(knownThrough.values());
+  if (end < earliest) return { chart: "", duration: 0 };
   const start = Math.max(
     earliest,
     end - (SPEND_HISTORY_DAYS - 1) * DAY_MS,
