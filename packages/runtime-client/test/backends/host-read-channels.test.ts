@@ -237,25 +237,30 @@ describe("HostReadGate, for what crosses beside a value", () => {
       const reader = connect();
       try {
         const tx = writer.edit();
-        const written = writer.getCell(space, "unloaded", undefined, tx);
         writeSeedEnvelopeDoc(tx, space);
-        seedStoredEnvelope(tx, {
-          space,
-          id: written.getAsNormalizedFullLink().id!,
-          type: "application/json",
-          path: [],
-        }, {
-          value: { [SECRET_KEY]: SECRET_VALUE },
-          slug: "unloaded-slug",
-          cfc: {
-            version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
+        for (const id of ["unloaded", "unloaded-for-owner"]) {
+          const written = writer.getCell(space, id, undefined, tx);
+          seedStoredEnvelope(tx, {
+            space,
+            id: written.getAsNormalizedFullLink().id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value: { [SECRET_KEY]: SECRET_VALUE },
+            slug: "unloaded-slug",
+            cfc: {
               version: 1,
-              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: { confidentiality: [ownerOnly] },
+                }],
+              },
             },
-          },
-        } as FabricValue);
+          } as FabricValue);
+        }
         expect((await tx.commit()).ok).toBeDefined();
         await writer.storageManager.synced();
         const gate = gateFor(reader, visitor);
@@ -278,6 +283,13 @@ describe("HostReadGate, for what crosses beside a value", () => {
         });
         expect(slug).toEqual({ refused: { refusedBy: "display-ceiling" } });
         expect(metadata).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        // The owner's answer waits for the document, and is built.
+        expect(
+          await gateFor(reader, owner).fromCell(
+            reader.getCell(space, "unloaded-for-owner"),
+            build,
+          ),
+        ).toEqual({ rows: [SECRET_VALUE] });
       } finally {
         await reader.dispose();
         await writer.dispose();
