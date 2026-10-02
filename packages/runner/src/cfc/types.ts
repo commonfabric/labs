@@ -25,10 +25,6 @@ export type {
   LabelObservationClass,
 } from "./label-view-core.ts";
 
-// A result field a setup projects to one of the piece's own internal cells:
-// `target` is the field, `sources` the internal cell holding its value. The
-// setup creates that cell and initializes it, so the prepare gate takes the
-// marker for the field and for the cell alike.
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
@@ -611,31 +607,17 @@ export type WritePolicyInput =
   | {
     /**
      * Authority is carried by the runtime's private mark, never this record
-     * alone. A `"capture"` initialization stages a link to a cell that exists
-     * already into a slot, and none of what the cell holds, so its `value` is
-     * that link: a list's entry or the list itself handed to a sub-pattern,
-     * or a binding a callback captures. It is matched by the cell the link
-     * names and by whether the link is a write redirect, not by the link's
-     * bytes, which can carry the binding's schema beside the address, and it
-     * never re-points a slot that held a link to another cell. A `"binding"`
-     * initialization is a binding a setup stages into an argument or a result
-     * field: matched the same way, but re-established on every setup, so a
-     * later setup may re-point it at the cell the pattern now names. A
-     * `"replay"` record
-     * names an argument slot a runtime replaying a piece's setup carries over
-     * from the stored argument document, with the bytes it holds; it permits
-     * nothing but leaving those bytes as they are.
+     * alone. A `"reference"` initialization stages a link to a cell that exists
+     * already and none of what the cell holds, so its `value` is that link.
+     * A `"replay"` record names an argument slot a runtime replaying a
+     * piece's setup carries over from the stored argument document, with
+     * the bytes it holds; it permits nothing but leaving those bytes as they
+     * are.
      */
     readonly kind: "initialization";
     readonly target: CfcAddress;
     readonly value: FabricValue;
-    readonly mode:
-      | "seed"
-      | "default"
-      | "projection"
-      | "capture"
-      | "binding"
-      | "replay";
+    readonly mode: "seed" | "default" | "projection" | "reference" | "replay";
   }
   | {
     readonly kind: "schema";
