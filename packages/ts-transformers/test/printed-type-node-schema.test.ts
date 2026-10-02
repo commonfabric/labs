@@ -1263,6 +1263,145 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
       }
     });
 
+    describe("a labeled payload merged into a larger value", () => {
+      // A restriction lands wherever the payload's data may be, and evidence
+      // only where it must be, which a spread's result never says: a later
+      // spread of the payload's own type writes over its members.
+      const gps = { integrity: ["gps"] };
+      const secret = { confidentiality: ["secret"] };
+
+      /** Where `schema`'s labels sit: on the whole value, and on each member. */
+      const placement = (schema: Schema) => ({
+        whole: schema.ifc,
+        members: Object.fromEntries(
+          Object.entries((schema.properties ?? {}) as Record<string, Schema>)
+            .flatMap(([name, member]) =>
+              member.ifc ? [[name, member.ifc]] : []
+            ),
+        ),
+      });
+
+      for (
+        const [spelling, location, other, out, whole, members] of [
+          [
+            "a spread",
+            `Integrity<Point, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of the payload's own type over it",
+            `Integrity<Point, ["gps"]>`,
+            "Point",
+            "{ ...location, ...other, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of part of the payload's own type over it",
+            `Integrity<Point, ["gps"]>`,
+            `Pick<Point, "lat">`,
+            "{ ...location, ...other, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of a finite `Record`",
+            `Integrity<Record<"lat" | "long", number>, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of an index signature",
+            `Integrity<Record<string, number>, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a confidential spread of the payload's own type over it",
+            `Confidential<Point, ["secret"]>`,
+            "Point",
+            "{ ...location, ...other, name }",
+            undefined,
+            { lat: secret, long: secret },
+          ],
+          [
+            "a confidential spread of a finite `Record`",
+            `Confidential<Record<"lat" | "long", number>, ["secret"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            { lat: secret, long: secret },
+          ],
+          [
+            "a confidential spread of an index signature",
+            `Confidential<Record<string, number>, ["secret"]>`,
+            "number",
+            "{ ...location, name }",
+            secret,
+            {},
+          ],
+        ] as const
+      ) {
+        it(`places the labels of ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, pattern } from "commonfabric";
+type Point = { lat: number; long: number };
+export default pattern<{ location: ${location}; other: ${other}; name: string }>(
+  ({ location, other, name }) => ({ out: ${out} }),
+);`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { output } = patternSchemas(parseModule(files["/main.tsx"]!));
+          expect(placement((output.properties as Record<string, Schema>).out!))
+            .toEqual({ whole, members });
+        });
+      }
+
+      for (
+        const [spelling, a, whole] of [
+          [
+            "a kept member of a finite `Record`",
+            `Pick<Confidential<Record<"lat" | "long", number>, ["secret"]>, "lat">`,
+            secret,
+          ],
+          [
+            "a member beside an index signature",
+            `Pick<Integrity<Record<string, number>, ["gps"]> & { name: string }, "name">`,
+            undefined,
+          ],
+          [
+            "a kept member of an intersection",
+            `Pick<Integrity<Point, ["gps"]> & { name: string }, "lat">`,
+            gps,
+          ],
+        ] as const
+      ) {
+        it(`places the labels of ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, pattern } from "commonfabric";
+type Point = { lat: number; long: number };
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          for (const schema of [input, output]) {
+            expect(
+              placement((schema.properties as Record<string, Schema>).a!),
+            ).toEqual({ whole, members: {} });
+          }
+        });
+      }
+    });
+
     describe("a generic CFC alias written with its arguments", () => {
       // Written with its arguments, a chain's payload is read from the last
       // alias's declaration with each parameter bound to the argument written

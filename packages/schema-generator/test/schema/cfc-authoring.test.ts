@@ -3753,11 +3753,14 @@ describe("Schema: CFC authoring aliases", () => {
   });
 
   describe("a carrier that records the payload its policy was written around", () => {
-    // `CfcStamp` keeps the payload a policy names beside its metadata, and
-    // each member of a merged value keeps its declarations, so a label lands
-    // on the members that came from the payload: the whole value where all
-    // of them did, those members alone where others joined them, and nowhere
-    // where none survived.
+    // `CfcStamp` keeps the payload a policy names beside its metadata. A
+    // restriction lands wherever the payload's data may be in a merged value:
+    // on the members the payload names, or on the whole value when an index
+    // signature leaves the payload's names open. Evidence lands only where the
+    // payload's data must be: on members whose declarations are the payload's
+    // own, and never in a spread's result, where a later spread of the
+    // payload's own type writes over its members and keeps their
+    // declarations.
 
     const DECLARATIONS = `
       type Cfc<T, M> = T & {
@@ -3765,22 +3768,56 @@ describe("Schema: CFC authoring aliases", () => {
       };
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
-      type Location = Integrity<{ lat: number; long: number }, readonly ["gps"]>;
-      type Pin = Confidential<{ pin: string }, readonly ["s"]>;
+      type Point = { lat: number; long: number };
+      type Location = Integrity<Point, readonly ["gps"]>;
+      type RecordLocation = Integrity<Record<"lat" | "long", number>, readonly ["gps"]>;
+      type IndexLocation = Integrity<Record<string, number>, readonly ["gps"]>;
       type EitherCoordinate = Integrity<{ lat: number } | { long: number }, readonly ["gps"]>;
+      type SecretLocation = Confidential<Point, readonly ["s"]>;
+      type SecretRecord = Confidential<Record<"lat" | "long", number>, readonly ["s"]>;
+      type SecretIndex = Confidential<Record<string, number>, readonly ["s"]>;
+      type SecretEither = Confidential<{ lat: number } | { long: number }, readonly ["s"]>;
+      type Minted = Cfc<Point, { addIntegrity: readonly ["m"] }>;
+      type Pin = Confidential<{ pin: string }, readonly ["s"]>;
       type Select<T> = Pick<Integrity<T, readonly ["gps"]> & { name: string }, "name">;
+      type Copy<T> = { readonly [K in keyof T]: T[K] };
       declare const location: Location;
-      declare const pin: Pin;
+      declare const recordLocation: RecordLocation;
+      declare const indexLocation: IndexLocation;
       declare const either: EitherCoordinate;
+      declare const secretLocation: SecretLocation;
+      declare const secretRecord: SecretRecord;
+      declare const secretIndex: SecretIndex;
+      declare const secretEither: SecretEither;
+      declare const minted: Minted;
+      declare const pin: Pin;
+      declare const point: Point;
+      declare const latitude: Pick<Point, "lat">;
+      declare const counts: Record<string, number>;
+      declare const recordPoint: Record<"lat" | "long", number>;
       declare const other: number;
       const spread = { ...location, name: "x" };
       const overwriteOne = { ...location, lat: other, name: "x" };
       const overwriteBoth = { ...location, lat: other, long: other };
+      const sameTypeOverwrite = { ...location, ...point, name: "x" };
+      const sameTypePartial = { ...location, ...latitude, name: "x" };
+      const recordSpread = { ...recordLocation, name: "x" };
+      const indexSpread = { ...indexLocation, name: "x" };
+      const indexOverwrite = { ...indexLocation, ...counts };
+      const recordOverwrite = { ...recordLocation, ...recordPoint };
+      const mintedSpread = { ...minted, name: "x" };
       const twoPolicies = { ...location, ...pin, name: "x" };
       const eitherSpread = { ...either, name: "x" };
+      const secretSpread = { ...secretLocation, name: "x" };
+      const secretSameTypeOverwrite = { ...secretLocation, ...point, name: "x" };
+      const secretRecordSpread = { ...secretRecord, name: "x" };
+      const secretIndexSpread = { ...secretIndex, name: "x" };
+      const secretEitherSpread = { ...secretEither, name: "x" };
     `;
 
     const gps = { integrity: ["gps"] };
+    const mint = { addIntegrity: ["m"] };
+    const secret = { confidentiality: ["s"] };
 
     /** Where `schema`'s labels sit: on the whole value, and on each member. */
     const placement = (schema: Record<string, any>) => ({
@@ -3794,62 +3831,116 @@ describe("Schema: CFC authoring aliases", () => {
       ),
     });
 
-    for (
-      const [value, whole, members] of [
-        ["typeof spread", undefined, { lat: gps, long: gps }],
-        ["{ name: string } & Location", undefined, { lat: gps, long: gps }],
-        ["Readonly<{ name: string } & Location>", undefined, {
-          lat: gps,
-          long: gps,
-        }],
-        ['Omit<{ name: string } & Location, "lat">', undefined, { long: gps }],
-        ['Pick<{ name: string } & Location, "name">', undefined, {}],
-        ['Pick<{ name: string } & Location, "lat">', gps, {}],
-        ["Pick<Location, never>", undefined, {}],
-        [
-          'Integrity<{ lat: number; long: number } & { name: string }, readonly ["gps"]>',
-          gps,
-          {},
-        ],
-        ["typeof overwriteOne", undefined, { long: gps }],
-        ["typeof overwriteBoth", undefined, {}],
-        ["Select<{ lat: number; long: number }>", undefined, {}],
-        ["typeof twoPolicies", undefined, {
-          lat: gps,
-          long: gps,
-          pin: { confidentiality: ["s"] },
-        }],
-      ] as const
-    ) {
-      it(`places the labels of \`${value}\``, async () => {
-        const { type, checker } = await getTypeFromCode(
-          DECLARATIONS + `interface SchemaRoot { value: ${value} }`,
-          "SchemaRoot",
-        );
-        const schema = asObjectSchema(
-          new SchemaGenerator().generateSchema(type, checker),
-        );
-        const definitions = (schema.$defs ?? {}) as Record<string, any>;
-        const at = schema.properties?.value as Record<string, any>;
-        const resolved = typeof at.$ref === "string"
-          ? definitions[at.$ref.split("/").pop()!]
-          : at;
-        expect(placement(resolved)).toEqual({ whole, members });
-      });
-    }
-
-    it("places each alternative's labels on its own member of a union payload", async () => {
+    /** The schema of `value`, with a reference to a definition resolved. */
+    const schemaOf = async (value: string) => {
       const { type, checker } = await getTypeFromCode(
-        DECLARATIONS + `interface SchemaRoot { value: typeof eitherSpread }`,
+        DECLARATIONS + `interface SchemaRoot { value: ${value} }`,
         "SchemaRoot",
       );
       const schema = asObjectSchema(
         new SchemaGenerator().generateSchema(type, checker),
       );
-      const value = schema.properties?.value as Record<string, any>;
+      const definitions = (schema.$defs ?? {}) as Record<string, any>;
+      const at = schema.properties?.value as Record<string, any>;
+      return typeof at.$ref === "string"
+        ? definitions[at.$ref.split("/").pop()!]
+        : at;
+    };
+
+    describe("evidence", () => {
+      for (
+        const [value, whole, members] of [
+          ["{ name: string } & Location", undefined, { lat: gps, long: gps }],
+          ["Readonly<{ name: string } & Location>", undefined, {
+            lat: gps,
+            long: gps,
+          }],
+          ['Omit<{ name: string } & Location, "lat">', undefined, {
+            long: gps,
+          }],
+          ['Pick<{ name: string } & Location, "name">', undefined, {}],
+          ['Pick<{ name: string } & Location, "lat">', gps, {}],
+          ["Pick<Location, never>", undefined, {}],
+          ['Integrity<Point & { name: string }, readonly ["gps"]>', gps, {}],
+          ["Select<Point>", undefined, {}],
+          ['Pick<RecordLocation, "lat">', gps, {}],
+          ["Readonly<IndexLocation>", gps, {}],
+          ['Pick<IndexLocation & { name: string }, "name">', undefined, {}],
+          ["typeof spread", undefined, {}],
+          ["typeof overwriteOne", undefined, {}],
+          ["typeof overwriteBoth", undefined, {}],
+          ["typeof sameTypeOverwrite", undefined, {}],
+          ["typeof sameTypePartial", undefined, {}],
+          ["Copy<typeof sameTypeOverwrite>", undefined, {}],
+          ["Copy<typeof sameTypeOverwrite> & { extra: string }", undefined, {}],
+          ["typeof sameTypeOverwrite & Location", undefined, {}],
+          ["Copy<{ name: string } & Location>", undefined, {
+            lat: gps,
+            long: gps,
+          }],
+          ["typeof recordSpread", undefined, {}],
+          [
+            '{ [K in "lat" | "long" | "__ct_cfc__"]?: (typeof recordOverwrite)[K] }',
+            undefined,
+            {},
+          ],
+          ["typeof indexSpread", undefined, {}],
+          ["typeof indexOverwrite", undefined, {}],
+          ["{ name: string } & Minted", undefined, { lat: mint, long: mint }],
+          ["typeof mintedSpread", undefined, {}],
+          ["typeof twoPolicies", undefined, { pin: secret }],
+        ] as const
+      ) {
+        it(`places the labels of \`${value}\``, async () => {
+          expect(placement(await schemaOf(value))).toEqual({ whole, members });
+        });
+      }
+    });
+
+    describe("restrictions", () => {
+      for (
+        const [value, whole, members] of [
+          ["typeof secretSpread", undefined, { lat: secret, long: secret }],
+          ["typeof secretSameTypeOverwrite", undefined, {
+            lat: secret,
+            long: secret,
+          }],
+          ["typeof secretRecordSpread", undefined, {
+            lat: secret,
+            long: secret,
+          }],
+          ['Pick<SecretRecord, "lat">', secret, {}],
+          ["typeof secretIndexSpread", secret, {}],
+          ['Pick<SecretIndex & { name: string }, "name">', secret, {}],
+        ] as const
+      ) {
+        it(`places the labels of \`${value}\``, async () => {
+          expect(placement(await schemaOf(value))).toEqual({ whole, members });
+        });
+      }
+    });
+
+    it("places each alternative's evidence on its own member of a union payload", async () => {
+      const value = await schemaOf("EitherCoordinate & { name: string }");
       expect(value.anyOf.map(placement)).toEqual([
         { whole: undefined, members: { lat: gps } },
         { whole: undefined, members: { long: gps } },
+      ]);
+    });
+
+    it("places no evidence in a spread of a union payload", async () => {
+      const value = await schemaOf("typeof eitherSpread");
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: undefined, members: {} },
+        { whole: undefined, members: {} },
+      ]);
+    });
+
+    it("places each alternative's restriction on its own member of a spread union payload", async () => {
+      const value = await schemaOf("typeof secretEitherSpread");
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: undefined, members: { lat: secret } },
+        { whole: undefined, members: { long: secret } },
       ]);
     });
   });
