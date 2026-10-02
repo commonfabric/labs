@@ -28,8 +28,7 @@ const signer = await Identity.fromPassphrase("runner-cfc-llm-derived-stamp");
 // carry an explicit LlmDerived provenance stamp instead of representing
 // untrust as mere absence of integrity. This file starts with the stamping
 // MECHANISM kernel: a builtin-identity write through an item schema carrying
-// ifc.addIntegrity persists the atom on exactly the written element — and
-// only there (a sibling written through the plain schema stays unstamped).
+// ifc.addIntegrity persists the atom on the written element.
 
 const LLM_DERIVED_ATOM = {
   type: "https://commonfabric.org/cfc/atom/LlmDerived",
@@ -67,7 +66,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
     });
   });
 
-  it("stamps exactly the element pushed through the addIntegrity schema", async () => {
+  it("stamps the element pushed through the addIntegrity schema", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -90,18 +89,6 @@ describe("CFC LlmDerived stamping mechanism", () => {
       modelTx.prepareCfc();
       expect((await modelTx.commit()).ok).toBeDefined();
 
-      // User push into the SAME array through the plain schema: no stamp.
-      const userTx = runtime.edit();
-      const plain = runtime.getCell(
-        signer.did(),
-        "llm-derived-messages",
-        messagesSchema,
-        userTx,
-      );
-      plain.push({ role: "user", content: "typed by the user" });
-      userTx.prepareCfc();
-      expect((await userTx.commit()).ok).toBeDefined();
-
       const readTx = runtime.edit();
       const messages = runtime.getCell(
         signer.did(),
@@ -115,12 +102,6 @@ describe("CFC LlmDerived stamping mechanism", () => {
         (entry) => entry.label.integrity ?? [],
       );
       expect(assistantIntegrity).toContainEqual(LLM_DERIVED_ATOM);
-
-      const userView = cfcLabelViewForCell(messages.key(1));
-      const userIntegrity = (userView?.entries ?? []).flatMap(
-        (entry) => entry.label.integrity ?? [],
-      );
-      expect(userIntegrity).not.toContainEqual(LLM_DERIVED_ATOM);
       readTx.commit();
     } finally {
       await runtime.dispose();

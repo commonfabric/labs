@@ -11,19 +11,8 @@ existing unprotected value.
 When the runtime serializes a constructed cell with a default, it materializes
 the seed and records the cell's complete schema for CFC preparation. The value,
 schema document, and CFC envelope commit together. Failure aborts the operation.
-The default a pattern's setup writes into an internal cell it materializes for
-the pattern is recorded as the same initialization, whether the pattern exports
-the cell, passes it to a sub-pattern, or keeps it to itself. The reference that
-exposes the cell requires its own protection: changing that reference must not
-provide an alternative way to replace the protected value.
-
-A setup that creates a new piece's argument document records, the same way, the
-default it writes into each concrete protected field the caller leaves to that
-default. The document is new, so every field in it is new; "New fields during a
-source update" below covers an argument document that exists already, where
-only a field the prior schema did not declare is. A value the caller supplies in
-place of the default, explicit `undefined` included, is not initialization, and
-a path containing `*` receives no permission here either.
+The reference that exposes the cell requires its own protection: changing that
+reference must not provide an alternative way to replace the protected value.
 
 When a generated initializer returns the same protected cell again, its changed
 default does not replace an existing backing value. The runtime may record a
@@ -44,14 +33,13 @@ writer identity.
 
 ## New fields during a source update
 
-Verified pattern setup may initialize a concrete, newly declared protected field
-of an argument document that exists already from its schema default. It uses the
-candidate schema's ordinary default extraction and argument validation. The
-prior argument schema must be known and must not already declare the field. The
-argument document must be readable. Paths containing `*` (including a literal
-property with that name) and ambiguous previous declarations do not receive this
-permission. CFC's schema-entry paths do not distinguish literal `*` properties
-from wildcards.
+Verified pattern setup may initialize a concrete, newly declared protected
+argument field from its schema default. It uses the candidate schema's ordinary
+default extraction and argument validation. The prior argument schema must be
+known and must not already declare the field. The argument document must be
+readable. Paths containing `*` (including a literal property with that name)
+and ambiguous previous declarations do not receive this permission. CFC's
+schema-entry paths do not distinguish literal `*` properties from wildcards.
 
 The setup records the permission alongside the candidate argument schema and
 source transition. Preparation requires the field to be absent and the final
@@ -70,24 +58,17 @@ A collection builtin — `map`, `filter`, `flatMap` — instantiates one sub-pat
 per entry of the list it runs over, and stages that entry into the new piece's
 argument as a link to the entry's own cell, beside a link to the list. The
 builtin hands the piece a reference; it writes nothing of what the entry holds.
-The runtime records each such field as a capture when it stages the argument, at
-the builtin's request, and only where the staged value is a link to a cell that
-is not a write redirect, since a redirect sends writes on to the entry. A field
-holding a value receives no record.
+The runtime records each such field as a reference initialization when it stages
+the argument, at the builtin's request, and only where the staged value is a
+link to a cell that is not a write redirect. A field holding a value receives no
+record.
 
-Preparation permits a capture on these terms: the slot ends holding a link to
-the recorded cell, and before the transaction it was absent or held a link to
-that same cell. A link is matched by the cell it names and by whether it is a
-write redirect, not by its bytes, because a later version of the pattern can
-stage the same link under a different schema. Installing a link into an absent
-slot is refused where the stored envelope already declares a writer or UI
-contract on the slot, as for any initialization. A link to another cell over a
-slot that held one before the transaction is a modification, even when the
-transaction empties the slot first, and requires the slot's ordinary writer.
-The same link staged again, as a runtime starting a piece it finds set up
-stages its argument, lands no write at the slot and is permitted whatever the
-slot's stored policy: the slot keeps its link, and the labels stored with that
-link stay with it beside any entry the slot's schema declares there.
+Preparation permits the write on the terms above: the slot must be absent before
+the transaction, and the final value must be the recorded link. A link to
+another cell staged over a field that holds one is a modification and requires
+the field's ordinary writer. The same link staged again, as a runtime starting a
+piece it finds set up stages its argument, lands no write at the slot and is
+permitted: the slot keeps its link, and no policy stored on it is disturbed.
 
 The receiving slot's schema is the entry's own, so it can declare integrity the
 entry's writer adds, such as authorship by the current principal. Staging a
@@ -161,53 +142,6 @@ branch-local expansion rules. Ordinary chains need no shared-result cache.
 The persisted view still contains every distinct labeled path; sharing work
 does not reduce the size of a flat label map for a branching graph.
 
-### Captured bindings
-
-The builtin also stages the bindings its callback captures from the enclosing
-pattern, as a record in the argument's `params` field. A captured cell arrives
-there as a write redirect to it, whose payload carries the binding's schema
-beside the cell's address; the record may hold values too. The runtime records
-each link in the record, at any depth of records and lists, as a capture at the
-link's own path, on the terms above. A value in the record receives no record. A
-record covers the link's slot and nothing above it, so a protected record in
-`params` that holds a value beside a link is refused as any write of that value
-is.
-
-A capture covers the slot that holds the link, never the cell the link names. A
-write through a staged redirect lands at that cell and is checked against that
-cell's stored policy, its writer and owner binding included, as any other write
-to it is, in the staging transaction and after it. As for a reference, staging a
-capture mints none of the integrity the slot's schema adds for the principal
-staging it, so the slot names no owner, and an owner's runtime and a visitor's
-stage the same row alike.
-
-## Bindings a setup stages
-
-A pattern that passes a binding to a sub-pattern it composes, as in
-`Child({ items })`, has setup stage a write redirect to the bound cell into the
-sub-pattern's argument. A pattern's result can name a cell the pattern did not
-create the same way: its argument, passed through to a result field, or a cell
-the code setting the pattern up closed over, as when a handler defines a
-pattern that returns one of the handler's own bindings and sets it up. Setup
-records each such redirect as a binding of the slot holding it. A binding is
-matched as a capture is, by the cell its link names and by whether it is a
-write redirect. It differs in one respect: a setup stages its bindings again on
-every run, and a pattern version may name another cell for one, so preparation
-accepts a binding wherever the slot ends holding a link to the cell this setup
-staged, whatever the slot held before. A write in the setting-up transaction
-that leaves the slot naming another cell, at the slot or at an ancestor, is no
-binding and needs the slot's writer. A list builtin's capture is never
-re-pointed this way. Whether a trusted setup may re-point a capture when a
-pattern version names another cell for it is not settled.
-
-A binding covers the slot alone. The cell its redirect names belongs to
-whoever handed the piece the binding, and setup writes none of it, so a write
-to that cell, through the slot or directly, needs the cell's own writer and
-owner binding in the setting-up transaction as in any other. Only a result
-field naming one of the piece's own internal cells covers that cell as well,
-since setup creates and initializes it. Those cells are minted from the
-piece's result cell, so no other code names them.
-
 ## Setup replay over a stored argument
 
 A runtime that starts a piece it did not create replays the setup of the
@@ -252,9 +186,8 @@ carrying such a claim is.
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source
 update installing a new field's default — the seed, the reference that
-exposes it, the new field's default, the internal cells a setup projects
-result fields to and the slots it stages bindings into are all persisted
-without a claim about the current principal.
+exposes it, the new field's default and the cells a setup projects result
+fields to are all persisted without a claim about the current principal.
 Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
 `ownerPrincipal` binding is established by the first write an acting
 principal makes through the field's writer, and that write mints the claim
@@ -285,8 +218,7 @@ transaction interface has no initialization authority.
 
 Overlapping writes can record different intermediate snapshots. Every covering
 write snapshot must support absence: a snapshot showing an existing value, an
-unreadable path, a write redirect standing on the path above the slot, or
-unknown presence prevents initialization. A
+unreadable path, a redirect, or unknown presence prevents initialization. A
 whole-object deletion followed by a child write cannot turn an existing field
 into a new field. The exact-value check reads the transaction's final value,
 rather than reconstructing it from overlapping write details.

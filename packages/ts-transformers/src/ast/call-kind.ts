@@ -79,9 +79,6 @@ const CELL_LIKE_CLASSES = spellingsWhere({
 });
 
 const CELL_FACTORY_NAMES = new Set(["of"]);
-// The plain cell constructor's `of`, which `commonfabric` also exports on its
-// own as `cell<T>(…)`.
-const CELL_FUNCTION_NAMES = new Set(["cell"]);
 const CELL_FOR_NAMES = new Set(["for"]);
 const CELL_SCOPED_CONSTRUCTOR_NAMES = new Set([
   "perSpace",
@@ -287,29 +284,6 @@ export function detectNewExpressionKind(
   );
   if (!factoryName) return undefined;
   return { kind: "cell-factory", factoryName };
-}
-
-/**
- * The cell kind `call` constructs, where it calls a cell constructor's static
- * factory (`Writable.of<T>(…)`) or the plain cell constructor's `of` that
- * `commonfabric` exports as `cell<T>(…)`, or `undefined` for any other call.
- */
-export function detectCellFactoryCallKind(
-  call: ts.CallExpression,
-  checker: ts.TypeChecker,
-): Extract<CallKind, { kind: "cell-factory" }> | undefined {
-  const callee = stripWrappers(call.expression);
-  const symbol = ts.isIdentifier(callee)
-    ? checker.getSymbolAtLocation(callee)
-    : undefined;
-  const factoryName = symbol
-    ? getImportedCommonFabricNamedExport(symbol, CELL_FUNCTION_NAMES) &&
-      "Cell"
-    : ts.isPropertyAccessExpression(callee) &&
-        CELL_FACTORY_NAMES.has(callee.name.text)
-    ? detectCellConstructorExpressionName(callee.expression, checker, new Set())
-    : undefined;
-  return factoryName ? { kind: "cell-factory", factoryName } : undefined;
 }
 
 export function detectDirectBuilderCall(
