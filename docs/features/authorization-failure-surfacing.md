@@ -119,7 +119,8 @@ Subscription teardown also cancels pending render callbacks so they cannot
 restore a removed subtree. Transient transport errors preserve the mounted
 content and do not masquerade as revoked authority. What stands in for revoked
 content reads "Access unavailable" beside a Retry button, which asks for the
-revoked space once more and reads "Retrying…" until the answer comes; an
+revoked space once more, and the status reads "Retrying…" until the answer
+comes; an
 admission restores the content.
 
 ## CLI: surface the denial for the space it was asked to reach

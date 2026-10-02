@@ -113,21 +113,20 @@ describe("space access loss notification", () => {
         { storageManager: storage },
         retries,
       );
-      provider.retry?.(identity.did());
+      provider.retries?.retry(identity.did());
       expect(retried).toEqual([identity.did()]);
-      expect(provider.retryState?.(identity.did())).toEqual({
+      expect(provider.retries?.state(identity.did())).toEqual({
         retrying: true,
         settled: 0,
       });
       gate.resolve();
       await retries.retry(identity.did());
-      expect(provider.retryState?.(identity.did())).toEqual({
+      expect(provider.retries?.state(identity.did())).toEqual({
         retrying: false,
         settled: 1,
       });
       const bare = renderSpaceAccessProviderFor({ storageManager: storage });
-      expect(bare.retry).toBeUndefined();
-      expect(bare.retryState).toBeUndefined();
+      expect(bare.retries).toBeUndefined();
     } finally {
       await storage.close();
     }

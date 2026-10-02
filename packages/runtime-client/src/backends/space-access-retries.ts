@@ -8,7 +8,8 @@ import type { Cancel } from "@commonfabric/runner";
  * while one of the same space is in flight shares it, so the render
  * boundaries' retry controls and the host's requests ask the memory server
  * once between them. Observers hear when each retry starts and when it
- * settles, which is how a retry control shows it is in flight.
+ * settles, which is how a retry control shows it is in flight. Once disposed,
+ * it starts no retry and tells no observer anything.
  */
 export class SpaceAccessRetries {
   readonly #retrySpaceAccess: (space: MemorySpace) => Promise<void>;
@@ -21,6 +22,8 @@ export class SpaceAccessRetries {
 
   readonly #observers = new Set<(space: MemorySpace) => void>();
 
+  #disposed = false;
+
   /**
    * Constructs an instance which retries a space by calling
    * `retrySpaceAccess`, ordinarily `Runtime.retrySpaceAccess()`.
@@ -31,9 +34,11 @@ export class SpaceAccessRetries {
 
   /**
    * Retries `space` unless a retry of it is already in flight, and returns
-   * the retry that is. It settles as the retry it calls does.
+   * the retry that is. It settles as the retry it calls does. Once disposed,
+   * it returns a resolved promise and calls nothing.
    */
   retry(space: MemorySpace): Promise<void> {
+    if (this.#disposed) return Promise.resolve();
     let retry = this.#inFlight.get(space);
     if (retry === undefined) {
       retry = this.#retrySpaceAccess(space).finally(() => {
@@ -61,6 +66,15 @@ export class SpaceAccessRetries {
     return () => {
       this.#observers.delete(observer);
     };
+  }
+
+  /**
+   * Stops starting retries and drops every observer, so that a retry still
+   * in flight settles unheard.
+   */
+  dispose(): void {
+    this.#disposed = true;
+    this.#observers.clear();
   }
 
   #notify(space: MemorySpace): void {

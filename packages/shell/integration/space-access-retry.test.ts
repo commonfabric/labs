@@ -98,8 +98,8 @@ async function waitForRefusal(page: Page): Promise<number> {
 
 /**
  * Waits until the page shows the piece, or shows the placeholder counting more
- * than `retries` settled retries with its Retry button enabled again, and
- * returns which: `piece` or `refused`. Either way a retry asked for after the
+ * than `retries` settled retries and no longer busy, and returns which:
+ * `piece` or `refused`. Either way a retry asked for after the
  * page counted `retries` has settled, so the answer is that retry's verdict.
  */
 async function waitForRetryOutcome(
@@ -116,20 +116,19 @@ async function waitForRetryOutcome(
     ) {
       return "piece";
     }
-    const settledRefused = placeholders.some((el) => {
-      const button = el.querySelector("[data-space-access-retry]");
-      return Number(el.getAttribute("data-space-access-retries")) > before &&
-        button instanceof HTMLButtonElement && !button.disabled;
-    });
+    const settledRefused = placeholders.some((el) =>
+      Number(el.getAttribute("data-space-access-retries")) > before &&
+      el.getAttribute("aria-busy") === "false"
+    );
     return settledRefused ? "refused" : false;
   }, { args: [retries] });
 }
 
 /**
  * Returns whether the page shows a retry under way or past, given that it
- * showed `retries` settled ones when the space was refused: the Retry button
- * disabled and reading "Retrying…", a higher settled count, or the piece in
- * the placeholder's place. Reads the page once, as it stands.
+ * showed `retries` settled ones when the space was refused: the placeholder
+ * busy and reading "Retrying…", a higher settled count, or the piece in the
+ * placeholder's place. Reads the page once, as it stands.
  */
 async function retryHasStarted(page: Page, retries: number): Promise<boolean> {
   // A predicate that always answers with an object holds at its first check,
@@ -137,12 +136,11 @@ async function retryHasStarted(page: Page, retries: number): Promise<boolean> {
   const reading = await waitForCondition(page, (probe, before) => {
     const placeholders = probe.collect("[data-space-access-lost]");
     const started = placeholders.length === 0 ||
-      placeholders.some((el) => {
-        const button = el.querySelector("[data-space-access-retry]");
-        return Number(el.getAttribute("data-space-access-retries")) > before ||
-          (button instanceof HTMLButtonElement && button.disabled &&
-            probe.deepText(button).trim() === "Retrying…");
-      });
+      placeholders.some((el) =>
+        Number(el.getAttribute("data-space-access-retries")) > before ||
+        (el.getAttribute("aria-busy") === "true" &&
+          probe.deepText(el).includes("Retrying…"))
+      );
     return { started };
   }, { args: [retries] });
   return reading?.started === true;
@@ -232,5 +230,58 @@ describe("shell space access retry", () => {
       }, { args: [space] });
       expect(asked).toEqual([space]);
     });
+  });
+
+  it("keeps keyboard focus on the Retry button through a retry that is refused", async () => {
+    await using ownerFile = await writeTempIdentity({
+      implementation: "noble",
+    });
+    const owner = ownerFile.identity;
+    const member = await Identity.generate({ implementation: "noble" });
+    const space = await createTestSpace(owner, {
+      grants: { [member.did()]: "WRITE" },
+    });
+    const pieceId = await filePiece(ownerFile.path, space);
+    const controller = await PiecesController.initialize({
+      space,
+      apiUrl: new URL(API_URL),
+      identity: owner,
+    });
+    try {
+      const acl = new ACLManager(controller.runtime, space);
+      const page = shell.page();
+      await shell.goto({
+        frontendUrl: FRONTEND_URL,
+        view: { spaceDid: space, pieceId },
+        identity: member,
+      });
+      expect(await waitForRetryOutcome(page, 0)).toBe("piece");
+      await acl.remove(member.did());
+      const retries = await waitForRefusal(page);
+
+      // Focus the control from the page, and press it from the keyboard, as
+      // someone tabbing to it would.
+      await waitForCondition(page, (probe) => {
+        const button = probe.collect("[data-space-access-retry]").at(-1);
+        if (!(button instanceof HTMLElement)) return false;
+        button.focus();
+        return true;
+      });
+      await page.keyboard.press("Enter");
+      expect(await waitForRetryOutcome(page, retries)).toBe("refused");
+
+      const focused = await waitForCondition(page, () => {
+        let active: Element | null = document.activeElement;
+        while (active?.shadowRoot?.activeElement) {
+          active = active.shadowRoot.activeElement;
+        }
+        return {
+          retry: active?.hasAttribute("data-space-access-retry") ?? false,
+        };
+      });
+      expect(focused).toEqual({ retry: true });
+    } finally {
+      await controller.dispose();
+    }
   });
 });

@@ -804,14 +804,16 @@ export function renderSpaceAccessProviderFor(
       };
     },
     ...(retries !== undefined && {
-      retry: (space: string) => {
-        // A render boundary has nowhere to report a failure, and the person
-        // can ask again.
-        retries.retry(space as MemorySpace).catch((error) => {
-          console.warn(`Retrying access to space ${space} failed:`, error);
-        });
+      retries: {
+        retry: (space: string) => {
+          // A render boundary has nowhere to report a failure, and the person
+          // can ask again.
+          retries.retry(space as MemorySpace).catch((error) => {
+            console.warn(`Retrying access to space ${space} failed:`, error);
+          });
+        },
+        state: (space: string) => retries.state(space as MemorySpace),
       },
-      retryState: (space: string) => retries.state(space as MemorySpace),
     }),
   };
 }
@@ -1345,6 +1347,7 @@ export class RuntimeProcessor {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
         this.#profilePreloadCancel = undefined;

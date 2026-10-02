@@ -58,6 +58,22 @@ describe("SpaceAccessRetries", () => {
       });
     });
 
+    describe("dispose()", () => {
+      it("starts no retry afterwards, and tells no observer of a retry that settles afterwards", async () => {
+        const { retries, calls, gates } = gatedRetries();
+        const heard: MemorySpace[] = [];
+        retries.subscribe((space) => heard.push(space));
+        const inFlight = retries.retry(SPACE);
+        expect(heard).toEqual([SPACE]);
+        retries.dispose();
+        await retries.retry(OTHER);
+        expect(calls).toEqual([SPACE]);
+        gates[0].resolve();
+        await inFlight;
+        expect(heard).toEqual([SPACE]);
+      });
+    });
+
     describe("state()", () => {
       it("reports a retry in flight while one is, and one more settled once it settles", async () => {
         const { retries, gates } = gatedRetries();

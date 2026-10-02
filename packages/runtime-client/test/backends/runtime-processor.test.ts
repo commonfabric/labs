@@ -6580,6 +6580,33 @@ describe("runtime-processor", () => {
         ]);
       });
 
+      it("starts no retry once disposed", async () => {
+        const calls: string[] = [];
+        const gate = Promise.withResolvers<void>();
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              return gate.promise;
+            },
+            storageManager: { synced: () => Promise.resolve() },
+            dispose: () => Promise.resolve(),
+          },
+        });
+        const inFlight = processor.handleRetrySpaceAccess({
+          type: RequestType.RetrySpaceAccess,
+          space: "did:key:z6Mk-ipc-before-dispose",
+        });
+        await processor.dispose();
+        await processor.handleRetrySpaceAccess({
+          type: RequestType.RetrySpaceAccess,
+          space: "did:key:z6Mk-ipc-after-dispose",
+        });
+        expect(calls).toEqual(["did:key:z6Mk-ipc-before-dispose"]);
+        gate.resolve();
+        await inFlight;
+      });
+
       it("shares a retry still in flight with a request for the same space, and asks again once it settles", async () => {
         const calls: string[] = [];
         const gates: PromiseWithResolvers<void>[] = [];

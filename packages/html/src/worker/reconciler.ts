@@ -81,7 +81,6 @@ import type {
   ReconcileContext,
   RenderDeclassificationPolicy,
   RenderPolicy,
-  SpaceAccessRetryState,
   WorkerProps,
   WorkerReconcilerOptions,
   WorkerRenderNode,
@@ -1499,11 +1498,13 @@ export class WorkerReconciler {
   /**
    * What stands in for content of `space` while its session is refused: a
    * status saying so, and, when the access provider can retry, a control that
-   * asks once more. The control is disabled and reads "Retrying…" while a
-   * retry of the space is in flight, and the status carries how many have
-   * settled as `data-space-access-retries`. An admission re-renders the
-   * content through the provider's `subscribe()`, and a refusal re-enables
-   * the control.
+   * asks once more. While a retry of the space is in flight the status is
+   * `aria-busy` and reads "Retrying…" after the control, and it carries how
+   * many retries have settled as `data-space-access-retries`. The control
+   * itself is the same whatever the retry state, so a placeholder updated in
+   * place keeps it and its keyboard focus, and a press while a retry is in
+   * flight shares that retry. An admission re-renders the content through the
+   * provider's `subscribe()`.
    */
   #accessPlaceholderVNode(space: string): WorkerVNode {
     const props: WorkerProps = {
@@ -1511,23 +1512,26 @@ export class WorkerReconciler {
       role: "status",
     };
     const children: WorkerRenderNode[] = ["Access unavailable"];
-    const spaceAccess = this.#spaceAccess;
-    if (spaceAccess?.retry !== undefined) {
-      const { retrying, settled } = this.#retryStateOf(space);
-      const retry = () => spaceAccess.retry?.(space);
+    const retries = this.#spaceAccess?.retries;
+    if (retries !== undefined) {
+      const { retrying, settled } = retries.state(space);
+      const retry = () => retries.retry(space);
       this.#accessRetryHandlers.add(retry);
+      props["aria-busy"] = retrying ? "true" : "false";
       props["data-space-access-retries"] = String(settled);
       children.push(" ", {
         type: "vnode",
         name: "button",
         props: {
           type: "button",
-          "data-space-access-retry": "true",
-          disabled: retrying,
+          // Names the space, so that a control for another space is another
+          // child to the keyed diff, carrying its own handler.
+          "data-space-access-retry": space,
           onClick: retry,
         },
-        children: [retrying ? "Retrying…" : "Retry"],
+        children: ["Retry"],
       });
+      if (retrying) children.push(" Retrying…");
     }
     return { type: "vnode", name: "span", props, children };
   }
@@ -1537,15 +1541,10 @@ export class WorkerReconciler {
    * what the placeholder shows does.
    */
   #accessPlaceholderKey(space: string): string {
-    if (this.#spaceAccess?.retry === undefined) return "access";
-    const { retrying, settled } = this.#retryStateOf(space);
-    return `access:${retrying}:${settled}`;
-  }
-
-  /** Where the retries of `space` stand, as the access provider reports. */
-  #retryStateOf(space: string): SpaceAccessRetryState {
-    return this.#spaceAccess?.retryState?.(space) ??
-      { retrying: false, settled: 0 };
+    const state = this.#spaceAccess?.retries?.state(space);
+    return state === undefined
+      ? `access:${space}`
+      : `access:${space}:${state.retrying}:${state.settled}`;
   }
 
   #cellRefForBinding(cell: Cell<unknown>): CellRef {
@@ -2776,62 +2775,14 @@ export class WorkerReconciler {
       isOldStateText: oldState?.tagName === "#text",
     }));
 
-    // Case 1: Same element type - update in place. Not across a change in
-    // the subtree's fetch block: a literal prop the old decision set would
-    // be skipped as unchanged.
-    if (
-      oldState && oldTagName && newTagName && oldTagName === newTagName &&
-      this.#sameRemoteLoadDecision(oldState.renderPolicy, policy)
-    ) {
-      const sanitized = this.#sanitizeNode(newVNode!);
-      if (sanitized) {
-        const childPolicy = this.#childRenderPolicyForNode(
-          sanitized,
-          policy,
-          oldState.nodeId,
-        );
-        const policyChildren = this.#childrenForRenderPolicy(
-          sanitized,
-          childPolicy,
-        );
-        const policyChanged = !this.#renderPolicyEquals(
-          oldState.childRenderPolicy,
-          childPolicy,
-        ) || oldState.childrenBlockedByPolicy !== policyChildren.blocked;
-        logger.debug("reconcile-node", () => ({
-          id: wrapper.nodeId,
-          strategy: "update-in-place",
-          tagName: newTagName,
-        }));
-        oldState.renderPolicy = policy;
-        oldState.childRenderPolicy = childPolicy;
-        this.#setChildrenBlocked(oldState, policyChildren, childPolicy);
-        oldState.sourceChildren = sanitized.children;
-        oldState.sourceProps = sanitized.props;
-        // Update props in place with proper diffing
-        this.#updatePropsInPlace(ctx, oldState, sanitized.props);
-
-        // Update children in place with proper diffing
-        if (policyChildren.children !== undefined) {
-          const childrenSame = this.#areChildrenSame(
-            oldState,
-            policyChildren.children,
-          );
-          this.#updateChildrenInPlace(
-            ctx,
-            oldState,
-            policyChildren.children,
-            new Set(),
-            childPolicy,
-            policyChanged,
-          );
-          if (!childrenSame || policyChanged) {
-            this.#refreshTextIntegrityBoundaryState(oldState, childPolicy);
-          }
-        }
-        return;
-      }
-      // sanitized is null (e.g., script tag) - fall through to Case 2 to remove
+    // Case 1: Same element type - update in place.
+    if (oldState && this.#updateInPlace(ctx, oldState, node, policy)) {
+      logger.debug("reconcile-node", () => ({
+        id: wrapper.nodeId,
+        strategy: "update-in-place",
+        tagName: newTagName,
+      }));
+      return;
     }
 
     // Case 2: Different type, text node, array, or no previous - destroy and recreate
@@ -2871,6 +2822,73 @@ export class WorkerReconciler {
       wrapper.currentChild = null;
       wrapper.cancel = () => {};
     }
+  }
+
+  /**
+   * Helper for `#reconcileIntoWrapper()` and the refused-content placeholder,
+   * which updates `oldState` in place to render `node`, diffing its props and
+   * children, and returns whether it could. It cannot when `node` is not an
+   * element of the same tag, when sanitizing drops it, or across a change in
+   * the subtree's fetch block, where a literal prop the old decision set
+   * would be skipped as unchanged.
+   */
+  #updateInPlace(
+    ctx: ReconcileContext,
+    oldState: NodeState,
+    node: WorkerRenderNode,
+    policy: RenderPolicy,
+  ): boolean {
+    const newVNode = this.#extractVNode(node);
+    const oldTagName = "tagName" in oldState ? oldState.tagName : null;
+    const newTagName = newVNode?.name ?? null;
+    if (
+      !oldTagName || !newTagName || oldTagName !== newTagName ||
+      !this.#sameRemoteLoadDecision(oldState.renderPolicy, policy)
+    ) {
+      return false;
+    }
+    const sanitized = this.#sanitizeNode(newVNode!);
+    if (!sanitized) return false;
+    const childPolicy = this.#childRenderPolicyForNode(
+      sanitized,
+      policy,
+      oldState.nodeId,
+    );
+    const policyChildren = this.#childrenForRenderPolicy(
+      sanitized,
+      childPolicy,
+    );
+    const policyChanged = !this.#renderPolicyEquals(
+      oldState.childRenderPolicy,
+      childPolicy,
+    ) || oldState.childrenBlockedByPolicy !== policyChildren.blocked;
+    oldState.renderPolicy = policy;
+    oldState.childRenderPolicy = childPolicy;
+    this.#setChildrenBlocked(oldState, policyChildren, childPolicy);
+    oldState.sourceChildren = sanitized.children;
+    oldState.sourceProps = sanitized.props;
+    // Update props in place with proper diffing
+    this.#updatePropsInPlace(ctx, oldState, sanitized.props);
+
+    // Update children in place with proper diffing
+    if (policyChildren.children !== undefined) {
+      const childrenSame = this.#areChildrenSame(
+        oldState,
+        policyChildren.children,
+      );
+      this.#updateChildrenInPlace(
+        ctx,
+        oldState,
+        policyChildren.children,
+        new Set(),
+        childPolicy,
+        policyChanged,
+      );
+      if (!childrenSame || policyChanged) {
+        this.#refreshTextIntegrityBoundaryState(oldState, childPolicy);
+      }
+    }
+    return true;
   }
 
   /**
@@ -4768,10 +4786,11 @@ export class WorkerReconciler {
     // Whether the rendered content was laid out with its URL fetches blocked.
     // A change re-renders rather than reusing what the old decision set.
     let currentRemoteLoadsBlocked = false;
-    // Which placeholder stands in for policy-blocked content, so that a change
-    // of placeholder re-renders even when the value it stands in for has not
-    // changed.
+    // Which placeholder stands in for policy-blocked content, and which
+    // refused space it stands in for, so that a change of placeholder
+    // re-renders even when the value it stands in for has not changed.
     let currentPlaceholder: string | undefined;
+    let currentRefusedSpace: string | undefined;
 
     // §4.9.3 Stage 2: on each render, watch the ACL docs of the spaces this
     // cell's read is labeled with, so a fail-closed over-block upgrades to an
@@ -4822,11 +4841,25 @@ export class WorkerReconciler {
         ? this.#accessPlaceholderKey(refusedSpace)
         : "policy";
       if (!isInitialRender && valueUnchanged) {
-        if (
-          blockedByPolicy && currentContentState === "policy-blocked" &&
-          currentPlaceholder === placeholder
-        ) {
-          return;
+        if (blockedByPolicy && currentContentState === "policy-blocked") {
+          if (currentPlaceholder === placeholder) return;
+          // A retry starting or settling changes the placeholder of the same
+          // space, which is updated where it stands, so that its control
+          // keeps keyboard focus.
+          if (
+            refusedSpace !== undefined &&
+            refusedSpace === currentRefusedSpace &&
+            childState.elementState !== undefined &&
+            this.#updateInPlace(
+              ctx,
+              childState.elementState,
+              this.#accessPlaceholderVNode(refusedSpace),
+              policy,
+            )
+          ) {
+            currentPlaceholder = placeholder;
+            return;
+          }
         }
         if (
           blockedByIntegrity && currentContentState === "integrity-blocked"
@@ -4869,6 +4902,7 @@ export class WorkerReconciler {
         currentCancel = blockedState.cancel;
         currentContentState = "policy-blocked";
         currentPlaceholder = placeholder;
+        currentRefusedSpace = refusedSpace;
 
         const beforeId = this.#findNextSiblingId(
           parentState.children,
