@@ -112,14 +112,22 @@ The exceptions, all of them about `cf-render`:
   over-approximation (CFC §8.2.5). A label the slot's schema declares decides
   only where the read consumed no stored label. A `cf-render` whose binding is
   withheld shows nothing, where opening a refused piece shows the placeholder.
-- A nested render applies the root ceiling and no text-integrity requirement.
+- A nested render applies the root ceiling, and none of the declassification
+  or text-integrity requirement of a boundary around the `cf-render`. A
+  boundary that only declassifies admits more than the root, so there the
+  binding keeps the component's read, and what the boundary would release
+  shows as the placeholder, as when the piece is opened by its address.
   Inside a boundary that lowers the ceiling, or under an authorship boundary
-  that verifies text integrity, it would not be held to what the element is,
-  so there the binding is decided on a read of everything the bound cell
-  reaches, whatever the slot declares, and a piece holding anything the
-  element's ceiling refuses shows nothing. That read fits confidentiality only:
-  under an authorship boundary, a piece whose text carries no endorsement still
-  binds, and its nested render shows that text.
+  that verifies text integrity, the nested render would not be held to what
+  the element is, so there the binding is decided on a read of everything the
+  bound cell reaches, whatever the slot declares, and a piece holding anything
+  the element's ceiling refuses shows nothing. That read fits confidentiality
+  only: under an authorship boundary, a piece whose text carries no
+  endorsement still binds, and its nested render shows that text.
+- `cf-render`'s `cell` is also a remote load (`REMOTE_LOAD_PROPS`), so the
+  read that decides the binding is fitted on the fetch ceiling as well, and
+  the nested render keeps what a caveated view inside the piece would load
+  from loading, as opening the piece does.
 - The component's own reads through the bound handle, such as the piece menu's
   Data panel, are answered without the ceiling, as for every binding.
 

@@ -1,7 +1,11 @@
 import { expect } from "@std/expect";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { cfcAtom } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  CFC_CONCEPT_KIND,
+  cfcAtom,
+} from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import {
@@ -239,6 +243,10 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
       removed: () =>
         ops.filter((op) => op.op === "remove-prop" && op.key === "cell")
           .length,
+      propsSet: (key: string) =>
+        ops.flatMap((op) =>
+          op.op === "set-prop" && op.key === key ? [op.value] : []
+        ),
       // The elements and text a render shows, in the order it builds them.
       shown: () =>
         ops.flatMap((op) =>
@@ -784,24 +792,54 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     await t.step(
       "binds a pinned piece inside a boundary that only declassifies, as at the root",
       async () => {
-        expect(
-          await boundCount(
-            await tileView(
-              "declassified-shelf-view",
-              await pinned(
-                "declassified-shelf-pins",
-                await shelf("declassified-shelf"),
-              ),
-              {
-                name: "cf-cfc-render-boundary",
-                props: {
-                  declassifyConfidentiality: [cfcAtom.user(visitor.did())],
+        // A boundary that only declassifies admits more than the root ceiling,
+        // so the nested render, which starts from the root and does not take
+        // the declassification with it, shows no more than the boundary
+        // allows. It shows what opening the piece shows, whether the boundary
+        // declassifies the piece's sealed entry or something else; a read of
+        // everything the piece reaches would change only the second case,
+        // withholding the piece.
+
+        const declassified = [
+          ["something else", cfcAtom.user(visitor.did())],
+          ["the sealed entry", sealedAtom],
+        ] as const;
+        const outcomes: Record<string, unknown> = {};
+        for (const [id, atom] of declassified) {
+          const piece = await shelf(`declassified-shelf-${id}`);
+          const page = await mount(
+            createCellRef(
+              await tileView(
+                `declassified-shelf-view-${id}`,
+                await pinned(`declassified-shelf-pins-${id}`, piece),
+                {
+                  name: "cf-cfc-render-boundary",
+                  props: { declassifyConfidentiality: [atom] },
                 },
-              },
+              ),
             ),
             owner,
-          ),
-        ).toBe(1);
+          );
+          const direct = await openDirectly(piece, owner);
+          try {
+            const [binding] = page.bindings();
+            const tile = binding === undefined
+              ? undefined
+              : await mount(createCellRef(target(binding)), owner);
+            outcomes[id] = {
+              bound: page.bindings().length,
+              tileAsOpened: tile?.shown().join() === direct.shown().join(),
+            };
+            tile?.cancel();
+          } finally {
+            page.cancel();
+            direct.cancel();
+          }
+        }
+        expect(outcomes).toEqual({
+          "something else": { bound: 1, tileAsOpened: true },
+          "the sealed entry": { bound: 1, tileAsOpened: true },
+        });
       },
     );
 
@@ -1021,6 +1059,81 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         } finally {
           page.cancel();
         }
+      },
+    );
+    await t.step(
+      "keeps what a nested render loads under the fetch ceiling, as opening the piece does",
+      async () => {
+        // A binding to `cf-render` is a remote load, so it is fitted on the
+        // fetch ceiling too, on the read that decides it. A material-risk
+        // caveat the display admits, on a view the piece shows, binds the
+        // piece, and its nested render sets no URL that view names, as
+        // opening the piece sets none. On the piece's own document it
+        // withholds the binding.
+
+        const unscreened: CfcAtom = {
+          type: CFC_ATOM_TYPE.Caveat,
+          kind: CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+          source: "of:untrusted-sender",
+        };
+        const risky = [owner.did(), unscreened];
+        const PIXEL = "https://example.test/pixel.png";
+        const holding = await write("risky-holding-shelf", {
+          [NAME]: "Shelf",
+          [UI]: vnode("div", [
+            "Shelf heading",
+            link(
+              await write(
+                "risky-view",
+                vnode("img", [], { src: PIXEL }),
+                [[[], risky]],
+              ),
+            ),
+          ]),
+        });
+        const riskyPiece = await write("risky-piece", {
+          [NAME]: "Shelf",
+          [UI]: vnode("div", ["Shelf heading"]),
+        }, [[[], risky]]);
+
+        const page = await mount(
+          createCellRef(
+            await tileView(
+              "risky-holding-view",
+              await pinned("risky-holding-pins", holding),
+            ),
+          ),
+          owner,
+        );
+        const direct = await openDirectly(holding, owner);
+        try {
+          expect(page.bindings()).toHaveLength(1);
+          const tile = await mount(
+            createCellRef(target(page.bindings()[0])),
+            owner,
+          );
+          try {
+            expect(tile.shown()).toEqual(direct.shown());
+            expect([tile.propsSet("src"), direct.propsSet("src")]).toEqual([
+              [],
+              [],
+            ]);
+          } finally {
+            tile.cancel();
+          }
+        } finally {
+          page.cancel();
+          direct.cancel();
+        }
+        expect(
+          await boundCount(
+            await tileView(
+              "risky-piece-view",
+              await pinned("risky-piece-pins", riskyPiece),
+            ),
+            owner,
+          ),
+        ).toBe(0);
       },
     );
   } finally {
