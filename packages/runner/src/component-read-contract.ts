@@ -312,12 +312,16 @@ export type NestedRenderPath = readonly string[];
  * {@link componentReadSchema} resolves it against the schema the bound handle
  * carries, and, for a nested render root, the paths of the references it
  * mounts a render from, each read as `NestedRenderReferenceSchema` reads one.
- * A component's entry is reviewed like the component itself: what it reads
- * through the handle beyond `schema`, or shows from beyond a reference other
- * than through a render mounted from it, the entry does not cover.
+ * `projected` is set when the component reads the handle with `schema`
+ * whatever schema the handle carries; otherwise a schema the handle carries
+ * is read in place of `schema`. A component's entry is reviewed like the
+ * component itself: what it reads through the handle beyond that read, or
+ * shows from beyond a reference other than through a render mounted from it,
+ * the entry does not cover.
  */
 export type ComponentPropRead = {
   readonly schema: JSONSchema;
+  readonly projected?: true;
   readonly renders?: readonly NestedRenderPath[];
 };
 
@@ -335,12 +339,16 @@ export const componentReadContracts: Readonly<
   "cf-tabs": { value: { schema: stringSchema } },
   "cf-tab-bar": { value: { schema: stringSchema } },
   "cf-render": {
-    cell: { schema: NestedRenderReferenceSchema, renders: [[]] },
+    cell: {
+      schema: NestedRenderReferenceSchema,
+      projected: true,
+      renders: [[]],
+    },
   },
   // `cf-picker` hands each item's reference to a `cf-render` of its own.
   "cf-picker": {
     selectedIndex: { schema: numberSchema },
-    items: { schema: pieceListSchema, renders: [["*"]] },
+    items: { schema: pieceListSchema, projected: true, renders: [["*"]] },
   },
   "cf-autocomplete": {
     value: { schema: { anyOf: [stringSchema, stringArraySchema] } },
@@ -363,13 +371,15 @@ export const componentReadContracts: Readonly<
   },
   "cf-code-editor": {
     value: { schema: stringSchema },
-    mentionable: { schema: MentionableArraySchema },
-    mentioned: { schema: MentionableArraySchema },
-    references: { schema: MentionRefMapSchema },
+    mentionable: { schema: MentionableArraySchema, projected: true },
+    mentioned: { schema: MentionableArraySchema, projected: true },
+    references: { schema: MentionRefMapSchema, projected: true },
   },
-  "cf-profile-badge": { profile: { schema: ProfileBadgeSchema } },
+  "cf-profile-badge": {
+    profile: { schema: ProfileBadgeSchema, projected: true },
+  },
   "cf-markdown": { content: { schema: true } },
-  "cf-fab": { previewMessage: { schema: stringSchema } },
+  "cf-fab": { previewMessage: { schema: stringSchema, projected: true } },
   "cf-theme": { theme: { schema: true } },
   "cf-calendar": { value: { schema: true }, markedDates: { schema: true } },
   "cf-select": { value: { schema: true } },
@@ -397,14 +407,10 @@ export function componentReadSchema(
   supplied: JSONSchema | undefined,
   props: Record<string, unknown> = {},
 ): JSONSchema | undefined {
-  const declared = componentReadContracts[component]?.[property]?.schema;
-  if (declared === undefined) return undefined;
-  if (
-    (component === "cf-render" && property === "cell") ||
-    (component === "cf-picker" && property === "items") ||
-    component === "cf-profile-badge" || component === "cf-fab" ||
-    (component === "cf-code-editor" && property !== "value")
-  ) return declared;
+  const contract = componentReadContracts[component]?.[property];
+  if (contract === undefined) return undefined;
+  const declared = contract.schema;
+  if (contract.projected) return declared;
   const schema = component === "cf-autocomplete" && property === "value"
     ? autocompleteValueSchema(props.multiple === true)
     : declared;
