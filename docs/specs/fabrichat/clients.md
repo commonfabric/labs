@@ -30,11 +30,11 @@ a room to anyone its space doesn't admit.
   (see [shared spaces](README.md#shared-spaces)).
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
-  client MUST read the principal the room's `about` is labeled `authored-by`
-  (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), as
-  `cf-cfc-authorship` reads a message's label, and pass that principal as
-  `counterpart`, never the notice's claim. The manager can't make this check
-  itself, since a pattern can't read a label's principal. A client shows who
+  client MUST read the principal the room's `about.record` is labeled
+  `authored-by` (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)),
+  as `cf-cfc-authorship` reads a message's label, and pass that principal as
+  `counterpart`, never the notice's claim. The manager makes the same check, and
+  refuses a `counterpart` that isn't the room's creator. A client shows who
   created the room from the same label. Whether to add the room to their list is
   the person's decision, so a client SHOULD accept only after showing them who
   created the room, and what it is.

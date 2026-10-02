@@ -38,6 +38,10 @@
       // exists for.
       "command": "deno bench --allow-read"
     },
+    "regenerate-fvj1-conformance": {
+      "description": "Write test/fixtures/fvj1-conformance.json from the conformance cases",
+      "command": "deno run --allow-write=test/fixtures/fvj1-conformance.json test/regenerate-fvj1-conformance.ts"
+    },
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test"
   },
   "test": {

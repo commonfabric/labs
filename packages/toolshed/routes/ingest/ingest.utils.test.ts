@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { type MemorySpace, Runtime } from "@commonfabric/runner";
+import { type MemorySpace, parseLink, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
@@ -192,6 +192,39 @@ describe("ingest journal sink", () => {
     const ids = (cell.get() as { point_id: string }[]).map((p) => p.point_id)
       .sort();
     expect(ids).toEqual(["a", "b", "c"]);
+  });
+
+  it("leaves the documents of earlier records in place when appending", async () => {
+    // Each record in a journal is a document of its own, and the journal
+    // cell holds a link to each. An append that wrote the earlier records
+    // again would store every one of them under a new id on every POST, and
+    // leave the copies it replaced behind.
+
+    const r = reg();
+    const cell = journalCell(runtime, r, "2026-07-06");
+    const recordIds = async (): Promise<(string | undefined)[]> => {
+      await cell.sync();
+      const links = (cell.getRaw() ?? []) as readonly unknown[];
+      return links.map((link) => parseLink(link, cell)?.id);
+    };
+
+    await appendToJournal(runtime, r, "2026-07-06", [{ point_id: "a" }]);
+    const [first] = await recordIds();
+    await appendToJournal(runtime, r, "2026-07-06", [
+      { point_id: "b" },
+      { point_id: "c" },
+    ]);
+
+    const after = await recordIds();
+    expect(typeof first).toBe("string");
+    expect(after).toHaveLength(3);
+    expect(after[0]).toBe(first);
+    expect(new Set(after).size).toBe(3);
+    expect(cell.get()).toEqual([
+      { point_id: "a" },
+      { point_id: "b" },
+      { point_id: "c" },
+    ]);
   });
 
   it("validates the partition segment", () => {
