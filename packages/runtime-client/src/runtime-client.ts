@@ -1428,6 +1428,17 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.resetSubscriptionDiagnostics();
   }
 
+  /**
+   * Snapshot pending writes and session progress without awaiting idle or sync.
+   * Null means the worker's storage manager does not expose diagnostics.
+   */
+  async getStorageDiagnostics() {
+    const res = await this.#conn.request<RequestType.GetStorageDiagnostics>({
+      type: RequestType.GetStorageDiagnostics,
+    });
+    return res.diagnostics;
+  }
+
   async getLoggerCounts(): Promise<{
     counts: LoggerCountsData;
     metadata: LoggerMetadata;

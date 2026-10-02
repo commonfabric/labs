@@ -812,18 +812,35 @@ structurally representable.
   expressions
 - direct top-level `any` / `unknown` result inference emits
   `pattern:any-result-schema`
-- individual inferred-result **fields** whose type is `unknown` emit **Error**
-  `pattern-result:unknown-type`, naming the offending paths — the schema would
+- individual inferred-result **fields** whose type is `unknown`, at any depth of
+  object types, array elements, tuple elements, `readonly` types, and the
+  members of a union, emit **Error** `pattern-result:unknown-type`, naming the
+  offending paths (`a.b`, `items[]`, `pair[0]`, and `pair[1...]` for a tuple's
+  rest element; a union member's path is the union's) — the schema would
   carry `{ type: "unknown" }` there, which a consumer does not materialize: it
   reads the field back as an opaque reference carrying no properties
-  (`schema-injection.ts:2621`)
+  (`reportUnknownPatternResult()` in `schema-injection.ts`)
 - authors who intentionally want a permissive/opaque output boundary must make
   it explicit with `pattern<Input, Output>(...)`
 
 This inference runs through `collectFunctionSchemaTypeNodes` via
 `inferReturnType`, object-literal recovery, and direct projection recovery. The
 inferred return type is printed under the flags §10.1 names, so a result type
-holding `[]` anywhere is printed whole.
+holding `[]` anywhere is printed whole. A result type the checker prints no node
+for, such as the instance type of an anonymous class expression, and that no
+recovery reads, stands as an `unknown` placeholder recorded as printed from it,
+as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
+as that type (§12). Both checks above read such a placeholder by its type:
+whether the type is `any` or `unknown`, and which of its fields are `unknown`.
+The field walk descends each object type with no name, each instance of a class
+expression with no name, each array element, each tuple element, and each
+member of a union, as the node walk descends a printed type literal, array,
+tuple, union, and `readonly` operand. It skips a member schema generation leaves
+out of an object's schema, a symbol-keyed member or a cell's internal marker
+(`isInternalMemberName()` in the schema generator), since no consumer receives
+it as a field. It stops at a type it is already inside, since a type with no
+name can hold itself through `typeof`, and walks a type reached again by
+another path under that path.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1860,6 +1877,9 @@ If schemas are not already present via type args:
   recovery (`x => x.foo`, `x => x["foo"]`)
 - direct projection recovery can reuse result types recovered from local
   `lift(...)` initializer aliases registered in `typeRegistry`
+- a result type the checker prints no node for, and that no recovery reads, is
+  carried as an `unknown` placeholder recorded as printed from it, so the
+  result schema is generated from the type (§6.6)
 - unresolved generic helper-definition-site type parameters degrade to
   `{ type: "unknown" }` when schemas are injected from explicit builder type
   arguments
@@ -2631,6 +2651,20 @@ Special path:
   pinned by `test/cfc-authoring.test.ts`,
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
+- Authored writer identities also survive plain generic interfaces and object
+  aliases, forwarded aliases, inherited members, index signatures, and `Record`
+  value arguments, in both pattern input and explicit output schemas. A whole
+  `WriteAuthorizedBy` can be passed as a type argument, or a member can apply it
+  to a writer parameter supplied as a direct `typeof` query. Defaults read under
+  preceding parameters. Recursive `$defs` preserve the declaration identity of
+  each writer even when two handlers have identical types. Unread authored
+  bindings remain fatal; secondary type-only reads retain the exemption
+  described in §6.8. An indexed access or conditional generic member whose
+  instantiated carrier retains a writer policy but loses its binding syntax
+  also reports `cfc-write-authorized-by:unread`, including on stored-source
+  compilation. Pinned by `test/generic-writer-policy.test.ts` and
+  `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
+  mapping spec §11 describes the binding rules.
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 

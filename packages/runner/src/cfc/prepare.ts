@@ -38,7 +38,13 @@ import {
 import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import { STREAM_ENTRIES_DOC_PREFIX } from "@commonfabric/memory/v2";
+import {
+  type DocumentPath,
+  type NonDocumentPath,
+  STREAM_ENTRIES_DOC_PREFIX,
+  toDocumentPath,
+  type ValuePath,
+} from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -87,6 +93,7 @@ import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
+  IReadActivity,
   MediaType,
 } from "../storage/interface.ts";
 import {
@@ -282,10 +289,10 @@ const appliesAtItsPathOnly = (
  */
 const nativeLengthParent = (
   tx: IExtendedStorageTransaction,
-  read: Pick<IMemorySpaceAddress, "space" | "id" | "type" | "scope" | "path">,
-): readonly string[] | undefined => {
+  read: Pick<IReadActivity, "space" | "id" | "type" | "scope" | "path">,
+): DocumentPath | undefined => {
   if (read.path.at(-1) !== "length") return undefined;
-  const parentPath = read.path.slice(0, -1);
+  const parentPath = toDocumentPath(read.path.slice(0, -1));
   const parent = tx.read({ ...read, path: parentPath }, {
     meta: internalVerifierRead,
     nonRecursive: true,
@@ -1705,7 +1712,9 @@ const attemptsOnlyApplicationsAt = (
   for (const read of getTransactionReadActivities(tx)) {
     if (!sameDocument(read, target)) continue;
     if (!isReadMarkedAsAttemptedWrite(read.meta)) continue;
-    const path = canonicalizeDocumentPath(read.path.map(String));
+    const path = canonicalizeDocumentPath(
+      toDocumentPath(read.path.map(String)),
+    );
     const index = unmatched.findIndex((candidate) =>
       arraysEqual(candidate, path)
     );
@@ -2597,7 +2606,9 @@ const valueWritePathsOf = (
   (getTransactionWriteAttempts(tx) ?? []).filter((write) =>
     sameDocument(write, target) &&
     (write.path.length === 0 || write.path[0] === "value")
-  ).map((write) => canonicalizeDocumentPath(write.path.map(String)));
+  ).map((write) =>
+    canonicalizeDocumentPath(toDocumentPath(write.path.map(String)))
+  );
 
 /**
  * The authoring identity for a field path: the schema input on this cell whose
@@ -2693,7 +2704,7 @@ const currentLinkWritesByTarget = function* (
   return result;
 };
 
-const pathKey = (path: readonly string[]): string => encodePointer(path);
+const pathKey = (path: NonDocumentPath): string => encodePointer(path);
 
 const pathPatternsOverlap = (
   prefix: readonly string[],
@@ -6036,7 +6047,8 @@ const ifcEntryAppliesToAttemptedWrite = (
         if (write.id !== target.id) return false;
         if (normalizeCellScope(write.scope) !== target.scope) return false;
         if (write.path.length > 0 && write.path[0] !== "value") return false;
-        const writePath = canonicalizeDocumentPath(write.path);
+        // The reactivity log records the journal's document-rooted paths.
+        const writePath = canonicalizeDocumentPath(toDocumentPath(write.path));
         return concretePathHasPrefix(writePath, path) ||
           (ancestorTouches && concretePathHasPrefix(path, writePath));
       };
@@ -6070,7 +6082,8 @@ const ifcEntryAppliesToAttemptedWrite = (
   ].filter((write) => write.path.length === 0 || write.path[0] === "value")
     .map((write) => ({
       write,
-      path: canonicalizeDocumentPath(write.path),
+      // The reactivity log records the journal's document-rooted paths.
+      path: canonicalizeDocumentPath(toDocumentPath(write.path)),
     })).filter(({ write, path: writePath }) =>
       write.space === target.space &&
       write.id === target.id &&
@@ -6471,25 +6484,22 @@ const verifyInputRequirements = (
   // transaction writes the document. The activity list stays live so newly
   // recorded reads remain visible to later targets.
   let clockLessReads = 0;
-  // Read activities carry document-rooted paths; trigger reads arrive with
-  // logical ones. The set tells the two apart when a path is canonicalized.
-  const activityReads = [
-    ...(tx.getPotentiallyExternalReadActivities?.() ??
-      tx.getReadActivities?.() ?? []),
-  ].filter((read) => !isInternalVerifierRead(read.meta)).map((read) => {
-    if (provenance !== undefined && read.journalIndex === undefined) {
-      clockLessReads += 1;
-    }
-    return {
-      ...read,
-      // A read without a clock position (journal-less backend) is treated
-      // as preceding every write: it joins every prefix — conservative.
-      journalIndex: read.journalIndex ?? -Infinity,
-    };
-  });
-  const documentReads = new Set<object>(activityReads);
+  // Every read here carries a document-rooted path, as a read activity does.
   const currentReads = [
-    ...activityReads,
+    ...[
+      ...(tx.getPotentiallyExternalReadActivities?.() ??
+        tx.getReadActivities?.() ?? []),
+    ].filter((read) => !isInternalVerifierRead(read.meta)).map((read) => {
+      if (provenance !== undefined && read.journalIndex === undefined) {
+        clockLessReads += 1;
+      }
+      return {
+        ...read,
+        // A read without a clock position (journal-less backend) is treated
+        // as preceding every write: it joins every prefix — conservative.
+        journalIndex: read.journalIndex ?? -Infinity,
+      };
+    }),
     // §8.9.2 / SC-3 (H5): the trigger reads join the gate when enabled — a
     // handler scheduled by a labeled write must satisfy requiredIntegrity even
     // if its branch never re-reads that write. Empty when the flag is off.
@@ -6497,9 +6507,11 @@ const verifyInputRequirements = (
     // scheduled the run, so they logically precede every write in the attempt
     // and sit at -Infinity, joining EVERY protected write's prefix (doc §4);
     // anything else would let the scheduling channel escape the per-write
-    // gate.
+    // gate. A trigger read names a payload path, so its document path is that
+    // path under `value`.
     ...triggerReadSources(tx).map((read) => ({
       ...read,
+      path: toDocumentPath(["value", ...read.path]),
       journalIndex: -Infinity,
     })),
   ];
@@ -6514,14 +6526,11 @@ const verifyInputRequirements = (
       return (ifc?.requiredIntegrity?.length ?? 0) > 0 ||
         ifc?.maxConfidentiality !== undefined;
     });
+  const gatePaths: ValuePath[] = [];
   const sourceMetadata = currentReads.map((read) => {
     // Gate paths are captured before resolving an envelope: backend reads may
     // mutate a caller-owned path array. Ungated targets only need the address.
-    if (needsReadLabels) {
-      read.path = documentReads.has(read)
-        ? canonicalizeDocumentPath(read.path)
-        : canonicalizeLogicalPath(read.path);
-    }
+    if (needsReadLabels) gatePaths.push(canonicalizeDocumentPath(read.path));
     return metadataResolver.read(
       read.space,
       read.id,
@@ -6541,9 +6550,10 @@ const verifyInputRequirements = (
   const buildGatedReads = () => {
     const gatedReads = currentReads.map((read, index) => ({
       ...read,
+      path: gatePaths[index],
       label: effectiveReadLabel(
         sourceMetadata[index],
-        read.path,
+        gatePaths[index],
         { nonRecursive: read.nonRecursive, consumes: "all" },
       ),
     })).filter((read) =>
@@ -8512,7 +8522,7 @@ const storedValuesAt = (
   const attempts = (getTransactionWriteAttempts(tx) ?? []).filter((attempt) =>
     sameDocument(attempt, target) && attempt.path[0] === "value"
   ).map((attempt) => ({
-    path: canonicalizeDocumentPath(attempt.path.map(String)),
+    path: canonicalizeDocumentPath(toDocumentPath(attempt.path.map(String))),
     journalIndex: attempt.journalIndex,
   }));
   const UNKNOWN = Symbol("unknown");
@@ -9093,6 +9103,12 @@ export const loadStoredCfcEnvelope = (
   }
 };
 
+/** The part of a read the consumed-label collection keys on. */
+type ConsumedReadAddress = Pick<
+  IReadActivity,
+  "space" | "id" | "scope" | "type" | "nonRecursive"
+>;
+
 /**
  * Join confidentiality and integrity across the transaction's non-internal
  * labeled reads, retaining each source in first-seen order for refusal details.
@@ -9158,20 +9174,11 @@ const collectConsumedLabelImpl = (
   // rules bind kind/source structurally, so evidence still has to match the
   // clause it discharges.
   const integrityAtoms: CfcAtom[] = [];
-  // Read activities carry document-rooted paths; trigger reads arrive with
-  // logical ones, and the set marks them when a path is canonicalized.
-  const triggerReadList = triggerReadSources(tx);
-  const triggerReads = new Set<object>(triggerReadList);
-  for (
-    const read of [
-      ...(tx.getReadActivities?.() ?? []),
-      // §8.9.2 / SC-3 (H5): a handler scheduled by a confidential write must not
-      // egress past a sink ceiling just because its branch never re-read that
-      // write. Empty when the trigger-read gate is off.
-      ...triggerReadList,
-    ]
-  ) {
-    if (isInternalVerifierRead(read.meta)) continue;
+  // The label index of the document a read names, or `undefined` when the
+  // document has no label metadata.
+  const labelsOf = (
+    read: ConsumedReadAddress,
+  ): ConsumedLabelIndex | undefined => {
     const scope = normalizeCellScope(read.scope);
     const type = read.type ?? "application/json";
     const metadataKey = stringTupleKey([read.space, read.id, scope, type]);
@@ -9189,76 +9196,100 @@ const collectConsumedLabelImpl = (
           }),
       );
     }
-    const labels = labelIndexes.get(metadataKey);
-    if (labels === undefined) continue;
-    const collectAt = (
-      path: readonly string[],
-      nonRecursive: boolean | undefined,
-    ): void => {
-      // A recursive read at `path` observes the value at `path` and everything
-      // below it, so its confidentiality is the union of every labelMap entry
-      // that is an ancestor-or-equal of `path` (a label that applies to it) OR a
-      // DESCENDANT of `path` (a label on a field inside the value just read).
-      // labelAtPath alone would only see the ancestor — so reading a whole object
-      // and sending one confidential field would slip the ceiling (review on
-      // #3993). A nonRecursive read sees ONLY the value at `path`, so it counts
-      // ancestor-or-equal entries but NOT descendants — counting those would
-      // false-reject valid commits (review round 2 on #3993).
-      for (const { entry, path: entryPath } of labels.overlapping(path)) {
-        // CONCRETE structure entries label only the container node's shape:
-        // an ancestor structure entry does not apply to a read strictly
-        // below it (same exact-path rule as `labelAtPath`); as a descendant
-        // of a recursive read it does apply (the read materializes the
-        // shape). `*`-path templates (template-population §3.2) exist to be
-        // consumed at matching child paths, so they take the generic
-        // ancestor-or-equal arm — this collector stays additive; templates
-        // just participate. An `enumerate` entry takes the exact-path rule
-        // too, as it does in `labelAtPath`.
-        const overlapsRead = appliesAtItsPathOnly(
-            entry,
-            isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath }),
-          )
-          ? (entryPath.length === path.length
-            ? isPrefix(entryPath, path)
-            : nonRecursive !== true && isPrefix(path, entryPath))
-          : (isPrefix(entryPath, path) ||
-            (nonRecursive !== true && isPrefix(path, entryPath)));
-        if (!overlapsRead) continue;
-        const contributed = entry.label.confidentiality ?? [];
-        for (const atom of contributed) atoms.push(atom);
-        for (const atom of contributed) {
-          noteSource(atom, {
-            space: read.space,
-            id: read.id,
-            scope: normalizeCellScope(read.scope),
-            path,
-          } as CfcAddress, entryPath);
-        }
-        for (
-          const reference of modulePolicyReferencesIn(
-            entry.label.confidentiality,
-          )
-        ) {
-          const key = modulePolicyArtifactKey(reference);
-          const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
-          spaces.add(read.space);
-          modulePolicySpaces.set(key, spaces);
-        }
-        for (const atom of entry.label.integrity ?? []) {
-          integrityAtoms.push(atom);
-        }
+    return labelIndexes.get(metadataKey);
+  };
+  // Collects what a read at the logical `path` consumes from `labels`.
+  const collectAt = (
+    read: ConsumedReadAddress,
+    labels: ConsumedLabelIndex,
+    path: ValuePath,
+    nonRecursive: boolean | undefined,
+  ): void => {
+    // A recursive read at `path` observes the value at `path` and everything
+    // below it, so its confidentiality is the union of every labelMap entry
+    // that is an ancestor-or-equal of `path` (a label that applies to it) OR a
+    // DESCENDANT of `path` (a label on a field inside the value just read).
+    // labelAtPath alone would only see the ancestor — so reading a whole object
+    // and sending one confidential field would slip the ceiling (review on
+    // #3993). A nonRecursive read sees ONLY the value at `path`, so it counts
+    // ancestor-or-equal entries but NOT descendants — counting those would
+    // false-reject valid commits (review round 2 on #3993).
+    for (const { entry, path: entryPath } of labels.overlapping(path)) {
+      // CONCRETE structure entries label only the container node's shape:
+      // an ancestor structure entry does not apply to a read strictly
+      // below it (same exact-path rule as `labelAtPath`); as a descendant
+      // of a recursive read it does apply (the read materializes the
+      // shape). `*`-path templates (template-population §3.2) exist to be
+      // consumed at matching child paths, so they take the generic
+      // ancestor-or-equal arm — this collector stays additive; templates
+      // just participate. An `enumerate` entry takes the exact-path rule
+      // too, as it does in `labelAtPath`.
+      const overlapsRead = appliesAtItsPathOnly(
+          entry,
+          isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath }),
+        )
+        ? (entryPath.length === path.length
+          ? isPrefix(entryPath, path)
+          : nonRecursive !== true && isPrefix(path, entryPath))
+        : (isPrefix(entryPath, path) ||
+          (nonRecursive !== true && isPrefix(path, entryPath)));
+      if (!overlapsRead) continue;
+      const contributed = entry.label.confidentiality ?? [];
+      for (const atom of contributed) atoms.push(atom);
+      for (const atom of contributed) {
+        noteSource(atom, {
+          space: read.space,
+          id: read.id,
+          scope: normalizeCellScope(read.scope),
+          path,
+        } as CfcAddress, entryPath);
       }
-    };
-    const toLogical = triggerReads.has(read)
-      ? canonicalizeLogicalPath
-      : canonicalizeDocumentPath;
-    collectAt(toLogical(read.path), read.nonRecursive);
+      for (
+        const reference of modulePolicyReferencesIn(
+          entry.label.confidentiality,
+        )
+      ) {
+        const key = modulePolicyArtifactKey(reference);
+        const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+        spaces.add(read.space);
+        modulePolicySpaces.set(key, spaces);
+      }
+      for (const atom of entry.label.integrity ?? []) {
+        integrityAtoms.push(atom);
+      }
+    }
+  };
+  for (const read of tx.getReadActivities?.() ?? []) {
+    if (isInternalVerifierRead(read.meta)) continue;
+    const labels = labelsOf(read);
+    if (labels === undefined) continue;
+    collectAt(
+      read,
+      labels,
+      canonicalizeDocumentPath(read.path),
+      read.nonRecursive,
+    );
     const lengthOf = isLinkResolutionProbe(read.meta)
       ? undefined
       : nativeLengthParent(tx, read);
     if (lengthOf !== undefined) {
-      collectAt(toLogical(lengthOf), true);
+      collectAt(read, labels, canonicalizeDocumentPath(lengthOf), true);
     }
+  }
+  // §8.9.2 / SC-3 (H5): a handler scheduled by a confidential write must not
+  // egress past a sink ceiling just because its branch never re-read that
+  // write. Empty when the trigger-read gate is off. A trigger names the value a
+  // write changed, which is never an array's native `length`, so it has no
+  // length parent.
+  for (const read of triggerReadSources(tx)) {
+    const labels = labelsOf(read);
+    if (labels === undefined) continue;
+    collectAt(
+      read,
+      labels,
+      canonicalizeLogicalPath(read.path),
+      read.nonRecursive,
+    );
   }
   // Label-metadata observations (inv-12 Stage 2): the introspection
   // surface's records enter the egress consumed set with their §4.6.4.2

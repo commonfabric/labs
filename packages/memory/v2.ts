@@ -772,6 +772,15 @@ export type DocumentPath = readonly string[] & {
 export type ValuePath = readonly string[] & {
   readonly __memoryV2ValuePath: unique symbol;
 };
+
+/**
+ * Any path except a {@link DocumentPath}. A parameter of this type takes a
+ * plain path or a {@link ValuePath} and refuses one branded as rooted at the
+ * stored document, which has to be converted before it gets there.
+ */
+export type NonDocumentPath = readonly string[] & {
+  readonly __memoryV2DocumentPath?: never;
+};
 export type ReadPath = DocumentPath;
 export type DocumentSchemaPathSelector =
   & Omit<SchemaPathSelector, "path">

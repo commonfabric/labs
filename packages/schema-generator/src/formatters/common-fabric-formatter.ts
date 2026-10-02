@@ -71,6 +71,10 @@ import {
   reportUnreadLabel,
 } from "../unread-label-diagnostics.ts";
 import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
+import {
+  bindWrittenArgument,
+  usesParameterUnreachably,
+} from "../type-parameter-bindings.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
@@ -573,26 +577,6 @@ const readInFull = (value: unknown): boolean =>
     (Array.isArray(value) ? value : Object.values(value)).every(readInFull));
 
 /**
- * Whether `node` uses a type parameter where no reading of it under bindings
- * reaches: in an indexed access, a conditional type, `keyof`, a mapped type,
- * or a template literal type, each of which the checker settles only once it
- * instantiates the parameter.
- */
-const usesParameterUnreachably = (
-  node: ts.Node,
-  checker: ts.TypeChecker,
-): boolean =>
-  ((ts.isIndexedAccessTypeNode(node) || ts.isConditionalTypeNode(node) ||
-    ts.isMappedTypeNode(node) || ts.isTemplateLiteralTypeNode(node) ||
-    (ts.isTypeOperatorNode(node) &&
-      node.operator === ts.SyntaxKind.KeyOfKeyword)) &&
-    holdsFreeTypeParameter(node, checker)) ||
-  (ts.forEachChild(
-    node,
-    (child) => usesParameterUnreachably(child, checker) || undefined,
-  ) ?? false);
-
-/**
  * The payload of `type`, a scope wrapper's instantiation, or `undefined` where
  * it cannot be told apart. A scope wrapper intersects its payload with its
  * brand, so the payload is the one member besides the brand; a payload that
@@ -979,6 +963,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     // carriers are read in full, or the value is its payload alone.
     const carried = cfcCarriedParts(type, context.typeChecker);
     if (carried) {
+      if (
+        carried.metadata.some((metadata) =>
+          context.typeChecker.getNonNullableType(metadata).getProperty(
+            "writeAuthorizedBy",
+          )
+        )
+      ) this.#reportUnreadOperatorWriter(context);
       const payload = this.#schemaGenerator.formatChildType(
         carried.payload,
         context,
@@ -2575,17 +2566,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     bound: BoundTypeParameters | undefined,
     context: GenerationContext,
   ): BoundTypeArgument | undefined {
-    const checker = context.typeChecker;
-    if (holdsFreeTypeParameter(node, checker, bound?.arguments)) {
-      return undefined;
-    }
-    const parameter = bound && typeParameterOfReference(node, checker);
-    const forwarded = parameter && bound?.arguments.get(parameter);
-    if (forwarded) return forwarded;
-    const type = this.#writtenArgumentType(node, context);
-    return bound && holdsTypeParameter(node, checker, bound.arguments)
-      ? { type, node, bound }
-      : { type, node };
+    return bindWrittenArgument(
+      node,
+      bound,
+      context.typeChecker,
+      (written) => this.#writtenArgumentType(written, context),
+    );
   }
 
   /**
@@ -3060,7 +3046,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * an error here as well as in `WriteAuthorizedByValidationTransformer`,
    * which cannot see bindings passed through another alias's parameters. A
    * policy written through another alias whose binding has no node to read
-   * is also an error: its schema would carry no write restriction.
+   * is also an error: its schema would carry no write restriction. A generic
+   * member whose operator syntax erases its bound writer reports an error
+   * with a specific authoring remedy.
    */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
@@ -3069,7 +3057,10 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): Record<string, unknown> | undefined {
     const bindingNode = aliasArgNodes?.[1];
     if (!bindingNode) {
-      if (this.#writesPolicyThroughAlias(aliasName, context)) {
+      if (
+        !this.#reportUnreadOperatorWriter(context) &&
+        this.#writesPolicyThroughAlias(aliasName, context)
+      ) {
         reportUnreadWriterBinding(context, aliasName);
       }
       return undefined;
@@ -3094,6 +3085,28 @@ export class CommonFabricFormatter implements TypeFormatter {
         ),
       },
     };
+  }
+
+  /** Reports a policy whose authored operator erased its writer syntax. */
+  #reportUnreadOperatorWriter(context: GenerationContext): boolean {
+    const node = context.typeNode;
+    if (
+      !node || !context.boundTypeParameters ||
+      !holdsTypeParameter(
+        node,
+        context.typeChecker,
+        context.boundTypeParameters.arguments,
+      ) ||
+      !usesParameterUnreachably(node, context.typeChecker)
+    ) return false;
+    reportUnreadWriterBinding(
+      context,
+      "WriteAuthorizedBy",
+      "The generic member's operator syntax cannot preserve its authored " +
+        "writer binding. Write the protected member directly or pass the " +
+        "policy unchanged through a parameter.",
+    );
+    return true;
   }
 
   /**

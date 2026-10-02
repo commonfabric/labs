@@ -1,4 +1,9 @@
 import { hashStringOf } from "@commonfabric/data-model";
+import type {
+  DocumentPath,
+  NonDocumentPath,
+  ValuePath,
+} from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 import { normalizeCellScope } from "../scope.ts";
 import type { CfcConfClause } from "./clause.ts";
@@ -32,13 +37,11 @@ import { isOrClause, normalizeClause } from "./clause.ts";
  * A path rooted at the stored document, as a transaction address is, goes
  * through {@link canonicalizeDocumentPath} instead.
  */
-export const canonicalizeLogicalPath = (
-  path: readonly string[],
-): readonly string[] => {
+export const canonicalizeLogicalPath = (path: NonDocumentPath): ValuePath => {
   if (Object.isFrozen(path)) {
-    return path;
+    return path as ValuePath;
   }
-  return Object.freeze(path.slice());
+  return Object.freeze(path.slice()) as ValuePath;
 };
 
 /**
@@ -52,10 +55,10 @@ export const canonicalizeLogicalPath = (
  * shares a logical path with a payload field of the same name, so a caller
  * that must keep the two apart checks the raw path first.
  */
-export const canonicalizeDocumentPath = (
-  path: readonly string[],
-): readonly string[] =>
-  canonicalizeLogicalPath(path[0] === "value" ? path.slice(1) : path);
+export const canonicalizeDocumentPath = (path: DocumentPath): ValuePath =>
+  path[0] === "value"
+    ? Object.freeze(path.slice(1)) as ValuePath
+    : canonicalizeLogicalPath(path as readonly string[]);
 
 /**
  * WeakMap cache mapping a path-array identity to its JSON-pointer
@@ -73,7 +76,7 @@ export const canonicalizeDocumentPath = (
  */
 const pathPointerCache = new WeakMap<readonly string[], string>();
 
-export const logicalPathToPointer = (path: readonly string[]): string => {
+export const logicalPathToPointer = (path: NonDocumentPath): string => {
   const cached = pathPointerCache.get(path);
   if (cached !== undefined) return cached;
   const pointer = encodePointer(path);

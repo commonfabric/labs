@@ -10,12 +10,48 @@ import {
   isAtomVarPlaceholder,
 } from "./atom-pattern.ts";
 import { isCfcFieldCommitment } from "./label-representation.ts";
+import type { JSONSchema } from "../builder/types.ts";
 
 export const CFC_POLICY_MANIFEST_ID_PREFIX = "of:cfc-policy-manifest:";
 
 export const cfcPolicyManifestDocId = (
   policyDigest: string,
 ): `of:${string}` => `${CFC_POLICY_MANIFEST_ID_PREFIX}${policyDigest}`;
+
+/**
+ * The schema a policy manifest document is read and loaded with. A stored
+ * manifest keeps each of its rules in a document its root links to, and a
+ * load under this schema brings those documents in with the root.
+ */
+export const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+} as const satisfies JSONSchema;
+
+/**
+ * Adds to `digests` the digest of every module policy `schema` names, such as
+ * the `PolicyOf` markers in a compiled pattern's schemas.
+ */
+export const collectModulePolicyDigests = (
+  schema: unknown,
+  digests: Set<string>,
+): void => {
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (!isObjectOrArray(value) || seen.has(value)) return;
+    seen.add(value);
+    if (
+      value.type === CFC_ATOM_TYPE.Policy &&
+      value.policyRefKind === "module" &&
+      typeof value.policyDigest === "string"
+    ) {
+      digests.add(value.policyDigest);
+      return;
+    }
+    for (const entry of Object.values(value)) visit(entry);
+  };
+  visit(schema);
+};
 
 const MODULE_POLICY_REF_KEYS = new Set([
   "type",

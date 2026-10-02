@@ -79,6 +79,11 @@ export type {
   TriggerTraceValueSummary,
 } from "./scheduler.ts";
 export type {
+  PendingCommitDiagnostic,
+  SpaceStorageDiagnostic,
+  StorageDiagnostics,
+} from "./storage/diagnostics.ts";
+export type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
   WriteStackTraceMatchMode,

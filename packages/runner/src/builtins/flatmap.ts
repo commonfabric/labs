@@ -7,6 +7,7 @@ import type { AddCancel } from "../cancel.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -152,6 +153,15 @@ function createFlatMapInstance(
   // then does not commit leaves it holding a container nothing links to; the
   // next reconcile issues them again. See list-element-rollback.ts.
   const containerSetup: SetupRecord = { needsSetup: false };
+
+  // An element's link back to this coordinator. It is a setup write like the
+  // element's pattern run: issued when the element is created, and again when
+  // the transaction carrying it did not commit. Without it the element's
+  // document names no owning piece, so nothing can start that piece for an
+  // event addressed to it.
+  const linkElementCell = (cell: Cell<any>): void => {
+    setResultCell(cell, parentCell);
+  };
 
   // Identity-based tracking: maps element address key → element run.
   // resultCell holds the per-element result array.
@@ -458,6 +468,13 @@ function createFlatMapInstance(
                 referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
               },
             );
+            // The whole setup, every time, because issuing it takes the debt
+            // for it: an overlapping reconcile that wrote the link and has not
+            // settled hands it to this one, and a partial issuance would leave
+            // nobody owing it. A link already durable costs a comparison,
+            // since a write of the value a leaf already holds does not reach
+            // storage.
+            linkElementCell(existing.resultCell.withTx(tx));
             rollback.setupIssued(existing);
           }
         }
@@ -488,6 +505,7 @@ function createFlatMapInstance(
             referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
           },
         );
+        linkElementCell(boundResultCell);
         const entry = { resultCell, lastIndex: i, needsSetup: false };
         elementRuns.set(elementKey, entry);
         rollback.created(elementKey, entry);
