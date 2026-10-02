@@ -577,4 +577,138 @@ describe("CFOwnerView", () => {
       }
     });
   });
+  describe("edges of its lifecycle", () => {
+    const alice: CfcLabelView = {
+      version: 1,
+      entries: [{
+        path: [],
+        label: {
+          integrity: [{
+            kind: "represents-principal",
+            subject: "did:key:alice",
+          }],
+        },
+      }],
+    };
+
+    // Runs Lit's update hook as a mounted element does, without a DOM.
+    class UpdatingOwnerView extends CFOwnerView {
+      override get isConnected(): boolean {
+        return true;
+      }
+
+      protected override performUpdate(): void {}
+    }
+
+    const bind = (
+      element: CFOwnerView,
+      options: {
+        actor?: () => string;
+        label?: () => Promise<CfcLabelView | undefined>;
+        reset?: () => Promise<void>;
+      } = {},
+    ) => {
+      const writes: (boolean | null)[] = [];
+      element.runtime = {
+        actingPrincipalDid: options.actor ?? (() => "did:key:bob"),
+      } as unknown as RuntimeClient;
+      element.originator = {
+        getCfcLabel: options.label ?? (() => Promise.resolve(alice)),
+      } as unknown as CellHandle;
+      element.result = {
+        setStrict: (value: boolean | null) => {
+          writes.push(value);
+          return value === null && options.reset
+            ? options.reset()
+            : Promise.resolve();
+        },
+      } as unknown as CellHandle<boolean | null>;
+      return writes;
+    };
+
+    it("rechecks the origin when a bound property changes, and not otherwise", () => {
+      const element = new UpdatingOwnerView();
+      const writes = bind(element);
+
+      element.willUpdate(new Map([["hidden", false]]));
+      expect(writes).toEqual([]);
+
+      element.willUpdate(new Map([["originator", undefined]]));
+      expect(writes).toEqual([null]);
+    });
+
+    it("renders no content of its own", () => {
+      expect(new HeadlessOwnerView().render().strings.join("")).toBe("");
+    });
+
+    it("leaves a first connect to the update that follows it", () => {
+      const element = new HeadlessOwnerView();
+      const writes = bind(element);
+
+      element.connectedCallback();
+
+      expect(writes).toEqual([]);
+    });
+
+    it("starts over when moved before its reset landed", async () => {
+      // The first reset is held, so the move finds no decision standing and
+      // refreshes again, and the held reset decides nothing once it lands.
+      const element = new HeadlessOwnerView();
+      const held = Promise.withResolvers<void>();
+      let resets = 0;
+      const writes = bind(element, {
+        reset: () => ++resets === 1 ? held.promise : Promise.resolve(),
+      });
+      const refreshes: Promise<void>[] = [];
+      const refresh = element.refresh.bind(element);
+      element.refresh = () => {
+        const refreshing = refresh();
+        refreshes.push(refreshing);
+        return refreshing;
+      };
+      void element.refresh();
+      element.disconnectedCallback();
+
+      element.connectedCallback();
+      held.resolve();
+      await Promise.all(refreshes);
+
+      expect(refreshes).toHaveLength(2);
+      expect(writes).toEqual([null, null, false]);
+    });
+
+    it("follows its origin before a result is bound, and writes nothing", async () => {
+      const element = new HeadlessOwnerView();
+      const writes = bind(element);
+      element.result = undefined;
+
+      await element.refresh();
+
+      expect(writes).toEqual([]);
+    });
+
+    it("keeps the presentation closed when the label cannot be read", async () => {
+      const element = new HeadlessOwnerView();
+      const writes = bind(element, {
+        label: () => Promise.reject(new Error("the label is unreadable")),
+      });
+
+      await element.refresh();
+
+      expect(writes).toEqual([null]);
+    });
+
+    it("keeps the presentation closed when the acting principal is unknown", async () => {
+      const element = new HeadlessOwnerView();
+      const writes = bind(element, {
+        actor: () => {
+          throw new Error("no principal is signed in");
+        },
+      });
+
+      await element.refresh();
+
+      expect(writes).toEqual([null, null]);
+    });
+  });
 });
