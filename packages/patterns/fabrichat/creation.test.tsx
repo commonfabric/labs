@@ -31,6 +31,7 @@ import { FabriChatManagerCore } from "./manager.tsx";
 import type {
   ChatIndexEntry,
   ChatManagerNotice,
+  ChatOfferHandling,
   ChatProfile,
   ChatRequestOutcome,
   ChatRoomLink,
@@ -109,6 +110,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: directNotices,
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const directHeld = Writable.of<HeldRoom>({});
   const action_hold_direct = action(() =>
@@ -132,6 +134,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: groupRequests,
     outgoingNotices: groupNotices,
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const action_create_group = action(() =>
     group.createGroup.send({
@@ -165,6 +168,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const acceptHeld = Writable.of<HeldRoom>({});
   const action_hold_accepted = action(() =>
@@ -216,6 +220,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: deliveredNotices,
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const action_report_delivered = action(() =>
     delivering.delivered.send({

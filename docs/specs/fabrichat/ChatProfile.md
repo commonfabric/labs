@@ -13,6 +13,12 @@ interface ChatProfile {
 
   /** The person's avatar: a URL or a glyph, if they have set one. */
   avatar?: string;
+
+  /**
+   * Where the person's offers are delivered: a link to their private inbox,
+   * absent while they have none.
+   */
+  inbox?: { piece?: Cell<ChatInbox> };
 }
 ```
 
@@ -32,6 +38,12 @@ A profile also says whose it is. Its value carries a `represents-principal`
 label naming its owner, and that is what a client compares with a message's
 `authored-by` label to show the message as verified (see
 [`clients.md`](clients.md#showing-a-room)).
+
+A profile also says where to offer the person a room: its `inbox` points at
+their private inbox ([`private-inbox.md`](../../features/private-inbox.md)). A
+manager offers a new room there when the request names the person's profile,
+and lists the rooms offered to its own user from the inbox their profile points
+at (see [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
 
 ## When a profile can't be read
 

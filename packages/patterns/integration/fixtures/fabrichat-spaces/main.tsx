@@ -15,7 +15,7 @@ import {
 import { type ChatProfile } from "../../../fabrichat/schemas.tsx";
 
 export default pattern<FabriChatManagerInput, FabriChatManagerOutput>(
-  ({ rooms, direct, requests, outgoingNotices }) => {
+  ({ rooms, direct, requests, outgoingNotices, handledOffers }) => {
     const profile = Writable.of<ChatProfile>({ name: "Starter" });
     return FabriChatManagerCore({
       myProfile: profile,
@@ -23,6 +23,7 @@ export default pattern<FabriChatManagerInput, FabriChatManagerOutput>(
       direct,
       requests,
       outgoingNotices,
+      handledOffers,
     });
   },
 );

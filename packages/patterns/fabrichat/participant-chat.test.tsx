@@ -43,6 +43,7 @@ import {
   CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
+  type ChatOfferHandling,
   type ChatProfile,
   type ChatRequestOutcome,
 } from "./schemas.tsx";
@@ -196,6 +197,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const chipFor = {
     myProfile: profile,
@@ -253,6 +255,11 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       { label: "bob-done" },
     ],
+    // TODO(danfuzz): The chat's first run is abandoned to load the profile it
+    // reads and then run again, and the runner drops the offer it queued on
+    // that first run with a warning, though the run after it sends the offer
+    // again. Expect no warnings once the runner drops it quietly.
+    allowConsoleWarnings: true,
   };
 });
 

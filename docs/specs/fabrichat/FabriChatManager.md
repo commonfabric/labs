@@ -22,8 +22,8 @@ each, and a row in the built-in targets table of
 
 ## State
 
-The manager keeps `rooms`, `direct`, `requests`, and `outgoingNotices` in the
-home space. `direct` is maintained alongside `rooms` by the same handlers, which
+The manager keeps `rooms`, `direct`, `requests`, `outgoingNotices`, and what
+its user did with each offer they acted on (`handledOffers`) in the home space. `direct` is maintained alongside `rooms` by the same handlers, which
 keep the two consistent: `direct` holds one entry per counterpart, including
 forgotten rooms, and `rooms` can also hold a second direct room with the same
 counterpart after crossing creations.
@@ -38,7 +38,8 @@ create a space for the conversation, with the room as its chat, in four steps:
    default pattern, comes from its host the first time someone opens it.
 2. Grant each other member WRITE on the room's space, by principal.
 3. Add a notice for each other member to `outgoingNotices`, for a client to
-   deliver.
+   deliver, and offer the room to each member whose profile the request names,
+   through the private inbox the profile points at.
 4. Record the entry in `rooms`, and in `direct` for a direct room, and mark the
    request `done`.
 
@@ -65,18 +66,25 @@ is what labels it `authored-by` this user.
 
 ### First contact
 
-A notice has to reach a principal who may share no space with the sender. Its
-route is the recipient's profile share inbox: a profile's `inbox` field
-(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at a piece
-in a space of its own that any writer may post to and only its owner reads. The
-sender offers the room there, and the recipient's manager reads its offers, is
-readmitted to the room's space, and accepts the room. Nothing delivers one end
-to end today: no offer names a room yet, the manager reads none, and an inbox
-exists only where a host outside this repository creates one. A space's access
-list can admit any writer, but that is the `"*"` grant a room has only when its
-creator makes a group joinable by its link, and then its address, sent some
-other way, is the notice.
+A room has to reach a principal who may share no space with the sender. Its
+route is the recipient's private inbox
+([`private-inbox.md`](../../features/private-inbox.md)), which Home creates for
+each identity and each of the identity's profiles points at through its `inbox`
+field. Any principal may append an offer to it through its `receive` stream,
+which records who sent it, and only its owner reads what it holds. When a
+request names a member's profile, as `openDirect` does when it is started from
+a participant's chip, step 3 offers the room there. The recipient's manager
+lists the offers in the inbox its own profile points at, and its user adds a
+room to their chats with `accept`, or sets the offer aside with `dismissOffer`
+(see [`ChatManagerOutput`](ChatManagerOutput.md#offers)). Which runtime makes a
+sender's write, and what each server-execution setting protects, is the
+inbox's to say.
 
-That is why step 3 hands notices to a client through `outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once offers
-deliver end to end, the manager can deliver notices itself.
+Step 3 still hands a notice for every other member to a client through
+`outgoingNotices` (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A member known
+only by their DID has no profile to reach an inbox through, and nothing tells
+the sender that an offer arrived. A space's access list can admit any writer,
+but that is the `"*"` grant a room has only when its creator makes a group
+joinable by its link, and then its address, sent some other way, is the
+notice.

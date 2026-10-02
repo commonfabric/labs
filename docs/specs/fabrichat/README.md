@@ -244,10 +244,10 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** A room is to be offered to its recipient through
-  their profile share inbox, but no offer names a room yet and the manager
-  reads none, so nothing delivers a notice to a principal who shares no space
-  with the sender end to end (see
+- **Delivering a notice.** A room is offered to its recipient through the
+  private inbox their profile points at, but only when the request that
+  creates it names their profile, and the sender learns nothing of whether it
+  arrived; a recipient known only by their DID is reached by no offer (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -337,11 +337,13 @@ from this design, as below.
   `hasOlder` and `hasNewer` are as of when the window was set. `commitWindow`
   writes the windows of the session that sent the event, wherever it runs; an
   event the server itself emitted has no session, and can't open one.
-- **Notices.** A manager's notice id is `[recipient, requestId]` as JSON.
-  Nothing delivers a notice yet (see
+- **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
+  JSON. A room is offered through a member's private inbox only when the
+  request names their profile (see
   [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
-  creator to send on. And a room shows a viewer whose manager
+  creator to send on, and shows each room offered to its own user with "Add to
+  my chats" and "Dismiss". An offer's key is `[from, receivedAt]` as JSON. And a room shows a viewer whose manager
   doesn't list it a control that asks the manager to `accept` it, so
   whoever opens the room's link can add it to their chats.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
