@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-29\
-Revision: `37971c23cd`
+Last verified: 2026-10-01\
+Revision: `28544790e8`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -29,6 +29,7 @@ The runtime has four main boundaries:
    `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
    [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
    constrained host-adjacent profile whose typed `browser` tool the harness
+   sends to a browser host attached to the run, such as the Weaver, or else
    binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
    is a distinct trusted-host path whose Fabric identity stays outside the
    sandbox. It runs pieces in the configured space and admits input references
@@ -531,7 +532,7 @@ The current package provides:
 - per-turn and aggregate token/cache usage in run reports, operator output,
   batch metadata, and interactive turn-completion events;
 - stable interactive prompt-cache affinity, configurable reasoning effort, and
-  opt-in GPT-5.6 gateway cache controls; the ChatGPT/Codex subscription backend
+  opt-in GPT-5.6/GPT-6.1 Sol gateway cache controls; the subscription backend
   uses implicit caching because it rejects the API `prompt_cache_options` field;
 - interactive NDJSON stdio sessions with optional SQLite session, turn, event,
   replay, cancellation, and restore state; a session's durable transcript
@@ -553,6 +554,11 @@ The current package provides:
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
+- parent-only, host-opt-in `weaver_action`, which asks the person's client to
+  run client actions mid-turn and waits for each settlement (idle timeout of
+  five minutes reset by each settlement; cancel declines the rest), settled
+  through the `resolve_client_action` request or the console's
+  `POST /api/client-actions`;
 - parent-only `finish_task` for a completed answer, a question, or a give-up
   reason, admitted through ordinary policy and artifacts as the sole call in a
   model turn. A completed answer satisfies the Fabric piece contract and may
@@ -575,10 +581,12 @@ The current package provides:
   name without a slug permits at most one registry lookup; only a unique
   released match allows work to proceed;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
-  run for cell addresses, recorded in `run-state.json`, and carried across
-  resume; the prompt loop swaps addresses to tokens in model-bound tool output
-  and resolves tokens in model-authored tool arguments before policy evaluation
-  and dispatch, `delegate_task` arguments excepted;
+  run for cell addresses, recorded in `run-state.json`, carried across resume,
+  and committed with an interactive session's checkpoint so each turn's run
+  starts from the table the session kept; the prompt loop swaps addresses to
+  tokens in model-bound tool output and resolves tokens in model-authored tool
+  arguments before policy evaluation and dispatch, `delegate_task` arguments
+  excepted;
 - cross-agent handles: a delegation seeds the child's own table with a verbatim
   copy of every parent address entry or non-cell referent whose token the `goal`
   or `context` names or a selected current research kit declares as an input,
@@ -926,7 +934,15 @@ host.
 
 Loom also has an opt-in adapter for the interactive NDJSON protocol. It is not
 the default interactive harness, and browser automation is not yet wired into
-that interactive product path.
+that interactive product path. The console's interactive path does browse: on a
+console launched with `--allow-browser-host`, a task that declares a browser
+host has its browser children drive the page that host shows the owner, under
+the confinements the [browser host section](../README.md#a-browser-host)
+describes. What a host shows enters the model's context under the unscreened
+prompt-injection caveat, sourced to the page's origin, and is withheld from a
+run whose read ceiling does not admit it. A child's return brings the child's
+model-context label into its parent's, for every child, so the caveat reaches
+the parent with whatever crosses.
 
 Loom currently forces autonomous `cf-harness` runs to `observe` mode while
 trusted `runsc-cfc` observation metadata is not wired through every local tool
@@ -1003,8 +1019,9 @@ mode.
   that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
   consumed when the agent result writer links or observes a retrieved row; there
   is no general-purpose value-handle dereference or release mechanism.
-- `estimatedCostUsd` is available only for known GPT-5.6 gateway models when the
-  response includes cache reads and writes. It uses public OpenAI pricing;
+- `estimatedCostUsd` is available for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6
+  gateway models when the response includes cache reads and writes. It uses
+  [public OpenAI pricing](https://developers.openai.com/api/docs/pricing);
   gateway markup, subscription quota accounting, and provider invoices remain
   outside the harness. `estimateWithheldReason` distinguishes missing provider
   detail, unknown models, invalid counters, subscription pricing, and incomplete

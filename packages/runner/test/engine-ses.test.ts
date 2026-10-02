@@ -353,6 +353,73 @@ describe("Engine in SES mode", () => {
     expect(main?.default?.window?.value).toBe(600n);
   });
 
+  it("keeps a fabric primitive constructed at top level as it is", async () => {
+    // A construction at top level, as a `const` and as the default export,
+    // reaches the freezer only through the transformer's `__cf_data()` wrap;
+    // the previous test holds one inside an object literal, which the wrap of
+    // the literal carries.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { FabricDurationNsec } from "commonfabric";',
+            "const Duration = FabricDurationNsec;",
+            "export const window = new FabricDurationNsec(600n);",
+            "export const viaConst = new Duration(2n);",
+            "export default new FabricDurationNsec(1n);",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    expect(joinedBodies(graph)).toContain("__cf_data(new");
+
+    const { main } = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    expect(main?.window).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.window?.value).toBe(600n);
+    expect(main?.viaConst).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.viaConst?.value).toBe(2n);
+    expect(main?.default).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.default?.value).toBe(1n);
+  });
+
+  it("refuses a top-level construction that only looks like a fabric primitive", async () => {
+    // The class declares a member under a symbol that shares the brand's
+    // name. It is not wrapped, so the verifier refuses the module before the
+    // constructor can run.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            "declare const FABRIC_PRIMITIVE_BRAND: unique symbol;",
+            "export default new (class Imposter {",
+            "  declare readonly [FABRIC_PRIMITIVE_BRAND]: true;",
+            "  constructor() {",
+            '    throw new Error("IMPOSTER CONSTRUCTOR EXECUTED");',
+            "  }",
+            "})();",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
+      "Mutable top-level data must be wrapped in __cf_data() in SES mode",
+    );
+  });
+
   it("allows top-level template literal snapshots", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",

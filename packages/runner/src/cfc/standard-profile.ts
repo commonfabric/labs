@@ -1,5 +1,11 @@
 import { CFC_ATOM_TYPE, CFC_CONCEPT_KIND } from "@commonfabric/api/cfc";
 import type { CfcPolicyRecordInput, ExchangeRule } from "./policy.ts";
+import { MATERIAL_RISK_DISCHARGE_KINDS } from "./prompt-caveat-kinds.ts";
+
+export {
+  MATERIAL_RISK_DISCHARGE_KINDS,
+  MATERIAL_RISK_KINDS,
+} from "./prompt-caveat-kinds.ts";
 
 /**
  * The §10.1 standard prompt-caveat profile, expressed entirely as ordinary
@@ -30,28 +36,6 @@ import type { CfcPolicyRecordInput, ExchangeRule } from "./policy.ts";
  *   it to the caveat) → value-screened discharge — never by bare
  *   `InjectionSafe`.
  */
-
-/** The canonical material-risk tier kinds (the screening gradient). */
-export const MATERIAL_RISK_KINDS: readonly string[] = [
-  CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
-  CFC_CONCEPT_KIND.PromptInjectionRiskIngressScreened,
-  CFC_CONCEPT_KIND.PromptInjectionRiskValueScreened,
-];
-
-// Short aliases participate in discharge only. The tier gradient is defined
-// over the canonical URIs, into which a deployment normalizes aliases before
-// tier evaluation (§10.1 SHOULD-normalize).
-const MATERIAL_RISK_ALIAS_KINDS: readonly string[] = [
-  "prompt-injection-risk-unscreened",
-  "prompt-injection-risk-ingress-screened",
-  "prompt-injection-risk-value-screened",
-];
-
-/** Every caveat kind a positive `InjectionSafe` discharges. */
-export const MATERIAL_RISK_DISCHARGE_KINDS: readonly string[] = [
-  ...MATERIAL_RISK_KINDS,
-  ...MATERIAL_RISK_ALIAS_KINDS,
-];
 
 const injectionSafeGuard = { type: CFC_ATOM_TYPE.InjectionSafe } as const;
 

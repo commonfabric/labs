@@ -684,7 +684,9 @@ holds the measurements and the conditions for revisiting.
   §5.3.4 for the query-pipeline context.
 - **Current default and planned end state.** On by default; an explicit
   `false` restores the strict pseudo-intersection (`combineSchema`) at link
-  crossings as a rollback override. The rollback is plain ambient
+  crossings as a rollback override, and a read addressed at a link slot then
+  projects by the link's stored schema rather than resolving it against the
+  reader's. The rollback is plain ambient
   last-construction-wins state: each Runtime construction sets it from its
   resolved option, and dispose deliberately does NOT reset it — a server
   runs one serving runtime per space and disposes idle ones while the rest
@@ -1481,7 +1483,7 @@ the per-epic implementation notes).
   ceiling behind a shell dogfood flag (Epic H3a)" (#4550, 2026-07-07).
 - **Purpose.** Populates the CFC render confidentiality ceiling in the shell's
   runtime. Display sinks admit the acting user's identity and personal-space
-  atoms plus allow-listed influence-class caveat kinds. Before the fit check,
+  atoms plus the prompt-caveat family (SC-54). Before the fit check,
   the worker resolves shared `Space` labels through verified reader membership,
   and runs the exchange rules of any module policy (`PolicyOf`) a label
   selects, reading that policy's manifest from the space the label is stored

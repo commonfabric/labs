@@ -85,6 +85,12 @@ import {
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
+import {
+  diagnosticPrefix,
+  type PendingCommitContext,
+  type SpaceStorageDiagnostic,
+  type StorageDiagnostics,
+} from "./diagnostics.ts";
 import type { Cell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import {
@@ -1211,7 +1217,13 @@ export class StorageManager implements IStorageManager {
    * carries cross-space _read_ work (link-target loads) and so must not gate
    * questions of whether there are unconfirmed writes.
    */
-  #pendingCommits = new Set<Promise<unknown>>();
+  #pendingCommits = new Map<Promise<unknown>, {
+    id: number;
+    startedAt: number;
+    context?: () => PendingCommitContext;
+  }>();
+
+  #nextPendingCommitId = 1;
 
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
@@ -2135,11 +2147,18 @@ export class StorageManager implements IStorageManager {
     return () => this.#spaceAccessChangeObservers.delete(observer);
   }
 
-  trackPendingCommit(promise: Promise<unknown>): void {
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void {
     // Normalize so a rejected commit settles the barrier instead of leaking an
     // unhandled rejection; the caller keeps the original promise for results.
     const tracked = promise.then(() => {}, () => {});
-    this.#pendingCommits.add(tracked);
+    this.#pendingCommits.set(tracked, {
+      id: this.#nextPendingCommitId++,
+      startedAt: performance.now(),
+      context,
+    });
     if (this.#pendingCommits.size === 1) {
       this.#notifyPendingCommits(true);
     }
@@ -2151,12 +2170,35 @@ export class StorageManager implements IStorageManager {
     });
   }
 
+  /** @inheritDoc */
+  getDiagnostics(): StorageDiagnostics {
+    const now = performance.now();
+    const pendingCommits = diagnosticPrefix(this.#pendingCommits.values()).map(
+      ({ id, startedAt, context }) => ({
+        ...context?.() ?? { kind: "unknown" as const },
+        id,
+        ageMs: Math.max(0, now - startedAt),
+      }),
+    );
+    const spaces = diagnosticPrefix(this.#providers.values()).map(
+      (provider) => provider.replica.getDiagnostics(),
+    );
+    return {
+      pendingCommitCount: this.#pendingCommits.size,
+      pendingCommits,
+      pendingCommitsOmitted: this.#pendingCommits.size - pendingCommits.length,
+      pendingCrossSpaceCount: this.pendingCrossSpacePromiseCount(),
+      spaces,
+      spacesOmitted: this.#providers.size - spaces.length,
+    };
+  }
+
   hasPendingCommits(): boolean {
     return this.#pendingCommits.size > 0;
   }
 
   async pendingCommitsSettled(): Promise<void> {
-    await Promise.allSettled([...this.#pendingCommits]);
+    await Promise.allSettled(this.#pendingCommits.keys());
   }
 
   /**
@@ -4137,6 +4179,23 @@ export class SpaceReplica
     return this.#space;
   }
 
+  /** Current session progress without starting I/O or waiting for commits. */
+  getDiagnostics(): SpaceStorageDiagnostic {
+    return {
+      space: this.#space,
+      sessionId: this.#sessionSession?.sessionId,
+      caughtUpLocalSeq: this.#caughtUpLocalSeq,
+      pendingCommitCount: this.#commitPromises.size,
+      pendingReadCount: this.#syncPromises.size,
+      unsettledLocalSeqs: diagnosticPrefix(this.#commitOutcomeBySeq.keys()),
+      unsettledCount: this.#commitOutcomeBySeq.size,
+      repairLocalSeqs: diagnosticPrefix(this.#rejectedPendingLayers.keys()),
+      repairCount: this.#rejectedPendingLayers.size,
+      parkedAcceptLocalSeqs: diagnosticPrefix(this.#parkedAccepts.keys()),
+      parkedAcceptCount: this.#parkedAccepts.size,
+    };
+  }
+
   /**
    * The scope INSTANCE key a local address keys under (see `docKey`):
    * the address's explicit `scopeKey` when it names one; else the scope
@@ -5516,22 +5575,24 @@ export class SpaceReplica
     // §2b free-read row would fail intermittently whenever any pattern
     // persistently attempted one foreign scoped read. Refusing the
     // OFFENDING caller's pull keeps the refusal action-scoped, the
-    // arc's standing refusal convention.
+    // arc's standing refusal convention. The refusal is typed rather than
+    // a `ConnectionError`: it can never heal in this runtime, so a served
+    // event whose required load meets it terminalizes at once
+    // (`toReplicaLoadFailureError`).
     if (this.#refuseForeignScopedReads) {
       for (const [address] of normalizedEntries) {
         const scope = normalizeCellScope(address.scope) ?? "space";
         if (scope !== "space") {
           return {
-            error: toPullError(
-              new Error(
-                `foreign scoped read refused on the serving path: ` +
-                  `${address.id} (scope "${scope}") in ${this.#space} — ` +
-                  "a serving runtime reads foreign scoped instances only " +
-                  "under the grant-scoped read design (protocol.md §2; " +
-                  "delegated scoped reads are fail-closed until grant " +
-                  "resolution lands)",
-              ),
-            ),
+            error: {
+              name: "ForeignScopedReadRefusedError",
+              message: `foreign scoped read refused on the serving path: ` +
+                `${address.id} (scope "${scope}") in ${this.#space} — ` +
+                "a serving runtime reads foreign scoped instances only " +
+                "under the grant-scoped read design (protocol.md §2; " +
+                "delegated scoped reads are fail-closed until grant " +
+                "resolution lands)",
+            },
           };
         }
       }

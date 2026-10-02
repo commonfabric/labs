@@ -337,11 +337,6 @@ Key points:
 - A participant cannot read their own never-written `PerUser` array (e.g. an
   empty rack before joining); assert pre-join isolation via normalized
   primitives (`myName === ""`) instead.
-- A handler's `noticeSpaceAccess()` is delivered to an in-process inbox, and
-  each participant reads the notices its OWN runtime sent from the input
-  `spaceAccessNotices: SentSpaceAccessNotice[]`, after a `{ settle: true }`
-  step. The same input serves a single-user test. See
-  [Notices a handler sends](../workflows/pattern-testing.md#notices-a-handler-sends).
 - The example to copy:
   `packages/patterns/cfc-group-chat-demo/multi-user.test.tsx`; for the
   output-snapshot and inline-read idioms see

@@ -45,7 +45,6 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { FakeInbox } from "@commonfabric/runner/for-testing-only";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -119,11 +118,6 @@ import {
   runMultiUserTestPattern,
 } from "./multi-user-test-runner.ts";
 import { inferProgramRoot } from "./program-root.ts";
-import {
-  publishSentNotices,
-  sentNoticesCell,
-  SPACE_ACCESS_NOTICES_INPUT,
-} from "./space-access-notices.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 /**
@@ -1207,31 +1201,20 @@ export async function runTestPattern(
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
 
-  // The inbox a handler's `noticeSpaceAccess()` sends to: the runtime's
-  // `apiUrl` is the inbox's origin, and its `fetch` answers that origin
-  // in-process, so a notice is delivered without a server and nothing is
-  // logged. Every recipient counts as enabled, since whether a person has
-  // opened their inbox is no fact about the pattern under test. A caller
-  // supplying its own API host keeps that host, inbox included.
-  const inbox = new FakeInbox({
-    everyRecipientEnabled: true,
-    fallback: mockFetch,
-  });
-
   const runtime = await withPhase(
     ["runTestPattern", "runtime"],
     () =>
       // `runtimePresets.patternTest` carries the shared first-party posture
       // (CT-1814). Params below are this harness's declared deltas.
       new Runtime(runtimePresets.patternTest({
-        apiUrl: options.storageHost?.apiUrl ?? inbox.apiUrl,
+        apiUrl: options.storageHost?.apiUrl ?? new URL(import.meta.url),
         storageManager,
         experimental: experimentalOptionsFromEnv(Deno.env.get),
         moduleByteCache: options.moduleByteCache ??
           getDefaultModuleByteCache(),
-        // Inject a fetch that answers the inbox and honors test-declared
-        // `fetchMocks` (scoped to this runtime; no process-global mutation).
-        fetch: (input, init) => inbox.fetch(input, init),
+        // Inject a fetch that honors test-declared `fetchMocks` (scoped to this
+        // runtime; no process-global mutation).
+        fetch: mockFetch,
         // Tests that need a different mode than the harness posture opt in
         // per test.
         ...(options.cfcEnforcementMode !== undefined
@@ -1525,13 +1508,6 @@ export async function runTestPattern(
       initializationBudgetPending = true;
     }
 
-    // The result cell's cause, and the notices cell's, derived from it: a
-    // caller keeping the store names the result's, so each run it keeps has a
-    // notices document of its own rather than one every run rewrites.
-    const resultCause: unknown = options.storageHost?.resultCause ??
-      `test-pattern-result-${Date.now()}`;
-    const noticesCause = ["space-access-notices", resultCause];
-
     // 4. Instantiate the test pattern using runtime.run() for proper space context
     const patternResult = await withPhase(
       ["runTestPattern", "patternRun"],
@@ -1542,24 +1518,15 @@ export async function runTestPattern(
         // Create a result cell for the pattern
         const resultCell = runtime.getCell<Record<string, unknown>>(
           space,
-          resultCause,
+          options.storageHost?.resultCause ??
+            `test-pattern-result-${Date.now()}`,
           undefined,
           tx,
         );
 
         try {
-          // The notices the run sends reach the test as an input; see
-          // `space-access-notices.ts`. Written empty here, so a test reading
-          // it before any `{ settle: true }` step reads a list.
-          const notices = sentNoticesCell(runtime, space, noticesCause, tx);
-          notices.set([]);
           // Run the pattern with proper space context
-          const value = runtime.run(
-            tx,
-            testPatternFactory,
-            { [SPACE_ACCESS_NOTICES_INPUT]: notices },
-            resultCell,
-          );
+          const value = runtime.run(tx, testPatternFactory, {}, resultCell);
 
           // Commit the transaction
           runtime.prepareTxForCommit?.(tx);
@@ -1729,20 +1696,6 @@ export async function runTestPattern(
         settlementFailed = true;
         throw error;
       });
-      // Settled, every notice the steps so far sent has reached the inbox,
-      // so this is where the test's view of them is brought up to date.
-      const notices = await withPhase(
-        ["runTestPattern", "step", `settle_${stepIndex}`, "notices"],
-        () =>
-          publishSentNotices(
-            runtime,
-            sentNoticesCell(runtime, space, noticesCause),
-            inbox,
-          ),
-      );
-      if (options.verbose && notices.length > 0) {
-        console.log(`    ✉ ${notices.length} space-access notice(s) sent`);
-      }
     };
 
     // 5. Process tests sequentially
@@ -2381,17 +2334,12 @@ export async function runTestPattern(
       () =>
         runtime.dispose({ closeStorage: options.storageHost === undefined }),
     );
-    try {
-      await teardown.catch((error) => {
-        console.error(
-          `[cf test] teardown failed for ${testPath}: ${formatError(error)}`,
-        );
-        throw error;
-      });
-    } finally {
-      // After the runtime, which could still have been sending to it.
-      inbox.close();
-    }
+    await teardown.catch((error) => {
+      console.error(
+        `[cf test] teardown failed for ${testPath}: ${formatError(error)}`,
+      );
+      throw error;
+    });
   }
 }
 

@@ -537,7 +537,7 @@ export function computeModuleIdentities(
   options: {
     idPrefix?: string;
     runtimeFingerprint?: string;
-    sourcePackage?: SourcePackageIdentity;
+    sourcePackages?: readonly SourcePackageIdentity[];
   } = {},
 ): Map<string, string> {
   const stripPath = (path: string) =>
@@ -547,14 +547,14 @@ export function computeModuleIdentities(
     { specifier: string; target: string }[]
   >();
   const dataFiles = new Set<string>();
-  if (options.sourcePackage !== undefined) {
-    const entryPath = stripPath(options.sourcePackage.entryPath);
+  for (const sourcePackage of options.sourcePackages ?? []) {
+    const entryPath = stripPath(sourcePackage.entryPath);
     const rootPaths = [
-      ...new Set(options.sourcePackage.rootPaths.map(stripPath)),
+      ...new Set(sourcePackage.rootPaths.map(stripPath)),
     ]
       .filter((rootPath) => rootPath !== entryPath);
     const dataPaths = [
-      ...new Set((options.sourcePackage.dataPaths ?? []).map(stripPath)),
+      ...new Set((sourcePackage.dataPaths ?? []).map(stripPath)),
     ]
       .filter((dataPath) => dataPath !== entryPath);
     for (const dataPath of dataPaths) dataFiles.add(dataPath);
@@ -622,7 +622,7 @@ export function computeFabricModuleIdentities(
   options: {
     idPrefix?: string;
     runtimeFingerprint?: string;
-    sourcePackage?: SourcePackageIdentity;
+    sourcePackages?: readonly SourcePackageIdentity[];
   } = {},
 ): Map<string, string> {
   const authored: Source[] = [];

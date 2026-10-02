@@ -13,18 +13,19 @@ import type {
 
 const logger = getLogger("schema-generator.writer");
 
-/** Reports that `aliasName`, the policy being lowered, has no readable binding. */
+/** Reports an unread binding, with a specific authoring remedy where supplied. */
 export function reportUnreadWriterBinding(
   context: GenerationContext,
   aliasName: string,
+  remedy?: string,
 ): void {
   const diagnostic: SchemaGenerationDiagnostic = {
     severity: "error",
     type: "cfc-write-authorized-by:unread",
     message: `The writer binding of \`${aliasName}\` could not be read, so ` +
-      "the schema would carry no write restriction. Write the binding as a " +
-      "direct `typeof` reference, in the policy itself or passed to it " +
-      "unchanged through an alias's parameter.",
+      "the schema would carry no write restriction. " +
+      (remedy ?? "Write the binding as a direct `typeof` reference, in the " +
+          "policy itself or passed to it unchanged through an alias's parameter."),
     ...(context.typeNode && { node: context.typeNode }),
   };
   if (context.onDiagnostic) {
