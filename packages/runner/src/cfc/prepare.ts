@@ -204,6 +204,7 @@ import {
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
+  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -1475,11 +1476,18 @@ const setupProjectionSourceMatchesValue = (
   },
   path: readonly string[],
 ): boolean => {
+  // A field projecting the piece's own cell and a slot holding a binding
+  // alike: either marker names the redirect a setup put at the path.
   const projection = structuralProvenanceForPath(
     tx,
     target,
     path,
     CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+  ) ?? structuralProvenanceForPath(
+    tx,
+    target,
+    path,
+    CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   );
   if (projection === undefined) {
     return false;
@@ -1493,14 +1501,16 @@ const setupProjectionSourceMatchesValue = (
   if (!isWriteRedirectLink(targetValue)) {
     return false;
   }
-  const projected = parseLink(targetValue);
+  // A link whose address omits its document names the document holding it,
+  // so it is resolved against the target before it is compared.
+  const projected = parseLink(targetValue, { ...target, path: [] });
   if (projected === undefined) {
     return false;
   }
   const projectedPath = projected.path.map((entry) => String(entry));
   return projection.sources.some((source) =>
-    (projected.space === undefined || projected.space === source.space) &&
-    (projected.id === undefined || projected.id === source.id) &&
+    projected.space === source.space && projected.id === source.id &&
+    normalizeCellScope(projected.scope) === normalizeCellScope(source.scope) &&
     arraysEqual(projectedPath, source.path)
   );
 };
@@ -1512,14 +1522,20 @@ const setupProjectionSourceMatchesValue = (
 // applies to *subsequent* modifications).
 //
 // When the runtime instantiates a pattern whose result declares owner-protected
-// fields, it records a setup-projection marker on the result cell whose
-// `sources` point at the pattern's own projected (internal) cells — the cells
-// that hold the field's value and carry its `writeAuthorizedBy` schema. The
-// pattern initializing those fields (e.g. `avatar = ""`, `elements = []`) is its
-// own trusted creation step, authored by the runtime's result projection, not by
-// the per-field edit handler. Recognize a target as that trusted-creation site
-// when it is the redirect *source* of a setup-projection marker recorded in this
-// transaction, covering the field path.
+// fields, it records a setup-projection marker on the result cell for each
+// field it projects to one of the piece's own internal cells — the cells the
+// setup creates, minted from the result cell's cause, that hold the field's
+// value and carry its `writeAuthorizedBy` schema. The pattern initializing
+// those fields (e.g. `avatar = ""`, `elements = []`) is its own trusted creation
+// step, authored by the runtime's result projection, not by the per-field edit
+// handler. Recognize a target as that trusted-creation site when it is the
+// redirect *source* of a setup-projection marker recorded in this transaction,
+// covering the field path. A redirect to any other cell — a binding staged into
+// an argument, or a result field naming the piece's argument or a cell the code
+// setting the piece up closed over — records a marker of its own
+// (`CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION`), which does not count here:
+// the cell it names belongs to whoever handed the piece the binding, and the
+// setup initializes none of it.
 //
 // This is safe because the marker counts only with the runtime's authorization
 // (`isRuntimeWritePolicyInput`), which the runtime's result projection records
@@ -1786,12 +1802,17 @@ const pathHoldsUnattributedInitialization = (
     !tx.getCfcState().attributedInitialization &&
     inputs.some((input) => {
       if (input.kind === "structural-provenance") {
+        if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
         // internal cell holding the field's value; both are the pattern's own
-        // initialization (`writeIsPatternSetupInitialization`).
-        return tx.isRuntimeWritePolicyInput(input) &&
-          input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
-          [input.target, ...input.sources].some(covers);
+        // initialization (`writeIsPatternSetupInitialization`). A binding
+        // projection names the slot this setup stages and the cell the piece
+        // was handed, and only the slot is the setup's.
+        if (input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) {
+          return [input.target, ...input.sources].some(covers);
+        }
+        return input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION &&
+          covers(input.target);
       }
       return input.kind === "initialization" &&
         (input.mode === "seed" || input.mode === "projection" ||
