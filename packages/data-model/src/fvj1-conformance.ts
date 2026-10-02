@@ -13,9 +13,10 @@
  *
  * Where the formal spec says outright that this package falls short of it, the
  * case says so: the fixture records the spec's outcome, and this package's
- * beside it as a divergence. Generating the fixture fails
- * when a case's declared divergence does not hold, so that a fix here retires
- * the mark rather than leaving it to mislead.
+ * beside it as a divergence. Where the spec does not settle a case, the case
+ * records this package's outcome as unspecified: an answer, not a requirement.
+ * Generating the fixture fails when a case's declared divergence does not
+ * hold, so that a fix here retires the mark rather than leaving it to mislead.
  *
  * This is reached through `for-testing-only.ts` and has no place in any
  * barrel.
@@ -100,12 +101,17 @@ export type Fvj1DecodeOutcome =
  * only be declared for a value that function writes. For a text, it is that
  * the text is refused, the format refusing every text this package
  * over-accepts.
+ *
+ * `unspecified` is a note on what the spec leaves open, for a case whose
+ * outcome is this package's, recorded without being claimed as required. A
+ * case is not both: a divergence is measured against what the spec settles.
  */
 export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
     readonly divergence?: string;
+    readonly unspecified?: string;
   }
   & (
     | { readonly make: () => FabricValue }
@@ -191,6 +197,12 @@ const TEMPORAL_CLASSES = [
   ["DurationNsec", FabricDurationNsec, "AH8"],
   ["DurationDay", FabricDurationDay, "_4A"],
 ] as const;
+
+/** Note shared by the cases with a padded base64url state. */
+const PADDING_NOTE = "Section 3 has a decoder accept padded and unpadded " +
+  "states without saying which padding counts: whether it must be RFC " +
+  "4648's, which pads to a multiple of four characters with exactly the `=` " +
+  "the last group lacks, or whether fewer or more `=` are accepted too.";
 
 /** Note shared by the cases with a state that is not minimal. */
 const NON_MINIMAL_NOTE = "A state with a redundant leading `0x00` or " +
@@ -612,17 +624,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
       "not all zero is refused. This implementation ignores them, reading " +
       "`AR` as the byte `AQ` writes.",
   },
-  {
-    name: "bytes state of two bytes with padding",
-    section: SECTION_BASE64,
-    text: 'fvj1:{"/Bytes@1":"AAA="}',
-  },
-  // Padding other than RFC 4648's, which pads to a multiple of four
-  // characters with exactly the `=` the last group lacks.
-  ...["AA=", "AAA==", "AAAA=", "=="].map((state): Fvj1ConformanceCase => ({
-    name: `bytes state padded wrongly, ${JSON.stringify(state)}`,
+  ...["AAA=", "AA=", "AAA==", "AAAA=", "=="].map((
+    state,
+  ): Fvj1ConformanceCase => ({
+    name: `bytes state with padding ${JSON.stringify(state)}`,
     section: SECTION_BASE64,
     text: `fvj1:{"/Bytes@1":${JSON.stringify(state)}}`,
+    unspecified: PADDING_NOTE,
   })),
 
   // Nesting, and values beyond the class examples.
@@ -669,6 +677,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
           null: null,
           number: -1.5,
           string: "s",
+          symbol: Symbol.for("key"),
           undefined: undefined,
         },
       }),
@@ -825,13 +834,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_HOLES,
     text: 'fvj1:[{"/hole":-1}]',
   },
-  // The spec sets no greatest array length, and this implementation refuses
-  // a run past the 2^32 - 1 elements a JavaScript array can hold. What the
-  // fixture records here is that refusal, not a ruling of the spec's.
   {
     name: "hole run past the greatest array length",
     section: SECTION_HOLES,
     text: 'fvj1:[{"/hole":4294967296}]',
+    unspecified: "The spec sets no greatest array length. This " +
+      "implementation refuses a run past the 2^32 - 1 elements a JavaScript " +
+      "array can hold.",
   },
   {
     name: "object escape beside a plain key",
@@ -950,14 +959,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
       "`flags` is not optional. This implementation reads the flags as " +
       "empty.",
   },
-  // The spec calls `es2025` the default flavor without saying whether a state
-  // may leave the flavor out. What the fixture records here is that this
-  // implementation reads such a state as `es2025`, not a ruling of the
-  // spec's.
   {
     name: "regular expression with no flavor",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
+    unspecified: "The spec calls `es2025` the default flavor without saying " +
+      "whether a state may leave the flavor out. This implementation reads " +
+      "such a state as `es2025`.",
   },
   {
     name: "tag with no version",
@@ -1165,7 +1173,12 @@ function refusalOrRethrow<Refusal>(
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
 ): Record<string, Fvj1Descriptor> {
-  const { name, section, divergence } = conformanceCase;
+  const { name, section, divergence, unspecified } = conformanceCase;
+  if (divergence !== undefined && unspecified !== undefined) {
+    throw new Error(
+      `${name}: declares a divergence from what it says the spec leaves open.`,
+    );
+  }
   const entry: Record<string, Fvj1Descriptor> = { name, section };
   const implementation: Record<string, Fvj1Descriptor> = {};
 
@@ -1236,6 +1249,9 @@ function fixtureEntryOf(
       );
     }
     entry.divergence = { note: divergence, ...implementation };
+  }
+  if (unspecified !== undefined) {
+    entry.unspecified = unspecified;
   }
 
   return entry;
