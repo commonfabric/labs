@@ -38,6 +38,15 @@ const FIXTURE_URL = new URL(
   import.meta.url,
 );
 
+/**
+ * The classes whose codecs are stubs, which the conformance cases leave out
+ * until the format writes them.
+ */
+const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
+  "FabricMap",
+  "FabricSet",
+]);
+
 /** One entry of the fixture, as `fvj1-conformance.md` defines it. */
 interface FixtureEntry {
   readonly name: string;
@@ -155,7 +164,7 @@ describe("fvj1-conformance", () => {
     }
   });
 
-  it("has a case whose value is an instance of each concrete class", () => {
+  it("has a case whose value is an instance of each concrete class but those with stub codecs", () => {
     const values = FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap((c) =>
       "make" in c ? [c.make()] : []
     );
@@ -165,7 +174,7 @@ describe("fvj1-conformance", () => {
     };
     for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
-        .toEqual({ name, covered: true });
+        .toEqual({ name, covered: !STUB_CODEC_CLASSES.has(name) });
     }
   });
 

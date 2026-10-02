@@ -27,11 +27,12 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
   text lacks the prefix, `not-json` when what follows the prefix is not JSON,
   and `malformed` for any other form the format does not allow. The spec settles
   all three alike, so a decoder need only refuse; the kind says why.
-- `divergence`: present where the spec says outright that this package falls
-  short of it. The `encode` and `decode` beside it are then the spec's outcomes,
-  computed by the generator rather than written by hand, and `divergence.encode`
-  and `divergence.decode` are this package's, given only where they differ.
-  `divergence.note` says what the spec requires.
+- `divergence`: present where this package falls short of the format, as the
+  spec states it or as the format's owner has ruled. The `encode` and `decode`
+  beside it are then the format's outcomes, computed by the generator rather
+  than written by hand, and `divergence.encode` and `divergence.decode` are this
+  package's, given only where they differ. `divergence.note` says what the
+  format requires.
 - `unspecified`: present where the spec does not settle the case. The outcome
   recorded is this package's, and the note says what is open. An implementation
   may differ from it without failing to conform.
@@ -46,13 +47,11 @@ generation instead. Refusals assume a strict decoder. A lenient one returns a
 
 ## Exact text
 
-An encoder that is to match `text` byte for byte writes JSON the way
-ECMAScript's `JSON.stringify()` does: no whitespace; numbers in the shortest
-form that reads back as the same double, with an exponent, written `e+21` or
-`e-7`, from 1e21 up and below 1e-6; and in strings, `\"`, `\\`, `\b`, `\f`,
-`\n`, `\r` and `\t` for those characters, `\u` with four lowercase hexadecimal
-digits for any other character below U+0020 and for a lone surrogate, and every
-other character as itself. Record keys are in UTF-8 byte order, a lone surrogate
+An encoder that is to match `text` byte for byte writes the JSON that
+ECMAScript's `JSON.stringify()` writes with no indentation, as ECMA-262 defines
+it: a string by the `QuoteJSONString` abstract operation, and a number by
+`Number::toString`. The result is JSON as RFC 8259 defines it. Record keys are
+in the order section 10 of the spec requires, UTF-8 byte order, a lone surrogate
 taking the bytes WTF-8 gives it.
 
 ## Descriptors
@@ -88,11 +87,16 @@ other descriptor is an object with one key, naming the kind of value:
 | `{"RegExp": {...}}`                              | A regular expression: `flavor`, `source` and `flags`.                                          |
 | `{"Unavailable": {...}}`                         | Unavailable data: `reason`, and `errorKind` and `errorMessage` where the value has them.       |
 | `{"Error": {...}}`                               | An error: `type`, `name`, `message`, `stack` and `cause` where present, and `extras` as pairs. |
-| `{"Link": {"record": [...]}}`                    | A link, by the record of its fields.                                                           |
+| `{"Link": {"record": [...]}}`                    | A link, by the record of its payload.                                                          |
 | `{"Map": [[key, value], ...]}`                   | A map, its entries in insertion order.                                                         |
 | `{"Set": [value, ...]}`                          | A set, its values in insertion order.                                                          |
 | `{"Unknown": {"tag": "Future@2", "state": ...}}` | A value of a type no codec claims: the tag it arrived under, and its decoded state.            |
 | `{"Problematic": {...}}`                         | A preserved failure: `tag`, `state`, and `error`.                                              |
+
+A link's payload is opaque to the format: its fields are whatever the link's
+users define, and the payloads in the cases are examples rather than a required
+shape. `Map` and `Set` values are in the notation but not among the cases, their
+codecs being stubs pending general `FabricInstance` support.
 
 Strings inside the class descriptors are string descriptors. `name` in an
 `Error` is the error's name even where the wire writes `null` for a name equal
@@ -104,14 +108,7 @@ stored, a kind's default message not being one.
 The cases marked `unspecified` are questions for the owner of the format, each
 recorded with this package's current answer:
 
-1. Whether the JSON number `-0` decodes to negative zero.
-2. What a JSON number past the largest double decodes to.
-3. What a decoder does with a record that names one key twice.
-4. Whether `{"/Undefined@1":{}}` is accepted, section 5 accepting `{}` for a
-   stateless type where section 3 and its rule against reading a state no
-   encoder writes give `Undefined@1` the state `null` alone.
-5. Whether a non-minimal bigint state, such as `AAA`, is refused.
-6. Whether a base64url state holding whitespace is refused.
-7. Whether a base64url state with nonzero bits after its last whole byte, such
-   as `AR`, is refused.
-8. How `Map@1` and `Set@1` are written, their codecs being stubs under rework.
+1. Whether a base64url state with nonzero bits after its last whole byte, such
+   as `AR`, is refused. One byte takes two base64url characters, twelve bits of
+   which the byte fills eight, and `AQ` and `AR` differ only in the four left
+   over, so both read as the byte `0x01`.
