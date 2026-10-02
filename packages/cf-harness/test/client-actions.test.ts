@@ -684,6 +684,22 @@ Deno.test("a session whose host opted in opens with the Weaver command guidance,
     });
   expect(await contextOf(true)).toContain(WEAVER_COMMAND_GUIDANCE);
   expect(await contextOf(false)).not.toContain(WEAVER_COMMAND_GUIDANCE);
+  // A simple task needs no listing: the common commands are named, and the
+  // model lists only when it does not know the command it needs.
+  for (
+    const command of [
+      "loom.inspect",
+      "looms.list",
+      "loom.open",
+      "loom.add",
+      "loom.move",
+      "page.write",
+      "create.note",
+    ]
+  ) {
+    expect(WEAVER_COMMAND_GUIDANCE).toContain(command);
+  }
+  expect(WEAVER_COMMAND_GUIDANCE).not.toContain("Call list_commands first");
 });
 
 Deno.test("weaver_action is gated by backing, absent from defaults, and nameable in a stdio policy", () => {

@@ -59,10 +59,27 @@ const UNAVAILABLE =
 
 /**
  * How a session uses the Weaver's commands, given to a run whose host opted
- * in to `weaver_action`.
+ * in to `weaver_action`. It names the common commands, so a simple task
+ * invokes one without listing the catalog first.
+ *
+ * SHORTCUT: the named commands, their approvals and argument shapes are
+ * copied from the Weaver's catalog and are not checked against it; a command
+ * the Weaver renames comes back refused, and the model can still list. To
+ * harden, have the host send the common entries with the session's protocol
+ * declaration and render this list from them.
  */
-export const WEAVER_COMMAND_GUIDANCE =
-  "Weaver commands: for information the person's application holds (their looms, what a loom contains, its panels and version) or an operation on it (opening, adding, moving, writing), call a Weaver command through weaver_action rather than authoring a pattern. Call list_commands first to learn the command ids, their arguments and approvals, and invoke one with invoke_command, copying the approval its catalog entry names. A read on the Weaver's reviewed list answers at once; anything that changes something waits for the person to approve it, and a declined command is their choice, so do not repeat it. An executed command returns its outcome (ok, code, error, outputs, completed, mayHaveLanded) and a handle to its full answer, which stays out of your context: describe_handle says what the handle is and how it is labeled, not what it holds, so act on the outcome and its outputs. A version conflict is an answer, not a broken connection: read the current version and decide again rather than retrying the same write. Use patterns for computation, not for reading what a command already returned.";
+export const WEAVER_COMMAND_GUIDANCE = [
+  "Weaver commands: for information the person's application holds (their looms, what a loom contains, its panels and version) or an operation on it (opening, adding, moving, writing), call a Weaver command through weaver_action rather than authoring a pattern.",
+  "When you know the command you need, call invoke_command directly as your first call; the common ones are below. Call list_commands only for a command you do not know, or to read one's argument schema in detail.",
+  "- looms.list (global, read, approval automatic): list the person's looms, or find one by name; args { query?, limit?, include_archived? }.",
+  "- loom.inspect (loom, read, approval automatic): read a loom's manifest (its panels, selection and version); args {}, with target.loomId.",
+  "- loom.open (global, mutation, approval person): bring a loom forward on the person's screen; args { loom }.",
+  "- loom.add (loom, mutation, approval person): add a reference to the loom and show it; args { ref?, title? }, with target.loomId.",
+  "- loom.move (loom, mutation, approval person): move a panel within the loom's order; args { component, before? }, with target.loomId.",
+  "- page.write (global, mutation, approval person): replace a page's whole source in the File Cabinet; args { path, content, reason?, version? }.",
+  "- create.note (loom, mutation, approval person): make a note page and show it; args { text }, with target.loomId.",
+  "Copy the approval the command names. A read on the Weaver's reviewed list answers at once; anything that changes something waits for the person to approve it, and a declined command is their choice, so do not repeat it. An executed command returns its outcome (ok, code, error, outputs, completed, mayHaveLanded) and a handle to its full answer, which stays out of your context: describe_handle says what the handle is and how it is labeled, not what it holds, so act on the outcome and its outputs. A version conflict is an answer, not a broken connection: read the current version and decide again rather than retrying the same write. Use patterns for computation, not for reading what a command already returned.",
+].join("\n");
 
 /** Whether an untrusted action is an invocation whose args are too large. */
 const hasOversizedArgs = (value: unknown): boolean => {
