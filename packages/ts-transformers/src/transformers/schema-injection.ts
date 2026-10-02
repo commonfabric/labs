@@ -1,5 +1,9 @@
 import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
+import {
+  carriesWriterPolicy,
+  holdsWriterPolicy,
+} from "@commonfabric/schema-generator/writer-policy";
 import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
 import ts from "typescript";
 
@@ -871,6 +875,21 @@ function isToSchemaCall(node: ts.Expression): node is ts.CallExpression {
 
   return ts.isPropertyAccessExpression(node.expression) &&
     node.expression.name.text === "toSchema";
+}
+
+/**
+ * Marks `schema`, a schema argument the author wrote where SchemaInjection
+ * would otherwise inject one that defines a document, as defining it
+ * (`CrossStageState.markDocumentSchemaCall`), where it is a `toSchema` call
+ * the schema generator reads. A schema written out as a literal is read as
+ * written.
+ */
+function markAuthoredDocumentSchema(
+  schema: ts.Expression,
+  context: TransformationContext,
+): void {
+  const call = unwrapExpression(schema);
+  if (isToSchemaCall(call)) context.state.markDocumentSchemaCall(call);
 }
 
 function createUnknownSchemaTypeNode(factory: ts.NodeFactory): ts.TypeNode {
@@ -2013,6 +2032,7 @@ function buildObjectLiteralReturnTypeNode(
   factory: ts.NodeFactory,
   typeRegistry?: TypeRegistry,
   context?: TransformationContext,
+  freshValuesDefineDocument = false,
 ): ts.TypeNode | undefined {
   const members: ts.TypeElement[] = [];
 
@@ -2060,6 +2080,14 @@ function buildObjectLiteralReturnTypeNode(
     if (valueHint && context) {
       context.recordSchemaHint(valueTypeNode, { cfcUiContract: valueHint });
     }
+    // Fresh data under a writer policy is data the result document holds
+    // itself, so the value's schema defines that document.
+    if (
+      freshValuesDefineDocument && context &&
+      holdsFreshWriterPolicy(valueExpr, valueType, checker)
+    ) {
+      context.recordSchemaHint(valueTypeNode, { definesDocument: true });
+    }
 
     members.push(
       factory.createPropertySignature(
@@ -2075,6 +2103,135 @@ function buildObjectLiteralReturnTypeNode(
     members,
     { factory, checker, typeRegistry },
   );
+}
+
+/**
+ * Whether `expr`, a value a pattern's callback returns, puts fresh data where
+ * `type`, the type its schema is read from, carries a writer policy. Fresh
+ * data is what the result document holds itself: a literal, a template whose
+ * parts are all literals, an object or array literal, or a `const` bound to
+ * one, seen through `as`, `satisfies`, `!` and parentheses. An object or
+ * array literal is fresh data itself, carrying `type`'s own policy, and is
+ * read member by member against `type`'s members, any of which may be a
+ * reference instead. A reference, a call, or any other expression reaches
+ * another document, or derives from one.
+ */
+function holdsFreshWriterPolicy(
+  expr: ts.Expression,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  depth = 0,
+): boolean {
+  if (depth >= 8) return false;
+  const value = unwrapExpression(expr);
+  const within = (inner: ts.Expression, innerType: ts.Type | undefined) =>
+    !!innerType && holdsFreshWriterPolicy(inner, innerType, checker, depth + 1);
+  if (ts.isObjectLiteralExpression(value)) {
+    const object = checker.getNonNullableType(type);
+    return carriesWriterPolicy(type, checker) ||
+      value.properties.some((property) => {
+        if (
+          !ts.isPropertyAssignment(property) &&
+          !ts.isShorthandPropertyAssignment(property)
+        ) {
+          return false;
+        }
+        const name = ts.isIdentifier(property.name) ||
+            ts.isStringLiteral(property.name) ||
+            ts.isNumericLiteral(property.name)
+          ? property.name.text
+          : undefined;
+        const member = name === undefined
+          ? undefined
+          : checker.getPropertyOfType(object, name);
+        return within(
+          ts.isPropertyAssignment(property)
+            ? property.initializer
+            : property.name,
+          member && checker.getTypeOfSymbol(member),
+        );
+      });
+  }
+  if (ts.isArrayLiteralExpression(value)) {
+    const array = checker.getNonNullableType(type);
+    const elementTypes = checker.isTupleType(array)
+      ? checker.getTypeArguments(array as ts.TypeReference)
+      : undefined;
+    const elementType = checker.isArrayType(array)
+      ? checker.getTypeArguments(array as ts.TypeReference)[0]
+      : checker.getIndexTypeOfType(array, ts.IndexKind.Number);
+    return carriesWriterPolicy(type, checker) ||
+      value.elements.some((element, index) =>
+        !ts.isSpreadElement(element) &&
+        within(element, elementTypes ? elementTypes[index] : elementType)
+      );
+  }
+  if (isFreshLiteral(value)) return holdsWriterPolicy(type, checker);
+  if (!ts.isIdentifier(value)) return false;
+  const symbol = ts.isShorthandPropertyAssignment(value.parent)
+    ? checker.getShorthandAssignmentValueSymbol(value.parent)
+    : checker.getSymbolAtLocation(value);
+  const declaration = symbol?.valueDeclaration;
+  return !!declaration && ts.isVariableDeclaration(declaration) &&
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+    !!declaration.initializer && within(declaration.initializer, type);
+}
+
+/**
+ * Whether `expr` is a literal: a primitive, or a template or a signed number
+ * made of literals alone.
+ */
+function isFreshLiteral(expr: ts.Expression): boolean {
+  const value = unwrapExpression(expr);
+  if (ts.isPrefixUnaryExpression(value)) return isFreshLiteral(value.operand);
+  if (ts.isTemplateExpression(value)) {
+    return value.templateSpans.every((span) => isFreshLiteral(span.expression));
+  }
+  return ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) ||
+    ts.isBigIntLiteral(value) || ts.isRegularExpressionLiteral(value) ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    value.kind === ts.SyntaxKind.NullKeyword;
+}
+
+/**
+ * For a pattern's inferred result, the result type node rebuilt from
+ * `returned`, the object literal its callback returns, with each fresh value
+ * that carries a writer policy hinted as defining the result document
+ * (`SchemaHint.definesDocument`); `undefined` where it returns no such value.
+ * A returned value the rebuild cannot read member by member, or a fresh value
+ * returned whole, is `"whole"`: the whole result then defines its document.
+ */
+function freshResultTypeNode(
+  returned: ts.Expression | undefined,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: TypeRegistry | undefined,
+  context: TransformationContext,
+): ts.TypeNode | "whole" | undefined {
+  if (!returned) return undefined;
+  const carriesWriter = (value: ts.Expression) =>
+    holdsFreshWriterPolicy(value, checker.getTypeAtLocation(value), checker);
+  if (!ts.isObjectLiteralExpression(returned)) {
+    return carriesWriter(returned) ? "whole" : undefined;
+  }
+  const fresh = returned.properties.some((property) =>
+    ts.isPropertyAssignment(property)
+      ? carriesWriter(property.initializer)
+      : ts.isShorthandPropertyAssignment(property) &&
+        carriesWriter(property.name)
+  );
+  if (!fresh) return undefined;
+  return buildObjectLiteralReturnTypeNode(
+    returned,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
+    context,
+    true,
+  ) ?? "whole";
 }
 
 /** The authored type of a returned cell expression or identifier declaration. */
@@ -3069,6 +3226,27 @@ function handlePatternSchemaInjection(
   const argumentCapabilityMode: CapabilitySummaryApplicationMode =
     lowersArrayCallback ? "full" : "defaults_only";
 
+  // A result type the author wrote, as a type argument or as the callback's
+  // return annotation, defines the result document. An inferred result views
+  // the documents its fields link to, except where it returns fresh data
+  // carrying a writer policy, which the result document holds itself
+  // (`freshResultTypeNode()`).
+  const resultAuthored = (typeArgs?.length ?? 0) >= 2 ||
+    builderFunction.type !== undefined;
+  const freshResult = lowersArrayCallback || resultAuthored
+    ? undefined
+    : freshResultTypeNode(
+      unwrappedPatternReturnExpr,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      context,
+    );
+  const resultDefinesDocument = !lowersArrayCallback &&
+    (resultAuthored || freshResult === "whole");
+  const freshResultNode = freshResult === "whole" ? undefined : freshResult;
+
   // Helper to build final call with function-first argument order
   const buildCallExpression = (
     inputSchema: ts.Expression,
@@ -3083,6 +3261,24 @@ function handlePatternSchemaInjection(
       ]),
       node,
     );
+  };
+
+  // The result schema's type node and type where the callback's return infers
+  // them, or the rebuild `freshResultTypeNode()` made of what it returns.
+  const inferredResult = (
+    inferred: { result?: ts.TypeNode; resultType?: ts.Type },
+  ): { node: ts.TypeNode; type: ts.Type | undefined } => {
+    preserveUiContractHint(inferred.result, freshResultNode, context);
+    const node = freshResultNode ?? inferred.result ??
+      factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    return {
+      node,
+      type: getTypeFromRegistryOrFallback(
+        node,
+        freshResultNode ? undefined : inferred.resultType,
+        typeRegistry,
+      ),
+    };
   };
 
   // Determine input and result schema TypeNodes based on type arguments
@@ -3155,13 +3351,7 @@ function handlePatternSchemaInjection(
       inferred.result,
       inferred.resultType,
     );
-    resultTypeNode = inferred.result ??
-      factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
-    resultType = getTypeFromRegistryOrFallback(
-      resultTypeNode,
-      inferred.resultType,
-      typeRegistry,
-    );
+    ({ node: resultTypeNode, type: resultType } = inferredResult(inferred));
   } else {
     // Case 3: No type arguments - check for schema arguments
     const schemaArgs = detectSchemaArguments(
@@ -3170,7 +3360,13 @@ function handlePatternSchemaInjection(
     );
 
     if (schemaArgs.length >= 2) {
-      // Already has two schemas (input + result) - skip transformation
+      // Already has two schemas (input + result) - skip transformation. An
+      // authored `toSchema` among them defines its document as an injected
+      // one would.
+      if (!lowersArrayCallback) {
+        markAuthoredDocumentSchema(schemaArgs[0]!, context);
+        markAuthoredDocumentSchema(schemaArgs[1]!, context);
+      }
       return undefined;
     } else if (schemaArgs.length === 1) {
       // Case 3a: Has one schema argument but no type args
@@ -3194,13 +3390,7 @@ function handlePatternSchemaInjection(
         inferred.result,
         inferred.resultType,
       );
-      resultTypeNode = inferred.result ??
-        factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
-      resultType = getTypeFromRegistryOrFallback(
-        resultTypeNode,
-        inferred.resultType,
-        typeRegistry,
-      );
+      ({ node: resultTypeNode, type: resultType } = inferredResult(inferred));
 
       // Use existing schema directly as input, create result schema from type
       const toSchemaResult = createToSchemaCall(context, resultTypeNode);
@@ -3208,6 +3398,12 @@ function handlePatternSchemaInjection(
         toSchemaResult,
         node.expression,
       );
+      if (!lowersArrayCallback) {
+        markAuthoredDocumentSchema(existingInputSchema, context);
+      }
+      if (resultDefinesDocument) {
+        context.state.markDocumentSchemaCall(toSchemaResult);
+      }
       preserveUiContractHint(
         resultTypeNode,
         toSchemaResult,
@@ -3264,13 +3460,7 @@ function handlePatternSchemaInjection(
         typeRegistry,
       );
 
-      resultTypeNode = inferred.result ??
-        factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
-      resultType = getTypeFromRegistryOrFallback(
-        resultTypeNode,
-        inferred.resultType,
-        typeRegistry,
-      );
+      ({ node: resultTypeNode, type: resultType } = inferredResult(inferred));
     }
   }
 
@@ -3318,11 +3508,8 @@ function handlePatternSchemaInjection(
     resultSchemaCall,
     node.expression,
   );
-  // Its result document stores the envelope its result schema carries, where
-  // the author wrote the result type. A result inferred from the callback is
-  // read from a type alone: a view of the documents its fields link to, which
-  // store their own.
-  if (!lowersArrayCallback && typeArgs && typeArgs.length >= 2) {
+  // So does its result document, where the result defines it.
+  if (resultDefinesDocument) {
     context.state.markDocumentSchemaCall(resultSchemaCall);
   }
   if (
@@ -3459,6 +3646,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           // only covers our own output; a user-supplied 2-arg cell must also
           // be left alone, so this stays an argument-count check.)
           if (args.length >= 2) {
+            markAuthoredDocumentSchema(args[1]!, context);
             return ts.visitEachChild(node, visit, transformation);
           }
 
@@ -4186,6 +4374,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
 
         // If already has 2 arguments, assume schema is already present
         if (args.length >= 2) {
+          markAuthoredDocumentSchema(args[1]!, context);
           return ts.visitEachChild(node, visit, transformation);
         }
 

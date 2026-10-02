@@ -47,6 +47,7 @@ import {
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
+import { writerPolicyHeldBy } from "../typescript/writer-policy.ts";
 import {
   type CellWrapperKind,
   getCellBrand,
@@ -859,24 +860,6 @@ const cfcCarriedParts = (
     } else rest.push(member);
   }
   return metadata.length > 0 ? { payload: rest, metadata } : undefined;
-};
-
-/**
- * The writer policy `metadata`, a CFC carrier's metadata type, holds, by the
- * alias that writes it: a `writeAuthorizedBy` or a `writePolicyAnyOf`, whose
- * writers only `typeof` nodes name, so no reading of the type alone mints
- * them. `undefined` for metadata holding neither.
- */
-const writerPolicyHeldBy = (
-  metadata: ts.Type,
-  checker: ts.TypeChecker,
-): "WriteAuthorizedBy" | "WritePolicyAnyOf" | undefined => {
-  const value = checker.getNonNullableType(metadata);
-  return value.getProperty("writePolicyAnyOf")
-    ? "WritePolicyAnyOf"
-    : value.getProperty("writeAuthorizedBy")
-    ? "WriteAuthorizedBy"
-    : undefined;
 };
 
 /**
@@ -3596,7 +3579,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         this.#writesPolicyThroughAlias(aliasName, context)
       ) {
         reportUnreadWriterBinding(context, aliasName);
-      } else {
+      } else if (!this.#suppliesRootWriter(context)) {
         this.#reportWriterWithoutSyntax(aliasName, context);
       }
       return undefined;
@@ -3606,7 +3589,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       // A declaration read from an instantiated type can name a parameter
       // whose argument has no syntax. It is a type-only read, not an authored
-      // indirect binding for this check to reject.
+      // indirect binding for this check to reject; it is reported only where
+      // the schema defines a document.
       const bound = this.#boundArgumentAt(bindingNode, context);
       if (bound && !bound.argument.node) {
         this.#reportWriterWithoutSyntax(aliasName, context);
@@ -3702,8 +3686,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * every write against it, its own writer's included, and stops no other,
    * while the document the view reads stores the whole policy. A claim whose
    * type holds no writer is the author's, and stays as written. A schema that
-   * defines a document has the unread writer reported as an error, which
-   * fails its compilation.
+   * defines a document keeps its claims, and has the unread writer reported
+   * instead; a root whose writer the caller supplies keeps them too
+   * (`GenerationContext.rootWriterSuppliedAt`).
    */
   #withPolicyReadWhole(
     type: ts.Type,
@@ -3711,6 +3696,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): MutableJSONSchema {
     if (
+      context.definesDocument || this.#suppliesRootWriter(context) ||
       !isObjectOrArray(schema) || !isObjectOrArray(schema.ifc) ||
       schema.ifc.writeAuthorizedBy !== undefined ||
       schema.ifc.writePolicyAnyOf !== undefined
@@ -3741,10 +3727,26 @@ export class CommonFabricFormatter implements TypeFormatter {
     metadata: readonly ts.Type[],
     context: GenerationContext,
   ): void {
-    for (const type of metadata) {
-      const policy = writerPolicyHeldBy(type, context.typeChecker);
-      if (policy) return this.#reportWriterWithoutSyntax(policy, context);
-    }
+    const policies = metadata.flatMap((type) =>
+      (type.isIntersection() ? type.types : [type]).flatMap((part) =>
+        writerPolicyHeldBy(part, context.typeChecker) ?? []
+      )
+    );
+    // A root whose writer the caller supplies has one writer read; any other
+    // is still unread.
+    const unread = this.#suppliesRootWriter(context)
+      ? policies.slice(1)
+      : policies;
+    if (unread[0]) this.#reportWriterWithoutSyntax(unread[0], context);
+  }
+
+  /**
+   * Whether `context` reads the root of a schema whose root policy's writer
+   * the caller supplies (`GenerationContext.rootWriterSuppliedAt`).
+   */
+  #suppliesRootWriter(context: GenerationContext): boolean {
+    return context.rootWriterSuppliedAt !== undefined &&
+      context.typeNode === context.rootWriterSuppliedAt;
   }
 
   #writeAuthorizedByIdentityForBinding(

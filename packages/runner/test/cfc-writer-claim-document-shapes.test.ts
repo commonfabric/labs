@@ -176,6 +176,14 @@ export default pattern<In>((input) => {`,
       "export default pattern<{ byId: Record<string, WriteAuthorizedBy<string, typeof writerA>> }>((input) => {",
       'const value = input.byId["k"];',
     ),
+    "an index signature": program(
+      "export default pattern<{ byId: { [key: string]: WriteAuthorizedBy<string, typeof writerA> } }>((input) => {",
+      'const value = input.byId["k"];',
+    ),
+    "a tuple": program(
+      "export default pattern<{ pair: [WriteAuthorizedBy<string, typeof writerA>] }>((input) => {",
+      "const value = input.pair[0];",
+    ),
     "an owner policy in a generic alias": program(
       `type Box<T> = { value: T };
 export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
@@ -193,6 +201,70 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
       expect(await outcomeOf(source, reach)).not.toBe("open");
     });
   }
+
+  it("refuses fresh data an inferred result holds under a writer policy read from its type", async () => {
+    // The result document holds that data itself, so it would store no write
+    // restriction for it.
+    const tx = runtime.edit();
+    await expect(
+      runtime.patternManager.compilePattern(
+        program(
+          "export default pattern<{ initial: string }>((input) => {",
+          'const value = "seed" as WriteAuthorizedBy<string, typeof writerA>;',
+          "{ value }",
+        ),
+        { space, tx },
+      ),
+    ).rejects.toThrow("could not be read");
+    tx.abort();
+  });
+
+  describe("fresh data a callback's return annotation types", () => {
+    // No document the result links to stores the policy: the result document
+    // holds the data itself, and stores the policy the annotation declares.
+
+    const annotated = (resultType: string, returned: string) =>
+      program(
+        `type Box<T> = { value: T };
+export default pattern<{ initial: string }>((input): ${resultType} => {`,
+        "",
+        returned,
+      );
+
+    it("stores the whole policy declared through a generic alias, which refuses the pattern's own write", async () => {
+      const tx = runtime.edit();
+      const pattern = await runtime.patternManager.compilePattern(
+        annotated("Box<Owned<string, typeof writerA>>", '{ value: "seed" }'),
+        { space, tx },
+      );
+      const cell = runtime.getCell<{ value: string }>(
+        space,
+        "annotated-generic-alias",
+        undefined,
+        tx,
+      );
+      runtime.run(tx, pattern, {}, cell);
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /value",
+      );
+    });
+
+    it("refuses a policy declared through an index signature", async () => {
+      const tx = runtime.edit();
+      await expect(
+        runtime.patternManager.compilePattern(
+          annotated(
+            "{ byId: { [key: string]: Owned<string, typeof writerA> } }",
+            '{ byId: { k: "seed" } }',
+          ),
+          { space, tx },
+        ),
+      ).rejects.toThrow("could not be read");
+      tx.abort();
+    });
+  });
 
   describe("read in part by a view", () => {
     // A result inferred from the pattern's callback, and a computed's result,

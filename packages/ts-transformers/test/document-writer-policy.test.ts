@@ -13,7 +13,7 @@ import type { TransformationDiagnostic } from "../src/mod.ts";
 import { transformSource } from "./utils.ts";
 
 const PRELUDE = `/// <cts-enable />
-import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, wish } from "commonfabric";
+import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, toSchema, wish } from "commonfabric";
 const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
 type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPrincipal: CurrentPrincipal }>>;
 `;
@@ -74,10 +74,17 @@ function creationSchemas(root: ts.SourceFile): unknown[] {
 
 /** The input schema of the pattern `root` exports by default. */
 function inputSchema(root: ts.SourceFile): unknown {
+  return defaultPatternSchemas(root)[0];
+}
+
+/** The input and result schemas of the pattern `root` exports by default. */
+function defaultPatternSchemas(root: ts.SourceFile): unknown[] {
   const call = root.statements.filter(ts.isExportAssignment).map((statement) =>
     statement.expression
   ).find(ts.isCallExpression);
-  return call?.arguments[1] && literalToValue(call.arguments[1]);
+  return call
+    ? call.arguments.slice(1).map((argument) => literalToValue(argument))
+    : [];
 }
 
 function outcome(
@@ -179,6 +186,67 @@ export default pattern<${input}>((input) => ({ input }));`);
     }
   });
 
+  describe("a schema the author wrote with `toSchema`", () => {
+    // Written where SchemaInjection would otherwise inject one, it defines
+    // the same document.
+
+    it("keeps or refuses a writer a pattern's input schema reaches through a generic alias", async () => {
+      const result = await transform(`type Box<T> = { value: T };
+export default pattern(({ value }: Box<${POLICY}>) => ({ value }), toSchema<Box<${POLICY}>>());`);
+
+      expect(outcome(result, [inputSchema(result.root)])).not.toBe("dropped");
+    });
+
+    for (
+      const [which, input, output] of [
+        ["input", `Box<${POLICY}>`, "{ value: string }"],
+        ["result", "{ value: string }", `Box<${POLICY}>`],
+      ] as const
+    ) {
+      it(`keeps or refuses a writer a pattern's ${which} schema, written beside the other, reaches through a generic alias`, async () => {
+        const result = await transform(`type Box<T> = { value: T };
+export default pattern(
+  ({ value }: { value: string }) => ({ value }),
+  toSchema<${input}>(),
+  toSchema<${output}>(),
+);`);
+
+        expect(outcome(result, defaultPatternSchemas(result.root)))
+          .not.toBe("dropped");
+      });
+    }
+
+    it("keeps or refuses a writer the callback's return annotation reaches through a generic alias, beside an authored input schema", async () => {
+      const result = await transform(`type Box<T> = { value: T };
+export default pattern(
+  (_: { value: string }): Box<${POLICY}> => ({ value: "" }),
+  toSchema<{ value: string }>(),
+);`);
+
+      expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
+        .not.toBe("dropped");
+    });
+
+    for (
+      const creation of [
+        "new Writable",
+        "Writable.of",
+      ] as const
+    ) {
+      it(`keeps or refuses a writer the schema of a cell \`${creation}\` creates reaches through a generic alias`, async () => {
+        const result = await transform(`type Box<T> = { value: T };
+export default pattern<{}>(() => {
+  const a = ${creation}({ value: "" }, toSchema<Box<${POLICY}>>()).for("a");
+  return { a };
+});`);
+
+        expect(outcome(result, creationSchemas(result.root))).not.toBe(
+          "dropped",
+        );
+      });
+    }
+  });
+
   describe("an authored pattern's result", () => {
     // A result type the author wrote is what the result document stores its
     // envelope from. An inferred one views the documents its fields link to.
@@ -188,16 +256,80 @@ export default pattern<${input}>((input) => ({ input }));`);
 export default pattern<{ value: ${POLICY} }, { box: Box<${POLICY}> }>(
   ({ value }) => ({ box: { value } }),
 );`);
-      const output = (() => {
-        const call = result.root.statements.filter(ts.isExportAssignment)
-          .map((statement) => statement.expression).find(ts.isCallExpression);
-        return call?.arguments[2] && literalToValue(call.arguments[2]);
-      })();
+      const [, output] = defaultPatternSchemas(result.root);
 
       expect(outcome(result, [
         (output as { properties?: { box?: unknown } })
           ?.properties?.box,
       ])).not.toBe("dropped");
+    });
+
+    it("keeps or refuses a writer the callback's return annotation reaches through a generic alias", async () => {
+      const result = await transform(`type Box<T> = { value: T };
+export default pattern<{}>((): Box<${POLICY}> => ({ value: "" }));`);
+
+      expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
+        .not.toBe("dropped");
+    });
+
+    for (
+      const [what, body] of [
+        ["returns in place", `return { value: "" as ${POLICY} };`],
+        [
+          "returns through a constant",
+          `const value = "" as ${POLICY};\n  return { value, count: 1 };`,
+        ],
+        [
+          "returns inside an object",
+          `return { box: { value: "" } as Box<${POLICY}> };`,
+        ],
+        [
+          "returns as an object the policy protects whole",
+          'return { box: { a: "" } as WriteAuthorizedBy<{ a: string }, typeof setName> };',
+        ],
+        ["returns inside an array", `return { list: ["" as ${POLICY}] };`],
+        [
+          "returns beside a spread",
+          `return { ...{ count: 1 }, value: "" as ${POLICY} };`,
+        ],
+      ] as const
+    ) {
+      it(`refuses a writer read from the type of fresh data an inferred result ${what}`, async () => {
+        // The result document holds that data itself, so its schema defines
+        // the document there, and the cast names no writer.
+        const result = await transform(`type Box<T> = { value: T };
+export default pattern<{}>(() => {
+  ${body}
+});`);
+
+        expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
+          .toBe("refused");
+      });
+    }
+
+    it("keeps the claim on fresh data whose declaration names its writer, beside a protected value it views", async () => {
+      const result = await transform(`
+export default pattern<{ owned: Owned<string, typeof setName> }>(({ owned }) => {
+  const seed: ${POLICY} = "" as never;
+  return { seed, owned };
+});`);
+      const { output } = patternSchemas(result.root);
+
+      expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+      expect(output).toMatchObject({
+        properties: {
+          seed: {
+            ifc: {
+              writeAuthorizedBy: {
+                __ctWriterIdentityOf: { path: ["setName"] },
+              },
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(output.properties)).not.toMatch(
+        /ownerPrincipal|__ctCurrentPrincipal/,
+      );
     });
 
     it("reports nothing for an inferred result that returns a protected value through a generic alias", async () => {
@@ -300,6 +432,45 @@ export default pattern<{ initial: string }>(({ initial }) => {
           },
         });
       }
+    });
+
+    it("keeps the owner and the claim naming the current principal that its payload carries, in a created cell and in a wish", async () => {
+      // With the writer the transformer supplies, the policy is read whole.
+      const owned =
+        "WriteAuthorizedBy<RepresentsCurrentUser<Cfc<string, { ownerPrincipal: CurrentPrincipal }>>, typeof setName>";
+      const result = await transform(`
+export default pattern<{}>(() => {
+  const a = new Writable<${owned}>("").for("a");
+  const b = Writable.of<${owned}>("").for("b");
+  const found = wish<${owned}>({ query: "#found" });
+  return { a, b, found };
+});`);
+      const ownerPolicy = {
+        ifc: {
+          ownerPrincipal: { __ctCurrentPrincipal: true },
+          addIntegrity: [{ subject: { __ctCurrentPrincipal: true } }],
+          writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["setName"] } },
+        },
+      };
+
+      expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+      const schemas = creationSchemas(result.root);
+      expect(schemas).toHaveLength(2);
+      for (const schema of schemas) expect(schema).toMatchObject(ownerPolicy);
+      expect(callSchemas(result.root, "wish")).toMatchObject([ownerPolicy]);
+    });
+
+    it("refuses a second writer over a nullable payload, read from its type", async () => {
+      // The root policy's writer is the one the transformer supplies; the
+      // policy under `NonNullable` is read from its type alone.
+      const result = await transform(`
+const setOther = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+export default pattern<{}>(() => {
+  const a = new Writable<WriteAuthorizedBy<NonNullable<WriteAuthorizedBy<string, typeof setOther> | undefined> | null, typeof setName>>(null as never).for("a");
+  return { a };
+});`);
+
+      expect(outcome(result, [])).toBe("refused");
     });
 
     it("refuses a writer its payload reaches where no syntax names it", async () => {
