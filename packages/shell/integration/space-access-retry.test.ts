@@ -146,25 +146,41 @@ async function waitForRetryOutcome(
 }
 
 /**
- * Returns whether the page shows a retry under way or past, given that it
- * showed `retries` settled ones when the space was refused: the placeholder
- * busy and reading "Retrying…", a higher settled count, or the piece in the
- * placeholder's place. Reads the page once, as it stands.
+ * Reads where the refusal the page showed with `retries` settled retries
+ * stands now, once, as the page stands: `idle` while the placeholder still
+ * shows no retry since, `busy` while a retry is in flight, `settled` once one
+ * more has settled, `piece` once the piece is in the placeholder's place, and
+ * `gone` when neither the placeholder nor the piece is there.
  */
-async function retryHasStarted(page: Page, retries: number): Promise<boolean> {
+async function retryReading(page: Page, retries: number): Promise<string> {
   // A predicate that always answers with an object holds at its first check,
   // so this wait returns that check's reading rather than waiting for one.
   const reading = await waitForCondition(page, (probe, before) => {
     const placeholders = probe.collect("[data-space-access-lost]");
-    const started = placeholders.length === 0 ||
+    if (placeholders.length === 0) {
+      return {
+        state: probe.collect("#refused-space-marker").length > 0
+          ? "piece"
+          : "gone",
+      };
+    }
+    if (
       placeholders.some((el) =>
-        Number(el.getAttribute("data-space-access-retries")) > before ||
-        (el.getAttribute("aria-busy") === "true" &&
-          probe.deepText(el).includes("Retrying…"))
-      );
-    return { started };
+        Number(el.getAttribute("data-space-access-retries")) > before
+      )
+    ) {
+      return { state: "settled" };
+    }
+    return {
+      state: placeholders.some((el) =>
+          el.getAttribute("aria-busy") === "true" &&
+          probe.deepText(el).includes("Retrying…")
+        )
+        ? "busy"
+        : "idle",
+    };
   }, { args: [retries] });
-  return reading?.started === true;
+  return reading?.state ?? "unread";
 }
 
 describe("shell space access retry", () => {
@@ -176,7 +192,8 @@ describe("shell space access retry", () => {
    * it in a space the member is granted, and shows the view to the member in
    * the shell. The view links to the piece, so the member's runtime is refused
    * the piece's space on its first open of it. Waits for the view and the
-   * refusal in the piece's place, then hands `run` the page, the refused
+   * refusal in the piece's place, and for the member's runtime to settle and
+   * sync every space it opened, then hands `run` the page, the refused
    * space, the settled retries the refusal showed, and a grant of that space
    * to the member. The grant resolves once the server has committed it, and
    * then requires that the page still shows the refusal, no retry under way:
@@ -249,6 +266,16 @@ describe("shell space access retry", () => {
         (probe) => probe.collect("#linked-view-marker").length > 0,
       );
       const retries = await waitForRefusal(page);
+      // Under server execution the member's runtime opens its home space
+      // after the view, and the reads that follow open the refused space's
+      // session again. One landing after the grant would admit the space with
+      // no retry of the shell's, so the grant waits until the view has settled
+      // and every space the runtime opened has synced.
+      await awaitViewSettled(page);
+      await page.evaluate(async () => {
+        await globalThis.commonfabric?.rt?.allSynced();
+      });
+      await awaitViewSettled(page);
       await run({
         page,
         space,
@@ -256,7 +283,7 @@ describe("shell space access retry", () => {
         grant: async () => {
           await acl.set(member.did(), "WRITE");
           await awaitViewSettled(page);
-          expect(await retryHasStarted(page, retries)).toBe(false);
+          expect(await retryReading(page, retries)).toBe("idle");
         },
       });
     } finally {
@@ -278,7 +305,7 @@ describe("shell space access retry", () => {
       // worker marks the retry in flight while handling it, so once the view
       // has settled the page shows the retry under way or past.
       await awaitViewSettled(page);
-      expect(await retryHasStarted(page, retries)).toBe(true);
+      expect(await retryReading(page, retries)).not.toBe("idle");
       expect(await waitForRetryOutcome(page, retries)).toBe("piece");
     });
   });
@@ -328,7 +355,7 @@ describe("shell space access retry", () => {
       });
       await page.keyboard.press("Enter");
       await awaitViewSettled(page);
-      expect(await retryHasStarted(page, retries)).toBe(true);
+      expect(await retryReading(page, retries)).not.toBe("idle");
       expect(await waitForRetryOutcome(page, retries)).toBe("refused");
 
       const focused = await waitForCondition(page, () => {
