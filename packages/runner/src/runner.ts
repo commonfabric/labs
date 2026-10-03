@@ -91,6 +91,7 @@ import {
   collectModulePolicyDigests,
 } from "./cfc/policy.ts";
 import {
+  recordCapturedArgumentFields,
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
@@ -231,7 +232,6 @@ import {
   validateSchemaValue,
 } from "./cfc/schema-sanitization.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type ImplementationIdentity,
@@ -919,13 +919,14 @@ function describeSkippedSubPatternNode(
 }
 
 /**
- * Records a structural-provenance marker for each write redirect `projection`
- * stages into `resultCell`, at the position the redirect takes. A redirect to
- * one of `ownCells`, the documents the setup creates for its piece, is the
- * setup's own initialization of that cell and records a setup projection. Any
- * other redirect names a cell the piece was handed, through its argument or
- * through the code setting it up, and records a binding projection, which
- * covers the slot alone.
+ * Records what each write redirect `projection` stages into `resultCell`
+ * initializes, at the position the redirect takes. A redirect to one of
+ * `ownCells`, the documents the setup creates for its piece, is the setup's own
+ * initialization of that cell and records a setup projection. Any other
+ * redirect names a cell the piece was handed, through its argument or through
+ * the code setting it up, and records a binding of the slot holding it: the
+ * slot is compared by the cell it names, a later setup may re-point it, and
+ * the cell itself is not initialized.
  */
 const recordSetupProjectionPolicyInputs = (
   tx: IExtendedStorageTransaction,
@@ -955,26 +956,38 @@ const recordSetupProjectionPolicyInputs = (
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
   // setup-projection marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to. A binding-projection marker grants that
-  // exemption nothing; one for an alias would name a slot no check accepts.
+  // a path nothing redirects to. A binding of an alias would name a slot that
+  // never holds the link it records.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
+    const slot = {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      path: [...target.path, ...schemaPath],
+    };
     const source = parseLink(projection, target);
     const own = ownCells.some((cell) =>
       cell.space === source.space && cell.id === source.id &&
       normalizeCellScope(cell.scope) === normalizeCellScope(source.scope)
     );
+    if (!own) {
+      // A cell the piece was handed: staging the redirect initializes the
+      // slot and nothing of the cell. Every setup stages it again, and a
+      // pattern version may name another cell for it, so a later setup may
+      // re-point the slot, which a list builtin's capture may not.
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: slot,
+        value: projection,
+      }, runtimeWritePolicyAuthorization);
+      return;
+    }
     tx.recordCfcWritePolicyInput({
       kind: "structural-provenance",
-      target: {
-        space: target.space,
-        id: target.id,
-        scope: target.scope,
-        path: [...target.path, ...schemaPath],
-      },
-      claim: own
-        ? CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION
-        : CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
+      target: slot,
+      claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
       sources: [{
         space: source.space,
         id: source.id,
@@ -1328,6 +1341,9 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.referencedArgumentFields`. */
   referencedArgumentFields?: readonly string[];
 
+  /** See `RunnerRunOptions.capturedArgumentFields`. */
+  capturedArgumentFields?: readonly string[];
+
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
 
@@ -1671,10 +1687,18 @@ export type RunnerRunOptions = {
   parentPieceRootId?: string;
   // Argument fields a collection builtin fills with a link to a cell that
   // exists already: a list's entry, the list itself. Each one whose staged
-  // value is such a link is recorded as a protected initialization
-  // (docs/specs/cfc-protected-initialization.md), so handing a new piece a
-  // reference to an owner-protected cell does not pass for modifying it.
+  // value is a link that is not a write redirect is recorded as a protected
+  // initialization (docs/specs/cfc-protected-initialization.md), so handing a
+  // new piece a reference to an owner-protected cell does not pass for
+  // modifying it.
   referencedArgumentFields?: readonly string[];
+  // Argument fields a collection builtin fills with the bindings its callback
+  // captures: a record holding a write redirect to each captured cell, and
+  // values beside them. Each link in the record is recorded as a captured
+  // binding (docs/specs/cfc-protected-initialization.md), so handing a new
+  // piece a binding to an owner-protected cell does not pass for modifying
+  // it; a value in the record is not recorded.
+  capturedArgumentFields?: readonly string[];
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
   // alone: what a piece records after it exists is decided by a source
@@ -2961,13 +2985,12 @@ export class Runner {
     // What it walks is what this setup PROJECTS, which is `projection`: the
     // argument itself wherever the two are one value, and the caller's own
     // argument where the value being written folded the stored document's
-    // slots in. Each redirect it finds records a binding-projection marker,
-    // which exempts the slot holding it from `writeAuthorizedBy` while the slot
-    // holds the cell the marker names (`setupProjectionSourceMatchesValue` in
-    // cfc/prepare.ts), so the redirects it walks are the ones this setup
-    // establishes rather than the ones the document already held. The cell a
-    // redirect names receives no exemption: it is the caller's, and this setup
-    // writes none of it, so no cell counts as the setup's own.
+    // slots in. Each redirect it finds records a binding of the slot holding
+    // it (`writeIsRuntimeInitialization` in cfc/prepare.ts), so the redirects
+    // it walks are the ones this setup establishes rather than the ones the
+    // document already held. The cell a redirect names receives no exemption:
+    // it is the caller's, and this setup writes none of it, so no cell counts
+    // as the setup's own.
     recordSetupProjectionPolicyInputs(
       tx,
       this.#runtime,
@@ -3070,6 +3093,7 @@ export class Runner {
     patternRef: { identity: string; symbol: string },
     setupState: SetupStateReuse,
     referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): SetupResult<R> | undefined {
     const key = this.#getDocKey(resultCell);
     if (!this.#cancels.has(key)) return undefined;
@@ -3133,6 +3157,7 @@ export class Runner {
         argumentLink,
         referencedArgumentFields,
       );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
       return { resultCell, patternRef, needsStart: false };
     }
 
@@ -3157,7 +3182,7 @@ export class Runner {
       // cells is the setup's own initialization of that cell. Those cells are
       // minted from the result cell's cause, so no one else names them; a
       // field naming any other cell, the piece's argument or a cell the code
-      // setting it up closed over, covers the field alone.
+      // setting it up closed over, is a binding of the field alone.
       recordSetupProjectionPolicyInputs(
         tx,
         this.#runtime,
@@ -3368,6 +3393,7 @@ export class Runner {
     argument: T,
     resultCell: Cell<R>,
     referencedArgumentFields: readonly string[] = [],
+    capturedArgumentFields: readonly string[] = [],
   ): void {
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
@@ -3553,6 +3579,7 @@ export class Runner {
         argumentLink,
         referencedArgumentFields,
       );
+      recordCapturedArgumentFields(tx, argumentLink, capturedArgumentFields);
     }
 
     // Record the content-addressed {identity, symbol} reference — the ONLY
@@ -3908,6 +3935,7 @@ export class Runner {
       entryRef,
       setupState,
       validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
     if (runningSetup) {
       return runningSetup;
@@ -3930,6 +3958,7 @@ export class Runner {
       argument,
       resultCell,
       validationOptions.referencedArgumentFields,
+      validationOptions.capturedArgumentFields,
     );
 
     if (validationOptions.validateArgumentLinks !== undefined) {
@@ -7514,6 +7543,7 @@ export class Runner {
       resultCell,
       {
         referencedArgumentFields: options.referencedArgumentFields,
+        capturedArgumentFields: options.capturedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         ...(creatingPiece
           ? {

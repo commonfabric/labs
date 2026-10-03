@@ -315,8 +315,13 @@ const recordSchemaWritePolicyInput = (
   link: NormalizedFullLink,
   schema: JSONSchema | undefined,
   schemaRole?: "output",
+  storedSchema?: boolean,
 ): void => {
-  const resolvedSchema = resolveSchema(schema) ??
+  // A writer that brought no schema answers to the one the document stores,
+  // and the input says so (`storedSchema`): the stored schema's claims bind
+  // the writer, and its value stamps are not the writer's to mint.
+  const ownSchema = resolveSchema(schema);
+  const resolvedSchema = ownSchema ??
     storedSchemaForWritePolicyInput(tx, link);
   if (resolvedSchema === undefined) {
     return;
@@ -333,6 +338,8 @@ const recordSchemaWritePolicyInput = (
     schemaHash: schemaAndHash.taggedHashString,
     schema: schemaAndHash.schema,
     ...(schemaRole !== undefined && { schemaRole }),
+    ...((storedSchema === true || ownSchema === undefined) &&
+      { storedSchema: true as const }),
   });
 };
 
@@ -369,6 +376,7 @@ export const recordRelevantSchemaWritePolicyInput = (
   link: NormalizedFullLink,
   schema: JSONSchema | undefined,
   schemaRole?: "output",
+  storedSchema?: boolean,
 ): void => {
   const resolvedSchema = resolveSchema(schema);
   const cfcRelevant = schemaHasIfc(resolvedSchema) ||
@@ -382,6 +390,7 @@ export const recordRelevantSchemaWritePolicyInput = (
     link,
     schemaHasIfc(resolvedSchema) ? resolvedSchema : undefined,
     schemaRole,
+    storedSchema,
   );
 };
 
@@ -418,7 +427,12 @@ const arrayItemPolicyInput = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
   schema: JSONSchema | undefined,
-): { link: NormalizedFullLink; schema: JSONSchema } | undefined => {
+  storedSchema = false,
+): {
+  link: NormalizedFullLink;
+  schema: JSONSchema;
+  storedSchema: boolean;
+} | undefined => {
   const index = link.path[link.path.length - 1];
   if (index === undefined || !/^(0|[1-9][0-9]*)$/.test(index)) {
     return undefined;
@@ -453,7 +467,8 @@ const arrayItemPolicyInput = (
   ) {
     return undefined;
   }
-  const itemSchema = resolveSchema(schema) ??
+  const ownItemSchema = resolveSchema(schema);
+  const itemSchema = ownItemSchema ??
     storedSchemaForWritePolicyInput(tx, link);
   if (!isObjectOrArray(itemSchema)) return undefined;
   const { $defs, ...items } = itemSchema;
@@ -464,11 +479,17 @@ const arrayItemPolicyInput = (
       items,
       ...($defs !== undefined ? { $defs } : {}),
     } as JSONSchema,
+    storedSchema: storedSchema || ownItemSchema === undefined,
   };
   // An item of an item lifts again, to the outermost array a run of indexes
   // reaches: each level is spelled as the one below, so a write at
   // `grid/0/0` is recorded at `grid`.
-  return arrayItemPolicyInput(tx, lifted.link, lifted.schema) ?? lifted;
+  return arrayItemPolicyInput(
+    tx,
+    lifted.link,
+    lifted.schema,
+    lifted.storedSchema,
+  ) ?? lifted;
 };
 
 /**
@@ -2546,6 +2567,8 @@ export class CellImpl<T extends FabricValue>
         this.#tx,
         policyInput?.link ?? writeLink,
         policyInput?.schema ?? writeLink.schema ?? this.schema,
+        undefined,
+        policyInput?.storedSchema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj

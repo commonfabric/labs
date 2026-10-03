@@ -5629,7 +5629,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("persists only concrete evidence and addIntegrity in output metadata", async () => {
+  it("persists only concrete evidence and `addIntegrity` in output metadata, each in its own component", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -5726,16 +5726,18 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         } | undefined;
       };
       const persisted = replica.getDocument(parseLink(output.getAsLink()).id!);
-      expect(persisted?.cfc?.labelMap?.entries).toContainEqual({
-        path: ["value"],
-        label: {
-          integrity: [
-            "target-integrity",
-            "derived-integrity",
-          ],
+      expect(persisted?.cfc?.labelMap?.entries).toEqual([
+        {
+          path: ["value"],
+          label: { integrity: ["target-integrity"] },
+          origin: "declared",
         },
-        origin: "declared",
-      });
+        {
+          path: ["value"],
+          label: { integrity: ["derived-integrity"] },
+          origin: "minted",
+        },
+      ]);
     } finally {
       await runtime.dispose();
       await storageManager.close();
