@@ -69,7 +69,11 @@ async function makeRoster(label: string, roster: Roster) {
   const home = runtime.edit();
   const defaultPattern: Record<string, unknown> = { profiles };
   if (roster.defaultIndex !== undefined) {
-    defaultPattern.defaultProfile = references[roster.defaultIndex];
+    // Home keeps its default under `profile` in a slot (see wish.ts's
+    // homeHasDefaultProfileSlot).
+    defaultPattern.defaultProfile = {
+      profile: references[roster.defaultIndex],
+    };
   }
   if (roster.mruIndices !== undefined) {
     defaultPattern.mru = roster.mruIndices.map((index) => references[index]);
