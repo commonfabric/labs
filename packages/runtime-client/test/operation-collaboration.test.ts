@@ -759,9 +759,11 @@ describe("RuntimeClient operation collaboration", () => {
     };
     const runtime = {
       getCellFromLink: () => ({
-        resolveAsCell: () => ({
-          getAsNormalizedFullLink: () => resolved,
-        }),
+        // A resolved cell keeps the address it resolved to, as a cell does.
+        resolveAsCell: () => {
+          const link = resolved;
+          return { getAsNormalizedFullLink: () => link };
+        },
       }),
       storageManager: {
         open: () => ({ ...capability, replica: capability }),

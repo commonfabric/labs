@@ -600,13 +600,20 @@ export class HostReadGate {
    * carries, which cover everything inside it, since what `build` reads is
    * reached through it and not through a read the gate can measure. `build`
    * is handed the cell the decision was made on, and builds from it alone.
+   *
+   * `named`, when given, is the cell the host named to reach `cell`, such as
+   * one whose path led a collaborative session to the field it holds. It is
+   * decided as well, since the links along its path are part of what its
+   * document holds, and the host learns where they led from what is built.
    */
   async fromCell<T extends object>(
     cell: Cell<unknown>,
     build: (cell: Cell<unknown>) => Promise<T>,
+    named?: Cell<unknown>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
+    if (named !== undefined) await this.#hold(named);
     await this.#hold(cell);
-    const refusal = this.#cellRefusal(cell);
+    const refusal = this.#reachedRefusal(cell, named);
     if (refusal !== undefined) {
       return decided({ refused: this.#refuse(refusal).refused });
     }
@@ -614,16 +621,18 @@ export class HostReadGate {
   }
 
   /**
-   * An update of the collaborative field `cell` names, for subscription
+   * An update of the collaborative field `cell`, for subscription
    * `subscriptionId`: the field as it now stands, or the refusal that stands
-   * in its place, decided again at each update, as {@link fromCell} decides.
+   * in its place, decided again at each update, as {@link fromCell} decides,
+   * `named` included.
    */
   operationUpdate(
     cell: Cell<unknown>,
     subscriptionId: string,
     field: OperationFieldSnapshot,
+    named?: Cell<unknown>,
   ): OperationUpdateNotification {
-    const refusal = this.#cellRefusal(cell);
+    const refusal = this.#reachedRefusal(cell, named);
     return decided({
       type: NotificationType.OperationUpdate as const,
       subscriptionId,
@@ -963,6 +972,18 @@ export class HostReadGate {
       policy,
       this.#sources,
     );
+  }
+
+  /**
+   * The refusal of `cell`'s labels, or of those of the cell the host `named`
+   * to reach it, or `undefined` where both fit.
+   */
+  #reachedRefusal(
+    cell: Cell<unknown>,
+    named: Cell<unknown> | undefined,
+  ): RenderLabelSummary | undefined {
+    return (named === undefined ? undefined : this.#cellRefusal(named)) ??
+      this.#cellRefusal(cell);
   }
 
   /**

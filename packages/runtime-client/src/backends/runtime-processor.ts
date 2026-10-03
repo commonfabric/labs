@@ -855,8 +855,22 @@ type PendingCustodySeal = {
 
 type RuntimeOperationTarget = {
   capability: IOperationStorageCapability;
-  address: OperationFieldAddress;
+
+  /**
+   * The collaborative field the operations read and change: the cell the
+   * host named, resolved through its links when the target was made, and
+   * held for a session's life. Every answer is decided on this cell, and an
+   * operation is addressed by the cell decided on
+   * ({@link operationFieldAddress}).
+   */
+  field: Cell<unknown>;
 };
+
+/** Where the collaborative field `field` is, as the storage addresses it. */
+function operationFieldAddress(field: Cell<unknown>): OperationFieldAddress {
+  const link = field.getAsNormalizedFullLink();
+  return { id: link.id, scope: link.scope, path: toValuePath(link.path) };
+}
 
 /**
  * One client's membership in one presence room, keyed by the subscription
@@ -1729,9 +1743,10 @@ export class RuntimeProcessor {
       }
       return { ...existing.target, sessionKey, session: existing };
     }
-    const link = getCell(this.#runtime, cell).resolveAsCell()
-      .getAsNormalizedFullLink();
-    const provider = this.#runtime.storageManager.open(link.space);
+    const field = getCell(this.#runtime, cell).resolveAsCell();
+    const provider = this.#runtime.storageManager.open(
+      field.getAsNormalizedFullLink().space,
+    );
     const capability = hasOperationStorageCapability(provider)
       ? provider
       : provider.replica;
@@ -1740,14 +1755,7 @@ export class RuntimeProcessor {
         "runtime storage does not support collaborative operations",
       );
     }
-    const target = {
-      capability,
-      address: {
-        id: link.id,
-        scope: link.scope,
-        path: toValuePath(link.path),
-      },
-    };
+    const target = { capability, field };
     if (sessionKey === undefined) {
       return { ...target, sessionKey: undefined, session: undefined };
     }
@@ -1894,19 +1902,20 @@ export class RuntimeProcessor {
     request: OperationQueryRequest,
     client: WorkerClient = ownerClient,
   ): Promise<OperationFieldResponse> {
-    const { capability, address } = this.#operationTarget(
+    const { capability, field } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
     return await this.#hostReadGate.fromCell(
-      getCell(this.#runtime, request.cell),
-      async () => ({
+      field,
+      async (decided) => ({
         field: await capability.queryOperationField({
-          ...address,
+          ...operationFieldAddress(decided),
           ...(request.after === undefined ? {} : { after: request.after }),
         }),
       }),
+      getCell(this.#runtime, request.cell),
     );
   }
 
@@ -1914,7 +1923,7 @@ export class RuntimeProcessor {
     request: OperationApplyRequest,
     client: WorkerClient = ownerClient,
   ): Promise<OperationApplyResponse> {
-    const { capability, address } = this.#operationTarget(
+    const { capability, field } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
@@ -1922,11 +1931,11 @@ export class RuntimeProcessor {
     // An operation on a field the host may not see is not applied: what it
     // was made from was not shown, and its resolution would show the field.
     return await this.#hostReadGate.fromCell(
-      getCell(this.#runtime, request.cell),
-      async () => ({
+      field,
+      async (decided) => ({
         resolution: await capability.applyOperation({
           op: "apply-op",
-          ...address,
+          ...operationFieldAddress(decided),
           codec: request.codec,
           submissionId: request.submissionId,
           base: request.base,
@@ -1936,6 +1945,7 @@ export class RuntimeProcessor {
           payload: request.payload,
         }),
       }),
+      getCell(this.#runtime, request.cell),
     );
   }
 
@@ -1946,11 +1956,12 @@ export class RuntimeProcessor {
     if (this.#operationSubscriptions.has(request.subscriptionId)) {
       return { value: false };
     }
-    const { capability, address, sessionKey, session } = this.#operationTarget(
+    const { capability, field, sessionKey, session } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
+    const named = getCell(this.#runtime, request.cell);
     // A subscription id is a UUID the client mints, so two clients never
     // collide on one. What the owning client settles is where an update goes,
     // and what a departing client takes with it.
@@ -1969,9 +1980,9 @@ export class RuntimeProcessor {
     let cancel: Cancel;
     try {
       cancel = await capability.subscribeOperationField({
-        ...address,
+        ...operationFieldAddress(field),
         ...(request.after === undefined ? {} : { after: request.after }),
-      }, (field) => {
+      }, (snapshot) => {
         if (
           this.#operationSubscriptions.get(request.subscriptionId) !==
             subscription
@@ -1979,9 +1990,10 @@ export class RuntimeProcessor {
         queueMicrotask(() =>
           client.post(
             this.#hostReadGate.operationUpdate(
-              getCell(this.#runtime, request.cell),
-              request.subscriptionId,
               field,
+              request.subscriptionId,
+              snapshot,
+              named,
             ),
           )
         );
@@ -2017,14 +2029,14 @@ export class RuntimeProcessor {
     request: OperationReleaseRequest,
     client: WorkerClient = ownerClient,
   ): Promise<BooleanResponse> {
-    const { capability, address } = this.#operationTarget(
+    const { capability, field } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
     await capability.releaseOperationField({
       op: "release-op-field",
-      ...address,
+      ...operationFieldAddress(field),
       codec: request.codec,
       cursor: request.cursor,
     });

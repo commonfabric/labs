@@ -617,6 +617,70 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("decides a collaborative session on the field it holds, not on where the cell it named now leads", async () => {
+      await using docs = await shelf();
+      const sealed = await docs.write(
+        "sealed-field",
+        { content: SECRET_VALUE },
+        [[[], [ownerOnly]]],
+      );
+      const open = await docs.write("open-field", { content: "anyone" });
+      const holder = await docs.write("field-holder", {
+        link: sealed.key("content").getAsLink(),
+      });
+      const named = createCellRef(holder.key("link"));
+      const processorFor = (viewer: Identity) =>
+        buildProcessor({
+          runtime: docs.runtime,
+          identity: viewer,
+          space,
+          renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+            viewer.did(),
+          ),
+        });
+      const processor = processorFor(visitor);
+      const ownersProcessor = processorFor(owner);
+      try {
+        // Each session begins on the sealed field the link leads to.
+        for (const each of [processor, ownersProcessor]) {
+          await each.handleOperationCapabilities({
+            type: RequestType.OperationCapabilities,
+            cell: named,
+            operationSessionId: "session:moved",
+          });
+        }
+        // The link moves to a field anyone may see.
+        await docs.runtime.editWithRetry((tx) => {
+          holder.withTx(tx).key("link").setRawUntyped(
+            open.key("content").getAsLink(),
+          );
+        });
+
+        const queried = await processor.handleOperationQuery({
+          type: RequestType.OperationQuery,
+          cell: named,
+          operationSessionId: "session:moved",
+        });
+
+        expect(holds(queried, SECRET_VALUE)).toBe(false);
+        expect(queried).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        // Its owner's session goes on with the field it began on.
+        expect(
+          holds(
+            await ownersProcessor.handleOperationQuery({
+              type: RequestType.OperationQuery,
+              cell: named,
+              operationSessionId: "session:moved",
+            }),
+            SECRET_VALUE,
+          ),
+        ).toBe(true);
+      } finally {
+        await processor.dispose();
+        await ownersProcessor.dispose();
+      }
+    });
+
     it("refuses each update of a refused collaborative field", async () => {
       await using docs = await shelf();
       const field = { materialized: SECRET_VALUE } as never;
