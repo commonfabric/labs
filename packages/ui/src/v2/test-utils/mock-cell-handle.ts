@@ -63,6 +63,9 @@ class MockCellNetwork {
    */
   reads: "nothing" | "held" | { refused: CellReadRefusal } = "nothing";
 
+  /** What answers each read held so far, in order. */
+  readonly heldReads: Array<(answer: object) => void> = [];
+
   register(handle: CellHandle): void {
     this.#roots.set(this.#rootKey(handle.ref()), handle);
   }
@@ -177,7 +180,9 @@ function createMockConnection(
       }
       if (data.type === "cell:get" || data.type === "cell:pull") {
         const reads = network.reads;
-        if (reads === "held") return new Promise(() => {});
+        if (reads === "held") {
+          return new Promise((resolve) => network.heldReads.push(resolve));
+        }
         if (reads !== "nothing") return Promise.resolve(reads);
       }
       return Promise.resolve({} as any);
@@ -258,11 +263,20 @@ export function writesSent<T>(
 
 /**
  * Leaves every read (`cell:get`, `cell:pull`) the network `handle` was made
- * on is asked for unanswered, as a worker that has not answered yet does.
- * A read the mock answers otherwise finds the cell holding nothing.
+ * on is asked for unanswered, as a worker that has not answered yet does,
+ * until the function it returns answers them, as the worker would, and lets
+ * later reads through. A read the mock answers otherwise finds the cell
+ * holding nothing.
  */
-export function holdReads<T>(handle: CellHandle<T>): void {
-  networkOf(handle, "holdReads").reads = "held";
+export function holdReads<T>(
+  handle: CellHandle<T>,
+): (answer: { value: T | undefined } | { refused: CellReadRefusal }) => void {
+  const network = networkOf(handle, "holdReads");
+  network.reads = "held";
+  return (answer) => {
+    network.reads = "nothing";
+    for (const answerRead of network.heldReads.splice(0)) answerRead(answer);
+  };
 }
 
 /**
