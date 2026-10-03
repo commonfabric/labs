@@ -154,9 +154,9 @@ export interface ReviewedIntentBindings {
 
   /**
    * The pattern's cell that receives a link to the committed record. Its write
-   * target is reviewed with the rest, and the link is written without this
-   * module's identity, so a target in a document that admits only this
-   * module's writes refuses it.
+   * target is reviewed with the rest. The link is an ordinary write under no
+   * implementation identity, so a target whose writer claim names particular
+   * writers, this module included, refuses it.
    */
   readonly result: Cell<unknown>;
 }

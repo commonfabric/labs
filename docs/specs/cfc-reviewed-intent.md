@@ -145,10 +145,11 @@ than the actor's home space, so the commit writes in three transactions:
 2. **The record in the actor's home space**, at an address derived from a
    random host event identity, marked create-only.
 3. **The record's link into the result cell's write target**, which must be
-   the target the actor reviewed. The link is written without the builtin
-   identity, so a target in a document that admits only the builtin's writes,
-   such as a record or a receipt, refuses it. A record whose link is not
-   written is never acted on, and its window runs out.
+   the target the actor reviewed. The link is an ordinary write under no
+   implementation identity, so a target whose writer claim names particular
+   writers refuses it, a record or a receipt among them, and a pattern leaves
+   its result cell open to that write. A record whose link is not written is
+   never acted on, and its window runs out.
 
 The record:
 
