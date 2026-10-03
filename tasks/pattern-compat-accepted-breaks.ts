@@ -956,9 +956,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
-    // A THIRD entry for home, naming only the baseline recorded under the
-    // entry above; the other 23 report the same path and stay with the two
-    // entries that name them, keeping the pairs disjoint.
+    // A THIRD entry for home, naming only the baselines recorded under or
+    // after the entry above; the other 23 report the same path and stay with
+    // the two entries that name them, keeping the pairs disjoint.
     //
     // Home's default profile moves from a link stored at the root of its own
     // cell to a link under `profile` in a slot cell (`DefaultProfileSlot`),
@@ -967,7 +967,13 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // the cell the default was kept in stays, as `legacyDefaultProfile`, and
     // is the default until one is chosen in the slot.
     pattern: "system/home.tsx",
-    baselines: ["20261001T210138Z-P3RELdPaFKfIXROk"],
+    baselines: [
+      "20261001T190916Z-5k9_Adl37zMhsNgG",
+      "20261001T210138Z-P3RELdPaFKfIXROk",
+      "20261002T164437Z-Ppiw9bONPOzUfI_d",
+      "20261003T000427Z-oEfsHL584h6qI8sa",
+      "20261003T003223Z-fDj2SHhwNCXbd-O3",
+    ],
     paths: ["result.defaultProfile"],
     reason:
       "home's default profile moves under `profile` in a fresh slot cell so the picker can re-point it, and a default chosen before stays the default until one is chosen in the slot",
@@ -991,6 +997,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260922T075652Z-qC_3l84MczfDgjvh",
       "20260923T173753Z-1_LxUmwIZJz7WCut",
       "20260923T205258Z-B19D5XwDS0LdQdeY",
+      "20261003T000427Z-YEfgzmp3UjJCJFgP",
     ],
     paths: ["argument.defaultProfile"],
     reason:

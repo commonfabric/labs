@@ -33,14 +33,16 @@ wish reads `defaultProfile.profile`.
 ## What the proof reports
 
 - `system/home.tsx`, `result.defaultProfile`: "defaults changed below a
-  constraint that is not stable under default insertion", against the one home
-  baseline recorded after the schema generator began carrying the slot's labels
-  ([`home-default-profile-labels-break.md`](home-default-profile-labels-break.md)).
-  The other 23 home baselines report the same path and are already forgiven by
-  that entry and the profile inbox entry
+  constraint that is not stable under default insertion", against the five
+  home baselines no entry named: the one recorded when the schema generator
+  began carrying the slot's labels
+  ([`home-default-profile-labels-break.md`](home-default-profile-labels-break.md))
+  and four recorded beside it by other changes to home. The other 23 home
+  baselines report the same path and are already forgiven by that entry and the
+  profile inbox entry
   ([`profile-inbox-piece-break.md`](profile-inbox-piece-break.md)).
 - `system/profile-picker.tsx`, `argument.defaultProfile`: the same finding,
-  against the six picker baselines no entry named. The picker's other four
+  against the seven picker baselines no entry named. The picker's other four
   baselines report the same path and are forgiven by the two profile inbox
   entries.
 
