@@ -1129,6 +1129,62 @@ describe("v2-server-acl", () => {
       }
     });
 
+    it("rechecks an established session's write capability after its grant is downgraded", async () => {
+      const server = createAclServer("memory://acl-enforce-warm-downgrade", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-acl-space-warm-downgrade";
+      const alice = await connect(server);
+      const bob = await connect(server);
+      try {
+        await initializeSpaceAcl(server, space, {
+          [ALICE]: "OWNER",
+          [BOB]: "WRITE",
+        });
+        const owner = await openSession(alice, space, ALICE);
+        const writer = await openSession(bob, space, BOB);
+        expectExists(owner.ok);
+        expectExists(writer.ok);
+        for (let seq = 1; seq <= 3; seq++) {
+          expectExists(
+            (await transactSet(
+              bob,
+              space,
+              writer.ok.sessionId,
+              "of:counter",
+              seq,
+              seq,
+            )).ok,
+          );
+        }
+        expectExists(
+          (await transactSet(
+            alice,
+            space,
+            owner.ok.sessionId,
+            `of:${space}`,
+            { [ALICE]: "OWNER", [BOB]: "READ" },
+            1,
+          )).ok,
+        );
+        const denied = await transactSet(
+          bob,
+          space,
+          writer.ok.sessionId,
+          "of:counter",
+          4,
+          4,
+        );
+        expect(denied.error?.name).toBe("AuthorizationError");
+        expectExists(
+          (await graphQuery(bob, space, writer.ok.sessionId, "of:counter")).ok,
+        );
+        expect((await server.readDocument(space, "of:counter"))?.value).toBe(3);
+      } finally {
+        await server.close();
+      }
+    });
+
     it("revokes the session of a principal whose grant is removed and refuses its later messages", async () => {
       const server = createAclServer("memory://acl-enforce-revoke", {
         mode: "enforce",

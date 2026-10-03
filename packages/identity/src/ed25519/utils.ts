@@ -102,6 +102,11 @@ export function bytesToDid(publicKey: Uint8Array): DIDKey {
   return `${DID_KEY_PREFIX}${base58btc.encode(bytes)}`;
 }
 
+// Only successful canonical encodings are retained. Canonicality is immutable;
+// authority, signatures, leases and ACL decisions are checked by their callers.
+const canonicalDids = new Set<DIDKey>();
+const CANONICAL_DID_CACHE_LIMIT = 4096;
+
 /** Whether a value is the canonical DID of one Ed25519 public key. */
 export function isCanonicalEd25519DID(value: unknown): value is DIDKey {
   if (
@@ -110,10 +115,18 @@ export function isCanonicalEd25519DID(value: unknown): value is DIDKey {
   ) return false;
   try {
     const did = value as DIDKey;
+    if (canonicalDids.has(did)) return true;
     const bytes = didToBytes(did);
     const point = ed25519.Point.fromBytes(bytes);
-    return bytesToDid(bytes) === did && arrayEqual(point.toBytes(), bytes) &&
-      !point.isSmallOrder();
+    if (
+      bytesToDid(bytes) !== did || !arrayEqual(point.toBytes(), bytes) ||
+      point.isSmallOrder()
+    ) return false;
+    if (canonicalDids.size >= CANONICAL_DID_CACHE_LIMIT) {
+      canonicalDids.delete(canonicalDids.values().next().value!);
+    }
+    canonicalDids.add(did);
+    return true;
   } catch {
     return false;
   }

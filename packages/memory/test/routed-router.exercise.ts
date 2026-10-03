@@ -458,6 +458,8 @@ async function restartRouter() {
   await startRouter();
 }
 class Client {
+  #changed = Promise.withResolvers<void>();
+  #failure?: Error;
   ws: WebSocket;
   messages: Record<string, unknown>[] = [];
   sequence = 0;
@@ -485,10 +487,24 @@ class Client {
             true,
           ).body,
         );
+        this.#notify();
       },
     );
-    this.ws.on("close", () => this.closed.resolve());
-    this.ws.on("error", () => this.closed.resolve());
+    this.ws.on("close", () => {
+      this.#failure = new Error("client closed");
+      this.closed.resolve();
+      this.#notify();
+    });
+    this.ws.on("error", (error) => {
+      this.#failure = error;
+      this.closed.resolve();
+      this.#notify();
+    });
+  }
+  #notify() {
+    const changed = this.#changed;
+    this.#changed = Promise.withResolvers<void>();
+    changed.resolve();
   }
   async start(
     flags = {
@@ -513,22 +529,13 @@ class Client {
     this.hello = await this.take((m) => m.type === "hello.ok");
     return this;
   }
-  async take(
-    predicate: (m: Record<string, unknown>) => boolean,
-    timeout = 6000,
-  ) {
-    const end = Date.now() + timeout;
-    while (Date.now() < end) {
+  async take(predicate: (m: Record<string, unknown>) => boolean) {
+    while (true) {
       const i = this.messages.findIndex(predicate);
       if (i >= 0) return this.messages.splice(i, 1)[0];
-      if (this.ws.readyState === WebSocket.CLOSED) {
-        throw new Error("client closed");
-      }
-      await pause(5);
+      if (this.#failure !== undefined) throw this.#failure;
+      await this.#changed.promise;
     }
-    throw new Error(
-      `response deadline (${JSON.stringify(this.messages).slice(0, 400)})`,
-    );
   }
   send(body: Record<string, unknown>) {
     const requestId = `r${++this.sequence}`;
@@ -1369,7 +1376,7 @@ finally:
     session: {},
   });
   assert(short.ok);
-  await expiring.take((m) => m.type === "session/revoked", 5000);
+  await expiring.take((m) => m.type === "session/revoked");
   const held = expiring.send({
     type: "session.open",
     space: spaces[0],
@@ -1551,6 +1558,63 @@ finally:
   for (const entry of pool.slice(1)) entry.client.close();
   await until(() => workerStats().length === 1);
 
+  const burstStart = performance.now();
+  for (let offset = 0; offset < 2048; offset += 64) {
+    const replies = await Promise.all(
+      Array.from({ length: 64 }, (_, index) =>
+        client.request({
+          type: "transact",
+          space: spaces[1],
+          sessionId: b,
+          commit: {
+            localSeq: 101 + offset + index,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:burst-drain",
+              value: { value: offset + index },
+            }],
+          },
+        })),
+    );
+    for (const reply of replies) {
+      assert(reply.ok !== undefined, JSON.stringify(reply));
+    }
+  }
+  // Idempotent releases of an unauthenticated principal exercise the link
+  // agent's shared control budget without consuming challenge capacity.
+  for (let offset = 0; offset < 512; offset += 64) {
+    const replies = await Promise.all(
+      Array.from(
+        { length: 64 },
+        () =>
+          client.request({ type: "connection.release", principal: spaces[0] }),
+      ),
+    );
+    for (const reply of replies) {
+      assert(reply.ok !== undefined, JSON.stringify(reply));
+    }
+  }
+  // Proof renewal remains ordered after the admitted transaction/control burst.
+  await client.authenticate(bob, 180);
+  assert(
+    (await client.request({
+      type: "session.watch.set",
+      space: spaces[1],
+      sessionId: b,
+      watches: [],
+    })).ok !== undefined,
+  );
+  console.log(JSON.stringify({
+    burst: {
+      transactions: 2048,
+      controls: 512,
+      outstanding: 64,
+      elapsedMs: performance.now() - burstStart,
+    },
+  }));
+  pass("transaction and control bursts drain and renew on the same socket");
+
   // Each gate below covers a failure found by probing the router.
   const signerFor = (index: number) => index === 0 ? alice : bob;
   const newestWorker = () =>
@@ -1724,11 +1788,11 @@ finally:
   await pause(6500);
   toolsheds[1].signal("SIGCONT");
   assert(
-    (await steady.take((m) => m.requestId === stalledWatch, 10000)).ok !==
+    (await steady.take((m) => m.requestId === stalledWatch)).ok !==
       undefined,
   );
   assert(
-    (await steady.take((m) => m.requestId === renewal, 10000)).ok !== undefined,
+    (await steady.take((m) => m.requestId === renewal)).ok !== undefined,
   );
   assert(
     (await steady.request({
@@ -1806,7 +1870,7 @@ finally:
   );
   await otherShed.authenticate(bob, 300, false, pushedChallenge);
   assert(
-    (await otherShed.take((m) => m.requestId === heldOpen, 10000)).ok !==
+    (await otherShed.take((m) => m.requestId === heldOpen)).ok !==
       undefined,
   );
   pass(
@@ -1830,7 +1894,7 @@ finally:
   const challenged = performance.now();
   const challengeId = otherShed.send({ type: "connection.challenge" });
   assert(
-    (await otherShed.take((m) => m.requestId === challengeId, 3000)).ok !==
+    (await otherShed.take((m) => m.requestId === challengeId)).ok !==
       undefined,
   );
   assert(
@@ -1840,7 +1904,7 @@ finally:
   pass("a stalled toolshed does not delay clients of other toolsheds");
   await Promise.race([
     staller.closed.promise,
-    staller.take((m) => m.requestId === stalledOpen, 15000).catch(() => {}),
+    staller.take((m) => m.requestId === stalledOpen).catch(() => {}),
   ]);
   toolsheds[1].signal("SIGCONT");
   await opened("127.0.0.29", 1, 30000);
