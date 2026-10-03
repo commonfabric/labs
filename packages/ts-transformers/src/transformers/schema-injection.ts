@@ -57,7 +57,10 @@ import {
 } from "../core/mod.ts";
 import { analyzeFunctionCapabilities } from "../policy/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";
-import { isPatternFactoryCalleeExpression } from "./structural-reactive-factory.ts";
+import {
+  isPatternFactoryCalleeExpression,
+  isStructuralReactiveFactoryExpression,
+} from "./structural-reactive-factory.ts";
 import {
   applyShrinkAndWrap,
   type CapabilitySummaryApplicationMode,
@@ -2452,8 +2455,8 @@ function buildObjectLiteralReturnTypeNode(
  * document holds itself where `type`, the type its schema is read from,
  * carries a writer policy. Only a reactive reference
  * (`isReactiveReference()`) is a view of a document that exists
- * already: the pattern's argument, a cell, the result of a reactive call, or
- * a member of one. An object or array literal holds its own data, carrying
+ * already: the pattern's argument, a cell, the result of a reactive call or
+ * a pattern's instance, or a member of one. An object or array literal holds its own data, carrying
  * `type`'s own policy, and is read member by member against `type`'s members,
  * a spread among them; a member the type does not name, such as one whose
  * name cannot be read statically, is read against the type's index
@@ -2533,22 +2536,35 @@ function holdsFreshWriterPolicy(
 }
 
 /**
- * Whether `expression` is a reactive reference (`isReactiveValueExpression()`),
- * reading a shorthand property's name as the binding it reads rather than as
- * the property it declares.
+ * Whether `expression` is a reactive reference: a reactive value
+ * (`isReactiveValueExpression()`), reading a shorthand property's name as the
+ * binding it reads rather than as the property it declares, or a member of a
+ * value a reactive factory builds (`isStructuralReactiveFactoryExpression()`),
+ * such as a pattern's instance.
  */
 function isReactiveReference(
   expression: ts.Expression,
   checker: ts.TypeChecker,
 ): boolean {
-  return isReactiveValueExpression(expression, checker) ||
-    (ts.isIdentifier(expression) &&
-      ts.isShorthandPropertyAssignment(expression.parent) &&
-      expression.parent.name === expression &&
-      isReactiveValueSymbol(
-        checker.getShorthandAssignmentValueSymbol(expression.parent),
-        checker,
-      ));
+  if (isReactiveValueExpression(expression, checker)) return true;
+  if (
+    ts.isIdentifier(expression) &&
+    ts.isShorthandPropertyAssignment(expression.parent) &&
+    expression.parent.name === expression &&
+    isReactiveValueSymbol(
+      checker.getShorthandAssignmentValueSymbol(expression.parent),
+      checker,
+    )
+  ) {
+    return true;
+  }
+  let root = expression;
+  while (
+    ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)
+  ) {
+    root = unwrapExpression(root.expression);
+  }
+  return isStructuralReactiveFactoryExpression(root, checker);
 }
 
 /**
