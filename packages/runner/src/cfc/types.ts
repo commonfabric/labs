@@ -289,6 +289,17 @@ export type CfcSandboxResult = {
  *   stamp they accompany; concrete `observes:"shape"` existence entries
  *   freeze at creation). Readers that predate this component treat its
  *   entries as covering (over-taint, fail-safe).
+ * - `minted`: integrity a write's own schema stamped onto the value it wrote
+ *   (`ifc.addIntegrity`), principal claims excepted. It labels that value
+ *   and no later one: a write changing the value, or part of it, withdraws
+ *   the entry unless the writing transaction's schema stamps what it wrote
+ *   with the same atoms, and a schema the document merely stores mints
+ *   nothing. A
+ *   `*`-path entry states that every value the path matches carries the
+ *   stamp, and is replaced by per-value entries by the first write that
+ *   leaves one of them without it. A position holding a reference carries no
+ *   entry: the value behind it is labeled in its own document. See
+ *   `minted-integrity.ts`.
  * - `external-ingest`: the `ExternalIngest` provenance mark a vouched ingest
  *   channel mints onto the value it durably appends. Builtin-authored from
  *   verified channel metadata only (the split-mint), so it bypasses the
@@ -315,6 +326,7 @@ export type LabelEntryOrigin =
   | "link"
   | "derived"
   | "structure"
+  | "minted"
   | "external-ingest"
   | "label-metadata";
 
@@ -651,6 +663,14 @@ export type WritePolicyInput =
      * at rest.
      */
     readonly schemaRole?: "output";
+
+    /**
+     * Present only when the schema is the one the target document stores,
+     * standing in for a writer that brought none. Such a writer answers to
+     * the claims that schema makes and is stamped nothing by it: a value
+     * stamp (`ifc.addIntegrity`) is the stamping write's own.
+     */
+    readonly storedSchema?: true;
   }
   | {
     readonly kind: "structural-provenance";

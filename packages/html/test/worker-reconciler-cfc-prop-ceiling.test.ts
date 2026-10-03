@@ -207,6 +207,47 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     );
 
     await t.step(
+      "withholds a binding whose untyped field links to a document the ceiling refuses",
+      async () => {
+        // The host reads the whole of what a binding hands it, a field the
+        // binding's schema leaves untyped included, so the read deciding the
+        // binding is the read the host's reads are decided on.
+        const untyped = { type: "object", properties: { entry: {} } } as const;
+        const sealedHolder = await write("prop-ceiling-untyped-sealed", {
+          entry: { inner: link(secret) },
+        });
+        const plainHolder = await write("prop-ceiling-untyped-plain", {
+          entry: { inner: link(plain) },
+        });
+        const page = await mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [{
+            type: "vnode",
+            name: "cf-input",
+            props: { $value: sealedHolder.asSchema(untyped) as never },
+            children: [],
+          }, {
+            type: "vnode",
+            name: "cf-textarea",
+            props: { $value: plainHolder.asSchema(untyped) as never },
+            children: [],
+          }],
+        }, HOST_CEILING);
+        try {
+          const bindings = page.ops.filter((op) => op.op === "set-binding");
+          expect(bindings).toHaveLength(1);
+          expect(page.emitted()).not.toContain(
+            sealedHolder.getAsNormalizedFullLink().id,
+          );
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
       "binds a cell the ceiling admits and withholds one it does not",
       async () => {
         const page = await mount({

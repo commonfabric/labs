@@ -192,9 +192,10 @@ export function isPresenceUpdateNotification(
 }
 
 /**
- * Is `value` a {@link CellUpdateNotification}? Requires `value` to be
- * *present* rather than of any particular shape, since `undefined` is a value
- * a cell can hold and the absent case has to stay distinguishable from it.
+ * Is `value` a {@link CellUpdateNotification}? Requires `value`, or the
+ * `refused` that stands in its place, to be *present* rather than of any
+ * particular shape, since `undefined` is a value a cell can hold and the
+ * absent case has to stay distinguishable from it.
  * `cell` is tested with `typeof`, which `null` passes, so a `null` cell gets
  * through here and fails further in.
  */
@@ -205,7 +206,7 @@ export function isCellUpdateNotification(
     isObjectNotArray(value) &&
     value.type === NotificationType.CellUpdate &&
     typeof value.cell === "object" &&
-    "value" in value
+    ("value" in value || "refused" in value)
   );
 }
 

@@ -80,6 +80,7 @@ import {
   bindCurrentPrincipalToStoredClauses,
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
+import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
 import {
   areLinksSame,
   isPrimitiveCellLink,
@@ -158,6 +159,13 @@ import {
   CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON,
   CfcSchemaMigrationError,
 } from "./migration-reason.ts";
+import {
+  type IntegrityMint,
+  isValueStamp,
+  MINTED_ORIGIN,
+  mintedEntryReached,
+  reconcileMintedEntries,
+} from "./minted-integrity.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
 import {
@@ -1091,8 +1099,14 @@ const metadataAppliesToAnyPath = (
   const policies = new PathPrefixIndex();
   for (const entry of metadata.labelMap.entries) {
     // Claim-only entries are authored policy even without label values.
-    // Derived and structure entries record flow taint instead.
-    if (entry.origin === "derived" || entry.origin === "structure") continue;
+    // Derived and structure entries record flow taint instead, and a minted
+    // entry records what one write stamped on its own value.
+    if (
+      entry.origin === "derived" || entry.origin === "structure" ||
+      entry.origin === MINTED_ORIGIN
+    ) {
+      continue;
+    }
     if (written.hasPrefixOf(entry.path)) return true;
     policies.add(entry.path);
   }
@@ -1896,11 +1910,14 @@ const pathHoldsUnattributedInitialization = (
  * `mintSchemaIntegrity` false leaves out every integrity atom the schema adds;
  * `attributeCurrentPrincipal` false leaves out only the atoms that name the
  * current principal — the `represents-principal` and `authored-by` claims —
- * and keeps the rest.
+ * and keeps the rest. `mintValueStamps` false leaves out the `addIntegrity`
+ * atoms that label the written value alone (`valueStampsOf()`), which the
+ * `minted` component carries.
  */
 type LabelMintOptions = {
   mintSchemaIntegrity?: boolean;
   attributeCurrentPrincipal?: boolean;
+  mintValueStamps?: boolean;
 };
 
 /**
@@ -5673,6 +5690,84 @@ const previousWriteValueForTarget = (
 ): FabricValue => writeDetailValueForTarget(tx, target, "previousValue");
 
 /**
+ * Where the value at `address` lives at the end of this transaction: the
+ * address reached by reading through every link on the way to it from the
+ * root of its document, or `"absent"` where nothing is there. `stored` says
+ * whether the walk followed a link this transaction did not write. A link's
+ * target path is walked one segment at a time from the root of the document
+ * it names, so a link partway along that path is followed too. A link that
+ * names its cell relative to the document holding it resolves against that
+ * document. A read that fails, and a walk following more links than link
+ * resolution follows, return `undefined`.
+ */
+const resolveValueThroughLinks = (
+  tx: IExtendedStorageTransaction,
+  address: CfcAddress,
+): { held: CfcAddress; stored: boolean } | "absent" | undefined => {
+  let document = {
+    space: address.space,
+    id: address.id as URI,
+    scope: normalizeCellScope(address.scope),
+  };
+  let path: string[] = [];
+  let remaining: readonly string[] = canonicalizeLogicalPath(address.path);
+  let stored = false;
+  // Each turn either follows a link or consumes a segment, so bounding the
+  // links followed bounds the walk.
+  let hops = 0;
+  while (true) {
+    let value: FabricValue;
+    try {
+      value = tx.readValueOrThrow({ ...document, path }, {
+        meta: INTERNAL_VERIFIER_META,
+      });
+    } catch {
+      return undefined;
+    }
+    if (isPrimitiveCellLink(value)) {
+      if (++hops > MAX_PATH_RESOLUTION_LENGTH) return undefined;
+      stored ||= !writtenInTransaction(tx, document, path);
+      const next = parseLink(value, { ...document, path });
+      document = { space: next.space, id: next.id, scope: next.scope };
+      path = [];
+      remaining = [...next.path.map(String), ...remaining];
+      continue;
+    }
+    if (remaining.length === 0) {
+      return value === undefined
+        ? "absent"
+        : { held: { ...document, path }, stored };
+    }
+    const [segment, ...rest] = remaining;
+    if (!isWalkableObjectOrArray(value) || !Object.hasOwn(value, segment)) {
+      return "absent";
+    }
+    path = [...path, segment];
+    remaining = rest;
+  }
+};
+
+/** Whether this transaction wrote at `path` of `document`, or above it. */
+const writtenInTransaction = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const addressPath = ["value", ...path];
+  const details = tx.getWriteDetailsForTarget?.(document) ??
+    tx.getWriteDetails?.(document.space) ?? [];
+  return [...details].some((detail) =>
+    detail.address.id === document.id &&
+    normalizeCellScope(detail.address.scope) === document.scope &&
+    concretePathHasPrefix(addressPath, detail.address.path.map(String))
+  );
+};
+
+/**
  * The value this transaction leaves at `target`: its own write where it made
  * one, and what it reads there otherwise.
  *
@@ -7244,6 +7339,10 @@ const derivePersistedLabel = (
     projectionClaim !== undefined && projectionClaim !== "malformed"
       ? projectedSourceLabel(sourceEntryLabels!, projectionClaim)
       : undefined;
+  const addedIntegrity = resolveCurrentPrincipalLabelValues(
+    Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
+    actingPrincipal,
+  );
   return {
     // Normalize confidentiality clauses on persist (Epic A4): an authored or
     // copied `{anyOf:[…]}` clause is deduped/canonically-ordered/singleton-
@@ -7272,9 +7371,8 @@ const derivePersistedLabel = (
         ),
         copiedInputLabel?.integrity,
         projectedInputLabel?.integrity,
-        resolveCurrentPrincipalLabelValues(
-          Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
-          actingPrincipal,
+        addedIntegrity?.filter((atom) =>
+          options.mintValueStamps !== false || !isValueStamp(atom)
         ),
       )
       : mergeLabelValues(
@@ -7283,6 +7381,39 @@ const derivePersistedLabel = (
       ),
   };
 };
+
+/**
+ * The atoms `schema` stamps onto the value written through it
+ * (`ifc.addIntegrity`), principal claims excepted (`isValueStamp()`). They
+ * label the written value and no later one, so they are persisted in the
+ * `minted` component.
+ */
+const valueStampsOf = (
+  tx: IExtendedStorageTransaction,
+  schema: JSONSchema,
+  options: LabelMintOptions,
+): readonly CfcAtom[] => {
+  const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
+  if (
+    options.mintSchemaIntegrity === false || !Array.isArray(ifc?.addIntegrity)
+  ) {
+    return [];
+  }
+  return (resolveCurrentPrincipalLabelValues(
+    ifc.addIntegrity,
+    options.attributeCurrentPrincipal === false
+      ? undefined
+      : tx.getCfcState().trustSnapshot?.actingPrincipal,
+  ) ?? []).filter(isValueStamp);
+};
+
+/**
+ * One stamp a transaction's own schema names at a position, with the atoms
+ * the write's author may mint. `lands` says whether the stamp is minted onto
+ * the value written there: a union branch's stamp lands only on a value that
+ * takes the branch.
+ */
+type ValueStamp = IntegrityMint & { readonly lands: boolean };
 
 const OWNING_SPACE_PLACEHOLDER = "__ctOwningSpace";
 
@@ -9840,6 +9971,10 @@ const verifyWriteFloor = function* (
     linkWriteInputs: readonly LinkWritePolicyInput[];
     linkLabels: LinkLabelDeriver;
     flowIntegrity: readonly CfcAtom[];
+    // The stamp decision persistence consumes too (`ValueStamp`): a floor
+    // is credited only by a stamp the decision names at its path, with the
+    // atoms the write's author may mint.
+    valueStamps: readonly ValueStamp[];
   },
 ): Generator<void, string[]> {
   const failures: string[] = [];
@@ -9902,21 +10037,34 @@ const verifyWriteFloor = function* (
     // `addIntegrity` mints + `exactCopyOf`/`projection` carries,
     // evidence-gated so a pattern author cannot forge runtime-minted atoms
     // to satisfy their own floor.
-    const base = gateRuntimeMintedIntegrity(
-      derivePersistedLabel(
-        tx,
-        entry.schema,
-        entry.label,
-        entryLabels,
-        target.space,
-        labelMintOptionsAt(
-          tx,
-          target,
-          entry.path,
-        ),
+    const mint = labelMintOptionsAt(tx, target, entry.path);
+    const declared = derivePersistedLabel(
+      tx,
+      entry.schema,
+      entry.label,
+      entryLabels,
+      target.space,
+      { ...mint, mintValueStamps: false },
+    );
+    // A stamp credits the floor where it lands on the written value. The
+    // floor applies structurally, whichever branch of a union the value
+    // takes, so the stamps the floor's own branch names credit it as well,
+    // provided the writer's schema names them: a branch that both requires
+    // and stamps an atom is satisfied by a write through it. A stamp another
+    // branch names, which the value does not take, credits nothing.
+    const stampsHere = ctx.valueStamps.filter((stamp) =>
+      arraysEqual(stamp.path, entry.path)
+    );
+    const ownStamps = valueStampsOf(tx, entry.schema, mint);
+    const base = mergeLabelValues(
+      gateRuntimeMintedIntegrity(declared, ctx.identityForPath(entry.path))
+        .integrity,
+      stampsHere.filter((stamp) => stamp.lands)
+        .flatMap((stamp) => stamp.integrity),
+      stampsHere.flatMap((stamp) => stamp.integrity).filter((atom) =>
+        ownStamps.some((own) => deepEqual(own, atom))
       ),
-      ctx.identityForPath(entry.path),
-    ).integrity ?? [];
+    ) ?? [];
 
     // One contribution per link written at/under the floor path (each linked
     // value must individually carry the floor), plus one `value` contribution
@@ -9933,11 +10081,26 @@ const verifyWriteFloor = function* (
       // Re-point the derivation at the floor path INSIDE the linked source:
       // the value at the floor path is source.path + (floor − linkPath), so
       // the credit is the source's own label at that nested path (an endorsed
-      // nested value passes; an unendorsed one fails, fail-closed).
+      // nested value passes; an unendorsed one fails, fail-closed), derived
+      // through the references this transaction stages on the way. Where the
+      // source reaches the value through a link stored before this
+      // transaction, the credit is the label of the document holding the
+      // value, at the value's own position, and that label alone: a stored
+      // link's label describes whatever its target held when the link was
+      // written, which says nothing of the value there now. A source holding
+      // nothing there brings no value to the floor path, and absence is not a
+      // floored value.
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
+      const resolved = resolveValueThroughLinks(tx, {
+        ...input.source,
+        path: [...canonicalizeLogicalPath(input.source.path), ...relative],
+      });
+      if (resolved === "absent") continue;
       contributions.push(
-        (yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [],
+        (yield* (resolved?.stored === true
+          ? ctx.linkLabels.labelAt({ ...input, source: resolved.held }, [])
+          : ctx.linkLabels.labelAt(input, relative)))?.integrity ?? [],
       );
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
@@ -10058,6 +10221,17 @@ export function* prepareBoundaryCommitSteps(
   );
   const candidates = candidateSchemasByTarget(
     state.writePolicyInputs,
+    identityForInput,
+    generatedOutputPaths,
+  );
+  // The schemas this transaction's writers brought themselves, which are the
+  // ones that stamp the values they write (`ifc.addIntegrity`). A schema the
+  // document stores, standing in for a writer that brought none, stamps
+  // nothing: a stamp is the stamping write's own.
+  const stampingSchemas = candidateSchemasByTarget(
+    state.writePolicyInputs.filter((input) =>
+      input.kind !== "schema" || input.storedSchema !== true
+    ),
     identityForInput,
     generatedOutputPaths,
   );
@@ -10287,8 +10461,15 @@ export function* prepareBoundaryCommitSteps(
     )?.labelMap.entries ?? [];
     if (
       existingEntries.some((entry) =>
-        entry.origin === "link" &&
-        linkEntryPointerReplaced(tx, target, entry.path)
+        (entry.origin === "link" &&
+          linkEntryPointerReplaced(tx, target, entry.path)) ||
+        // A minted entry labels the value its write left, so a write that
+        // changed that value takes the entry with it (`minted-integrity.ts`).
+        (entry.origin === MINTED_ORIGIN &&
+          mintedEntryReached(
+            canonicalizeLogicalPath(entry.path),
+            target.paths,
+          ))
       )
     ) {
       targetKeys.add(key);
@@ -10330,14 +10511,16 @@ export function* prepareBoundaryCommitSteps(
     // policy — the schema document replicates to the destination anyway, so
     // transforming the mirror entries would protect nothing), carried-
     // forward existing entries (already at rest in this doc; migration
-    // never rewrites persisted envelopes), and the local external-ingest
-    // mark (minted from this tx's own channel stamp — no cross-space
-    // observation feeds it; its atoms commit like any others if they later
-    // flow into a foreign target through the join). The §8.12.5 route-2
-    // declaration below is the one `declared` entry that IS eligible: its
-    // content comes from the flow join rather than from an author's schema,
-    // so leaving it verbatim beside a committed derived stamp carrying those
-    // same clauses would publish in one entry what the other protects.
+    // never rewrites persisted envelopes), the value stamps this tx's own
+    // schema mints (`minted` — no observation feeds them at all), and the
+    // local external-ingest mark (minted from this tx's own channel stamp —
+    // no cross-space observation feeds it; its atoms commit like any others
+    // if they later flow into a foreign target through the join). The
+    // §8.12.5 route-2 declaration below is the one `declared` entry that IS
+    // eligible: its content comes from the flow join rather than from an
+    // author's schema, so leaving it verbatim beside a committed derived
+    // stamp carrying those same clauses would publish in one entry what the
+    // other protects.
     const crossSpaceEligible = labelProtectionMode !== "off"
       ? new Set<LabelMapEntry>()
       : undefined;
@@ -10482,6 +10665,42 @@ export function* prepareBoundaryCommitSteps(
       return undefined;
     };
 
+    // The stamps this transaction's own schemas name for the values it
+    // writes, decided once: floor enforcement and persistence consume the
+    // same branch selection and the same author-gated atoms.
+    const valueStamps: ValueStamp[] = [];
+    const stampingSchema = stampingSchemas.get(key);
+    if (stampingSchema !== undefined) {
+      for (const entry of cfcSchemaEntries(stampingSchema)) {
+        const path = canonicalizeLogicalPath(entry.path);
+        const integrity = gateRuntimeMintedIntegrity(
+          {
+            integrity: [
+              ...valueStampsOf(
+                tx,
+                entry.schema,
+                labelMintOptionsAt(tx, target, entry.path),
+              ),
+            ],
+          },
+          identityForSchemaPath(writeAuthorIdentities.get(key), path),
+        ).integrity ?? [];
+        if (integrity.length === 0) continue;
+        valueStamps.push({
+          path,
+          integrity,
+          lands: ifcEntryAppliesToAttemptedWrite(
+            tx,
+            target,
+            entry.path,
+            entry.schema,
+            entry.root,
+            entry.conditional === true,
+          ),
+        });
+      }
+    }
+
     let deferredWriterRefusal: string | undefined;
     const deferredWriterPaths: (readonly string[])[] = [];
     // A preserved runtime output's deferral is discarded only by SC-11's
@@ -10586,6 +10805,9 @@ export function* prepareBoundaryCommitSteps(
         const failures = yield* verifyWriteFloor(tx, schema, target, {
           identityForPath: (path) =>
             identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          // A commit that stores none of its payload's claims stores none
+          // of its stamps either, so they credit nothing.
+          valueStamps: ingestVerificationFailed ? [] : valueStamps,
           linkWriteInputs: currentLinkWrites.get(key) ?? [],
           linkLabels,
           // Only PERSISTED flow integrity may credit the floor: `observe` mode
@@ -10675,6 +10897,9 @@ export function* prepareBoundaryCommitSteps(
       }
     }
     const remintedDeclaredPaths = new Map<string, readonly string[]>();
+    // A commit that stores none of its payload's declared claims stores none
+    // of its value stamps either: both come from a schema that did not verify.
+    let mintsValueStamps = !ingestVerificationFailed;
     const persistedLabelEntries: LabelMapEntry[] = ingestVerificationFailed
       ? []
       : mergedSchemaEntries
@@ -10710,7 +10935,7 @@ export function* prepareBoundaryCommitSteps(
               entry.label,
               mergedSchemaEntryLabels,
               target.space,
-              mint,
+              { ...mint, mintValueStamps: false },
             ),
             identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
           );
@@ -10809,6 +11034,7 @@ export function* prepareBoundaryCommitSteps(
           // non-monotone declared claims must not.
           persistedLabelEntries.length = 0;
           remintedDeclaredPaths.clear();
+          mintsValueStamps = false;
         } else {
           for (const violation of monotonicityViolations) {
             tx.noteCfcDiagnostic(
@@ -11034,6 +11260,9 @@ export function* prepareBoundaryCommitSteps(
         droppedLabelMetadataTemplates = true;
         continue;
       }
+      // Minted entries are reconciled as a set, below, against what this
+      // transaction wrote.
+      if (entry.origin === MINTED_ORIGIN) continue;
       // RUNTIME-MINTED shape-class (existence) entries survive every
       // overwrite of a still-existing path (freeze-at-creation): not the
       // flow-clear, not a link write replacing the slot, not a declared
@@ -11867,6 +12096,27 @@ export function* prepareBoundaryCommitSteps(
       }
     }
 
+    // The stamps that land are reconciled with the ones the document stores.
+    const storedMintedEntries = (existing?.labelMap.entries ?? [])
+      .filter((entry) => entry.origin === MINTED_ORIGIN)
+      .map((entry) => ({
+        ...entry,
+        path: canonicalizeLogicalPath(entry.path),
+      }));
+    const mintedEntries = reconcileMintedEntries({
+      existing: storedMintedEntries,
+      mints: mintsValueStamps ? valueStamps.filter((stamp) => stamp.lands) : [],
+      changedPaths: valueTarget?.paths ?? [],
+      attemptedPaths: writtenValuePaths,
+      value: () =>
+        tx.readValueOrThrow({ space, id, scope, path: [] }, {
+          meta: INTERNAL_VERIFIER_META,
+        }),
+    });
+    for (const entry of mintedEntries) persistedLabelEntries.push(entry);
+    const mintedCleared = storedMintedEntries.length > 0 &&
+      mintedEntries.length === 0;
+
     if (isIngestTarget && ingestStamp !== undefined) {
       // The split-mint is derived only from trusted host metadata stamped on
       // the transaction, touching zero attacker bytes. A vouched-channel stamp
@@ -12046,7 +12296,7 @@ export function* prepareBoundaryCommitSteps(
 
     if (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
-      !linkCleared && !droppedLabelMetadataTemplates
+      !linkCleared && !mintedCleared && !droppedLabelMetadataTemplates
     ) {
       if (deferredWriterRefusal !== undefined) {
         reasons.push(verdictReason(deferredWriterRefusal));

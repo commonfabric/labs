@@ -28,8 +28,7 @@ const signer = await Identity.fromPassphrase("runner-cfc-llm-derived-stamp");
 // carry an explicit LlmDerived provenance stamp instead of representing
 // untrust as mere absence of integrity. This file starts with the stamping
 // MECHANISM kernel: a builtin-identity write through an item schema carrying
-// ifc.addIntegrity persists the atom on exactly the written element — and
-// only there (a sibling written through the plain schema stays unstamped).
+// ifc.addIntegrity persists the atom on the written element.
 
 const LLM_DERIVED_ATOM = {
   type: "https://commonfabric.org/cfc/atom/LlmDerived",
@@ -67,7 +66,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
     });
   });
 
-  it("stamps exactly the element pushed through the addIntegrity schema", async () => {
+  it("stamps the element pushed through the addIntegrity schema", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -90,18 +89,6 @@ describe("CFC LlmDerived stamping mechanism", () => {
       modelTx.prepareCfc();
       expect((await modelTx.commit()).ok).toBeDefined();
 
-      // User push into the SAME array through the plain schema: no stamp.
-      const userTx = runtime.edit();
-      const plain = runtime.getCell(
-        signer.did(),
-        "llm-derived-messages",
-        messagesSchema,
-        userTx,
-      );
-      plain.push({ role: "user", content: "typed by the user" });
-      userTx.prepareCfc();
-      expect((await userTx.commit()).ok).toBeDefined();
-
       const readTx = runtime.edit();
       const messages = runtime.getCell(
         signer.did(),
@@ -115,12 +102,57 @@ describe("CFC LlmDerived stamping mechanism", () => {
         (entry) => entry.label.integrity ?? [],
       );
       expect(assistantIntegrity).toContainEqual(LLM_DERIVED_ATOM);
+      readTx.commit();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
 
-      const userView = cfcLabelViewForCell(messages.key(1));
-      const userIntegrity = (userView?.entries ?? []).flatMap(
-        (entry) => entry.label.integrity ?? [],
+  it("leaves an element pushed through the plain schema unstamped when the stamped element is pushed after it", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const userTx = runtime.edit();
+      runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        messagesSchema,
+        userTx,
+      ).push({ role: "user", content: "typed by the user" });
+      userTx.prepareCfc();
+      expect((await userTx.commit()).ok).toBeDefined();
+
+      const modelTx = runtime.edit();
+      setCfcImplementationIdentity(modelTx, {
+        kind: "builtin",
+        builtinId: "llm-dialog",
+      });
+      runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        stampingMessagesSchema,
+        modelTx,
+      ).push({ role: "assistant", content: "model bytes" });
+      modelTx.prepareCfc();
+      expect((await modelTx.commit()).ok).toBeDefined();
+
+      const readTx = runtime.edit();
+      const messages = runtime.getCell(
+        signer.did(),
+        "llm-derived-user-first",
+        messagesSchema,
+        readTx,
       );
-      expect(userIntegrity).not.toContainEqual(LLM_DERIVED_ATOM);
+      const integrityAt = (index: number) =>
+        (cfcLabelViewForCell(messages.key(index))?.entries ?? []).flatMap(
+          (entry) => entry.label.integrity ?? [],
+        );
+      expect(integrityAt(0)).not.toContainEqual(LLM_DERIVED_ATOM);
+      expect(integrityAt(1)).toContainEqual(LLM_DERIVED_ATOM);
       readTx.commit();
     } finally {
       await runtime.dispose();

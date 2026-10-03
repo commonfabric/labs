@@ -1359,9 +1359,14 @@ const compiledDocProperties = {
     type: "array",
     items: { type: "object", additionalProperties: true },
   },
+  // Delegation metadata is also written on its own, to a document already
+  // stored. A write of part of a stamped value keeps the value's stamp only
+  // where it stamps what it writes, so this property carries the compiler's
+  // stamp as the document does.
   delegatedModuleIdentities: {
     type: "array",
     items: { type: "string" },
+    ifc: { addIntegrity: [COMPILED_INTEGRITY_ATOM] },
   },
   imports: {
     type: "array",
