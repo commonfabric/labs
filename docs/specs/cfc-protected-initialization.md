@@ -99,6 +99,15 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
+An integrity floor at a path below a staged link is checked against the value
+the link brings there, which is the source's value at the matching path. Where
+the source holds nothing at that path, nothing lands at the floor, and the
+floor does not apply. Where the source reaches that value through links stored
+in it, the label of the document holding the value, at the value's own
+position, credits the floor beside the source's label at the matching path. A
+link stored before the value was written carries none of that value's label,
+so only the document holding the value can show that the value was endorsed.
+
 When deriving a pending reference source, schema labels are minted at their
 declaration paths, with wildcard segments bound to the projected source path.
 Covering declarations join their confidentiality and static integrity, including

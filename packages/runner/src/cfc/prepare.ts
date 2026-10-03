@@ -80,6 +80,7 @@ import {
   bindCurrentPrincipalToStoredClauses,
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
+import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
 import {
   areLinksSame,
   isPrimitiveCellLink,
@@ -5673,6 +5674,53 @@ const previousWriteValueForTarget = (
 ): FabricValue => writeDetailValueForTarget(tx, target, "previousValue");
 
 /**
+ * Where the value at `address` lives at the end of this transaction: the
+ * address reached by reading through every link on the way to it from the
+ * root of its document, or `"absent"` where nothing is there. A link that
+ * names its cell relative to the document holding it resolves against that
+ * document. A read that fails, and a chain longer than link resolution
+ * follows, return `undefined`.
+ */
+const resolveValueThroughLinks = (
+  tx: IExtendedStorageTransaction,
+  address: CfcAddress,
+): CfcAddress | "absent" | undefined => {
+  let document = {
+    space: address.space,
+    id: address.id as URI,
+    scope: normalizeCellScope(address.scope),
+  };
+  let path: string[] = [];
+  let remaining: readonly string[] = canonicalizeLogicalPath(address.path);
+  for (let step = 0; step < MAX_PATH_RESOLUTION_LENGTH; step++) {
+    let value: FabricValue;
+    try {
+      value = tx.readValueOrThrow({ ...document, path }, {
+        meta: INTERNAL_VERIFIER_META,
+      });
+    } catch {
+      return undefined;
+    }
+    if (isPrimitiveCellLink(value)) {
+      const next = parseLink(value, { ...document, path });
+      document = { space: next.space, id: next.id, scope: next.scope };
+      path = next.path.map(String);
+      continue;
+    }
+    if (remaining.length === 0) {
+      return value === undefined ? "absent" : { ...document, path };
+    }
+    const [segment, ...rest] = remaining;
+    if (!isWalkableObjectOrArray(value) || !Object.hasOwn(value, segment)) {
+      return "absent";
+    }
+    path = [...path, segment];
+    remaining = rest;
+  }
+  return undefined;
+};
+
+/**
  * The value this transaction leaves at `target`: its own write where it made
  * one, and what it reads there otherwise.
  *
@@ -9933,12 +9981,35 @@ const verifyWriteFloor = function* (
       // Re-point the derivation at the floor path INSIDE the linked source:
       // the value at the floor path is source.path + (floor − linkPath), so
       // the credit is the source's own label at that nested path (an endorsed
-      // nested value passes; an unendorsed one fails, fail-closed).
+      // nested value passes; an unendorsed one fails, fail-closed). Where the
+      // source reaches that value through links of its own, the label of the
+      // document holding it, at the value's own position, credits it too:
+      // that is the label the value carries, which a label the link carried
+      // from before the value was written does not reflect. A source holding
+      // nothing there brings no value to the floor path, and absence is not a
+      // floored value.
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
-      contributions.push(
-        (yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [],
-      );
+      const nested = {
+        ...input.source,
+        path: [...canonicalizeLogicalPath(input.source.path), ...relative],
+      };
+      const held = resolveValueThroughLinks(tx, nested);
+      if (held === "absent") continue;
+      const credit = [
+        ...(yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [],
+      ];
+      if (
+        held !== undefined &&
+        (targetKey(held) !== targetKey(nested) ||
+          !arraysEqual(held.path, nested.path))
+      ) {
+        credit.push(
+          ...(yield* ctx.linkLabels.labelAt({ ...input, source: held }, []))
+            ?.integrity ?? [],
+        );
+      }
+      contributions.push(credit);
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
     // A value contribution exists when plain data lands at/under the floor
