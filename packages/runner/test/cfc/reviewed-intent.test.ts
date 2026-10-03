@@ -1622,6 +1622,42 @@ describe("reviewed-intent", () => {
       );
     });
 
+    it("refuses a parameter key that does not start with a letter, so `__proto__` cannot hide a parameter from every check", () => {
+      for (const key of ["__proto__", "_hidden", "1st", "", "to-1"]) {
+        const parameters = JSON.parse(
+          `{${JSON.stringify(key)}: {"kind": "text", "maxLength": 10}}`,
+        );
+        expect(() =>
+          parseReviewedIntentDescriptor({
+            ...DESCRIPTOR,
+            parameters: { ...DESCRIPTOR.parameters, ...parameters },
+          })
+        ).toThrow(/Reviewed intent descriptor/);
+      }
+      expect(
+        Object.keys(
+          parseReviewedIntentDescriptor({
+            ...DESCRIPTOR,
+            parameters: {
+              ...DESCRIPTOR.parameters,
+              note2: { kind: "text", maxLength: 10 },
+            },
+          }).parameters,
+        ),
+      ).toContain("note2");
+    });
+
+    it("takes a text parameter's `maxLength` of zero, as JSON Schema's `maxLength` does", () => {
+      const parsed = parseReviewedIntentDescriptor({
+        ...DESCRIPTOR,
+        parameters: {
+          ...DESCRIPTOR.parameters,
+          body: { kind: "text", maxLength: 0 },
+        },
+      });
+      expect(parsed.parameters.body).toEqual({ kind: "text", maxLength: 0 });
+    });
+
     it("refuses a parameter kind, a parameter member, or a descriptor member it does not know", () => {
       for (
         const descriptor of [
