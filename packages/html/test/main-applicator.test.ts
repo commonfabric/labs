@@ -1118,6 +1118,187 @@ describe("DomApplicator", () => {
           });
         });
 
+        describe("UI provenance of a trusted click on a trusted surface", () => {
+          // A trusted surface vouches for a gesture to the handlers bound on
+          // it or inside it, and to no others. The tree below wraps the
+          // surface in an element of its own with a handler of its own, as a
+          // pattern rendering a trusted surface can, and a click is
+          // dispatched the way a browser dispatches one: to the target and
+          // then to each ancestor in turn.
+          //
+          //   1 div                                      handler 1
+          //     2 section data-ui-pattern,
+          //               data-ui-event-integrity        handler 2
+          //       3 cf-button data-ui-action             handler 3
+          //       4 cf-submit-input data-ui-action       handler 4
+
+          const SURFACE = "TrustedSaveSurface";
+          const ACTION = "TrustedSaveTitle";
+
+          const renderWrappedSurface = () => {
+            const events: DomEventMessage[] = [];
+            const applicator = new DomApplicator({
+              document: createMockDocument(),
+              runtimeClient: createMockRuntimeClient(),
+              onEvent: (msg) => events.push(msg),
+              setProp: (target, key, value) => {
+                if (
+                  key.startsWith("data-") &&
+                  isObjectOrArray(target) &&
+                  "setAttribute" in target &&
+                  typeof target.setAttribute === "function"
+                ) {
+                  target.setAttribute(key, String(value));
+                  return;
+                }
+                (target as Record<string, unknown>)[key] = value;
+              },
+            });
+            applicator.applyBatch({
+              batchId: 1,
+              ops: [
+                { op: "create-element", nodeId: 1, tagName: "div" },
+                { op: "create-element", nodeId: 2, tagName: "section" },
+                {
+                  op: "set-prop",
+                  nodeId: 2,
+                  key: "data-ui-pattern",
+                  value: SURFACE,
+                },
+                {
+                  op: "set-prop",
+                  nodeId: 2,
+                  key: "data-ui-event-integrity",
+                  value: SURFACE,
+                },
+                { op: "create-element", nodeId: 3, tagName: "cf-button" },
+                {
+                  op: "set-prop",
+                  nodeId: 3,
+                  key: "data-ui-action",
+                  value: ACTION,
+                },
+                {
+                  op: "create-element",
+                  nodeId: 4,
+                  tagName: "cf-submit-input",
+                },
+                {
+                  op: "set-prop",
+                  nodeId: 4,
+                  key: "data-ui-action",
+                  value: ACTION,
+                },
+                { op: "insert-child", parentId: 1, childId: 2, beforeId: null },
+                { op: "insert-child", parentId: 2, childId: 3, beforeId: null },
+                { op: "insert-child", parentId: 2, childId: 4, beforeId: null },
+                ...[1, 2, 3, 4].map((nodeId) => ({
+                  op: "set-event" as const,
+                  nodeId,
+                  eventType: "click",
+                  handlerId: nodeId,
+                })),
+              ],
+            });
+            const provenanceFor = (handlerId: number) =>
+              events.find((message) => message.handlerId === handlerId)?.event
+                .provenance;
+            return { applicator, events, provenanceFor };
+          };
+
+          // Dispatches a trusted click to `target` and then to each of its
+          // ancestors, with `currentTarget` naming the node whose listeners
+          // run. With `composed`, the event's `composedPath()` returns
+          // `shadowPath` -- the nodes of a component's shadow tree that the
+          // click landed on before reaching its host -- followed by `target`
+          // and its ancestors, as a browser's does.
+          const clickBubbling = (
+            target: any,
+            { composed = true, shadowPath = [] as unknown[] } = {},
+          ) => {
+            const ancestors: any[] = [];
+            for (let node = target; node; node = node.parentNode) {
+              ancestors.push(node);
+            }
+            const event: Record<string, unknown> = {
+              type: "click",
+              target,
+              isTrusted: true,
+              ...(composed
+                ? { composedPath: () => [...shadowPath, ...ancestors] }
+                : {}),
+            };
+            for (const node of ancestors) {
+              event.currentTarget = node;
+              node.dispatchEvent(event);
+            }
+          };
+
+          for (const composed of [true, false]) {
+            const how = composed
+              ? "with a composed path"
+              : "without a composed path";
+
+            it(`gives a listener on an ancestor outside the surface no UI provenance, ${how}`, () => {
+              const { applicator, events, provenanceFor } =
+                renderWrappedSurface();
+
+              clickBubbling(applicator.getNode(3), { composed });
+
+              expect(events.map((message) => message.handlerId))
+                .toStrictEqual([3, 2, 1]);
+              expect(provenanceFor(1)).toStrictEqual({
+                origin: "dom",
+                trusted: true,
+              });
+            });
+
+            it(`gives a listener on the control the surface's provenance and the control's action, ${how}`, () => {
+              const { applicator, provenanceFor } = renderWrappedSurface();
+
+              clickBubbling(applicator.getNode(3), { composed });
+
+              expect(provenanceFor(3)).toStrictEqual({
+                origin: "dom",
+                trusted: true,
+                ui: {
+                  pattern: SURFACE,
+                  eventIntegrity: [SURFACE],
+                  uiContractDataset: { uiAction: ACTION },
+                },
+              });
+            });
+          }
+
+          it("gives a listener on a shadow host inside the surface the surface's provenance, and one outside the surface none", () => {
+            // A click on `cf-submit-input`'s submit button lands in its
+            // shadow tree, and reaches the pattern's listener on the host
+            // retargeted to the host.
+
+            const { applicator, provenanceFor } = renderWrappedSurface();
+            const shadowButton = { dataset: { cfButton: "" } };
+            const shadowRoot = {};
+
+            clickBubbling(applicator.getNode(4), {
+              shadowPath: [shadowButton, shadowRoot],
+            });
+
+            expect(provenanceFor(4)).toStrictEqual({
+              origin: "dom",
+              trusted: true,
+              ui: {
+                pattern: SURFACE,
+                eventIntegrity: [SURFACE],
+                uiContractDataset: { uiAction: ACTION },
+              },
+            });
+            expect(provenanceFor(1)).toStrictEqual({
+              origin: "dom",
+              trusted: true,
+            });
+          });
+        });
+
         it("removes event listener", () => {
           const doc = createMockDocument();
           const events: DomEventMessage[] = [];
