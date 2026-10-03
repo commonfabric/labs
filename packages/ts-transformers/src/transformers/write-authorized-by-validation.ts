@@ -148,6 +148,19 @@ function findWriteAuthorizedByReferences(
       return;
     }
 
+    // What a CFC carrier records holds its payload again, as `of`, besides
+    // its metadata: walked whole, it would reach every policy in the payload a
+    // second time. Only its metadata, which may name policies of its own, as
+    // `WritePolicyAnyOf`'s members, is walked.
+    if (
+      ts.isTypeReferenceNode(current) &&
+      declaredAliasName(current, context) === "CfcStamp"
+    ) {
+      const metadata = current.typeArguments?.[1];
+      if (metadata) visit(metadata, typeParamMap);
+      return;
+    }
+
     if (ts.isTypeReferenceNode(current)) {
       const declaration = getTypeDeclaration(current, context);
       if (declaration) {
@@ -214,13 +227,19 @@ function namesPolicyType(
     ? reference.typeName
     : reference.typeName.right;
   if (isWriteAuthorizedByLikeTypeName(name.text)) return true;
+  return isWriteAuthorizedByLikeTypeName(declaredAliasName(reference, context));
+}
+
+/** The name of the type alias `reference` resolves to, through any import. */
+function declaredAliasName(
+  reference: ts.TypeReferenceNode,
+  context: TransformationContext,
+): string | undefined {
   let symbol = context.checker.getSymbolAtLocation(reference.typeName);
   if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
     symbol = context.checker.getAliasedSymbol(symbol);
   }
-  return isWriteAuthorizedByLikeTypeName(
-    symbol?.declarations?.find(ts.isTypeAliasDeclaration)?.name.text,
-  );
+  return symbol?.declarations?.find(ts.isTypeAliasDeclaration)?.name.text;
 }
 
 /**

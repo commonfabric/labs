@@ -471,9 +471,127 @@ export const isCfcCarrier = (member: ts.Type): boolean =>
   cfcCarrierProperty(member) !== undefined;
 
 /**
+ * One policy a CFC carrier records: its metadata, and the payload it was
+ * written around, where the carrier records one (`CfcStamp` in
+ * `packages/api/cfc.ts`). A carrier that holds its metadata alone records
+ * none.
+ */
+type CarrierStamp = {
+  readonly meta: ts.Type;
+  readonly of: ts.Type | undefined;
+};
+
+/** The members a `CfcStamp` holds. */
+const STAMP_MEMBER_NAMES: ReadonlySet<string> = new Set(["meta", "of"]);
+
+/** Whether `type` is a `CfcStamp`: an object holding `meta`, and `of` at most besides. */
+const isCarrierStamp = (type: ts.Type): boolean => {
+  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
+  const names = type.getProperties().map((property) => property.name);
+  return names.includes("meta") &&
+    names.every((name) => STAMP_MEMBER_NAMES.has(name));
+};
+
+/**
+ * The policies `value`, the type a carrier's `__ct_cfc__` holds, records. An
+ * intersection or a mapped type folds several carriers into one, whose value
+ * is then the intersection of what each held, and two spreads that may each
+ * supply it make it their union; each member is a policy of its own.
+ */
+const carrierStamps = (
+  value: ts.Type,
+  checker: ts.TypeChecker,
+): CarrierStamp[] => {
+  const parts = value.isIntersection() ||
+      (value.isUnion() && value.types.every(isCarrierStamp))
+    ? value.types
+    : [value];
+  return parts.map((part) => {
+    if (!isCarrierStamp(part)) return { meta: part, of: undefined };
+    const member = (name: string) => {
+      const symbol = part.getProperty(name);
+      return symbol &&
+        memberValueType(symbol, checker.getTypeOfSymbol(symbol), checker);
+    };
+    return { meta: member("meta")!, of: member("of") };
+  });
+};
+
+/**
+ * The names of the members `type` holds as data: none for a primitive, and
+ * never a CFC carrier or a symbol-keyed brand.
+ */
+const dataMemberNames = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ReadonlySet<string> =>
+  (type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) === 0
+    ? new Set()
+    : new Set(
+      checker.getPropertiesOfType(type).map((property) => property.name)
+        .filter((name) =>
+          name !== CFC_CARRIER_PROPERTY && !name.startsWith("__@")
+        ),
+    );
+
+/**
+ * `schema`, the schema of a value of `type`, with each of `placed`'s labels
+ * on the part of the value its policy was written around (`CarrierStamp.of`).
+ * That is the whole value where every member the value holds is one of the
+ * payload's, and where the carrier records no payload or one with no members,
+ * as a primitive has none. Where the value holds other members too, merged
+ * into it by an intersection, a spread or a mapped type, it is each of the
+ * payload's members alone, and where the value holds none of the payload's
+ * members, nowhere. Read for its labels alone (`labelsOnly`), a value whose
+ * label belongs to some of its members carries none at its top.
+ */
+const placeCarriedLabels = (
+  schema: MutableJSONSchema,
+  type: ts.Type,
+  placed: readonly {
+    readonly labels: Record<string, unknown>;
+    readonly of: ts.Type | undefined;
+  }[],
+  context: GenerationContext,
+): MutableJSONSchema => {
+  const checker = context.typeChecker;
+  const valueNames = [...dataMemberNames(type, checker)];
+  let result = schema;
+  for (const { labels, of } of placed) {
+    const ofNames = of && dataMemberNames(of, checker);
+    if (
+      !ofNames || ofNames.size === 0 ||
+      valueNames.every((name) => ofNames.has(name))
+    ) {
+      result = withIfcLabels(result, labels);
+      continue;
+    }
+    const covered = valueNames.filter((name) => ofNames.has(name));
+    if (covered.length === 0 || context.labelsOnly) continue;
+    const properties = isObjectOrArray(result) && !Array.isArray(result) &&
+        isObjectOrArray(result.properties)
+      ? result.properties as Record<string, MutableJSONSchema>
+      : undefined;
+    if (!properties) {
+      result = withIfcLabels(result, labels);
+      continue;
+    }
+    const labeled: Record<string, MutableJSONSchema> = { ...properties };
+    for (const name of covered) {
+      const property = labeled[name];
+      if (property !== undefined) {
+        labeled[name] = withIfcLabels(property, labels);
+      }
+    }
+    result = { ...(result as MutableJSONSchemaObj), properties: labeled };
+  }
+  return result;
+};
+
+/**
  * The labeled parts of `type`, an intersection holding CFC metadata
  * carriers, or `undefined` for any other type: its other members, whose
- * intersection is the payload, and each carrier's metadata. The checker drops
+ * intersection is the payload, and each carrier's policies. The checker drops
  * a CFC alias's name where it reduces the alias's type, as
  * `Confidential<T | null, …>` at `T = string` reduces to `string & carrier`
  * once `null & carrier` is nothing. Then the carriers are all that say the
@@ -486,16 +604,19 @@ export const isCfcCarrier = (member: ts.Type): boolean =>
 const cfcCarriedParts = (
   type: ts.Type,
   checker: ts.TypeChecker,
-): { payload: readonly ts.Type[]; metadata: ts.Type[] } | undefined => {
+): { payload: readonly ts.Type[]; metadata: CarrierStamp[] } | undefined => {
   if (!type.isIntersection()) return undefined;
-  const metadata: ts.Type[] = [];
+  const metadata: CarrierStamp[] = [];
   const rest: ts.Type[] = [];
   for (const member of type.types) {
     const carrier = cfcCarrierProperty(member);
     if (carrier) {
-      metadata.push(
-        memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
-      );
+      for (
+        const stamp of carrierStamps(
+          memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
+          checker,
+        )
+      ) metadata.push(stamp);
     } else rest.push(member);
   }
   return metadata.length > 0 ? { payload: rest, metadata } : undefined;
@@ -545,6 +666,9 @@ const leavesNoCarrier = (type: ts.Type): boolean =>
 type CarriedMetadata = {
   readonly type: ts.Type;
   readonly bound: BoundTypeParameters | undefined;
+
+  /** The payload its policy was written around (`CarrierStamp.of`). */
+  readonly of?: ts.Type | undefined;
 };
 
 /**
@@ -967,9 +1091,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         : this.#schemaGenerator.formatStructure(type, context);
       // The structure may carry the same labels, from the carrier folded into
       // it; labelling it again with them changes nothing.
-      return (this.#labelsOf(view.metadata, context) ?? []).reduce<
-        MutableJSONSchema
-      >((labelled, label) => withIfcLabels(labelled, label), shape);
+      return this.#withPlacedLabels(shape, type, view.metadata, context);
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -982,8 +1104,8 @@ export class CommonFabricFormatter implements TypeFormatter {
       cfcCarriedParts(type, context.typeChecker);
     if (carried) {
       if (
-        carried.metadata.some((metadata) =>
-          context.typeChecker.getNonNullableType(metadata).getProperty(
+        carried.metadata.some((stamp) =>
+          context.typeChecker.getNonNullableType(stamp.meta).getProperty(
             "writeAuthorizedBy",
           )
         )
@@ -995,13 +1117,12 @@ export class CommonFabricFormatter implements TypeFormatter {
           undefined,
         )
         : this.#formatPayloadInPlace(type, context);
-      const metadata = carried.metadata.map((metadataType) => ({
-        type: metadataType,
+      const metadata = carried.metadata.map((stamp) => ({
+        type: stamp.meta,
         bound: context.boundTypeParameters,
+        of: stamp.of,
       }));
-      return (this.#labelsOf(metadata, context) ?? []).reduce<
-        MutableJSONSchema
-      >((labeled, label) => withIfcLabels(labeled, label), payload);
+      return this.#withPlacedLabels(payload, type, metadata, context);
     }
 
     // Handle wrapper unions first (before FactoryInput<T> union check)
@@ -1888,27 +2009,60 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * The labels `carrier`, a CFC metadata carrier an object holds as one of its
-   * members, attaches: one per metadata type, an intersection holding one per
-   * label that was folded into it (`#labelsOf()`).
+   * `schema`, the schema of an object of `type`, with the labels `carrier`, a
+   * CFC metadata carrier the object holds as one of its members, attaches:
+   * one per policy it records, folded into it by a mapped type or a spread
+   * (`carrierStamps()`), each placed on the part of the object its policy
+   * names.
    */
-  labelsCarriedBy(
+  withLabelsCarriedBy(
+    schema: MutableJSONSchema,
+    type: ts.Type,
     carrier: ts.Symbol,
     context: GenerationContext,
-  ): Record<string, unknown>[] | undefined {
+  ): MutableJSONSchema {
     const checker = context.typeChecker;
     const value = memberValueType(
       carrier,
       checker.getTypeOfSymbol(carrier),
       checker,
     );
-    return this.#labelsOf(
-      (value.isIntersection() ? value.types : [value]).map((type) => ({
-        type,
+    return this.#withPlacedLabels(
+      schema,
+      type,
+      carrierStamps(value, checker).map((stamp) => ({
+        type: stamp.meta,
         bound: context.boundTypeParameters,
+        of: stamp.of,
       })),
       context,
     );
+  }
+
+  /**
+   * `schema`, the schema of a value of `type`, with the labels each of
+   * `metadata` spells placed on the part of the value its policy names
+   * (`placeCarriedLabels()`), each read in full, or `schema` alone where any
+   * is not (`#labelsOf()`).
+   */
+  #withPlacedLabels(
+    schema: MutableJSONSchema,
+    type: ts.Type,
+    metadata: readonly CarriedMetadata[],
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const labels = this.#labelsOf(metadata, context);
+    return labels
+      ? placeCarriedLabels(
+        schema,
+        type,
+        labels.map((label, index) => ({
+          labels: label,
+          of: metadata[index]!.of,
+        })),
+        context,
+      )
+      : schema;
   }
 
   /**
@@ -2146,7 +2300,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       payload: payload.payload,
       metadata: [
         ...payload.metadata,
-        ...carried.metadata.map((type) => ({ type, bound })),
+        ...carried.metadata.map((stamp) => ({
+          type: stamp.meta,
+          bound,
+          of: stamp.of,
+        })),
       ],
       primitive: payload.payload.length === 1 &&
         (payload.payload[0]!.flags & ts.TypeFlags.Object) === 0,
@@ -2192,8 +2350,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       if (!inner) return undefined;
       for (const part of inner.payload) members.push(part);
       for (const part of inner.metadata) metadata.push(part);
-      for (const type of carried?.metadata ?? []) {
-        metadata.push({ type, bound: argument.bound });
+      for (const stamp of carried?.metadata ?? []) {
+        metadata.push({
+          type: stamp.meta,
+          bound: argument.bound,
+          of: stamp.of,
+        });
       }
     }
     return { payload: members, metadata };

@@ -12,7 +12,11 @@
 //   deno task check-cfc-types
 
 export type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: Meta;
+  readonly __ct_cfc__?: CfcStamp<T, Meta>;
+};
+type CfcStamp<T, Meta> = {
+  readonly meta?: Meta;
+  readonly of?: T;
 };
 export type CfcJsonValue =
   | null
