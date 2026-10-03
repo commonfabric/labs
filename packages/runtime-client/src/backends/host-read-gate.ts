@@ -110,6 +110,17 @@ export type DocumentAt = (
   scope?: CellScope,
 ) => Cell<unknown>;
 
+/**
+ * The document a scheduler graph names by space, id and scope key (`space`
+ * for the space instance), at its root, or `undefined` where the key names
+ * an instance this worker cannot place.
+ */
+export type GraphDocumentAt = (
+  space: string,
+  id: string,
+  scopeKey: string,
+) => Cell<unknown> | undefined;
+
 /** What stands in a diagnostic for a value the ceiling refuses. */
 const WITHHELD = CFC_POLICY_PLACEHOLDER_TEXT;
 
@@ -791,7 +802,16 @@ export class HostReadGate {
           })),
         };
       case "scheduler.graph.snapshot":
-        return { ...marker, graph: this.#graphShown(marker.graph) };
+        // A marker names a document by space and id alone, so only the
+        // space instance's addresses are placed.
+        return {
+          ...marker,
+          graph: this.#graphShown(
+            marker.graph,
+            (space, id, scopeKey) =>
+              scopeKey === "space" ? documentAt(space, id) : undefined,
+          ),
+        };
       case "scheduler.read-attempt":
       case "runner.piece.install":
       case "runner.deferred-start.pending":
@@ -829,20 +849,52 @@ export class HostReadGate {
   }
 
   /**
-   * The scheduler's graph as a host may see it: under a policy, with no
-   * node's `preview`, the first characters of its function's body, which is
-   * program text {@link patternSources} withholds. The addresses its nodes
-   * read and write are not decided here (see the dispositions).
+   * The scheduler's graph as a host may see it. Under a policy its nodes
+   * carry no `preview`, the first characters of a function's body, which is
+   * program text {@link patternSources} withholds; and an address a node
+   * read or wrote in a document the policy refuses names the document alone,
+   * since its path names the document's fields, as the trigger trace does.
+   * An address `documentAt` cannot place, such as another principal's
+   * instance, is treated as refused.
    */
-  graphSnapshot(snapshot: SchedulerGraphSnapshot): GraphSnapshotResponse {
-    return decided({ snapshot: this.#graphShown(snapshot) });
+  graphSnapshot(
+    snapshot: SchedulerGraphSnapshot,
+    documentAt: GraphDocumentAt,
+  ): GraphSnapshotResponse {
+    return decided({ snapshot: this.#graphShown(snapshot, documentAt) });
   }
 
-  #graphShown(snapshot: SchedulerGraphSnapshot): SchedulerGraphSnapshot {
+  #graphShown(
+    snapshot: SchedulerGraphSnapshot,
+    documentAt: GraphDocumentAt,
+  ): SchedulerGraphSnapshot {
     if (this.#policy === undefined) return snapshot;
+    const verdicts = new Map<string, boolean>();
+    const shown = (key: string): string => {
+      const [space, id, scopeKey, ...path] = key.split("/");
+      if (space === undefined || id === undefined || scopeKey === undefined) {
+        return WITHHELD;
+      }
+      if (path.length === 0) return key;
+      const document = `${space}/${id}/${scopeKey}`;
+      let refused = verdicts.get(document);
+      if (refused === undefined) {
+        const cell = documentAt(space, id, scopeKey);
+        refused = cell === undefined || this.#cellRefusal(cell) !== undefined;
+        verdicts.set(document, refused);
+      }
+      return refused ? document : key;
+    };
+    const addresses = (keys: string[] | undefined) =>
+      keys === undefined ? undefined : [...new Set(keys.map(shown))];
     return {
       ...snapshot,
-      nodes: snapshot.nodes.map(({ preview: _withheld, ...node }) => node),
+      nodes: snapshot.nodes.map(({ preview: _withheld, ...node }) => ({
+        ...node,
+        reads: addresses(node.reads),
+        shallowReads: addresses(node.shallowReads),
+        writes: addresses(node.writes),
+      })),
     };
   }
 

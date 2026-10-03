@@ -45,7 +45,11 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../runner/test/cfc-seed-envelope.ts";
-import { type DocumentAt, HostReadGate } from "@/backends/host-read-gate.ts";
+import {
+  type DocumentAt,
+  type GraphDocumentAt,
+  HostReadGate,
+} from "@/backends/host-read-gate.ts";
 import {
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
@@ -1189,6 +1193,45 @@ describe("HostReadGate, for what crosses beside a value", () => {
         new HostReadGate(undefined, {}).telemetry(committed, docs.documentAt)
           .marker,
       ).toEqual(committed);
+    });
+
+    it("names a refused document alone in the scheduler graph's addresses", async () => {
+      await using docs = await shelf();
+      const sealedKey = `${space}/${docs.contactsId}/space/${SECRET_KEY}`;
+      const openKey = `${space}/${docs.caveated.getAsNormalizedFullLink().id}` +
+        "/space/text";
+      const elsewhere = `${space}/of:another-instance/user:someone-else/field`;
+      const snapshot = {
+        nodes: [{
+          id: "action",
+          type: "computation" as const,
+          isDirty: false,
+          isPending: false,
+          reads: [sealedKey, openKey],
+          shallowReads: [sealedKey],
+          writes: [elsewhere],
+        }],
+        edges: [],
+        timestamp: 1,
+      };
+      const documentAt: GraphDocumentAt = (documentSpace, id, scopeKey) =>
+        scopeKey === "space" ? docs.documentAt(documentSpace, id) : undefined;
+
+      const toVisitor = gateFor(docs.runtime, visitor).graphSnapshot(
+        snapshot,
+        documentAt,
+      ).snapshot.nodes[0];
+      expect(holds(toVisitor, SECRET_KEY)).toBe(false);
+      expect(toVisitor.reads).toContain(`${space}/${docs.contactsId}/space`);
+      // An instance the worker cannot place is named alone, for anyone.
+      expect(toVisitor.writes).toEqual([
+        `${space}/of:another-instance/user:someone-else`,
+      ]);
+      const toOwner = gateFor(docs.runtime, owner).graphSnapshot(
+        snapshot,
+        documentAt,
+      ).snapshot.nodes[0];
+      expect(toOwner.reads).toEqual([sealedKey, openKey]);
     });
 
     it("names a refused document alone in the trigger trace", async () => {

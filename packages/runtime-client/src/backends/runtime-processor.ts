@@ -41,6 +41,7 @@ import {
   type EventAttentionIndexValue,
   type OperationFieldAddress,
   resolveScopeKey,
+  scopeOfScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type SqliteDbRef,
   type StreamEventsDocValue,
@@ -142,7 +143,11 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
-import { type DocumentAt, HostReadGate } from "./host-read-gate.ts";
+import {
+  type DocumentAt,
+  type GraphDocumentAt,
+  HostReadGate,
+} from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
 import { runtimeErrorReport } from "./runtime-error.ts";
@@ -3404,6 +3409,7 @@ export class RuntimeProcessor {
   getGraphSnapshot(_: GetGraphSnapshotRequest): GraphSnapshotResponse {
     return this.#hostReadGate.graphSnapshot(
       this.#runtime.scheduler.getGraphSnapshot(),
+      this.#graphDocumentAt,
     );
   }
 
@@ -3483,6 +3489,25 @@ export class RuntimeProcessor {
   };
 
   /** The root of the document a diagnostic names, which it is decided on. */
+  /**
+   * The document a graph address names, placed by its scope key: the space
+   * instance, or this runtime's own user or session instance. Another
+   * principal's instance is not placed.
+   */
+  #graphDocumentAt: GraphDocumentAt = (space, id, scopeKey) => {
+    const scope = scopeOfScopeKey(scopeKey);
+    let own: string;
+    try {
+      own = resolveScopeKey(
+        scope,
+        this.#runtime.storageManager.scopeKeyIdentity(),
+      );
+    } catch {
+      return undefined;
+    }
+    return own === scopeKey ? this.#documentAt(space, id, scope) : undefined;
+  };
+
   #documentAt: DocumentAt = (space, id, scope) =>
     this.#runtime.getCellFromLink({
       space: space as DID,

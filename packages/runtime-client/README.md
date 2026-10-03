@@ -88,8 +88,9 @@ type-check until it says how it stands. The ungated channels are a space's
 access list, which the space's own access rules govern; a presence room's
 records, which carry what each member chose to share; and the action-run trace
 and the write-stack trace, which carry addresses, field paths included, and no
-values. The scheduler graph is decided for its previews, and its addresses are
-not decided.
+values. The scheduler graph is decided: under a ceiling its nodes carry no
+function previews, and an address in a document the ceiling refuses names the
+document alone.
 
 Two things fall outside the tables:
 
