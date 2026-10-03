@@ -78,6 +78,60 @@ describe("interval #now wish", () => {
     runtime.runner.stop(resultCell);
   });
 
+  it("writes the current instant when the grid cell holds a past one", async () => {
+    // The grid cell is content-addressed by space and interval, so it outlives
+    // the timer that ticks it: a reload, or another tab that has stopped,
+    // leaves it holding whatever instant that session last wrote. The wish that
+    // acquires the grid next writes the current instant straight away rather
+    // than serving the past one until the boundary, which at this interval is
+    // a minute off — so the instant the cell takes on names which of the two
+    // wrote it.
+    const intervalMs = 60_000;
+    const current = Math.floor(Date.now() / intervalMs) * intervalMs;
+    const stale = current - intervalMs;
+
+    const gridCell = runtime.getCell<number>(
+      space,
+      { wish: { now: true, interval: intervalMs } },
+      undefined,
+      tx,
+    );
+    gridCell.set(stale);
+    await tx.commit();
+    tx = runtime.edit();
+
+    const { promise: republished, resolve } = Promise.withResolvers<number>();
+    const cancelSink = gridCell.sink((value) => {
+      if (typeof value === "number" && value !== stale) resolve(value);
+    });
+
+    const wishPattern = pattern(() => {
+      return { nowValue: wish({ query: "#now/60" }) };
+    });
+
+    const resultCell = runtime.getCell<{ nowValue?: { result?: number } }>(
+      space,
+      "stale grid now result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, wishPattern, {}, resultCell);
+    await tx.commit();
+    tx = runtime.edit();
+
+    await result.pull();
+    expect(await republished).toBe(current);
+
+    cancelSink();
+    runtime.runner.stop(resultCell);
+    // The acquire's own write is issued outside the action's transaction, so
+    // let it reach storage before the case tears that storage down under it.
+    // After the stop, never before: while the grid still holds a user its
+    // boundary timer re-arms itself, and `settled()` would advance the clock
+    // through one interval after another until the runaway ceiling trips.
+    await runtime.settled();
+  });
+
   it("reports a failed #now interval tick", async () => {
     const wishPattern = pattern(() => {
       return { nowValue: wish({ query: "#now/1" }) };
