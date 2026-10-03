@@ -618,11 +618,18 @@ export const FabriChatManagerCore = pattern<
           : 0
       )
     );
+    // A group's title lives in the room's own space, which not every user
+    // running this manager may read, so its label is each user's own:
+    // `spaceAccess()` makes it per-user, and a room the user may not read is
+    // labeled without its title. Stored once for every user, labels made
+    // from different reads would overwrite each other without end.
     const shown = computed((): ShownEntry[] =>
       newestFirst.map((entry) => ({
         room: entry.room,
         label: entry.kind === "direct"
           ? `With ${entry.counterpart ?? "someone"}`
+          : spaceAccess(entry.room) === "none"
+          ? "Group chat"
           : entry.room.key("about").get()?.title ?? "Group chat",
       }))
     );
