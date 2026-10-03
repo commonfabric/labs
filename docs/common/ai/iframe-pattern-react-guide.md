@@ -154,7 +154,7 @@ or sibling elements outside the React root.
 `useCell<T>(name)` returns one of three snapshots:
 
 - `{ status: "loading" }` while the initial pull is active;
-- `{ status: "ready", value }` after the host pull barrier resolves;
+- `{ status: "ready", value }` after the host pull completes;
 - `{ status: "error", error }` when the resource cannot be read.
 
 It also returns `initialize(defaultValue)`, `set(valueOrUpdater)`, and
@@ -162,12 +162,13 @@ It also returns `initialize(defaultValue)`, `set(valueOrUpdater)`, and
 has no backing value and returns the value selected by that transaction. A
 readable schema fallback does not count as stored. `refresh()` is the explicit
 host `Cell.pull()` boundary. The hook subscribes through `useSyncExternalStore`,
-so host updates rerender the component.
+so host updates rerender the component. The runtime pull demands producers and
+required loads; readiness does not confirm unrelated pending writes.
 
 `ready` means the pull completed; a newly scoped or optional Cell can therefore
 be ready with the value `undefined`. Include `undefined` in the hook type. Use
 the declared input default for an absent read-only input. For writable state or
-output, initialize only after that Cell's authoritative pull completes. Call
+output, initialize only after that Cell's pull completes. Call
 `initialize()` once even when the compiled schema fallback is already visible:
 the idempotent operation materializes the backing value without replacing a
 value another session won.

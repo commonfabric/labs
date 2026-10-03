@@ -101,6 +101,7 @@ export type {
   IPresenceStorageCapability,
   MemorySpace,
   TransactionCommitOptions,
+  TransactionCommitReceipt,
 } from "./storage/interface.ts";
 export {
   hasOperationStorageCapability,

@@ -63,7 +63,7 @@ describe("cell-handle", () => {
         expect(requests).toEqual([{
           type: RequestType.CellPull,
           cell: ref,
-          ...(awaitDurability === undefined ? {} : { awaitDurability }),
+          awaitDurability: awaitDurability ?? false,
         }]);
       },
     );

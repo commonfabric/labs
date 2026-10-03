@@ -58,6 +58,7 @@ import {
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import {
+  EmulatedStorageManager,
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
@@ -94,6 +95,7 @@ import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
 import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
+import { createTrustedBuilder } from "../../../runner/test/support/trusted-builder.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 
@@ -200,6 +202,169 @@ describe("runtime-processor", () => {
   });
 
   describe("render-readiness pulls", () => {
+    for (const awaitDurability of [undefined, false]) {
+      it(`reads empty, absent, and newly scoped values before a real pending commit with awaitDurability=${awaitDurability}`, async () => {
+        const server = newLoopbackServer();
+        const storageManager = EmulatedStorageManager.connectTo(server, {
+          as: cfcSigner,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let committing: Promise<unknown> | undefined;
+        const pulls: Promise<unknown>[] = [];
+        try {
+          const empty = runtime.getCell<Record<string, never>>(
+            cfcSigner.did(),
+            "pull-empty",
+          );
+          const absent = runtime.getCell<number>(
+            cfcSigner.did(),
+            "pull-absent",
+          );
+          const scoped = runtime.getCell<{ value: number }>(
+            cfcSigner.did(),
+            "pull-scoped",
+            undefined,
+            undefined,
+            "user",
+          );
+          await Promise.all([empty.sync(), absent.sync(), scoped.sync()]);
+          const seed = runtime.edit();
+          empty.withTx(seed).set({});
+          expect((await seed.commit()).error).toBeUndefined();
+
+          const transact = server.transact.bind(server);
+          using _transact = stub(server, "transact", async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return transact(...args);
+          });
+          const write = runtime.edit();
+          scoped.withTx(write).set({ value: 7 });
+          committing = write.commit();
+          await entered.promise;
+
+          const processor = buildProcessor({ runtime });
+          for (
+            const [cell, value] of [
+              [empty, {}],
+              [absent, undefined],
+              [scoped, { value: 7 }],
+            ] as const
+          ) {
+            expect(await cell.pull()).toEqual(value);
+            const barrier = Promise.withResolvers<void>();
+            const settled = storageManager.pendingCommitsSettled.bind(
+              storageManager,
+            );
+            using _barrier = stub(
+              storageManager,
+              "pendingCommitsSettled",
+              () => {
+                barrier.resolve();
+                return settled();
+              },
+            );
+            const pull = processor.handleCellPull({
+              type: RequestType.CellPull,
+              cell: createCellRef(cell),
+              awaitDurability,
+            });
+            pulls.push(pull);
+            expect(
+              await Promise.race([
+                pull.then(() => "read"),
+                barrier.promise.then(() => "commit-barrier"),
+              ]),
+            ).toBe("read");
+            await expect(pull).resolves.toEqual({ value });
+            expect(storageManager.hasPendingCommits()).toBe(true);
+          }
+        } finally {
+          release.resolve();
+          await committing;
+          await Promise.all(pulls);
+          await runtime.dispose();
+          await storageManager.close();
+          await server.close();
+        }
+      });
+    }
+
+    it("keeps a durable pull demanded while a pending commit installs lazy producers", async () => {
+      const server = newLoopbackServer();
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: cfcSigner,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const barrier = Promise.withResolvers<void>();
+      let committing: Promise<unknown> | undefined;
+      let pulling: Promise<unknown> | undefined;
+      try {
+        const { commonfabric: cf } = createTrustedBuilder(runtime);
+        const pattern = cf.pattern<{ value: number }>(({ value }) => ({
+          doubled: cf.lift((value: number) => value * 2)(value),
+        }));
+        const root = runtime.getCell<{ doubled: number }>(
+          cfcSigner.did(),
+          "durable-pull-deferred-producer",
+        );
+        await root.sync();
+        const transact = server.transact.bind(server);
+        using _transact = stub(server, "transact", async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return transact(...args);
+        });
+        const settled = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        using _barrier = stub(storageManager, "pendingCommitsSettled", () => {
+          barrier.resolve();
+          return settled();
+        });
+        const tx = runtime.edit();
+        tx.tx.immediate = true;
+        (tx.tx as { deferRunnerStartUntilCommit?: boolean })
+          .deferRunnerStartUntilCommit = true;
+        runtime.run(tx, pattern, { value: 3 }, root.withTx(tx));
+        committing = tx.commit();
+        await entered.promise;
+        const output = root.key("doubled");
+        const processor = buildProcessor({ runtime });
+        await expect(processor.handleCellPull({
+          type: RequestType.CellPull,
+          cell: createCellRef(output),
+        })).resolves.toEqual({ value: undefined });
+
+        pulling = processor.handleCellPull({
+          type: RequestType.CellPull,
+          cell: createCellRef(output),
+          awaitDurability: true,
+        });
+        await barrier.promise;
+        release.resolve();
+        await expect(pulling).resolves.toEqual({ value: 6 });
+        expect(storageManager.hasPendingCommits()).toBe(false);
+      } finally {
+        release.resolve();
+        await committing;
+        await pulling;
+        await runtime.dispose();
+        await storageManager.close();
+        await server.close();
+      }
+    });
+
     for (const bytes of [new Uint8Array(), new Uint8Array([1, 2, 3])]) {
       it(`returns ${bytes.length} readable bytes while an unrelated commit is pending`, async () => {
         const { runtime, storageManager } = createRuntime();
@@ -227,7 +392,6 @@ describe("runtime-processor", () => {
           pull = buildProcessor({ runtime }).handleCellPull({
             type: RequestType.CellPull,
             cell: createCellRef(cell),
-            awaitDurability: false,
           });
           expect(
             await Promise.race([
@@ -287,7 +451,6 @@ describe("runtime-processor", () => {
         const result = await buildProcessor({ runtime }).handleCellPull({
           type: RequestType.CellPull,
           cell: createCellRef(output),
-          awaitDurability: false,
         });
         expect(result).toMatchObject({ value: 6 });
         expect(runs).toBeGreaterThan(beforePull);
@@ -302,7 +465,7 @@ describe("runtime-processor", () => {
     for (const awaitDurability of [false, true, undefined]) {
       it(
         awaitDurability === undefined
-          ? "waits for pending commits by default"
+          ? "returns readable state while an unrelated commit is pending by default"
           : awaitDurability
           ? "holds a durable pull until pending commits settle"
           : "returns readable state while an unrelated commit is pending",
@@ -346,7 +509,7 @@ describe("runtime-processor", () => {
               barrierEntered.promise.then(() => "commit-barrier"),
             ]);
             expect(first).toBe(
-              awaitDurability === false ? "read" : "commit-barrier",
+              awaitDurability === true ? "commit-barrier" : "read",
             );
             expect(storageManager.hasPendingCommits()).toBe(true);
             releaseCommit.resolve();
@@ -362,8 +525,7 @@ describe("runtime-processor", () => {
     }
 
     it("returns the value a pending commit creates when the cell had none", async () => {
-      // The render pull skips the barrier only when there is a value to
-      // render. Here there is none until a write commits while the pull waits.
+      // An explicit durability pull waits for a write that creates the value.
 
       const { runtime, storageManager } = createRuntime();
       const releaseCommit = Promise.withResolvers<void>();
@@ -392,7 +554,7 @@ describe("runtime-processor", () => {
         pull = buildProcessor({ runtime }).handleCellPull({
           type: RequestType.CellPull,
           cell: createCellRef(cell),
-          awaitDurability: false,
+          awaitDurability: true,
         });
         const first = await Promise.race([
           pull.then(() => "read"),
@@ -3377,19 +3539,16 @@ describe("runtime-processor", () => {
       const processor = buildProcessor({
         runtime: {
           getCellFromLink: () => ({
-            pull: () => {
+            pull: (options: { awaitDurability?: boolean }) => {
               calls.push("pull");
+              if (options.awaitDurability) {
+                calls.push("commits");
+                durable = true;
+              }
               return Promise.resolve();
             },
             get: () => durable ? { ready: true } : undefined,
           }),
-          scheduler: {
-            idleWithPendingCommits: () => {
-              calls.push("commits");
-              durable = true;
-              return Promise.resolve();
-            },
-          },
         },
       });
 
@@ -3397,6 +3556,7 @@ describe("runtime-processor", () => {
         processor.handleRequest({
           type: RequestType.CellPull,
           cell: ref,
+          awaitDurability: true,
         }),
       ).resolves.toEqual({ value: { ready: true } });
       expect(calls).toEqual(["pull", "commits"]);
@@ -4419,6 +4579,10 @@ describe("runtime-processor", () => {
           expect(prepared).toBe(true);
           if (commitFailure) return Promise.reject(commitFailure);
           return Promise.resolve(commitResult);
+        },
+        startCommit: () => {
+          const settled = tx.commit();
+          return { verdict: settled, settled };
         },
       };
       const cellWithTx = {

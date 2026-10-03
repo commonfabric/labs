@@ -636,7 +636,7 @@ declare module "@commonfabric/api" {
       options?: SinkOptions,
     ): Cancel;
     sync(): Promise<Cell<T>>;
-    pull(): Promise<Readonly<T>>;
+    pull(options?: { awaitDurability?: boolean }): Promise<Readonly<T>>;
     getAsQueryResult<Path extends PropertyKey[]>(
       path?: Readonly<Path>,
       tx?: IExtendedStorageTransaction,
@@ -1670,8 +1670,11 @@ export class CellImpl<T extends FabricValue>
    *
    * @returns A promise that resolves to the cell's current value after all
    *          dependencies have been computed.
+   *
+   * `awaitDurability: true` keeps the read demanded through the runtime-wide
+   * commit-aware barrier, including producers installed by pending commits.
    */
-  pull(): Promise<Readonly<T>> {
+  pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -1723,6 +1726,11 @@ export class CellImpl<T extends FabricValue>
         noDebounce: true,
       });
 
+      const idle = () =>
+        options.awaitDurability === true
+          ? this.#runtime.scheduler.idleWithPendingCommits()
+          : this.#runtime.scheduler.idle();
+
       // Wait for the scheduler to process all pending work, then resolve.
       // If the read kicked async loads of absent link targets (cross-space,
       // or same-space docs a fresh replica never pulled), await them and
@@ -1731,7 +1739,7 @@ export class CellImpl<T extends FabricValue>
       // rounds is bounded by the reachable-doc depth; the fixed cap is only
       // a backstop against a pathological graph. Pulls that kicked nothing
       // take the zero-iteration path and keep their previous timing.
-      this.#runtime.scheduler.idle().then(async () => {
+      idle().then(async () => {
         const storage = this.#runtime.storageManager;
         // The pending pool is manager-global (same semantics as `synced()`):
         // this pull may also wait on loads kicked by concurrent readers.
@@ -1739,7 +1747,7 @@ export class CellImpl<T extends FabricValue>
         for (; round < 100; round++) {
           if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
           await (storage.crossSpaceSettled?.() ?? Promise.resolve());
-          await this.#runtime.scheduler.idle();
+          await idle();
         }
         if (
           round === 100 && (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0

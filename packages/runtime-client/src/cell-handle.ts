@@ -668,11 +668,10 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Demands lazy producers before fetching a value. By default, also waits for
-   * the runtime-wide commit-aware barrier. Rendering can pass
-   * `awaitDurability: false` to read reactive state while writes remain
-   * unconfirmed; a cell with no value yet still waits, since the write that
-   * creates it may be in flight.
+   * Demands lazy producers and required loads before fetching reactive state.
+   * Writes may remain unconfirmed when this resolves, including for an absent
+   * value or an empty object. Pass `awaitDurability: true` to also cross the
+   * runtime-wide commit-aware barrier.
    */
   async pull(
     options: { awaitDurability?: boolean } = {},
@@ -685,9 +684,7 @@ export class CellHandle<T = unknown> {
         const response = await this.#conn.request<RequestType.CellPull>({
           type: RequestType.CellPull,
           cell: this.ref(),
-          ...(options.awaitDurability === undefined
-            ? {}
-            : { awaitDurability: options.awaitDurability }),
+          awaitDurability: options.awaitDurability ?? false,
         });
         const value = CellHandle.deserialize<T>(this, response.value) as T;
         const authoritative = updateGeneration === this.#updateGeneration &&

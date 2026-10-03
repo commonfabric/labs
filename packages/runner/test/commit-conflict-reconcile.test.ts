@@ -208,11 +208,13 @@ describe("read-repair: stale read after cross-replica conflict", () => {
       commitCallbackFired = true;
     });
     let promiseSettled = false;
-    const commitP = txB.commit().then((result) => {
+    const receipt = txB.startCommit();
+    const commitP = receipt.settled.then((result) => {
       promiseSettled = true;
       return result;
     });
 
+    expect((await receipt.verdict).error?.name).toBe("ConflictError");
     await clock.settle();
     expect(
       (verdictResult?.error as { name?: string } | undefined)?.name,

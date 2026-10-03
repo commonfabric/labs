@@ -458,17 +458,6 @@ function cellValueForClient(value: unknown): FabricValue {
   );
 }
 
-/**
- * Whether `cell` holds no value: nothing at all, or an empty plain object. A
- * pull can find a scoped target in either state while the write that creates
- * its value is still committing, which the commit-aware barrier waits for.
- */
-function holdsNoValue(cell: Cell<unknown>): boolean {
-  const raw = cell.getRaw({ lastNode: "value" });
-  return raw === undefined ||
-    (isPlainObject(raw) && Object.keys(raw).length === 0);
-}
-
 function sqliteParamsForRuntime(
   runtime: Runtime,
   params: SqliteParams,
@@ -1574,15 +1563,7 @@ export class RuntimeProcessor {
     request: CellPullRequest,
   ): Promise<CellGetResponse> {
     const cell = getCell(this.#runtime, request.cell);
-    await cell.pull();
-    // The durable pull crosses the commit-aware fixpoint so subsequent
-    // operations observe all work causally demanded here. Rendering can read
-    // reactive state while the host continues to report unconfirmed writes,
-    // once there is a value to read. A cell holding none may be waiting on the
-    // very write that creates it, so that pull crosses the barrier too.
-    if (request.awaitDurability !== false || holdsNoValue(cell)) {
-      await this.#runtime.scheduler.idleWithPendingCommits();
-    }
+    await cell.pull({ awaitDurability: request.awaitDurability });
     return this.handleCellGet({
       type: RequestType.CellGet,
       cell: request.cell,
@@ -1663,7 +1644,7 @@ export class RuntimeProcessor {
       popFrame(frame);
     }
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.commit();
+    const commit = tx.startCommit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "push");
   }
@@ -2050,7 +2031,7 @@ export class RuntimeProcessor {
     const cell = getCell(this.#runtime, request.cell);
     cell.withTx(tx).send(mapCellRefsToSigilLinks(request.event));
     this.#runtime.prepareTxForCommit(tx);
-    const commit = tx.commit();
+    const commit = tx.startCommit().settled;
     if (request.awaitCommit) return this.#requireCellCommit(commit);
     this.#observeCellCommit(commit, "send");
   }
@@ -2468,7 +2449,11 @@ export class RuntimeProcessor {
 
   async #pullSqliteDbRef(cell: Cell<unknown>): Promise<SqliteDbRef> {
     await cell.pull();
-    if (holdsNoValue(cell)) {
+    const raw = cell.getRaw({ lastNode: "value" });
+    if (
+      raw === undefined ||
+      (isPlainObject(raw) && Object.keys(raw).length === 0)
+    ) {
       // A resolved scoped target can be demanded while its lazy factory write
       // is still committing. Its object schema presents that missing value as
       // an empty object rather than `undefined`. Pull waits for reactive work,

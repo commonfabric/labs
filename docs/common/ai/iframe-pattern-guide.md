@@ -180,8 +180,8 @@ the button's `click` event. Do not use a `<form>`, a submit button, or
 The Cell contract matches the rest of Common Fabric:
 
 - `get()` synchronously samples the guest cache and may be stale or undefined.
-- `pull()` waits for the host Cell's full update barrier, including work that
-  must settle before that value is current.
+- `pull()` demands the host Cell's producers and required loads before reading
+  reactive state. It can return while other writes remain unconfirmed.
 - `sink(listener)` calls the listener synchronously with `get()`, then calls it
   for later values. Call `pull()` when the first render needs fresh data.
 - `key(nameOrIndex)` derives a path-specific handle. Its sink observes that path

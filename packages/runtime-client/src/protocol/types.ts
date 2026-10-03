@@ -1125,9 +1125,8 @@ export type CellPullRequest = BaseRequest & {
 
   /**
    * Whether to cross the runtime-wide commit-aware barrier after demanding
-   * producers. Defaults to `true`. Rendering can pass `false` to read reactive
-   * state while writes remain unconfirmed; a cell with no value yet still
-   * waits, since the write that creates it may be in flight.
+   * producers. Defaults to `false`: reads return reactive state while writes
+   * may remain unconfirmed, including absent values and empty objects.
    */
   awaitDurability?: boolean;
 };
