@@ -128,9 +128,12 @@ export const seedProfileName = handler<
 // by the creating user, so a profile is unique per user AND per creation event,
 // and stable across the cross-space-commit retry. The display name flows ONLY to
 // `initialName` (editable later, independent of the space identity). Other
-// users read a profile — a lunch poll or a chat room shows its name — so the
-// space grants anyone READ. Existing profiles keep their
-// already-baked concrete DID link.
+// users read a profile — a lunch poll or a chat room shows its name — and a
+// runtime showing one writes into the profile's space, its per-session state
+// at the least, so the space grants anyone WRITE. What keeps a visitor from
+// changing the profile's data is the owner protection on its fields
+// (profile-home.tsx), not the space's access list; its view state is per
+// session. Existing profiles keep their already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
   {
@@ -166,7 +169,7 @@ export const submitProfileCreation = handler<
     const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
       []).length as number;
     profiles.push(
-      ProfileHome.inSpace(undefined, { grants: { "*": "READ" } })({
+      ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
         initialName: name,
         // The freshly created profile is current-vintage by construction — it
         // carries every stream and field, so the strict producer type is the
