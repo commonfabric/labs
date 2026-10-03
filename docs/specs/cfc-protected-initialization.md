@@ -102,11 +102,13 @@ link sees the entry's own authorship.
 An integrity floor at a path below a staged link is checked against the value
 the link brings there, which is the source's value at the matching path. Where
 the source holds nothing at that path, nothing lands at the floor, and the
-floor does not apply. Where the source reaches that value through links stored
-in it, the label of the document holding the value, at the value's own
-position, credits the floor beside the source's label at the matching path. A
-link stored before the value was written carries none of that value's label,
-so only the document holding the value can show that the value was endorsed.
+floor does not apply. Where the source reaches that value through references
+staged in the same transaction, the floor uses the labels derived through them,
+as described below. Where it reaches the value through a link stored before the
+transaction, the floor uses the label of the document holding the value, at the
+value's own position, and only that label. A stored link's label describes
+whatever its target held when the link was written, so it is no evidence about
+the value there now.
 
 When deriving a pending reference source, schema labels are minted at their
 declaration paths, with wildcard segments bound to the projected source path.

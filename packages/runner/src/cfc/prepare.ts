@@ -5676,17 +5676,18 @@ const previousWriteValueForTarget = (
 /**
  * Where the value at `address` lives at the end of this transaction: the
  * address reached by reading through every link on the way to it from the
- * root of its document, or `"absent"` where nothing is there. A link's target
- * path is walked one segment at a time from the root of the document it
- * names, so a link partway along that path is followed too. A link that names
- * its cell relative to the document holding it resolves against that
- * document. A read that fails, and a walk longer than link resolution
- * follows, return `undefined`.
+ * root of its document, or `"absent"` where nothing is there. `stored` says
+ * whether the walk followed a link this transaction did not write. A link's
+ * target path is walked one segment at a time from the root of the document
+ * it names, so a link partway along that path is followed too. A link that
+ * names its cell relative to the document holding it resolves against that
+ * document. A read that fails, and a walk following more links than link
+ * resolution follows, return `undefined`.
  */
 const resolveValueThroughLinks = (
   tx: IExtendedStorageTransaction,
   address: CfcAddress,
-): CfcAddress | "absent" | undefined => {
+): { held: CfcAddress; stored: boolean } | "absent" | undefined => {
   let document = {
     space: address.space,
     id: address.id as URI,
@@ -5694,8 +5695,11 @@ const resolveValueThroughLinks = (
   };
   let path: string[] = [];
   let remaining: readonly string[] = canonicalizeLogicalPath(address.path);
-  const steps = MAX_PATH_RESOLUTION_LENGTH + remaining.length;
-  for (let step = 0; step < steps; step++) {
+  let stored = false;
+  // Each turn either follows a link or consumes a segment, so bounding the
+  // links followed bounds the walk.
+  let hops = 0;
+  while (true) {
     let value: FabricValue;
     try {
       value = tx.readValueOrThrow({ ...document, path }, {
@@ -5705,6 +5709,8 @@ const resolveValueThroughLinks = (
       return undefined;
     }
     if (isPrimitiveCellLink(value)) {
+      if (++hops > MAX_PATH_RESOLUTION_LENGTH) return undefined;
+      stored ||= !writtenInTransaction(tx, document, path);
       const next = parseLink(value, { ...document, path });
       document = { space: next.space, id: next.id, scope: next.scope };
       path = [];
@@ -5712,7 +5718,9 @@ const resolveValueThroughLinks = (
       continue;
     }
     if (remaining.length === 0) {
-      return value === undefined ? "absent" : { ...document, path };
+      return value === undefined
+        ? "absent"
+        : { held: { ...document, path }, stored };
     }
     const [segment, ...rest] = remaining;
     if (!isWalkableObjectOrArray(value) || !Object.hasOwn(value, segment)) {
@@ -5721,7 +5729,26 @@ const resolveValueThroughLinks = (
     path = [...path, segment];
     remaining = rest;
   }
-  return undefined;
+};
+
+/** Whether this transaction wrote at `path` of `document`, or above it. */
+const writtenInTransaction = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const addressPath = ["value", ...path];
+  const details = tx.getWriteDetailsForTarget?.(document) ??
+    tx.getWriteDetails?.(document.space) ?? [];
+  return [...details].some((detail) =>
+    detail.address.id === document.id &&
+    normalizeCellScope(detail.address.scope) === document.scope &&
+    concretePathHasPrefix(addressPath, detail.address.path.map(String))
+  );
 };
 
 /**
@@ -9985,30 +10012,27 @@ const verifyWriteFloor = function* (
       // Re-point the derivation at the floor path INSIDE the linked source:
       // the value at the floor path is source.path + (floor − linkPath), so
       // the credit is the source's own label at that nested path (an endorsed
-      // nested value passes; an unendorsed one fails, fail-closed). Where the
-      // source reaches that value through links of its own, the label of the
-      // document holding it, at the value's own position, credits it too:
-      // that is the label the value carries, which a label the link carried
-      // from before the value was written does not reflect. A source holding
+      // nested value passes; an unendorsed one fails, fail-closed), derived
+      // through the references this transaction stages on the way. Where the
+      // source reaches the value through a link stored before this
+      // transaction, the credit is the label of the document holding the
+      // value, at the value's own position, and that label alone: a stored
+      // link's label describes whatever its target held when the link was
+      // written, which says nothing of the value there now. A source holding
       // nothing there brings no value to the floor path, and absence is not a
       // floored value.
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
-      const nested = {
+      const resolved = resolveValueThroughLinks(tx, {
         ...input.source,
         path: [...canonicalizeLogicalPath(input.source.path), ...relative],
-      };
-      const held = resolveValueThroughLinks(tx, nested);
-      if (held === "absent") continue;
-      const credit =
-        (yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [];
-      const heldCredit = held !== undefined &&
-          (targetKey(held) !== targetKey(nested) ||
-            !arraysEqual(held.path, nested.path))
-        ? (yield* ctx.linkLabels.labelAt({ ...input, source: held }, []))
-          ?.integrity ?? []
-        : [];
-      contributions.push([...credit, ...heldCredit]);
+      });
+      if (resolved === "absent") continue;
+      contributions.push(
+        (yield* (resolved?.stored === true
+          ? ctx.linkLabels.labelAt({ ...input, source: resolved.held }, [])
+          : ctx.linkLabels.labelAt(input, relative)))?.integrity ?? [],
+      );
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
     // A value contribution exists when plain data lands at/under the floor
