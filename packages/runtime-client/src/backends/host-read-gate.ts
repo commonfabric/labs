@@ -67,6 +67,7 @@ import {
   type CellReadRefusal,
   type CellRef,
   type CellRefusedAnswer,
+  type CellResolveResponse,
   type CellUpdateNotification,
   type CellValueResponse,
   type CfcLabelViewResponse,
@@ -129,6 +130,15 @@ function documentsHeld(cell: Cell<unknown>): boolean {
   } catch {
     return false;
   }
+}
+
+/** Whether two cells name the same address, scope and path included. */
+function sameAddress(left: Cell<unknown>, right: Cell<unknown>): boolean {
+  const a = left.getAsNormalizedFullLink();
+  const b = right.getAsNormalizedFullLink();
+  return a.space === b.space && a.id === b.id && a.scope === b.scope &&
+    a.path.length === b.path.length &&
+    a.path.every((segment, index) => segment === b.path[index]);
 }
 
 /** What the display ceiling's refusal of a host's read says. */
@@ -412,6 +422,38 @@ export class HostReadGate {
       ...ref,
       cfcLabelView: this.#displayView(cell, view),
     };
+  }
+
+  /**
+   * The refusal of naming where a link stored at `cell`'s node leads, or
+   * `undefined` where the policy admits it. A link is part of what the node
+   * holds, so it is decided on the labels at the node, as a read of the node
+   * is, and a document the replica does not hold is refused as unreadable.
+   */
+  linkRefusal(
+    cell: Cell<unknown>,
+  ): (HostReadDecided & CellRefusedAnswer) | undefined {
+    const policy = this.#policy;
+    if (policy === undefined) return undefined;
+    const refusal = documentsHeld(cell)
+      ? readRefusal(cell, [], policy, this.#sources)
+      : UNHELD;
+    return refusal === undefined ? undefined : this.#refuse(refusal, policy);
+  }
+
+  /**
+   * The cell the links along `cell`'s path lead to, as a ref {@link ref}
+   * makes, or the refusal that stands in its place where the policy refuses
+   * the node holding a link it followed ({@link linkRefusal}). A cell whose
+   * path follows no link resolves to itself, the address the host named.
+   */
+  resolveAsCell(cell: Cell<unknown>): CellResolveResponse {
+    const resolved = cell.resolveAsCell();
+    if (this.#policy !== undefined && !sameAddress(cell, resolved)) {
+      const refused = this.linkRefusal(cell);
+      if (refused !== undefined) return refused;
+    }
+    return decided({ cell: this.ref(resolved) });
   }
 
   /** A ref to the piece `cell` holds, as {@link ref} makes one. */

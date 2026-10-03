@@ -82,7 +82,7 @@ export const REQUEST_DISPOSITIONS = {
     why: "whether a subscription opened; its values arrive as cell updates",
   },
   [RequestType.CellUnsubscribe]: write,
-  [RequestType.CellResolveAsCell]: reference,
+  [RequestType.CellResolveAsCell]: DECIDED,
   [RequestType.CellGetCfcLabel]: DECIDED,
   [RequestType.CellFields]: DECIDED,
   [RequestType.SnapshotSharePrepare]: DECIDED,
@@ -184,7 +184,11 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.GetSpaceRootPattern]: reference,
   [RequestType.RecreateSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
-  [RequestType.PieceGet]: reference,
+  [RequestType.PieceGet]: {
+    kind: "reference",
+    why: "the piece a host names, or the one a redirect it names leads to, " +
+      "the redirect decided on its labels as a link's node is",
+  },
   [RequestType.PieceGetSlug]: DECIDED,
   [RequestType.SlugResolve]: reference,
   [RequestType.PieceRemove]: write,

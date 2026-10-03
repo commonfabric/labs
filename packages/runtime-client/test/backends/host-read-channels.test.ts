@@ -13,7 +13,8 @@ import { describe, it } from "@std/testing/bdd";
 import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { rootRenderPolicyFor } from "@commonfabric/html/worker";
-import { Identity } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
+import { PiecesController } from "@commonfabric/piece/ops";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import {
   type Cell,
@@ -43,6 +44,9 @@ import {
   toConsoleDebugValue,
 } from "@/backends/runtime-processor.ts";
 import { runtimeErrorReport } from "@/backends/runtime-error.ts";
+import { createCellRef } from "@/backends/utils.ts";
+import { RequestType } from "@/protocol/mod.ts";
+import { buildProcessor } from "./build-processor.ts";
 import { NotificationType } from "@/protocol/mod.ts";
 
 const owner = await Identity.fromPassphrase("host read channels owner");
@@ -124,6 +128,7 @@ async function shelf() {
 
   return {
     runtime,
+    write,
     contacts,
     contactsId,
     caveated,
@@ -296,6 +301,92 @@ describe("HostReadGate, for what crosses beside a value", () => {
         await reader.dispose();
         await writer.dispose();
         await server.close();
+      }
+    });
+
+    it("does not tell a visitor where a link in a document only its owner may see leads", async () => {
+      await using docs = await shelf();
+      const target = await docs.write("link-target", { x: 1 });
+      const holder = await docs.write(
+        "link-holder",
+        { link: target.getAsLink() },
+        [[[], [ownerOnly]]],
+      );
+      // A visitor's worker, with the shell's default ceiling.
+      const processor = buildProcessor({
+        runtime: docs.runtime,
+        identity: visitor,
+        space: visitor.did(),
+        renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+          visitor.did(),
+        ),
+      });
+      const targetId = target.getAsNormalizedFullLink().id;
+      try {
+        const answer = processor.handleCellResolveAsCell({
+          type: RequestType.CellResolveAsCell,
+          cell: createCellRef(holder.key("link")),
+        });
+        expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        expect(JSON.stringify(answer)).not.toContain(targetId);
+        // A cell whose path follows no link resolves to the address named.
+        expect(
+          processor.handleCellResolveAsCell({
+            type: RequestType.CellResolveAsCell,
+            cell: createCellRef(target),
+          }),
+        ).toEqual({ cell: expect.objectContaining({ id: targetId }) });
+
+        // A redirect the visitor may not see is not followed for them.
+        const tx = docs.runtime.edit();
+        const redirect = docs.runtime.getCell(space, "redirect", undefined, tx);
+        const redirectId = redirect.getAsNormalizedFullLink().id;
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: redirectId,
+          type: "application/json",
+          path: [],
+        }, {
+          value: {
+            "/": {
+              "link@1": { id: targetId, path: [], overwrite: "redirect" },
+            },
+          },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        const pieces = buildProcessor({
+          runtime: docs.runtime,
+          cc: new PiecesController(
+            createSession({ identity: visitor, spaceDid: space }),
+            docs.runtime,
+          ),
+          identity: visitor,
+          space,
+          renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+            visitor.did(),
+          ),
+        });
+        try {
+          await expect(pieces.handlePieceGet({
+            type: RequestType.PieceGet,
+            pieceId: redirectId.replace(/^of:/, ""),
+            space,
+            runIt: false,
+          })).rejects.toThrow("refused to name where this redirect leads");
+        } finally {
+          await pieces.dispose();
+        }
+      } finally {
+        await processor.dispose();
       }
     });
 

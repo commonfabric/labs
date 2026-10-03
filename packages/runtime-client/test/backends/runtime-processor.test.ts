@@ -66,6 +66,8 @@ import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
   type CellRef,
+  type CellResolveResponse,
+  type CellResponse,
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
@@ -159,6 +161,15 @@ const createRuntime = (
   });
   return { runtime, storageManager };
 };
+
+/**
+ * The cell a resolution answered with, failing the case when it was refused:
+ * no resolution here is made under a display ceiling.
+ */
+function resolvedOf(response: CellResolveResponse): CellResponse {
+  if ("refused" in response) throw new Error("The resolution was refused.");
+  return response;
+}
 
 /**
  * The value answer `response` holds, failing the case when the read was
@@ -3959,10 +3970,10 @@ describe("runtime-processor", () => {
           },
         });
 
-        const response = processor.handleCellResolveAsCell({
+        const response = resolvedOf(processor.handleCellResolveAsCell({
           type: RequestType.CellResolveAsCell,
           cell: sourceRef,
-        });
+        }));
         const atom = response.cell.cfcLabelView?.entries[0].label
           .confidentiality?.[0] as Record<string, unknown>;
         expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
@@ -4054,10 +4065,10 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = processor.handleCellResolveAsCell({
+      const response = resolvedOf(processor.handleCellResolveAsCell({
         type: RequestType.CellResolveAsCell,
         cell: sourceRef,
-      });
+      }));
 
       expect(response.cell).toEqual({
         ...resolvedRef,

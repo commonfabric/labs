@@ -3604,6 +3604,16 @@ export type CellResponse = {
 };
 
 /**
+ * The answer to a {@link RequestType.CellResolveAsCell} request: the cell
+ * the links along a cell's path lead to, or the refusal that stands in its
+ * place where the display ceiling refuses the node that holds a link it
+ * followed.
+ */
+export type CellResolveResponse =
+  & HostReadDecided
+  & (CellResponse | CellRefusedAnswer);
+
+/**
  * A cell's display label. `undefined` means the cell carries none, which is
  * distinct from the request having failed.
  */
@@ -4127,6 +4137,7 @@ export type RemoteResponse =
   | CellValueResponse
   | CellGetResponse
   | CellResponse
+  | CellResolveResponse
   | CfcLabelViewResponse
   | CellFieldsResponse
   | SnapshotSharePrepareResponse
@@ -4348,7 +4359,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResponse;
+    response: CellResolveResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;

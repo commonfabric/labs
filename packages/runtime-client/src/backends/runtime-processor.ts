@@ -171,6 +171,7 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
+  type CellResolveResponse,
   CellResponse,
   type CellSendRequest,
   type CellSetRequest,
@@ -2138,10 +2139,14 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResolveResponse {
     const cell = getCell(this.#runtime, request.cell);
+    const answer = this.#hostReadGate.resolveAsCell(cell);
+    if ("refused" in answer) return answer;
     const resolved = cell.resolveAsCell();
-    const ref = this.#hostReadGate.ref(resolved);
+    const ref = answer.cell;
     if (
       ref.schema && typeof ref.schema === "object" &&
       !Array.isArray(ref.schema)
@@ -2158,9 +2163,7 @@ export class RuntimeProcessor {
         : { type: "object" as const };
       ref.schema = { ...schema, asCell: ["sqlite"] as const };
     }
-    return {
-      cell: ref,
-    };
+    return answer;
   }
 
   /** Keeps release authority in this backend while the host shows a preview. */
@@ -2839,6 +2842,16 @@ export class RuntimeProcessor {
       requestedCell.getAsNormalizedFullLink(),
     );
     if (redirect?.overwrite === "redirect") {
+      // Where a redirect leads is what its document holds, so it is decided
+      // as the node holding a link is: a host refused it is told so, and not
+      // where it leads.
+      const refused = this.#hostReadGate.linkRefusal(requestedCell);
+      if (refused !== undefined) {
+        throw new Error(
+          `The worker refused to name where this redirect leads ` +
+            `(${refused.refused.refusedBy}).`,
+        );
+      }
       const target = this.#runtime.getCellFromLink({
         ...redirect,
         space: redirect.space ?? cc.getSpace(),
