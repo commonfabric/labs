@@ -193,10 +193,12 @@ function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
  * The label view a host is shown for `cell`, whose view is `view`: with each
  * caveat's source redacted, and, where `policy` refuses `cell`'s labels, as
  * {@link cellLabelRefusal} fits them, joined at its root, since the path an
- * entry sits at names a field of the document (§4.6.4.1). Every view the
- * worker hands a host, on a ref, a link in a value or a binding, is made
- * here, so a channel added later that carries one is held to the same
- * display form.
+ * entry sits at names a field, which is part of what the record holding it
+ * holds (§4.6.4.1). Fitting the cell as a whole is stricter than deciding a
+ * name on the record's node alone, as a host's list of a record's fields is
+ * decided: a view can withhold a name that list shows. Every view the worker
+ * hands a host, on a ref, a link in a value or a binding, is made here, so a
+ * channel added later that carries one is held to the same display form.
  */
 export function displayLabelView(
   cell: Cell<unknown>,

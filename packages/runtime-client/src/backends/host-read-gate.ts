@@ -513,9 +513,13 @@ export class HostReadGate {
   }
 
   /**
-   * `cell`'s display label, for a host that asked for it alone. Where the
-   * policy refuses the cell, the label's entries are joined at its root,
-   * since the paths they sit at name the document's fields (§4.6.4.1).
+   * `cell`'s display label, for a host that asked for it alone. A field's
+   * name is part of what the record holding it holds, and the path of each
+   * entry names a field, so where the policy refuses the cell the entries
+   * are joined at its root (§4.6.4.1). The cell is refused as a whole here,
+   * as `displayLabelView()` fits it, so a view can withhold the name of a
+   * field the record's own field list ({@link fields}), decided on the
+   * record's node, shows: of the two, the view is the stricter.
    */
   label(cell: Cell<unknown>): CfcLabelViewResponse {
     // The value read elsewhere resolved the same links and kicked any

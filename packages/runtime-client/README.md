@@ -45,28 +45,40 @@ The gate also decides what crosses beside a value:
 
 - **Label views.** A label read, and the view a ref or a link inside a value
   carries, is joined at its root where the ceiling refuses the cell, since the
-  paths its entries sit at name the document's fields. A ref carries a view only
-  where the gate gave it one.
+  paths its entries sit at name fields, and a field's name is part of what the
+  record holding it holds. A record's field list is decided on the record's
+  node, so it can name a field whose label view is joined: the view is the
+  stricter of the two. A ref carries a view only where the gate gave it one.
 - **Metadata.** A piece's slug and source are decided as metadata, on every
   label its document stores. A refused source is neither read nor changed
-  through the host, and a refused slug is not offered.
-- **Reads the gate cannot measure.** A SQLite query, a collaborative field's
-  query, operation and each update are decided on the target cell's labels.
+  through the host, and a refused slug is not offered. A slug reference is
+  decided the same way, on every document its resolution read, so a guessed slug
+  is not resolved to a piece whose slug would be refused.
+- **Reads the gate cannot measure.** A SQLite query is decided on the database
+  cell's labels. A collaborative field's query, operation and each update are
+  decided on the field the session holds, and on the cell the host named to
+  reach it.
 - **Diagnostics.** Telemetry `cell.update` markers, the trigger trace, and
   `DetectNonIdempotent` name a document the ceiling refuses alone, with the
-  placeholder in place of its values and paths.
-- **Console and errors.** A pattern's `console` arguments, and a runtime error's
-  message and stack, are decided on the labels of everything the action that
-  made them had read; where those are refused, the placeholder stands in their
-  place.
+  placeholder in place of its values and paths. A telemetry marker's error or
+  rejection message, and a refused commit's reasons, are decided on the labels
+  of the transaction it reports on, and withheld where it carries none.
+- **What an action says.** A pattern's `console` arguments, a runtime error's
+  message and stack, and where a pattern asks the host to navigate, are decided
+  on the labels of everything the action had read; where those are refused, or
+  it carries none, the placeholder stands in their place, or no navigation is
+  requested.
 
 Every request and notification the worker sends is classified in
 `REQUEST_DISPOSITIONS` and `NOTIFICATION_DISPOSITIONS`: decided by the gate,
 rendered, carrying no cell value, a reference, a trusted operation, or ungated.
 The answers of the channels marked as decided carry a mark only the gate gives
 them, and a type-level check holds the tables to it, so a new channel fails to
-type-check until it says how it stands. The only ungated channels are a space's
-access list, which the space's own access rules govern.
+type-check until it says how it stands. The ungated channels are a space's
+access list, which the space's own access rules govern; a presence room's
+records, which carry what each member chose to share; and the action-run trace,
+the write-stack trace and the scheduler graph, which carry addresses, field
+paths included, and no values.
 
 Two things fall outside the tables:
 
