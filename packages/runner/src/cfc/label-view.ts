@@ -11,8 +11,10 @@ import {
   parseLink,
 } from "../link-utils.ts";
 import { resolveLink } from "../link-resolution.ts";
-import { readStoredCfcMetadata } from "./metadata.ts";
-import type { CfcMetadata } from "./types.ts";
+import {
+  readStoredCfcLabelsForReader,
+  type StoredCfcLabels,
+} from "./metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./observation.ts";
 import {
   type CfcLabelView,
@@ -45,16 +47,21 @@ type LabelQueryableCell = {
 };
 
 type LinkedValueMetadata = {
-  metadata: CfcMetadata;
+  metadata: StoredCfcLabels;
   path: readonly string[];
   space: string;
 };
 
-// `readFailed` distinguishes a genuine metadata read error (fail closed) from a
-// cleanly-absent label (`readOrThrow` already maps NotFound/TypeMismatch to
-// undefined without throwing, so those are NOT failures).
+// `metadata` is what a reader of a document instance answers to
+// (`readStoredCfcLabelsForReader`): the instance's own envelope, joined, for a
+// scoped instance, with the confidentiality a value read of each broader
+// instance of the same id consumes. It is `undefined` only when none of those
+// instances stores a label. `readFailed` distinguishes a genuine metadata read
+// error on any of them (fail closed) from a cleanly-absent label (`readOrThrow`
+// already maps NotFound/TypeMismatch to undefined without throwing, so those
+// are NOT failures).
 type StoredMetadataResult = {
-  metadata: CfcMetadata | undefined;
+  metadata: StoredCfcLabels | undefined;
   readFailed: boolean;
 };
 
@@ -88,10 +95,11 @@ const storedMetadataForCell = (
   }
   try {
     return {
-      metadata: readStoredCfcMetadata(
+      // A scoped instance of a document holds labels of its own, as it
+      // holds a value of its own, and answers to its broader instances'
+      // value-read confidentiality besides.
+      metadata: readStoredCfcLabelsForReader(
         cellRuntime(cell).readTx(cellTx(cell)),
-        // A scoped instance of a document holds labels of its own, as it
-        // holds a value of its own.
         { space: link.space, id: link.id, scope: link.scope },
       ),
       readFailed: false,
@@ -118,7 +126,9 @@ const linkedValueMetadataForCell = (
     if (target?.id === undefined || target.space === undefined) {
       return { linkedValue: undefined, readFailed: false };
     }
-    const metadata = readStoredCfcMetadata(tx, {
+    // The link's target answers by the same reader rule as the cell's own
+    // document: a scoped target joins its broader instances' confidentiality.
+    const metadata = readStoredCfcLabelsForReader(tx, {
       space: target.space,
       id: target.id,
       scope: target.scope,
@@ -225,8 +235,13 @@ type ResolvedMetadataResult = StoredMetadataResult & {
 };
 
 /**
- * Stored metadata of the doc that actually HOLDS the value at `link`, found by
- * the runtime's own link resolution — the following `.get()` performs.
+ * The stored labels a reader of the doc that actually HOLDS the value at
+ * `link` answers to, that doc found by the runtime's own link resolution — the
+ * following `.get()` performs. They are read by the reader rule
+ * (`readStoredCfcLabelsForReader`): the doc's own envelope, joined, where the
+ * doc is a scoped instance, with the confidentiality a value read of each
+ * broader instance consumes. `metadata` is `undefined` only when none of those
+ * instances stores a label.
  *
  * `storedMetadataForCell` reads the doc the cell names, and
  * `linkedValueMetadataForCell` follows one link when the selected path lands ON
@@ -260,7 +275,7 @@ const resolvedMetadataForCell = (
         : {}),
     });
     return {
-      metadata: readStoredCfcMetadata(tx, {
+      metadata: readStoredCfcLabelsForReader(tx, {
         space: resolved.space,
         id: resolved.id,
         scope: resolved.scope,
@@ -274,8 +289,9 @@ const resolvedMetadataForCell = (
 };
 
 /**
- * The label stored on the document that holds the value at `cell`'s path,
- * rebased onto that value, or undefined when `cell` names no document.
+ * The labels a reader of the document that holds the value at `cell`'s path
+ * answers to ({@link resolvedMetadataForCell}), rebased onto that value, or
+ * undefined when `cell` names no document.
  */
 const resolvedTargetLabelView = (
   cell: unknown,
@@ -305,16 +321,19 @@ const resolvedTargetLabelView = (
 };
 
 /**
- * The label stored on the document that holds the value at `cell`'s path,
- * found by the runtime's own link resolution and rebased onto that value.
+ * The labels a reader of the document that holds the value at `cell`'s path
+ * answers to, that document found by the runtime's own link resolution, rebased
+ * onto that value: the document's own envelope and, where it is a scoped
+ * instance, the confidentiality a value read of each broader instance of the
+ * same id consumes. Its integrity is the document's own alone.
  *
  * It leaves out the labels of the documents the path passes through on the way
  * there, and any view the cell carries. A label on a document that holds a
  * link is about the link: what integrity it carries endorses the reference,
  * not the current contents of its target (spec §3.7.2, §8.2.4). This is
  * therefore the view that says what vouches for the value itself, which is what
- * a check requiring integrity of the value reads. It is undefined when no
- * label is stored and when the read fails.
+ * a check requiring integrity of the value reads. It is undefined when none of
+ * those instances stores a label, and when the read fails.
  */
 export const cfcLabelViewForResolvedTarget = (
   cell: unknown,
@@ -322,8 +341,9 @@ export const cfcLabelViewForResolvedTarget = (
 ): CfcLabelView | undefined => resolvedTargetLabelView(cell, options)?.view;
 
 /**
- * {@link cfcLabelViewForCellWithStatus}, plus the label stored on the doc the
- * selected path RESOLVES to.
+ * {@link cfcLabelViewForCellWithStatus}, plus the labels of the doc the
+ * selected path RESOLVES to, as {@link cfcLabelViewForResolvedTarget} reads
+ * them.
  *
  * For an inspection or display surface that answers "what is the label here"
  * about a path a person typed or a value a view is bound to, the one-hop read

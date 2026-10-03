@@ -109,7 +109,7 @@ import {
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import {
-  cfcLabelViewForCell,
+  cfcLabelViewForCellFailClosed,
   cfcLabelViewForResolvedCell,
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
@@ -401,6 +401,49 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
+/** Keywords that annotate a schema and constrain no value. */
+const SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
+  "title",
+  "description",
+  "$comment",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
+
+/**
+ * Whether `schema` gives a value no shape: it is absent, or admits every value
+ * once its annotations are set aside, so it holds nothing but what the runtime
+ * reads for itself (a label, a cell kind, a scope), a default and definitions
+ * besides them (`ContextualFlowControl.isTrueSchema`).
+ */
+const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
+  schema === undefined ||
+  ContextualFlowControl.isTrueSchema(
+    isObjectOrArray(schema)
+      ? Object.fromEntries(
+        Object.entries(schema).filter(([key]) =>
+          !SCHEMA_ANNOTATION_KEYWORDS.has(key)
+        ),
+      )
+      : schema,
+  );
+
+/**
+ * Whether an item write under a missing parent, which the stored envelope
+ * describes as `schema`, writes an item of an array. The storage write creates
+ * an array for a missing container an index addresses, and that answers where
+ * the envelope gives the parent no shape ({@link schemaGivesNoShape}): no
+ * envelope, no declaration there, or one holding only a label and annotations.
+ * Where the envelope declares an array, it agrees. Any other declaration is
+ * taken as written, whether by type, by the members of an object, by a
+ * combinator or by a reference: the input is then spelled at the index, and
+ * the envelope's checks of the member it declares there apply to the write.
+ */
+const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
+  schemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+
 /**
  * The schema write-policy input for a write landing at an item of an array:
  * the array itself, with the item's schema as its `items`. A candidate
@@ -414,14 +457,17 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
  * envelope's at the item — a writer through a bare link answers to the
  * stored claim as any routed write does. The slot is an item of an array
  * where the parent holds one, or holds nothing yet and the stored envelope
- * declares one there: an absent container's first item write is still an
- * item write. A numeric key of an object stays a property. `undefined`
- * where none of that holds, or where no schema for the item is known; the
- * parent read propagates what `readValueOrThrow` throws, since an absent or
- * mismatched parent reads as `undefined` and anything else is a failure a
- * policy decision must not be built on. The item's own definitions move to
- * the array's root, where the envelope's references to them point. An item
- * of an item lifts through every index to the outermost array.
+ * gives it no other shape ({@link missingParentIsArray}): an absent
+ * container's first item write is still an item write. That includes the
+ * first write into an instance no envelope describes yet, such as the scoped
+ * instance a slot's content is narrowed into. A numeric key of an object
+ * stays a property.
+ * `undefined` where none of that holds, or where no schema for the item is
+ * known; the parent read propagates what `readValueOrThrow` throws, since an
+ * absent or mismatched parent reads as `undefined` and anything else is a
+ * failure a policy decision must not be built on. The item's own definitions
+ * move to the array's root, where the envelope's references to them point. An
+ * item of an item lifts through every index to the outermost array.
  */
 const arrayItemPolicyInput = (
   tx: IExtendedStorageTransaction,
@@ -463,7 +509,7 @@ const arrayItemPolicyInput = (
   if (
     !Array.isArray(held) &&
     (held !== undefined ||
-      !schemaDeclaresArray(storedSchemaForWritePolicyInput(tx, parent)))
+      !missingParentIsArray(storedSchemaForWritePolicyInput(tx, parent)))
   ) {
     return undefined;
   }
@@ -490,6 +536,29 @@ const arrayItemPolicyInput = (
     lifted.schema,
     lifted.storedSchema,
   ) ?? lifted;
+};
+
+/**
+ * Records the schema write-policy input for a write of `schema`'s value
+ * landing at `destination`, an item of an array spelled as
+ * {@link arrayItemPolicyInput} spells it. The input describes the write, so it
+ * is recorded where the write lands: `Cell.set` records its destination, and
+ * the diff records the scoped instance a slot's content is narrowed into.
+ */
+export const recordWriteDestinationPolicyInput = (
+  tx: IExtendedStorageTransaction,
+  destination: NormalizedFullLink,
+  schema: JSONSchema | undefined,
+  schemaRole?: "output",
+): void => {
+  const policyInput = arrayItemPolicyInput(tx, destination, schema);
+  recordRelevantSchemaWritePolicyInput(
+    tx,
+    policyInput?.link ?? destination,
+    policyInput?.schema ?? schema,
+    schemaRole,
+    policyInput?.storedSchema,
+  );
 };
 
 /**
@@ -1867,9 +1936,10 @@ export class CellImpl<T extends FabricValue>
     // CFC write-ceiling (Phase 2): a value bound to a labeled column must fit the
     // column's `ifc.maxConfidentiality`. The label rides the bound value (a Cell
     // or any carried-label value); fail closed when a labeled value's target
-    // column can't be determined. No-op until a column declares `ifc`.
+    // column can't be determined, or when a stored label it reads cannot be
+    // read. No-op until a column declares `ifc`.
     const confidentialityOf = (value: unknown): readonly unknown[] => {
-      const view = cfcLabelViewForCell(value);
+      const view = cfcLabelViewForCellFailClosed(value);
       return view
         ? cfcConfidentialityForObservationNode({ labelView: view })
         : [];
@@ -2558,17 +2628,10 @@ export class CellImpl<T extends FabricValue>
       // item's schema as its `items`: a candidate envelope spells a path
       // segment as a named property, and the stored schema spells the array
       // as one, so an input at the index alone could never merge with it.
-      const policyInput = arrayItemPolicyInput(
+      recordWriteDestinationPolicyInput(
         this.#tx,
         writeLink,
         writeLink.schema ?? this.schema,
-      );
-      recordRelevantSchemaWritePolicyInput(
-        this.#tx,
-        policyInput?.link ?? writeLink,
-        policyInput?.schema ?? writeLink.schema ?? this.schema,
-        undefined,
-        policyInput?.storedSchema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj

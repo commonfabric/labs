@@ -22,6 +22,7 @@ import {
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
+  cfcLabelViewForResolvedTarget,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   getCarriedCfcLabelView,
@@ -30,6 +31,7 @@ import {
   cfcLabelViewOriginSpaces,
   cfcLabelViewsEqual,
   cloneCfcLabelView,
+  type IFCLabel,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
   redactEntryPathsForDisplay,
@@ -514,58 +516,255 @@ describe("CFC label view helpers", () => {
     }
   });
 
-  it("reads a scoped cell's own label from its scoped instance, not the space instance's", async () => {
-    const signer = await Identity.fromPassphrase("cfc label view scoped");
-    const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager,
+  describe("a scoped instance's stored labels", () => {
+    type Scope = "space" | "user" | "session";
+    type Instance = {
+      value: FabricValue;
+      label?: IFCLabel;
+      /** A label on the pointer the instance holds at `notes`. */
+      pointer?: IFCLabel;
+      version?: number;
+    };
+
+    /**
+     * Runs `body` with a runtime whose storage holds the given instances of
+     * one document, each labeled at `notes` where it has a label, and storing
+     * no envelope where it has none.
+     */
+    async function withInstances(
+      instances: Partial<Record<Scope, Instance>>,
+      body: (cellAt: (scope: Scope) => Cell<unknown>) => void,
+    ): Promise<void> {
+      const signer = await Identity.fromPassphrase("cfc label view scoped");
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const space = signer.did();
+        const tx = runtime.edit();
+        const id = parseLink(
+          runtime.getCell(space, "scoped-label", undefined, tx).getAsLink(),
+        ).id!;
+        writeSeedEnvelopeDoc(tx, space);
+        for (const scope of ["space", "user", "session"] as const) {
+          const instance = instances[scope];
+          if (instance === undefined) continue;
+          const entries = [
+            ...(instance.label === undefined
+              ? []
+              : [{ path: ["notes"], label: instance.label }]),
+            ...(instance.pointer === undefined ? [] : [{
+              path: ["notes"],
+              label: instance.pointer,
+              origin: "link" as const,
+            }]),
+          ];
+          seedStoredEnvelope(tx, {
+            space,
+            id,
+            scope,
+            type: "application/json",
+            path: [],
+          }, {
+            value: instance.value,
+            ...(entries.length > 0 && {
+              cfc: {
+                version: instance.version ?? 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: { version: 1, entries },
+              },
+            }),
+          });
+        }
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).ok).toBeDefined();
+        body((scope) =>
+          runtime.getCell(space, "scoped-label", undefined, undefined, scope)
+        );
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    }
+
+    /** The confidentiality and integrity atoms a view holds, sorted. */
+    const atomsOf = (view: CfcLabelView | undefined) => ({
+      confidentiality:
+        (view?.entries.flatMap((entry) => entry.label.confidentiality ?? []) ??
+          []).sort(),
+      integrity:
+        (view?.entries.flatMap((entry) => entry.label.integrity ?? []) ?? [])
+          .sort(),
     });
-    try {
-      const space = signer.did();
-      const tx = runtime.edit();
-      const id = parseLink(
-        runtime.getCell(space, "scoped-label", undefined, tx).getAsLink(),
-      ).id!;
-      writeSeedEnvelopeDoc(tx, space);
-      for (
-        const [scope, label] of [["space", "space-label"], [
+
+    const labelsAt = (cell: Cell<unknown>) =>
+      atomsOf(cfcLabelViewSourceForCell(cell).view);
+
+    it("joins a broader instance's confidentiality that is tighter than its own", async () => {
+      await withInstances({
+        space: {
+          value: { notes: "slot" },
+          label: { confidentiality: ["secret"] },
+        },
+        user: { value: { notes: "hi" }, label: { confidentiality: ["mine"] } },
+      }, (cellAt) => {
+        expect(labelsAt(cellAt("user")).confidentiality).toEqual([
+          "mine",
+          "secret",
+        ]);
+        expect(labelsAt(cellAt("space")).confidentiality).toEqual(["secret"]);
+      });
+    });
+
+    it("keeps its own label where its broader instance is public", async () => {
+      await withInstances({
+        space: { value: { notes: "slot" } },
+        user: { value: { notes: "hi" }, label: { confidentiality: ["mine"] } },
+      }, (cellAt) => {
+        expect(labelsAt(cellAt("user")).confidentiality).toEqual(["mine"]);
+        expect(cfcLabelViewSourceForCell(cellAt("space")).view)
+          .toBeUndefined();
+      });
+    });
+
+    it("leaves out what its broader instance stores for the pointer it holds", async () => {
+      // The broader slot's link entry labels the redirect it holds, which a
+      // reader of the content behind it does not observe.
+      await withInstances({
+        space: {
+          value: { notes: "slot" },
+          label: { confidentiality: ["secret"] },
+          pointer: { confidentiality: ["pointer"] },
+        },
+        user: { value: { notes: "hi" } },
+      }, (cellAt) => {
+        expect(labelsAt(cellAt("user")).confidentiality).toEqual(["secret"]);
+        expect(labelsAt(cellAt("space")).confidentiality).toEqual([
+          "pointer",
+          "secret",
+        ]);
+      });
+    });
+
+    it("takes integrity from its own envelope alone", async () => {
+      // The broader instance's integrity speaks for whoever wrote that
+      // instance, not for whoever wrote this one.
+      await withInstances({
+        space: {
+          value: { notes: "slot" },
+          label: { confidentiality: ["secret"], integrity: ["space-writer"] },
+        },
+        user: { value: { notes: "hi" }, label: { integrity: ["user-writer"] } },
+      }, (cellAt) => {
+        expect(labelsAt(cellAt("user"))).toEqual({
+          confidentiality: ["secret"],
+          integrity: ["user-writer"],
+        });
+        expect(
+          atomsOf(cfcLabelViewForResolvedTarget(cellAt("user").key("notes"))),
+        ).toEqual({ confidentiality: ["secret"], integrity: ["user-writer"] });
+      });
+    });
+
+    it("joins a session instance's user and space confidentiality", async () => {
+      await withInstances({
+        space: { value: { notes: "a" }, label: { confidentiality: ["space"] } },
+        user: { value: { notes: "b" }, label: { confidentiality: ["user"] } },
+        session: {
+          value: { notes: "c" },
+          label: { confidentiality: ["session"] },
+        },
+      }, (cellAt) => {
+        expect(labelsAt(cellAt("session")).confidentiality).toEqual([
+          "session",
+          "space",
           "user",
-          "user-label",
-        ]] as const
-      ) {
-        seedStoredEnvelope(tx, {
-          space,
-          id,
-          scope,
-          type: "application/json",
-          path: [],
-        }, {
-          value: label,
-          cfc: {
-            version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [{ path: [], label: { confidentiality: [label] } }],
+        ]);
+        expect(labelsAt(cellAt("user")).confidentiality).toEqual([
+          "space",
+          "user",
+        ]);
+        expect(labelsAt(cellAt("space")).confidentiality).toEqual(["space"]);
+      });
+    });
+
+    it("reads its broader instance's confidentiality where it stores no envelope", async () => {
+      // The shape a write narrowed into a scoped instance left before such a
+      // write stamped the instance's own envelope.
+      await withInstances({
+        space: {
+          value: { notes: "slot" },
+          label: { confidentiality: ["secret"] },
+        },
+        user: { value: { notes: "hi" } },
+      }, (cellAt) => {
+        const { view, readFailed } = cfcLabelViewSourceForCell(cellAt("user"));
+        expect(readFailed).toBe(false);
+        expect(atomsOf(view).confidentiality).toEqual(["secret"]);
+      });
+    });
+
+    it("fails its read closed when a broader instance's envelope cannot be read", async () => {
+      await withInstances({
+        space: {
+          value: { notes: "slot" },
+          label: { confidentiality: ["secret"] },
+          version: 99,
+        },
+        user: { value: { notes: "hi" } },
+      }, (cellAt) => {
+        expect(cfcLabelViewSourceForCell(cellAt("user")).readFailed).toBe(true);
+      });
+    });
+
+    it("reads the label a narrowing write declares, without the broader slot's pointer labels", async () => {
+      const signer = await Identity.fromPassphrase("cfc label view narrowed");
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const space = signer.did();
+        const tx = runtime.edit();
+        runtime.getCell(space, "narrowed-label", {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            notes: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"] },
             },
           },
-        } as never);
+        }, tx).set({ title: "t", notes: "hi" });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).ok).toBeDefined();
+
+        // The broader slot holds a redirect, whose link entry labels that
+        // pointer, reference integrity atom included.
+        const slot = labelsAt(runtime.getCell(space, "narrowed-label"));
+        expect(slot.confidentiality).toEqual(["secret", "secret"]);
+        expect(slot.integrity).not.toEqual([]);
+        const scoped = labelsAt(
+          runtime.getCell(
+            space,
+            "narrowed-label",
+            undefined,
+            undefined,
+            "user",
+          ),
+        );
+        // The declared label, from the instance's own envelope and the
+        // broader slot's alike, and nothing of the redirect's link entry.
+        expect(scoped).toEqual({ confidentiality: ["secret"], integrity: [] });
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
       }
-      runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).ok).toBeDefined();
-
-      const view = (scope: "space" | "user") =>
-        cfcLabelViewSourceForCell(
-          runtime.getCell(space, "scoped-label", undefined, undefined, scope),
-        ).view?.entries.flatMap((entry) => entry.label.confidentiality ?? []);
-
-      expect(view("user")).toEqual(["user-label"]);
-      expect(view("space")).toEqual(["space-label"]);
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-    }
+    });
   });
 
   it("names the spaces of the documents a view was read from", async () => {
