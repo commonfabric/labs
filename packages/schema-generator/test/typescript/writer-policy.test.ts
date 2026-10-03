@@ -104,6 +104,9 @@ describe("writer-policy", () => {
         element: "{ list: Policy[] }",
         tupleElement: "{ pair: [string, Policy] }",
         nullableMember: "{ value: Policy | null }",
+        indexSignature: "{ byId: { [key: string]: Policy } }",
+        numericIndexSignature: "{ byIndex: { [index: number]: Policy } }",
+        twentyDeep: `${"{ nested: ".repeat(20)}Policy${" }".repeat(20)}`,
       });
 
       for (const type of Object.values(types)) {

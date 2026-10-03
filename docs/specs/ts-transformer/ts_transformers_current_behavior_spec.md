@@ -144,24 +144,28 @@ present; no stage handles a missing one.
      callback's return annotation), or a cell `new Writable(…)`,
      `Writable.of(…)`, `cell(…)` and the other cell factories create.
      SchemaInjection sets it on the call it creates, and on the `toSchema`
-     call that generates a schema the author passes in that call's place:
-     written there, or reached through a `const` binding, an import of one, or
-     a property of a `const` object literal. A `toSchema` call in another
-     module is generated there as a view; passed where a document is defined,
-     it is reported (`cfc-write-authorized-by:unread`) when its type holds a
-     writer policy. SchemaGeneration passes the flag to the schema generator as
-     its `definesDocument` option, under which a writer it cannot read is an
-     error. Like `patternResultAnchor`, a plain identity lookup with **no**
-     `getOriginalNode` fallback. A result inferred from the callback is a view
-     where it returns a reactive reference: the pattern's argument, a cell, a
-     reactive call's result, or a member of one. Any other data it returns
-     under a writer policy is data its result document holds: a literal, an
-     object or array literal (spreads and computed keys included), a constant,
-     a plain call's result. That result is rebuilt from the returned object,
-     and each such member's type node carries the `definesDocument` schema
-     hint, which the generator reads the same way for that member alone. A
-     returned value the rebuild cannot read member by member, such as one
-     holding a spread, marks the whole result.
+     calls that generate a schema the author passes in that call's place:
+     written there, or reached through `const` bindings, imports of them, and
+     member accesses on the object literals they lead to (nested, aliased, or
+     held in a spread), including `toSchema` calls inside a schema written out
+     as a literal. A `toSchema` call in another module is generated there as a
+     view; passed where a document is defined, it is reported
+     (`cfc-write-authorized-by:unread`) when its type holds a writer policy. So
+     is a schema that cannot be read back to its `toSchema` calls and
+     literals, such as a call's result. SchemaGeneration passes the flag to the
+     schema generator as its `definesDocument` option, under which a writer it
+     cannot read is an error. Like `patternResultAnchor`, a plain identity
+     lookup with **no** `getOriginalNode` fallback. A result inferred from the
+     callback is a view where it returns a reactive reference: the pattern's
+     argument, a cell, a reactive call's result, or a member of one. Any other
+     data it returns under a writer policy is data its result document holds:
+     a literal, an object or array literal (spreads and computed keys
+     included, a member its type does not name read against the type's index
+     signature), a constant, a plain call's result, at any depth. That result
+     is rebuilt from the returned object, and each such member's type node
+     carries the `definesDocument` schema hint, which the generator reads the
+     same way for that member alone. A returned value the rebuild cannot read
+     member by member, such as one holding a spread, marks the whole result.
    - `printedFrom` — for a type node printed from a type, that type. Both
      printers record it: `typeToTypeNodeWithRegistry()`, including the
      `unknown` it puts in place of a type the checker will not print, and the
@@ -1193,8 +1197,9 @@ report these through the same collector (deduplicated via §2.2's
   method's callback, is not reported; it reads the policy whole or not at all,
   leaving out with an unread writer the `ownerPrincipal` and current-principal
   integrity that the runtime enforces only beside one. SchemaInjection reports
-  it too, for a `toSchema` call another module generates, holding a writer
-  policy, passed where a document is defined (§2.2). See §11 of the
+  it too, where a document is defined by a `toSchema` call another module
+  generates, holding a writer policy, or by a schema it cannot read back to
+  its sources (§2.2). See §11 of the
   schema-generator mapping spec,
   rules 8 and 9 of `cfc_authoring_contract.md`,
   `test/protected-cell-policy.test.ts`, and

@@ -48,20 +48,20 @@ export const carriesWriterPolicy = (
 /**
  * Whether `type`, or a value it holds, carries a writer policy: a member of an
  * intersection that is a CFC carrier holding one, read through unions,
- * intersections, object properties, and array and tuple elements, to a depth
- * of `depth` such steps. A function's signature, a cell's methods among them,
- * holds no value, and is not read.
+ * intersections, object properties and index signatures, and array and tuple
+ * elements. Each type is read once, which is what ends the reading of a
+ * recursive type; no depth bound cuts it short, since one would answer that a
+ * policy past it is absent. A function's signature, a cell's methods among
+ * them, holds no value, and is not read.
  */
 export const holdsWriterPolicy = (
   type: ts.Type,
   checker: ts.TypeChecker,
-  depth = 8,
   seen: Set<ts.Type> = new Set(),
 ): boolean => {
-  if (depth === 0 || seen.has(type)) return false;
+  if (seen.has(type)) return false;
   seen.add(type);
-  const within = (inner: ts.Type) =>
-    holdsWriterPolicy(inner, checker, depth - 1, seen);
+  const within = (inner: ts.Type) => holdsWriterPolicy(inner, checker, seen);
   if (type.isUnionOrIntersection()) {
     return type.types.some((member) => {
       const carrier = cfcCarrierProperty(member);
@@ -78,5 +78,6 @@ export const holdsWriterPolicy = (
   if (type.getCallSignatures().length > 0) return false;
   return type.getProperties().some((property) =>
     within(checker.getTypeOfSymbol(property))
-  );
+  ) ||
+    checker.getIndexInfosOfType(type).some((info) => within(info.type));
 };

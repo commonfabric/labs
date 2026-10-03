@@ -263,6 +263,26 @@ export default pattern<{}>(() => {
           `const generated = toSchema<${UNREAD}>();\nconst schema = generated;`,
           "schema",
         ],
+        [
+          "a property of a constant bound to an object literal",
+          `const generated = { input: toSchema<${UNREAD}>() };\nconst schemas = generated;`,
+          "schemas.input",
+        ],
+        [
+          "a nested property",
+          `const schemas = { outer: { input: toSchema<${UNREAD}>() } };`,
+          "schemas.outer.input",
+        ],
+        [
+          "a property a spread holds",
+          `const base = { input: toSchema<${UNREAD}>() };\nconst schemas = { ...base, other: 1 };`,
+          "schemas.input",
+        ],
+        [
+          "a schema literal holding a `toSchema` call",
+          `const schema = { type: "object", properties: { byId: toSchema<${UNREAD}>() } } as const;`,
+          "schema",
+        ],
       ] as const
     ) {
       it(`refuses a writer a pattern's input schema, passed through ${how}, reads where no syntax names it`, async () => {
@@ -272,6 +292,28 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
         expect(result.diagnostics.filter(isUnreadWriter)).not.toEqual([]);
       });
     }
+
+    it("reports a schema that cannot be read back to its sources", async () => {
+      // A schema a call returns could be one `toSchema` generated in a schema
+      // that views a document.
+      const result = await transform(`
+const make = () => toSchema<${UNREAD}>();
+export default pattern((input: ${UNREAD}) => ({ input }), make());`);
+
+      expect(
+        result.diagnostics.filter(isUnreadWriter).map((diagnostic) =>
+          diagnostic.message.includes("could not be read back")
+        ),
+      ).toEqual([true]);
+    });
+
+    it("reports nothing for a schema written out as a literal", async () => {
+      const result = await transform(`
+const schema = { type: "object", properties: { value: { type: "string" } } } as const;
+export default pattern((input: { value: string }) => ({ input }), schema);`);
+
+      expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+    });
 
     for (
       const [what, schemaType, reported] of [
@@ -388,6 +430,16 @@ export default pattern<{}>((): ${UNREAD} => ({ byId: {} }));`);
         [
           "returns as a constant holding the whole result",
           `const result = { value: "" as ${POLICY} };\n  return result;`,
+        ],
+        [
+          "returns nested twenty objects deep",
+          `return { box: ${"{ nested: ".repeat(20)}"" as ${POLICY}${
+            " }".repeat(20)
+          } };`,
+        ],
+        [
+          "returns through a constant whose declared type is an index signature",
+          `const fresh: { [key: string]: ${POLICY} } = { value: "" };\n  return { box: fresh };`,
         ],
         [
           "returns under a dynamic computed key",
