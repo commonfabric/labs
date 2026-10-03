@@ -65,6 +65,8 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type { SinkConsumedLabel } from "../cell.ts";
+import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { NavigationWithheldError } from "../navigation-withheld.ts";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
@@ -142,6 +144,42 @@ function chosenFromOf(value: unknown): (() => SinkConsumedLabel) | undefined {
   return () => read;
 }
 
+/**
+ * The labels an intent is decided on: what chose its target, as the intent
+ * says (`chosenFrom`), joined with the labels stored where the intent sits
+ * (`stored`). An entry the server wrote stores none, so the join is the
+ * intent's own; one something else wrote stores the labels of what that
+ * write was made from, which the intent's own claim does not lower.
+ * Integrity is the intent's alone: a stored label's evidence is no claim
+ * about what chose the target. Either one failing to read fails the join.
+ */
+function joinedLabels(
+  chosenFrom: () => SinkConsumedLabel,
+  stored: () => SinkConsumedLabel,
+): () => SinkConsumedLabel {
+  return () => {
+    const claimed = chosenFrom();
+    const held = stored();
+    const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
+    for (
+      const [key, spaces] of [
+        ...claimed.modulePolicySpaces,
+        ...held.modulePolicySpaces,
+      ]
+    ) {
+      const set = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+      for (const space of spaces) set.add(space);
+      modulePolicySpaces.set(key, set);
+    }
+    return {
+      confidentiality: [...claimed.confidentiality, ...held.confidentiality],
+      integrity: claimed.integrity,
+      modulePolicySpaces,
+      sources: [],
+    };
+  };
+}
+
 export class EffectsChannel {
   readonly #runtime: Runtime;
 
@@ -172,6 +210,9 @@ export class EffectsChannel {
   readonly #acking = new Set<string>();
 
   #warnedNoNavigate = false;
+
+  /** Intents left pending as undecidable, each reported once in this life. */
+  readonly #reportedUndecidable = new Set<string>();
   #closed = false;
 
   constructor(runtime: Runtime) {
@@ -317,6 +358,18 @@ export class EffectsChannel {
     this.#enacted.add(nonce);
     const started = Promise.withResolvers<unknown>();
     const settled = started.promise.then(() => true, (error) => {
+      if (error instanceof NavigationWithheldError) {
+        // Nothing to decide this intent on: it waits, unacked, for a
+        // delivery that can be decided, and is reported once.
+        if (!this.#reportedUndecidable.has(nonce)) {
+          this.#reportedUndecidable.add(nonce);
+          logger.warn("enact-undecidable", () => [
+            `navigate intent ${nonce} carries no labels this client can ` +
+            "decide it on; left unacked",
+          ]);
+        }
+        return false;
+      }
       logger.warn("enact-failed", () => [
         `navigate enactment for ${nonce} failed; left unacked — a ` +
         "later delivery retries",
@@ -335,6 +388,31 @@ export class EffectsChannel {
       started.reject(error);
     }
     return settled;
+  }
+
+  /**
+   * The labels stored where the intent at `index` of `space`'s session
+   * instance sits, read now through a transaction that never commits, for a
+   * decision made later. Labels that cannot be read are not: asking for
+   * them raises the failure.
+   */
+  #storedLabels(space: MemorySpace, index: number): () => SinkConsumedLabel {
+    let read: SinkConsumedLabel;
+    try {
+      const tx = this.#runtime.readTx();
+      this.#runtime.getCellFromLink({
+        space,
+        id: SERVER_EXECUTION_EFFECTS_DOC_ID as URI,
+        scope: "session",
+        path: ["entries", String(index)],
+      }).withTx(tx).getRaw();
+      read = collectConsumedLabel(tx);
+    } catch (error) {
+      return () => {
+        throw error;
+      };
+    }
+    return () => read;
   }
 
   /** ONE listener per channel (design (e) item 13): wants the session
@@ -386,7 +464,7 @@ export class EffectsChannel {
     if (!isObjectOrArray(value)) return;
     const entries = Array.isArray(value.entries) ? value.entries : [];
     const acks = isObjectNotArray(value.acks) ? value.acks : {};
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
       if (
         !isObjectOrArray(entry) ||
         typeof entry.nonce !== "string"
@@ -444,15 +522,28 @@ export class EffectsChannel {
             scope: (target.scope ?? "space") as never,
             path: [...(target.path ?? [])],
           });
-          // What chose the target, as the server measured it: the
-          // navigation is decided on it as one this runtime's own run chose
-          // is. A callback that withholds the navigation throws, so it is
-          // left unacked rather than retired.
+          // What chose the target, as the server measured it, joined with
+          // the labels stored where the intent sits: the navigation is
+          // decided on them as one this runtime's own run chose is.
           const chosenFrom = chosenFromOf(entry.args?.chosenFrom);
+          const decidedOn = chosenFrom === undefined
+            ? undefined
+            : joinedLabels(chosenFrom, this.#storedLabels(space, index));
           work = () => {
             const enacting = Promise.resolve().then(() =>
-              navigate(targetCell, chosenFrom)
-            );
+              navigate(targetCell, decidedOn)
+            ).catch((error: unknown) => {
+              // Withheld on labels this viewer is refused: the intent is
+              // done for this session, as it would be refused again, so it
+              // is acked rather than left to pile up. Withheld for want of
+              // labels, it stays pending (`#beginEnactment`).
+              if (
+                error instanceof NavigationWithheldError && error.definitive
+              ) {
+                return;
+              }
+              throw error;
+            });
             this.#runtime.trackAsyncWork(enacting);
             return enacting;
           };
@@ -472,9 +563,13 @@ export class EffectsChannel {
         // Record BEFORE the (deferred) callback can run — a re-entrant
         // delivery converges on the in-flight record instead of
         // double-enacting — and chain the ack on SUCCESS only.
-        void this.#beginEnactment(nonce, work).then((ok) => {
-          if (ok && !this.#closed) this.#ack(space, nonce);
-        });
+        // Tracked through its ack, so that a caller waiting for the runtime
+        // to settle sees the intent acked or left pending, not in between.
+        this.#runtime.trackAsyncWork(
+          this.#beginEnactment(nonce, work).then((ok) => {
+            if (ok && !this.#closed) this.#ack(space, nonce);
+          }),
+        );
         continue;
       }
       // A settled-successful record (this life enacted it, or the

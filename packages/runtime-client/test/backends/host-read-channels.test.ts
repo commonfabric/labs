@@ -25,6 +25,7 @@ import {
   entityIdFrom,
   hostValueOf,
   makeAddressKey,
+  NavigationWithheldError,
   readProjected,
   Runtime,
   RuntimeTelemetryEvent,
@@ -44,11 +45,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../runner/test/cfc-seed-envelope.ts";
-import {
-  type DocumentAt,
-  HostReadGate,
-  NavigationWithheldError,
-} from "@/backends/host-read-gate.ts";
+import { type DocumentAt, HostReadGate } from "@/backends/host-read-gate.ts";
 import {
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
@@ -1771,9 +1768,22 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
-    it("decides a server's navigation on what chose it, and leaves one it withholds unacked", async () => {
+    it("decides a server's navigation on what chose it and where it is stored, and retires only a definitive withhold", async () => {
       const nonce = "nav:host-read-channels";
-      const enact = async (viewer: Identity) => {
+      const sealed = {
+        confidentiality: [ownerOnly],
+        integrity: [],
+        modulePolicySpaces: {},
+      };
+      const open = {
+        confidentiality: [],
+        integrity: [],
+        modulePolicySpaces: {},
+      };
+      const enact = async (
+        viewer: Identity,
+        intent: { chosenFrom?: typeof sealed; storedSealed?: boolean },
+      ) => {
         const storageManager = StorageManager.emulate({ as: owner });
         let gate: HostReadGate | undefined;
         const delivered: unknown[] = [];
@@ -1801,29 +1811,52 @@ describe("HostReadGate, for what crosses beside a value", () => {
           );
           destination.set({ title: "anyone may see this" });
           const destinationId = destination.getAsNormalizedFullLink().id;
-          // The intent a server writes into this session's effects
-          // instance, raw as the server writes it, chosen from what only the
-          // owner may see.
-          runtime.getCellFromLink({
-            space,
-            id: SERVER_EXECUTION_EFFECTS_DOC_ID,
-            scope: "session",
-            path: [],
-          }).withTx(tx).setRawUntyped({
+          const intents = {
             entries: [{
               nonce,
               kind: "navigate",
               args: {
                 target: { id: destinationId, path: [] },
-                chosenFrom: {
-                  confidentiality: [ownerOnly],
-                  integrity: [],
-                  modulePolicySpaces: {},
-                },
+                ...(intent.chosenFrom === undefined
+                  ? {}
+                  : { chosenFrom: intent.chosenFrom }),
               },
               issuedIn: null,
             }],
-          });
+          };
+          if (intent.storedSealed === true) {
+            // An entry something other than the server wrote, from what only
+            // the owner may see, and so stored with that label.
+            writeSeedEnvelopeDoc(tx, space);
+            seedStoredEnvelope(tx, {
+              space,
+              id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+              scope: "session",
+              type: "application/json",
+              path: [],
+            }, {
+              value: intents,
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [{
+                    path: ["entries"],
+                    label: { confidentiality: [ownerOnly] },
+                  }],
+                },
+              },
+            } as FabricValue);
+          } else {
+            // Raw, as the server writes an intent.
+            runtime.getCellFromLink({
+              space,
+              id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+              scope: "session",
+              path: [],
+            }).withTx(tx).setRawUntyped(intents);
+          }
           expect((await tx.commit()).ok).toBeDefined();
           await enacted;
           await runtime.settled();
@@ -1833,22 +1866,41 @@ describe("HostReadGate, for what crosses beside a value", () => {
             scope: "session",
             path: ["acks"],
           }).get();
-          return { delivered, acks };
+          return { delivered, acked: holds(acks, nonce) };
         } finally {
           await runtime.dispose();
           await storageManager.close();
         }
       };
-
-      const toVisitor = await enact(visitor);
-      expect(toVisitor.delivered).toEqual([]);
-      expect(holds(toVisitor.acks, nonce)).toBe(false);
-
-      const toOwner = await enact(owner);
-      expect(toOwner.delivered).toEqual([
+      const navigation = [
         expect.objectContaining({ type: NotificationType.NavigateRequest }),
-      ]);
-      expect(toOwner.acks).toEqual({ [nonce]: true });
+      ];
+
+      // Chosen from what the viewer may not see: withheld, and done for this
+      // session, since the same viewer would be refused again.
+      expect(await enact(visitor, { chosenFrom: sealed })).toEqual({
+        delivered: [],
+        acked: true,
+      });
+      expect(await enact(owner, { chosenFrom: sealed })).toEqual({
+        delivered: navigation,
+        acked: true,
+      });
+      // Nothing to decide on, as from a server that carries no labels:
+      // withheld, and left pending rather than lost.
+      expect(await enact(owner, {})).toEqual({ delivered: [], acked: false });
+      // An entry stored with a label is decided on it too, whatever it
+      // claims. (A write to a document whose envelope names a schema needs
+      // a schema input, which an ack carries none of, so only what reached
+      // the host is compared.)
+      expect(
+        (await enact(visitor, { chosenFrom: open, storedSealed: true }))
+          .delivered,
+      ).toEqual([]);
+      expect(
+        (await enact(owner, { chosenFrom: open, storedSealed: true }))
+          .delivered,
+      ).toEqual(navigation);
     });
 
     it("answers a host's read of the session effects document as unreadable", async () => {

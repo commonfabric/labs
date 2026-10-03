@@ -42,6 +42,7 @@ import {
   isStream,
   type JSONSchema,
   type MetaField,
+  NavigationWithheldError,
   parseAddressKey,
   readProjected,
   type RuntimeTelemetryMarkerResult,
@@ -212,21 +213,6 @@ function holdsEvents(cell: Cell<unknown>): boolean {
  */
 function fieldNamesOf(value: unknown): string[] | undefined {
   return isObjectNotArray(value) ? Object.keys(value) : undefined;
-}
-
-/**
- * A navigation the display ceiling withholds: the host is not told where the
- * run that asked meant to go. Thrown rather than returned as nothing, so that
- * the caller does not record the navigation as made.
- */
-export class NavigationWithheldError extends Error {
-  constructor() {
-    super(
-      "The display ceiling withheld a navigation: what chose its target is " +
-        "not shown to this host.",
-    );
-    this.name = "NavigationWithheldError";
-  }
 }
 
 /**
@@ -974,13 +960,18 @@ export class HostReadGate {
    * A navigation is a side effect its caller records as done, as the effects
    * channel acks a server's intent once it is enacted, so one the policy
    * withholds is not returned as nothing: it throws
-   * {@link NavigationWithheldError}, and the caller records no enactment.
+   * `NavigationWithheldError`, `definitive` where labels were read and
+   * refused, and not where there were none to decide on or they could not
+   * be read.
    */
   navigate(
     target: CellRef,
     consumed: (() => SinkConsumedLabel) | undefined,
   ): NavigateRequestNotification {
-    if (this.#withheld(consumed)) throw new NavigationWithheldError();
+    const verdict = this.#consumedVerdict(consumed);
+    if (verdict !== "admitted") {
+      throw new NavigationWithheldError(verdict === "refused");
+    }
     return decided({
       type: NotificationType.NavigateRequest as const,
       targetCellRef: target,
@@ -1114,36 +1105,40 @@ export class HostReadGate {
    * everything an action says to a host.
    */
   #withheld(consumed: (() => SinkConsumedLabel) | undefined): boolean {
-    return this.#policy !== undefined &&
-      (consumed === undefined || this.#consumedRefused(consumed));
+    return this.#consumedVerdict(consumed) !== "admitted";
   }
 
   /**
-   * Whether the policy refuses labels an action consumed. Labels that cannot
-   * be read refuse; an action that consumed no labeled value is admitted.
+   * How the policy stands with labels an action consumed: `admitted` with
+   * no policy, or where it admits them (an action that consumed no labeled
+   * value included); `refused` where it refuses them; `unreadable` where
+   * they cannot be read; and `absent` where there are none to decide on.
    */
-  #consumedRefused(
+  #consumedVerdict(
     consumed: (() => SinkConsumedLabel) | undefined,
-  ): boolean {
+  ): "admitted" | "refused" | "unreadable" | "absent" {
     const policy = this.#policy;
-    if (policy === undefined || consumed === undefined) return false;
+    if (policy === undefined) return "admitted";
+    if (consumed === undefined) return "absent";
     let read: SinkConsumedLabel;
     try {
       read = consumed();
     } catch {
-      return true;
+      return "unreadable";
     }
-    if (read.confidentiality.length === 0) return false;
+    if (read.confidentiality.length === 0) return "admitted";
     const spaces = [...read.modulePolicySpaces.values()].flatMap((set) => [
       ...set,
     ]);
-    return !canRenderLabelUnderPolicy(
-      read.confidentiality,
-      read.integrity,
-      () => spaces,
-      policy,
-      this.#sources,
-    );
+    return canRenderLabelUnderPolicy(
+        read.confidentiality,
+        read.integrity,
+        () => spaces,
+        policy,
+        this.#sources,
+      )
+      ? "admitted"
+      : "refused";
   }
 
   /**
