@@ -113,6 +113,18 @@ freshness boundary; it waits for the runtime Cell pull, including scheduler and
 storage work that pull must settle. The bridge does not substitute a lighter
 readiness probe for that contract.
 
+A read the host may not show is refused, with the `read-refused` error code, and
+is never delivered as `undefined`. `pull()` rejects with it, and a sink hears it
+through its optional second argument, after the cleanup its listener returned
+for the last value runs:
+
+```ts
+const stopSecret = secret.sink(
+  (value) => render(value),
+  (error) => renderHidden(error.code),
+);
+```
+
 `describe()` makes the API inspectable by people and agents. It returns every
 resource's kind, core operations, named methods, description, and schema.
 Missing resources and unsupported operations reject with `FabricBridgeError`,

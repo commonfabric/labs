@@ -217,10 +217,15 @@ describe("Fabric iframe bridge", () => {
 
       const cell = client.cell<string>("secret");
       const seen: Array<string | undefined> = [];
+      const withdrawn: Array<string | undefined> = [];
+      const errors: string[] = [];
       let heard = Promise.withResolvers<string>();
       const cancelSink = cell.sink((current) => {
         seen.push(current);
-      });
+        return () => withdrawn.push(current);
+      }, (error) => errors.push(error.code));
+      // The refusal of the pull above still stands, and the sink hears it.
+      expect(errors).toEqual([BRIDGE_READ_REFUSED]);
       const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
         heard.resolve(
           snapshot.status === "error" ? snapshot.error.code : snapshot.status,
@@ -239,7 +244,22 @@ describe("Fabric iframe bridge", () => {
 
       await expect(heard.promise).resolves.toBe(BRIDGE_READ_REFUSED);
       expect(cell.get()).toBeUndefined();
-      expect(seen).toEqual([undefined, "shown before the seal"]);
+      // The sink hears the refusal, its value is withdrawn, and nothing is
+      // handed to it in the value's place.
+      expect(errors).toEqual([BRIDGE_READ_REFUSED, BRIDGE_READ_REFUSED]);
+      // Strict: `toEqual()` takes a trailing `undefined` for no entry at all.
+      expect(withdrawn).toStrictEqual([undefined, "shown before the seal"]);
+      expect(seen).toStrictEqual([undefined, "shown before the seal"]);
+
+      // A read admitted again ends the refusal, even one finding nothing.
+      heard = Promise.withResolvers<string>();
+      sinkListener!(undefined);
+      await expect(heard.promise).resolves.toBe("ready");
+      expect(seen).toStrictEqual([
+        undefined,
+        "shown before the seal",
+        undefined,
+      ]);
       cancelSink();
       cancelSnapshot();
     } finally {

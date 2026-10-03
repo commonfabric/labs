@@ -55,6 +55,21 @@ export type ResourceSnapshot<T> =
 
 type SnapshotListener<T> = (snapshot: ResourceSnapshot<T>) => void;
 type CellSink<T> = (value: Readonly<T> | undefined) => void | (() => void);
+
+/**
+ * Hears an error that stands in place of a sink's value, such as a refusal of
+ * the read (`read-refused`).
+ */
+type CellSinkError = (error: FabricBridgeError) => void;
+
+/**
+ * One sink: the cleanup its listener returned for the last value, and what
+ * hears an error in the value's place.
+ */
+type SinkEntry = {
+  cleanup: (() => void) | void;
+  readonly onError: CellSinkError | undefined;
+};
 type EncodedBridgeRequest = ReturnType<typeof realmFromFabricValue>;
 
 type QueuedBridgeRequest = {
@@ -90,7 +105,7 @@ export class RemoteCell<T = FabricValue> {
   readonly #client: FabricClient;
   readonly #target: RemoteCellTarget;
   readonly #snapshotListeners = new Set<SnapshotListener<T>>();
-  readonly #sinks = new Map<CellSink<T>, (() => void) | void>();
+  readonly #sinks = new Map<CellSink<T>, SinkEntry>();
   readonly #identity: BridgeCellIdentity | undefined;
   readonly #operationQueue: CellOperationQueue;
   #snapshot: ResourceSnapshot<T> = { status: "loading" };
@@ -140,13 +155,19 @@ export class RemoteCell<T = FabricValue> {
 
   /**
    * Calls `listener` synchronously with get(), then again whenever the value
-   * changes. The returned function tears down this sink.
+   * changes. An error that stands in place of the value, such as a refusal of
+   * the read, is never handed to `listener` as a value: the cleanup it
+   * returned for the last value runs, and `onError` hears the error, at once
+   * when one already stands. The returned function tears down this sink.
    */
-  sink(listener: CellSink<T>): () => void {
-    this.#sinks.set(listener, listener(this.get()));
+  sink(listener: CellSink<T>, onError?: CellSinkError): () => void {
+    const entry: SinkEntry = { cleanup: undefined, onError };
+    this.#sinks.set(listener, entry);
+    entry.cleanup = listener(this.get());
+    if (this.#snapshot.status === "error") onError?.(this.#snapshot.error);
     this.#ensureRemoteSink();
     return () => {
-      this.#runSinkCleanup(listener);
+      this.#runSinkCleanup(entry);
       this.#sinks.delete(listener);
       this.#closeRemoteSinkIfUnused();
     };
@@ -366,6 +387,7 @@ export class RemoteCell<T = FabricValue> {
 
   #setReady(value: T): void {
     const previous = this.get();
+    const wasError = this.#snapshot.status === "error";
     if (
       this.#snapshot.status === "ready" &&
       valueEqual(
@@ -377,12 +399,12 @@ export class RemoteCell<T = FabricValue> {
     }
     this.#snapshot = { status: "ready", value };
     for (const listener of this.#snapshotListeners) listener(this.#snapshot);
-    if (
-      previous !== undefined || value !== undefined
-    ) {
-      for (const listener of this.#sinks.keys()) {
-        this.#runSinkCleanup(listener);
-        this.#sinks.set(listener, listener(value));
+    // A value that ends an error is news to the sinks that heard the error,
+    // even one that holds nothing.
+    if (wasError || previous !== undefined || value !== undefined) {
+      for (const [listener, entry] of this.#sinks) {
+        this.#runSinkCleanup(entry);
+        entry.cleanup = listener(value);
       }
     }
   }
@@ -399,6 +421,11 @@ export class RemoteCell<T = FabricValue> {
       });
     this.#snapshot = { status: "error", error: bridgeError };
     for (const listener of this.#snapshotListeners) listener(this.#snapshot);
+    // The value each sink was handed no longer stands.
+    for (const entry of this.#sinks.values()) {
+      this.#runSinkCleanup(entry);
+      entry.onError?.(bridgeError);
+    }
   }
 
   #ensureRemoteSink(): void {
@@ -419,9 +446,11 @@ export class RemoteCell<T = FabricValue> {
     this.#unsubscribeRemote = undefined;
   }
 
-  #runSinkCleanup(listener: CellSink<T>): void {
+  #runSinkCleanup(entry: SinkEntry): void {
+    const cleanup = entry.cleanup;
+    entry.cleanup = undefined;
     try {
-      this.#sinks.get(listener)?.();
+      cleanup?.();
     } catch {
       // A broken consumer cleanup must not retain or block the other sinks.
     }
