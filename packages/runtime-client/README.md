@@ -4,19 +4,18 @@
 
 ## Reading render state
 
-`CellHandle.pull()` demands lazy producers and crosses the runtime-wide
-commit-aware barrier before returning their value. Renderers can use
-`pull({ awaitDurability: false })` to demand producers and read reactive state
-while writes remain unconfirmed. This option still waits for reactive work and
-required loads; it cannot bypass a blocked producer or storage read. A cell with
-no value yet, or only an empty plain object, crosses that barrier as the default
-pull does, because the write that creates its value may be one still in flight.
+`CellHandle.pull()` demands lazy producers and required loads before returning
+reactive state, matching the runtime's `Cell.pull()`. Writes may remain
+unconfirmed when the read returns. An absent value or an empty object is a valid
+read and follows the same contract. A blocked producer or required storage read
+still holds the pull open.
 
-A rendered value does not confirm that a write was saved. Hosts using this
-option should continue observing `RuntimeClient.hasPendingWrites()` and
-`pendingwriteschange` to show unsaved state and guard navigation. The barrier
-covers pending pattern work as well as commits. Operations that require
-durability should retain the default pull.
+A rendered value does not confirm that a write was saved. Hosts observe
+`RuntimeClient.hasPendingWrites()` and `pendingwriteschange` to show unsaved
+state and guard navigation. `pull({ awaitDurability: true })` additionally
+crosses the runtime-wide commit-aware barrier, which covers pending pattern work
+as well as commits. `RuntimeClient.idle()` also crosses that barrier. Strict
+writes confirm their own operation independently of the pull default.
 
 ## Refused reads
 

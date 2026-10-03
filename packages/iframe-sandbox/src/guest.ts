@@ -152,7 +152,7 @@ export class RemoteCell<T = FabricValue> {
     };
   }
 
-  /** Waits for the host Cell.pull() barrier and returns its current value. */
+  /** Demands the host cell's current value through its pull contract. */
   pull(): Promise<T> {
     return this.#enqueueOperation(() => this.#pull());
   }

@@ -64,6 +64,7 @@ export type {
 export * from "./interface.ts";
 export { raw } from "./module.ts";
 export type { Cell, ProjectedRead, SinkConsumedLabel, Stream } from "./cell.ts";
+export { pullForInitialization } from "./cell.ts";
 // The seam's vocabulary, which describes a document's shape and is read by
 // hosts. Its write authorization is deliberately not here: it rides the
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
@@ -95,12 +96,16 @@ export type {
 } from "./scheduler.ts";
 export type {
   ChangeGroup,
+  CommitError,
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
   IOperationStorageCapability,
   IPresenceStorageCapability,
   MemorySpace,
+  PendingCommitDocument,
+  PendingCommitImpact,
   TransactionCommitOptions,
+  TransactionCommitReceipt,
 } from "./storage/interface.ts";
 export {
   hasOperationStorageCapability,

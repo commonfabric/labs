@@ -242,6 +242,23 @@ export type StoreReadThrough = (
   address: { id: URI; scopeKey: ScopeKey },
 ) => SessionSyncUpsert | undefined;
 
+/** A document whose pending reads or writes can change initialization readiness. */
+export type PendingCommitDocument = {
+  readonly space: MemorySpace;
+  readonly id: string;
+
+  /** Normalized scope kind; omission conservatively matches every scope. */
+  readonly scope?: CellScope;
+};
+
+/** The conservative readiness footprint of one pending commit registration. */
+export type PendingCommitImpact =
+  | { readonly kind: "global" }
+  | {
+    readonly kind: "documents";
+    readonly documents: readonly PendingCommitDocument[];
+  };
+
 export interface IStorageManager extends IStorageSubscriptionCapability {
   id: string;
 
@@ -484,11 +501,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * transaction layer at `commit()` entry, synchronously with the commit
    * being issued, so there is no window where a commit is in flight but
    * invisible to the barrier. The registration must tolerate rejection and
-   * drop the promise once it settles.
+   * drop the promise once it settles. Omitted impact means runtime-wide work.
+   * A document impact must include every read, write, and commit condition.
    */
   trackPendingCommit(
     promise: Promise<unknown>,
     context?: () => PendingCommitContext,
+    impact?: () => PendingCommitImpact,
   ): void;
 
   /** Snapshot pending work without waiting for durability or starting I/O. */
@@ -498,17 +517,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Whether any registered commit is still unconfirmed. Every write flows
    * through `edit()` transactions, so this is the authoritative "are there
    * unconfirmed local writes" signal — narrower than `synced()`, which also
-   * waits for pulls and cross-space read work.
+   * waits for pulls and cross-space read work. A document filter includes
+   * intersecting document work and all registrations with global impact.
    */
-  hasPendingCommits(): boolean;
+  hasPendingCommits(documents?: readonly PendingCommitDocument[]): boolean;
 
   /**
    * Wait for the currently pending commits to settle (server confirmation or
    * terminal failure). One round only: commits issued after the call starts
    * are not awaited — callers that need a fixpoint re-check `hasPendingCommits`
    * after each round, as the scheduler's client-facing idle does.
+   * With documents supplied, waits for intersecting document registrations
+   * and global or unspecified-impact registrations. Disjoint document work
+   * remains pending; each call takes a new snapshot of the selected promises.
    */
-  pendingCommitsSettled(): Promise<void>;
+  pendingCommitsSettled(
+    documents?: readonly PendingCommitDocument[],
+  ): Promise<void>;
 
   /**
    * Add a promise to the list of cross-space promises.
@@ -1218,6 +1243,23 @@ export interface TransactionCommitOptions {
   resolveAt?: "coverage" | "verdict";
 }
 
+/** The independently observable completion stages of one commit attempt. */
+export interface TransactionCommitReceipt {
+  /**
+   * The commit's fate. A separate backend verdict signal can report it before
+   * subscription coverage or rejection repair; otherwise it resolves with
+   * settlement.
+   * A sealed contribution's fate follows its seal destination's contract.
+   */
+  readonly verdict: Promise<Result<Unit, CommitError>>;
+
+  /**
+   * The default `commit()` completion: coverage or rejection repair, commit
+   * callbacks, and inline post-commit effects.
+   */
+  readonly settled: Promise<Result<Unit, CommitError>>;
+}
+
 /**
  * Representation of a storage transaction, which can be used to query state and
  * assert / retract while maintaining consistency guarantees. Storage ensures
@@ -1855,6 +1897,15 @@ export interface TransactionSealDestination {
 
 export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
+   * Starts committing and returns a receipt synchronously. Valid ordinary
+   * single-space writes apply locally before this returns; multi-space
+   * writes start each space in sequence. Readiness does not require awaiting
+   * the receipt. Observe `.verdict` for the commit's fate or `.settled` for
+   * coverage, rejection repair, and inline post-commit effects.
+   */
+  startCommit(): TransactionCommitReceipt;
+
+  /**
    * Stages `cid:<rootHash>` and its referenced closure into this
    * transaction from the realm registry, with per-transaction dedupe and
    * the confirmed-persistence elision (see ExtendedStorageTransaction).
@@ -2463,7 +2514,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * Enqueues a side effect to run from the CFC outbox after a successful
-   * commit. See ownership note above.
+   * commit. Register while the transaction is ready, before storage starts.
+   * See ownership note above.
    */
   enqueuePostCommitEffect(effect: PostCommitSideEffect): void;
 
@@ -2510,6 +2562,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Note: Callbacks are called synchronously after the transaction settles.
    * If a callback throws, the error is logged but doesn't affect other callbacks.
    *
+   * Register while the transaction is ready, before storage starts.
+   *
    * @param callback - Function to call when the transaction settles
    */
   addCommitCallback(
@@ -2528,7 +2582,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * compensation reading the repaired base, a retry) belongs on
    * {@link addCommitCallback}. Same once-only dispatch and error isolation
    * as commit callbacks; on synchronous fates (abort, pre-storage
-   * rejection) both layers fire together, verdict first.
+   * rejection) both layers fire together, verdict first. Register while the
+   * transaction is ready, before storage starts.
    */
   addVerdictCallback(
     callback: (

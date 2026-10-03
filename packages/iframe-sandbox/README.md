@@ -109,9 +109,11 @@ fabric.disconnect();
 
 `sink()` calls its listener synchronously with the same cache sample `get()`
 would return, then calls it when the host cell changes. `pull()` is the explicit
-freshness boundary; it waits for the runtime Cell pull, including scheduler and
-storage work that pull must settle. The bridge does not substitute a lighter
-readiness probe for that contract.
+freshness boundary; the runtime adapter demands producers and required loads
+before returning reactive state. Pending commit confirmation is separate from
+readiness. The runtime adapter's mutations confirm their own commit, and
+subsequent operations on the same resource stay ordered behind those mutations.
+Custom hosts supply their own pull contract.
 
 `describe()` makes the API inspectable by people and agents. It returns every
 resource's kind, core operations, named methods, description, and schema.
