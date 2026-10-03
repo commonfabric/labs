@@ -2,17 +2,28 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { NAME } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 /** Discovery collections with reference-based candidate lists. */
-type DiscoveryMode = "favorites" | "legacy" | "profile";
+type DiscoveryMode =
+  | "favorites"
+  | "legacy"
+  | "profile"
+  | "current-mentionables"
+  | "did-mentionables";
 
 /** Builds a collection whose first match has no backing document. */
-async function makeFixture(mode: DiscoveryMode, includePresent = true) {
+async function makeFixture(
+  mode: DiscoveryMode,
+  includePresent = true,
+  includeAbsent = false,
+) {
   const signer = await Identity.fromPassphrase(`unavailable candidate ${mode}`);
   const space = signer.did();
   const manager = StorageManager.emulate({ as: signer });
@@ -20,13 +31,23 @@ async function makeFixture(mode: DiscoveryMode, includePresent = true) {
     apiUrl: new URL(import.meta.url),
     storageManager: manager,
   });
-  const unavailable = runtime.getCell(space, "unavailable candidate");
-  const present = runtime.getCell(space, "present candidate");
+  const discoverySpace = mode === "did-mentionables"
+    ? (await Identity.fromPassphrase("discovery mentionables")).did()
+    : space;
+  const unavailable = runtime.getCell(discoverySpace, "unavailable candidate");
+  const present = runtime.getCell(discoverySpace, "present candidate");
   const setup = runtime.edit();
-  present.withTx(setup).set({ version: 1, name: "Present provider" });
+  present.withTx(setup).set({
+    version: 1,
+    name: "Present provider",
+    [NAME]: "resources",
+  });
   expect((await setup.commit()).error).toBeUndefined();
 
   const cells = includePresent ? [unavailable, present] : [unavailable];
+  if (includeAbsent) {
+    cells.push(runtime.getCell(discoverySpace, "absent candidate"));
+  }
   const home = runtime.edit();
   if (mode === "profile") {
     const profileSpace = (await Identity.fromPassphrase("discovery profile"))
@@ -48,6 +69,13 @@ async function makeFixture(mode: DiscoveryMode, includePresent = true) {
     runtime.getHomeSpaceCell(home).key("defaultPattern").set({
       profiles: [profile],
     });
+  } else if (
+    mode === "current-mentionables" || mode === "did-mentionables"
+  ) {
+    runtime.getCell(discoverySpace, discoverySpace, undefined, home)
+      .key("defaultPattern").set({
+        backlinksIndex: { mentionable: cells },
+      });
   } else {
     runtime.getHomeSpaceCell(home).key("defaultPattern").set({
       favorites: cells.map((cell) => ({ cell, tags: ["resources"] })),
@@ -65,7 +93,13 @@ async function makeFixture(mode: DiscoveryMode, includePresent = true) {
       const pattern = commonfabric.pattern(() => ({
         found: commonfabric.wish({
           query: mode === "legacy" ? "#favorites/res" : "#resources",
-          scope: mode === "profile" ? ["profile"] : ["~"],
+          scope: mode === "profile"
+            ? ["profile"]
+            : mode === "current-mentionables"
+            ? ["."]
+            : mode === "did-mentionables"
+            ? [discoverySpace]
+            : ["~"],
           headless: true,
         }),
       }));
@@ -94,7 +128,14 @@ async function makeFixture(mode: DiscoveryMode, includePresent = true) {
 }
 
 describe("wish-unavailable-candidate", () => {
-  for (const mode of ["legacy", "profile"] as const) {
+  for (
+    const mode of [
+      "legacy",
+      "profile",
+      "current-mentionables",
+      "did-mentionables",
+    ] as const
+  ) {
     it(`selects a present ${mode} match after a confirmed missing match`, async () => {
       const fixture = await makeFixture(mode);
       try {
@@ -125,7 +166,15 @@ describe("wish-unavailable-candidate", () => {
     });
   }
 
-  for (const mode of ["favorites", "legacy", "profile"] as const) {
+  for (
+    const mode of [
+      "favorites",
+      "legacy",
+      "profile",
+      "current-mentionables",
+      "did-mentionables",
+    ] as const
+  ) {
     for (const includePresent of [true, false]) {
       it(`waits for a ${mode} candidate's load, then ${includePresent ? "selects a readable match and recovers the failed match live" : "reports the load failure when no readable match remains"}`, async () => {
         const fixture = await makeFixture(mode, includePresent);
@@ -150,8 +199,11 @@ describe("wish-unavailable-candidate", () => {
           released.resolve();
           await pulling;
           await fixture.manager.crossSpaceSettled();
-          await clock.tick(100);
-          await fixture.runtime.idle();
+          await waitForCellValue(
+            fixture.runtime,
+            found.key("candidates"),
+            (value) => value !== undefined,
+          );
           if (includePresent) {
             expect(found.key("candidates").get()).toHaveLength(1);
             expect(selected.key("name").get()).toBe("Present provider");
@@ -161,11 +213,14 @@ describe("wish-unavailable-candidate", () => {
             fixture.unavailable.withTx(restore).set({
               version: 1,
               name: "Restored provider",
+              [NAME]: "resources",
             });
             expect((await restore.commit()).error).toBeUndefined();
-            // Advance the live wish's trailing debounce window.
-            await clock.tick(100);
-            await fixture.runtime.idle();
+            await waitForCellValue<string>(
+              fixture.runtime,
+              selected.key("name"),
+              (value) => value === "Restored provider",
+            );
             expect(selected.key("name").get()).toBe("Restored provider");
             expect(found.key("candidates").get()).toHaveLength(
               mode === "legacy" ? 1 : 2,
@@ -182,5 +237,28 @@ describe("wish-unavailable-candidate", () => {
         }
       });
     }
+
+    it(`reports a load error for absent and failed ${mode} candidates without a readable match`, async () => {
+      const fixture = await makeFixture(mode, false, true);
+      const provider = fixture.manager.open(fixture.unavailable.space);
+      const originalSync = provider.sync.bind(provider);
+      const unavailableId = fixture.unavailable.getAsNormalizedFullLink().id;
+      provider.sync = (id, ...options) =>
+        id === unavailableId
+          ? Promise.resolve({ error: new Error("Candidate load failed") })
+          : originalSync(id, ...options);
+      try {
+        const { found, pulling } = await fixture.launch();
+        await pulling;
+        await fixture.manager.crossSpaceSettled();
+        await fixture.runtime.idle();
+        expect(found.key("error").asSchema({ type: "string" }).get())
+          .toContain("Could not load document");
+        expect(found.key("candidates").get()).toHaveLength(0);
+      } finally {
+        provider.sync = originalSync;
+        await fixture.dispose();
+      }
+    });
   }
 });
