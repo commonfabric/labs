@@ -7431,11 +7431,7 @@ const SYSTEM_STRING_ATOMS: ReadonlySet<string> = new Set(
 const isTransformedByAtom = (atom: unknown): boolean =>
   isObjectOrArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy;
 
-/**
- * Whether `atom` is integrity evidence only trusted runtime code mints: a
- * pattern-authored schema that declares one has it stripped.
- */
-export const isRuntimeMintedIntegrityAtom = (atom: unknown): boolean =>
+const isRuntimeMintedIntegrityAtom = (atom: unknown): boolean =>
   (isObjectOrArray(atom) && typeof atom.type === "string" &&
     RUNTIME_MINTED_INTEGRITY_ATOM_TYPES.has(atom.type)) ||
   // Compile-cache attestation (string-shaped, see CFC_COMPILED_BY_ATOM):

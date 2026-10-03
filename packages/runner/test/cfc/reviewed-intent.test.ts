@@ -1036,21 +1036,18 @@ describe("reviewed-intent", () => {
           verified(committed.record, withIntegrity([WITNESSED])).parameters.to,
         ).toEqual(shown(witnessed));
 
-        // A variable shared across patterns binds once: the writer and the
-        // writer it witnesses must be the same, and here they are not.
-        const writer = { kind: "builtin", builtinId: { var: "$writer" } };
-        await fixture.republish(withIntegrity([
-          { type: CFC_ATOM_TYPE.TransformedBy, identity: writer },
-          {
+        // A variable may leave the witnessed writer open; it binds to the one
+        // the stored atom names. The address book's own identity is stated.
+        const anyImport = {
+          ...WRITTEN_BY_ADDRESS_BOOK,
+          inputWitness: {
             type: CFC_ATOM_TYPE.TransformedBy,
-            inputWitness: {
-              type: CFC_ATOM_TYPE.TransformedBy,
-              identity: writer,
-            },
+            identity: { kind: "builtin", builtinId: { var: "$importer" } },
           },
-        ]));
-        await expect(prepareReviewedIntent(fixture.bindings(to))).rejects
-          .toThrow(/without the integrity its descriptor requires/);
+        };
+        await fixture.republish(withIntegrity([anyImport]));
+        const open = await prepareReviewedIntent(fixture.bindings(to));
+        expect(shown(open)[0].integrity).toEqual([WITNESSED]);
       } finally {
         await fixture.dispose();
       }
@@ -1171,7 +1168,7 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("refuses a descriptor whose destination integrity a pattern could author, so a pattern's own document carrying it never passes", async () => {
+    it("refuses a descriptor whose destination integrity is a string atom a pattern can declare, so a pattern's own document carrying it never passes", async () => {
       const authored = {
         ...DESCRIPTOR,
         parameters: {
@@ -1188,7 +1185,7 @@ describe("reviewed-intent", () => {
         );
         await expect(prepareReviewedIntent(
           fixture.bindings({ parameters: { to: [lookalike] } }),
-        )).rejects.toThrow(/a pattern could author/);
+        )).rejects.toThrow(/one builtin's `TransformedBy`/);
       } finally {
         await fixture.dispose();
       }
@@ -1237,6 +1234,70 @@ describe("reviewed-intent", () => {
             },
           }),
         )).rejects.toThrow(/outside the space its parameter names/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("takes destinations from the space a parameter declares, and refuses the subject's own there", async () => {
+      const fixture = await setup({
+        ...DESCRIPTOR,
+        parameters: {
+          ...DESCRIPTOR.parameters,
+          to: { ...DESCRIPTOR.parameters.to, space: other.did() },
+        },
+      });
+      try {
+        // The consumer's address book lives in a space of its own, here
+        // another principal's, and its builtin writes the sender an entry.
+        const book = fixture.runtimeFor(other);
+        const visible = { ifc: { confidentiality: [ADDRESS_BOOK_CLAUSE] } };
+        const noted = book.edit();
+        const notes = book.getCell(
+          other.did(),
+          "shared-book-notes",
+          visible as never,
+          noted,
+        );
+        notes.set({ updated: 1 } as never);
+        expect((await noted.commit()).error).toBeUndefined();
+        const written = book.edit();
+        setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
+        notes.withTx(written).get();
+        const entry = book.getCell(other.did(), "shared-book-carol", {
+          ifc: {
+            confidentiality: [ADDRESS_BOOK_CLAUSE],
+            writeAuthorizedBy: [ADDRESS_BOOK],
+          },
+        } as never, written);
+        entry.set("tel:+15550155" as never);
+        expect((await written.commit()).error).toBeUndefined();
+        await fixture.storage.synced();
+        const prepared = await prepareReviewedIntent(fixture.bindings({
+          parameters: {
+            to: [
+              fixture.runtime.getCellFromLink(entry.getAsNormalizedFullLink()),
+            ],
+          },
+        }));
+        expect(shown(prepared)[0].source.space).toBe(other.did());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Hi"),
+        );
+        const descriptor = {
+          ...DESCRIPTOR,
+          parameters: {
+            ...DESCRIPTOR.parameters,
+            to: { ...DESCRIPTOR.parameters.to, space: other.did() },
+          },
+        };
+        expect(verified(committed.record, descriptor).parameters.to)
+          .toEqual(shown(prepared));
+        // The sender's own address book entry is not in the declared space.
+        await expect(prepareReviewedIntent(fixture.bindings())).rejects
+          .toThrow(/outside the space its parameter names/);
       } finally {
         await fixture.dispose();
       }
@@ -1554,7 +1615,7 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("refuses a destination integrity pattern whose atom type a pattern could author", () => {
+    it("refuses a destination integrity pattern other than one builtin's `TransformedBy`, named outright", () => {
       for (
         const pattern of [
           "verified-address",
@@ -1562,6 +1623,21 @@ describe("reviewed-intent", () => {
           { type: { var: "$type" } },
           { kind: "represents-principal", subject: { var: "$who" } },
           {},
+          { type: CFC_ATOM_TYPE.TransformedBy },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "verified", moduleIdentity: "sha256:any" },
+          },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "builtin", builtinId: { var: "$writer" } },
+          },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: { var: "$kind" }, builtinId: ADDRESS_BOOK },
+          },
+          { ...WRITTEN_BY_ADDRESS_BOOK, extra: "member" },
+          { type: CFC_ATOM_TYPE.PolicyCertified },
         ]
       ) {
         expect(() =>
@@ -1574,8 +1650,20 @@ describe("reviewed-intent", () => {
               },
             },
           })
-        ).toThrow(/a pattern could author/);
+        ).toThrow(/one builtin's `TransformedBy`/);
       }
+    });
+
+    it("reads a destination's declared space, which must be a DID", () => {
+      const withSpace = (space: unknown) => ({
+        ...DESCRIPTOR,
+        parameters: { to: { ...DESCRIPTOR.parameters.to, space } },
+      });
+      expect(
+        parseReviewedIntentDescriptor(withSpace(other.did())).parameters.to,
+      ).toEqual({ ...DESCRIPTOR.parameters.to, space: other.did() });
+      expect(() => parseReviewedIntentDescriptor(withSpace("elsewhere")))
+        .toThrow(/cannot show/);
     });
 
     it("refuses destinations declared without integrity, and malformed limits", () => {

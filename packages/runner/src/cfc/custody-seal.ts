@@ -56,7 +56,10 @@ import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
-import { matchAtomPattern } from "./atom-pattern.ts";
+import {
+  containsAtomPatternVariable,
+  matchAtomPattern,
+} from "./atom-pattern.ts";
 import {
   type CfcConfClause,
   clauseAlternatives,
@@ -764,7 +767,9 @@ export const releaseRequiresSealWitness = (
  * `THIS_POLICY.moduleIdentity` names the policy's own module, so it counts.
  */
 const namesConcreteCode = (identity: unknown): boolean => {
-  if (!isObjectNotArray(identity) || containsVariable(identity)) return false;
+  if (!isObjectNotArray(identity) || containsAtomPatternVariable(identity)) {
+    return false;
+  }
   switch (identity.kind) {
     case "verified":
       return (typeof identity.codeHash === "string" &&
@@ -780,14 +785,6 @@ const namesConcreteCode = (identity: unknown): boolean => {
       return false;
   }
 };
-
-/** Whether `pattern` holds a `{ var }` placeholder anywhere. */
-const containsVariable = (pattern: unknown): boolean =>
-  Array.isArray(pattern)
-    ? pattern.some(containsVariable)
-    : isObjectNotArray(pattern) &&
-      (Object.hasOwn(pattern, "var") ||
-        Object.values(pattern).some(containsVariable));
 
 /**
  * Whether the document at `link` is absent, or its root was written by the

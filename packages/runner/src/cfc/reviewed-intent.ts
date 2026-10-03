@@ -15,7 +15,7 @@
  */
 
 import type { JSONValue } from "@commonfabric/api";
-import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
@@ -29,6 +29,7 @@ import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   type AtomPattern,
+  containsAtomPatternVariable,
   isAtomPattern,
   matchAtomPattern,
   matchAtomPatternConjunction,
@@ -46,10 +47,9 @@ import {
 import { canonicalizeCfcLogicalPath } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
-import {
-  collectConsumedLabel,
-  isRuntimeMintedIntegrityAtom,
-} from "./prepare.ts";
+import { CUSTODY_SEAL_WRITER } from "./custody-seal.ts";
+import { collectConsumedLabel } from "./prepare.ts";
+import { SNAPSHOT_SHARE_WRITER } from "./share-snapshot.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isTrustedGestureOn } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
@@ -90,11 +90,20 @@ export interface ReviewedIntentDestinationsParameter {
   readonly max: number;
 
   /**
-   * Atom patterns each destination's stored integrity must satisfy together,
+   * Atom patterns each destination's derived integrity must satisfy together,
    * as one conjunction whose variables are shared across the patterns. At
-   * least one.
+   * least one, and each the `TransformedBy` of one builtin named outright.
    */
   readonly integrity: readonly AtomPattern[];
+
+  /**
+   * The space every destination must be in, such as the space the consumer's
+   * own address book lives in. Absent, it is the subject's home space. A
+   * builtin's stamp says which code wrote a value, not whose data it is, so
+   * the same builtin running for another principal stamps that principal's
+   * values the same way.
+   */
+  readonly space?: string;
 }
 
 /** A declared parameter whose value is text the actor enters on the surface. */
@@ -369,14 +378,65 @@ const isCount = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
 
 /**
- * Whether every atom `pattern` matches is of a type only trusted runtime code
- * mints, so no pattern can author an atom it matches.
+ * Whether `pattern` matches only the `TransformedBy` of one builtin it names
+ * outright: a literal `identity` of kind `builtin` with a literal
+ * `builtinId`, and nothing else beside it but an `inputWitness`. Such an atom
+ * is minted only on what a transaction under that builtin's identity wrote.
+ * It says nothing about whose data the builtin wrote, or what decided it:
+ * {@link refuseSteeredWriters} refuses the builtins whose writes this runtime
+ * knows a pattern decides, and a destination's space is checked apart.
  */
-const namesRuntimeMintedAtom = (pattern: AtomPattern): boolean =>
-  typeof pattern === "string"
-    ? isRuntimeMintedIntegrityAtom(pattern)
-    : isObjectNotArray(pattern) && typeof pattern.type === "string" &&
-      isRuntimeMintedIntegrityAtom({ type: pattern.type });
+const namesOneBuiltin = (pattern: AtomPattern): boolean =>
+  isObjectNotArray(pattern) &&
+  Object.keys(pattern).every((key) =>
+    key === "type" || key === "identity" || key === "inputWitness"
+  ) &&
+  pattern.type === CFC_ATOM_TYPE.TransformedBy &&
+  isObjectNotArray(pattern.identity) &&
+  !containsAtomPatternVariable(pattern.identity) &&
+  pattern.identity.kind === "builtin" &&
+  isNonEmptyString(pattern.identity.builtinId);
+
+/**
+ * The builtins outside this runtime's module registry whose writes hold a
+ * value a pattern chose: the host operations that copy a reviewed value.
+ */
+const HOST_COPYING_WRITERS: ReadonlySet<string> = new Set([
+  SNAPSHOT_SHARE_WRITER,
+  CUSTODY_SEAL_WRITER,
+  REVIEWED_INTENT_WRITER,
+]);
+
+/**
+ * Refuses a descriptor whose destination integrity names a builtin whose
+ * writes a pattern decides: one this runtime's module registry holds, which
+ * pattern code invokes with inputs it chooses, or a host operation that
+ * copies a value a pattern chose. A builtin this runtime does not know is
+ * taken at the descriptor's word; naming one whose writes no pattern steers
+ * is the descriptor author's responsibility.
+ */
+const refuseSteeredWriters = (
+  runtime: Runtime,
+  descriptor: ReviewedIntentDescriptor,
+): void => {
+  for (const declared of Object.values(descriptor.parameters)) {
+    if (declared.kind !== "destinations") continue;
+    for (const pattern of declared.integrity) {
+      const builtinId = (pattern as { identity: { builtinId: string } })
+        .identity.builtinId;
+      if (runtime.moduleRegistry.has(builtinId)) {
+        throw new Error(
+          debugStr`Reviewed intent descriptor requires destination integrity from $quote${builtinId}, a builtin pattern code invokes`,
+        );
+      }
+      if (HOST_COPYING_WRITERS.has(builtinId)) {
+        throw new Error(
+          debugStr`Reviewed intent descriptor requires destination integrity from $quote${builtinId}, which writes values a pattern chose`,
+        );
+      }
+    }
+  }
+};
 
 /** Validates one declared parameter, refusing a kind or member it does not know. */
 const parseParameter = (
@@ -384,21 +444,31 @@ const parseParameter = (
   value: unknown,
 ): ReviewedIntentParameter => {
   if (isObjectNotArray(value) && value.kind === "destinations") {
-    const { min, max, integrity } = value;
+    const { min, max, integrity, space } = value;
     if (
       Array.isArray(integrity) && integrity.every(isAtomPattern) &&
-      !integrity.every(namesRuntimeMintedAtom)
+      !integrity.every(namesOneBuiltin)
     ) {
       throw new Error(
-        debugStr`Reviewed intent descriptor requires destination integrity a pattern could author for $quote${key}`,
+        debugStr`Reviewed intent descriptor requires each destination integrity pattern for $quote${key} to name one builtin's \`TransformedBy\``,
       );
     }
     if (
-      hasExactKeys(value, ["integrity", "kind", "max", "min"]) &&
+      (hasExactKeys(value, ["integrity", "kind", "max", "min"]) ||
+        (hasExactKeys(value, ["integrity", "kind", "max", "min", "space"]) &&
+          isDID(space))) &&
       isCount(min) && isPositiveInteger(max) && min <= max &&
       Array.isArray(integrity) && integrity.length > 0 &&
       integrity.every(isAtomPattern)
-    ) return { kind: "destinations", min, max, integrity: [...integrity] };
+    ) {
+      return {
+        kind: "destinations",
+        min,
+        max,
+        integrity: [...integrity],
+        ...(isDID(space) ? { space } : {}),
+      };
+    }
   } else if (isObjectNotArray(value) && value.kind === "text") {
     if (
       hasExactKeys(value, ["kind", "maxLength"]) &&
@@ -546,16 +616,22 @@ const satisfyingAtoms = (
 };
 
 /**
- * Reads one destination: its stored value, which is all the surface shows of
- * it, the atoms of its stored integrity that satisfy `patterns`, and where it
- * is.
+ * Reads one destination, which must be in `space`: its stored value, which
+ * is all the surface shows of it, the atoms of its derived integrity that
+ * satisfy `patterns`, and where it is.
  */
 const readDestination = (
   tx: IExtendedStorageTransaction,
   cell: Cell<unknown>,
   patterns: readonly AtomPattern[],
+  space: string,
 ): ReviewedDestination => {
   const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+  if (link.space !== space) {
+    throw new Error(
+      "Reviewed intent refuses a destination outside the space its parameter names",
+    );
+  }
   // Read as stored, so that a link inside the value is refused rather than
   // followed: the integrity covers this document, not one it links to.
   const stored = tx.readValueOrThrow(link);
@@ -624,6 +700,7 @@ const inspect = async (
         "descriptor",
       ),
     );
+    refuseSteeredWriters(runtime, descriptor);
     for (const key of Object.keys(bindings.parameters)) {
       if (descriptor.parameters[key]?.kind !== "destinations") {
         throw new Error(
@@ -642,7 +719,7 @@ const inspect = async (
         );
       }
       bound[key] = cellsForKey.map((cell) =>
-        readDestination(tx, cell, declared.integrity)
+        readDestination(tx, cell, declared.integrity, declared.space ?? actor)
       );
     }
     const consumed = collectConsumedLabel(tx).confidentiality;
@@ -1177,6 +1254,7 @@ export function verifyReviewedIntentRecord(
       ...value,
       parameters,
     }) as unknown as ReviewedIntentRecord;
+    refuseSteeredWriters(cellRuntime(record), descriptor);
     checkAgainstDescriptor(verified, descriptor);
     return verified;
   } finally {
@@ -1209,6 +1287,19 @@ const checkAgainstDescriptor = (
     throw new Error("Reviewed intent record's window exceeds its descriptor's");
   }
   const declared = Object.entries(descriptor.parameters);
+  for (const [key, parameter] of declared) {
+    const value = record.parameters[key];
+    if (
+      parameter.kind === "destinations" && Array.isArray(value) &&
+      !value.every((destination) =>
+        destination.source.space === (parameter.space ?? record.subject)
+      )
+    ) {
+      throw new Error(
+        "Reviewed intent record names a destination outside the space its parameter names",
+      );
+    }
+  }
   if (
     !hasExactKeys(record.parameters, declared.map(([key]) => key)) ||
     !declared.every(([key, parameter]) => {

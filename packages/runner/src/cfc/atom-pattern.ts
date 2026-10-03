@@ -345,6 +345,18 @@ const instantiateValue = (
 };
 
 /**
+ * Whether `pattern` holds a `{ var }` placeholder anywhere, or a record
+ * carrying a `var` key in any arrangement: whether any part of it is left
+ * open rather than stated.
+ */
+export const containsAtomPatternVariable = (pattern: unknown): boolean =>
+  Array.isArray(pattern)
+    ? pattern.some(containsAtomPatternVariable)
+    : isObjectNotArray(pattern) &&
+      (Object.hasOwn(pattern, "var") ||
+        Object.values(pattern).some(containsAtomPatternVariable));
+
+/**
  * Instantiates a pattern under a binding environment (spec §4.4.5
  * `substituteVars`/`instantiate`): placeholders are replaced by their bound
  * values; explicit-`undefined` fields (the absence-requirement form) are

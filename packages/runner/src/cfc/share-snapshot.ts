@@ -91,7 +91,8 @@ interface ConsentState {
 }
 
 const consents = new WeakMap<SnapshotShareConsent, ConsentState>();
-const SHARE_WRITER = "cfc-share-snapshot";
+/** Builtin implementation identity that alone writes reviewed snapshot copies. */
+export const SNAPSHOT_SHARE_WRITER = "cfc-share-snapshot";
 
 /** Follows a host binding's one pointer without observing its private target. */
 function appendTarget(
@@ -303,7 +304,7 @@ export async function commitSnapshotShare(
     }
     setCfcImplementationIdentity(tx, {
       kind: "builtin",
-      builtinId: SHARE_WRITER,
+      builtinId: SNAPSHOT_SHARE_WRITER,
     });
     const confidentiality = [...current.retained, {
       anyOf: [cfcAtom.user(state.actor), state.audience],
@@ -311,7 +312,7 @@ export async function commitSnapshotShare(
     const shared = runtime.getCell<JSONValue>(state.destination.space, {
       sharedSnapshot: state.eventId,
     }, {
-      ifc: { confidentiality, writeAuthorizedBy: [SHARE_WRITER] },
+      ifc: { confidentiality, writeAuthorizedBy: [SNAPSHOT_SHARE_WRITER] },
     }, tx);
     shared.set(state.value);
     if (state.appendBooksTo) {
@@ -348,7 +349,7 @@ export async function commitSnapshotShare(
       additionalProperties: true,
       ifc: {
         confidentiality: [...current.retained, cfcAtom.user(state.actor)],
-        writeAuthorizedBy: [SHARE_WRITER],
+        writeAuthorizedBy: [SNAPSHOT_SHARE_WRITER],
       },
     }, tx);
     receipt.set({
