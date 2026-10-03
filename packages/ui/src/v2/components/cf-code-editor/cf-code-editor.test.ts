@@ -1,4 +1,5 @@
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import {
   autocompletion,
@@ -1987,6 +1988,124 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
 
     // The host registers a piece it is told of by writing it into a list.
     expect(told).toBe(0);
+  });
+
+  /** Runs every microtask the editor queued, its reads' answers among them. */
+  const settled = async () => {
+    const time = new FakeTime();
+    try {
+      await time.runMicrotasks();
+    } finally {
+      time.restore();
+    }
+  };
+
+  it("asks again for a read that failed, rather than stay read-only for good", async () => {
+    const element = editor();
+    const universe = createMockCellHandle<MentionableArray>(undefined, {
+      id: "of:universe",
+    });
+    const answer = holdReads(universe);
+    element.mentionable = universe;
+    const view = viewOver("Hello", [], element._refusalGate());
+    element._editorView = view;
+    bind(element, ["mentionable"]);
+
+    answer(new Error("the connection dropped the read"));
+    await settled();
+    // The next change the editor hears.
+    element.updated(new Map());
+    await settled();
+
+    view.dispatch({
+      changes: { from: 5, insert: "!" },
+      userEvent: "input.type",
+    });
+    expect(view.state.doc.toString()).toBe("Hello!");
+  });
+
+  it("applies a rename that arrived while a read was refused once it is admitted", async () => {
+    const element = editor();
+    const universe = bound(
+      createMockCellHandle<MentionableArray>([], { id: "of:universe" }),
+    );
+    const destination = bound(
+      createMockCellHandle<Record<string, unknown>>(
+        { [NAME]: "Old name" },
+        { id: "of:item-42" },
+      ),
+    );
+    element.mentionable = universe;
+    Object.defineProperty(element, "references", {
+      value: bound(
+        createMockCellHandle<MentionRefMap>(
+          { [KEY]: { destination, modifiedTitle: false } },
+          { id: "of:references" },
+        ),
+      ),
+      writable: true,
+    });
+    const view = viewOver(
+      `See [Old name][${KEY}].`,
+      [KEY],
+      element._refusalGate(),
+    );
+    element._editorView = view;
+    await Promise.all(bind(element, ["mentionable", "references"]));
+    await settled();
+
+    pushRefusal(universe);
+    pushUpdate(destination, { [NAME]: "New name" });
+    await settled();
+    expect(view.state.doc.toString()).toBe(`See [Old name][${KEY}].`);
+
+    pushUpdate(universe, []);
+    await settled();
+
+    expect(view.state.doc.toString()).toBe(`See [New name][${KEY}].`);
+  });
+
+  it("drops the token of a mention whose create returned after a refusal, once the read is admitted", async () => {
+    const element = editor();
+    const universe = bound(
+      createMockCellHandle<MentionableArray>([], { id: "of:universe" }),
+    );
+    element.mentionable = universe;
+    const references = bound(
+      createMockCellHandle<MentionRefMap>({}, { id: "of:references" }),
+    );
+    Object.defineProperty(element, "references", {
+      value: references,
+      writable: true,
+    });
+    const created = Promise.withResolvers<unknown>();
+    element.pattern = {
+      get: () => "{}",
+      space: () => "did:key:mock",
+      runtime: () => ({
+        signal: new AbortController().signal,
+        createPiece: () => created.promise,
+      }),
+    };
+    const view = viewOver("[[Topic", [], element._refusalGate(), 7);
+    element._editorView = view;
+    await Promise.all(bind(element, ["mentionable", "references"]));
+
+    element._completeBacklinkQuery(view, "Topic");
+    pushRefusal(universe);
+    created.resolve({
+      id: () => "new-topic",
+      cell: () => createMockCellHandle({ [NAME]: "Topic" }),
+    });
+    await settled();
+    // A token with no entry, which the gate keeps while the read is refused.
+    expect(view.state.doc.toString()).toMatch(/^\[Topic\]\[[a-z0-9]+\]$/);
+
+    pushUpdate(universe, []);
+    await settled();
+
+    expect(view.state.doc.toString()).toBe("Topic");
+    expect(writesSent(references)).toEqual([]);
   });
 
   it("mints no key into a refused reference map", () => {
