@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/runner/shared";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type CellHandle,
   CellReadRefusedError,
@@ -59,14 +60,9 @@ export async function deliverOpenPath<T>(
   }
   const field = exported?.openPath;
   const stream = isCellHandle(field) ||
-    (isRecord(field) && field.$stream === true);
+    (isObjectNotArray(field) && field.$stream === true);
   if (!stream || !claim()) return false;
   await cell.asSchema<{ openPath: { path: string } }>({ type: "object" })
     .key("openPath").send({ path });
   return true;
-}
-
-/** Whether `value` is a plain record. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
