@@ -1570,10 +1570,25 @@ export class RuntimeProcessor {
     if (request.awaitDurability !== false || holdsNoValue(cell)) {
       await this.#runtime.scheduler.idleWithPendingCommits();
     }
-    return this.handleCellGet({
+    return await this.#settledGet({
       type: RequestType.CellGet,
       cell: request.cell,
     });
+  }
+
+  /**
+   * {@link handleCellGet}, made once more where its answer was a refusal
+   * made before the access lists it consulted had loaded, once they have
+   * (`HostReadGate.settle()`). A one-shot read has no watch to make it again,
+   * and the refusal would otherwise stand on the host's handle.
+   */
+  async #settledGet(request: CellGetRequest): Promise<CellGetResponse> {
+    const answer = this.handleCellGet(request);
+    if (answer.refused === undefined) return answer;
+    const settled = await this.#hostReadGate.settle(
+      getCell(this.#runtime, request.cell),
+    );
+    return settled ? this.handleCellGet(request) : answer;
   }
 
   /** Atomically stores a default only while the target has no backing value. */
@@ -3566,7 +3581,7 @@ export class RuntimeProcessor {
       case RequestType.Dispose:
         return await this.dispose();
       case RequestType.CellGet:
-        return this.handleCellGet(request);
+        return await this.#settledGet(request);
       case RequestType.CellPull:
         return await this.handleCellPull(request);
       case RequestType.CellInitialize:

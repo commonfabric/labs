@@ -390,6 +390,82 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("decides a member's one-shot read again once the access list it consulted loads", async () => {
+      // The owner's space grants the visitor READ. The visitor's worker has
+      // loaded a document labeled with that space, but not its access list.
+      const server = newLoopbackServer();
+      const writer = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      const reader = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, {
+          as: visitor,
+        }),
+      });
+      try {
+        const tx = writer.edit();
+        tx.writeOrThrow({
+          space,
+          id: `of:${space}` as `${string}:${string}`,
+          type: "application/json",
+          path: [],
+        }, { value: { [space]: "OWNER", [visitor.did()]: "READ" } });
+        const labeled = writer.getCell(space, "for-members", undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: labeled.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { note: "for members of the space" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { confidentiality: [cfcAtom.space(space)] },
+              }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        await writer.storageManager.synced();
+        const cell = reader.getCell(space, "for-members");
+        await cell.sync();
+        // The visitor's worker works in a space of its own, so membership of
+        // the owner's space comes from that space's access list alone.
+        const processor = buildProcessor({
+          runtime: reader,
+          identity: visitor,
+          space: visitor.did(),
+          renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+            visitor.did(),
+          ),
+        });
+        try {
+          const answer = await processor.handleRequest({
+            type: RequestType.CellGet,
+            cell: createCellRef(cell),
+          });
+
+          expect(answer).toEqual({
+            value: { note: "for members of the space" },
+          });
+        } finally {
+          await processor.dispose();
+        }
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
     it("refuses each update of a refused collaborative field", async () => {
       await using docs = await shelf();
       const field = { materialized: SECRET_VALUE } as never;

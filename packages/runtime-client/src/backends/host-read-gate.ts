@@ -57,6 +57,7 @@ import {
   type CfcLabelView,
   cfcLabelViewForCell,
   cfcLabelViewForResolvedCell,
+  membershipSpacesInConfidentiality,
   reportCfcDenial,
 } from "@commonfabric/runner/cfc";
 import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
@@ -264,6 +265,40 @@ export class HostReadGate {
         ? undefined
         : this.#displayView(cell, cfcLabel),
     });
+  }
+
+  /**
+   * Waits for what a decision on `cell` consults and has not loaded: the
+   * access lists of the spaces its labels name, which a read of the cell
+   * would consult. Says whether it waited for any. A decision made once and
+   * not again, as a host's one-shot read is, refuses a `Space(X)` label while
+   * X's access list has not loaded, and no watch would make it again; one
+   * made after this is made on what the access lists say.
+   */
+  async settle(cell: Cell<unknown>): Promise<boolean> {
+    const membership = this.#sources.membership;
+    if (
+      this.#policy === undefined || membership?.held === undefined ||
+      membership.whenHeld === undefined
+    ) {
+      return false;
+    }
+    const labels = [
+      ...readProjected(cell, hostValueOf).consumed.confidentiality,
+      ...(cellLabelSources(cell) ?? []).flatMap((source) =>
+        source.view === undefined
+          ? []
+          : source.view.entries.flatMap((entry) =>
+            entry.label.confidentiality ?? []
+          )
+      ),
+    ];
+    const pending = membershipSpacesInConfidentiality(labels).filter((space) =>
+      !membership.held!(space)
+    );
+    if (pending.length === 0) return false;
+    await Promise.all(pending.map((space) => membership.whenHeld!(space)));
+    return true;
   }
 
   /**
