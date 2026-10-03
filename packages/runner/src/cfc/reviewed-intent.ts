@@ -25,6 +25,7 @@ import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 import { type Cell, cellRuntime } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
+import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
@@ -38,10 +39,13 @@ import {
   matchAtomPatternConjunction,
 } from "./atom-pattern.ts";
 import type { CfcConfClause } from "./clause.ts";
-import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
+import { canonicalizeCfcLogicalPath } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
-import { collectConsumedLabel } from "./prepare.ts";
+import {
+  collectConsumedLabel,
+  isRuntimeMintedIntegrityAtom,
+} from "./prepare.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
@@ -388,6 +392,16 @@ const isPositiveInteger = (value: unknown): value is number =>
 const isCount = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
 
+/**
+ * Whether every atom `pattern` matches is of a type only trusted runtime code
+ * mints, so no pattern can author an atom it matches.
+ */
+const namesRuntimeMintedAtom = (pattern: AtomPattern): boolean =>
+  typeof pattern === "string"
+    ? isRuntimeMintedIntegrityAtom(pattern)
+    : isObjectNotArray(pattern) && typeof pattern.type === "string" &&
+      isRuntimeMintedIntegrityAtom({ type: pattern.type });
+
 /** Validates one declared parameter, refusing a kind or member it does not know. */
 const parseParameter = (
   key: string,
@@ -395,6 +409,14 @@ const parseParameter = (
 ): ReviewedIntentParameter => {
   if (isObjectNotArray(value) && value.kind === "destinations") {
     const { min, max, integrity } = value;
+    if (
+      Array.isArray(integrity) && integrity.every(isAtomPattern) &&
+      !integrity.every(namesRuntimeMintedAtom)
+    ) {
+      throw new Error(
+        debugStr`Reviewed intent descriptor requires destination integrity a pattern could author for $quote${key}`,
+      );
+    }
     if (
       hasExactKeys(value, ["integrity", "kind", "max", "min"]) &&
       isCount(min) && isPositiveInteger(max) && min <= max &&
@@ -535,19 +557,26 @@ const syncResolved = async (cell: Cell<unknown>): Promise<void> => {
 };
 
 /**
- * The integrity stored on the whole of the value at `link`: the integrity of
- * every entry at or above its path, other than the entries a link carried,
- * which describe the document a stored link names rather than this one.
+ * The integrity the runtime derived for the whole of the value at `link`:
+ * that of every `derived` entry at or above its path that labels content.
+ * Only the runtime writes a `derived` entry, and its `TransformedBy` is taken
+ * away when another writer writes at, above, or below it, so what it says
+ * about who wrote the value still holds. A declared label says what a
+ * location's values carry by its schema, not who wrote the value there, so
+ * it does not count.
  */
-const storedIntegrity = (
+const derivedIntegrity = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
 ): CfcAtom[] =>
-  (cfcLabelViewFromMetadata(readStoredCfcMetadata(tx, link), link.path)
-    ?.entries ?? [])
-    .filter((entry) =>
-      entry.path.length === 0 && entry.observes !== "followRef"
-    )
+  (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+    .filter((entry) => {
+      const path = canonicalizeCfcLogicalPath(entry.path);
+      return entry.origin === "derived" &&
+        (entry.observes === undefined || entry.observes === "value") &&
+        path.length <= link.path.length &&
+        path.every((segment, index) => segment === link.path[index]);
+    })
     .flatMap((entry) => entry.label.integrity ?? []);
 
 /**
@@ -591,7 +620,7 @@ const readDestination = (
     throw new Error("Reviewed intent refuses a destination that holds nothing");
   }
   const address = reviewedJson(stored, "destination");
-  const integrity = satisfyingAtoms(patterns, storedIntegrity(tx, link));
+  const integrity = satisfyingAtoms(patterns, derivedIntegrity(tx, link));
   if (integrity === undefined) {
     throw new Error(
       debugStr`Reviewed intent refuses a destination without the integrity its descriptor requires: $quote,long${address}`,
@@ -616,6 +645,16 @@ const inspect = async (
   ];
   if (cells.some((cell) => cellRuntime(cell) !== runtime)) {
     throw new Error("Reviewed intent handles must belong to the same runtime");
+  }
+  // The record's stamp is a flow label, so a runtime that would not persist
+  // one could only write records that never verify.
+  if (
+    runtime.cfcFlowLabels !== "persist" ||
+    runtime.cfcEnforcementMode === "disabled"
+  ) {
+    throw new Error(
+      "Reviewed intent requires a runtime that enforces CFC and persists flow labels",
+    );
   }
   await Promise.all(cells.map(syncResolved));
 
@@ -736,6 +775,14 @@ export async function prepareReviewedIntent(
 ): Promise<PreparedReviewedIntent> {
   const inspected = await inspect(bindings);
   const { descriptor } = inspected;
+  // The host transport carries no durable event identity, so the commit's
+  // identity is minted here, unpredictably: the record's address derives
+  // from it, and no other code can create that document first.
+  const idempotencyKey = crypto.randomUUID();
+  refuseUnlinkableResult(
+    bindings.result,
+    recordCellFor(cellRuntime(bindings.result), inspected, idempotencyKey),
+  );
   // The preview and the retained consent share these values, so they are
   // frozen: a caller that edits what it was shown cannot change what the
   // commit compares against.
@@ -753,10 +800,7 @@ export async function prepareReviewedIntent(
         ]),
       )),
     }),
-    // The host transport carries no durable event identity, so the commit's
-    // identity is minted here, unpredictably: the record's address derives
-    // from it, and no other code can create that document first.
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey,
   });
   return Object.freeze({
     actor: inspected.actor,
@@ -865,6 +909,65 @@ const writtenOnlyByReviewedIntent = (
   } as const;
 };
 
+/** The record a commit with `idempotencyKey` writes for `inspected`. */
+const recordCellFor = (
+  runtime: Runtime,
+  inspected: Inspection,
+  idempotencyKey: string,
+): Cell<JSONValue> =>
+  runtime.getCell<JSONValue>(
+    inspected.actor as never,
+    { reviewedIntent: idempotencyKey },
+    writtenOnlyByReviewedIntent(inspected.confidentiality),
+  );
+
+/**
+ * Refuses a result cell whose write target would refuse the link to `record`,
+ * by preparing that write and discarding it, so that a commit never writes a
+ * record it cannot link.
+ */
+const refuseUnlinkableResult = (
+  result: Cell<unknown>,
+  record: Cell<JSONValue>,
+): void => {
+  const runtime = cellRuntime(result);
+  const tx = runtime.edit();
+  try {
+    writeRecordLink(runtime, tx, result, record);
+    runtime.prepareTxForCommit(tx);
+    if (tx.getCfcState().prepare.status === "invalidated") {
+      throw new Error(
+        "Reviewed intent refuses a result cell that refuses the record's link",
+      );
+    }
+  } finally {
+    tx.abort();
+  }
+};
+
+/**
+ * Writes a link to `record` where a write to `result` lands, and returns that
+ * location.
+ */
+const writeRecordLink = (
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  result: Cell<unknown>,
+  record: Cell<JSONValue>,
+): NormalizedFullLink => {
+  const target = resolveLink(
+    runtime,
+    tx,
+    result.getAsNormalizedFullLink(),
+    "writeRedirect",
+  );
+  const { schema: _schema, ...recordLink } = record.getAsNormalizedFullLink();
+  runtime.getCellFromLink(target, undefined, tx).set(
+    runtime.getCellFromLink(recordLink, undefined, tx),
+  );
+  return target;
+};
+
 /**
  * Writes the reviewed intent after a host-trusted gesture on the surface: the
  * actor-private receipt, then the record, both in the actor's home space,
@@ -931,11 +1034,7 @@ export async function commitReviewedIntent(
     evidence: { component: REVIEWED_INTENT_COMPONENT },
   };
   const schema = writtenOnlyByReviewedIntent(current.confidentiality);
-  const recordCell = runtime.getCell<JSONValue>(
-    actor as never,
-    { reviewedIntent: idempotencyKey },
-    schema,
-  );
+  const recordCell = recordCellFor(runtime, current, idempotencyKey);
 
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
@@ -1008,20 +1107,15 @@ export async function commitReviewedIntent(
 
   const linkTx = runtime.edit();
   try {
-    const target = resolveLink(
+    const target = writeRecordLink(
       runtime,
       linkTx,
-      state.bindings.result.getAsNormalizedFullLink(),
-      "writeRedirect",
+      state.bindings.result,
+      recordCell,
     );
     if (!deepEqual(locationOf(target), state.resultLocation)) {
       throw new Error(STALE_REVIEW);
     }
-    const { schema: _schema, ...recordLink } = recordCell
-      .getAsNormalizedFullLink();
-    runtime.getCellFromLink(target, undefined, linkTx).set(
-      runtime.getCellFromLink(recordLink, undefined, linkTx),
-    );
     const result = await linkTx.commit();
     if (result.error) {
       throw new Error(
