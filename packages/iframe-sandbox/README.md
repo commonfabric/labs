@@ -127,6 +127,10 @@ const stopSecret = secret.sink(
 );
 ```
 
+The host holds the path a guest read to that refusal: `set()` and `push()`
+through the same path reject with `read-refused` until a read of it (a `pull()`,
+or a value its sink delivers) is admitted.
+
 `describe()` makes the API inspectable by people and agents. It returns every
 resource's kind, core operations, named methods, description, and schema.
 Missing resources and unsupported operations reject with `FabricBridgeError`,
