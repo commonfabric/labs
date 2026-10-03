@@ -4252,6 +4252,51 @@ interface HasImage {
       });
     }
 
+    for (
+      const [name, declarations, whole, ifc] of [
+        [
+          "a cell with labels of its own",
+          "",
+          'value: Confidential<Cell<Secret>, ["x"]>',
+          { confidentiality: ["x"] },
+        ],
+        [
+          "a cell with integrity of its own",
+          "",
+          'value: Integrity<Cell<Secret>, ["i"]>',
+          { integrity: ["i"] },
+        ],
+        [
+          "a cell that may be missing, with labels of its own",
+          'type Linked = Cfc<Cell<Secret>, { addIntegrity: ["linked"]; confidentiality: ["x"] }>;',
+          "value: Linked | undefined",
+          { confidentiality: ["x"], addIntegrity: ["linked"] },
+        ],
+        [
+          "a cell with labels of its own and of its value",
+          'type Outer<T> = Confidential<Cell<T | null>, ["x"]>;',
+          'value: Outer<Confidential<Secret, ["y"]>>',
+          { confidentiality: ["y", "x"] },
+        ],
+        [
+          "a union of cells with labels of their own",
+          "",
+          'value: Confidential<Cell<Secret>, ["x"]> | Confidential<Cell<Secret>, ["y"]>',
+          { confidentiality: ["x", "y"] },
+        ],
+      ] as const
+    ) {
+      it(`gives a node narrowed from ${name} every one of those labels`, async () => {
+        const { narrowed } = await narrowedSchema(
+          "{ narrowed: { a: string } }",
+          whole,
+          { declarations },
+        );
+
+        expect(narrowed).toEqual({ ...A_ONLY, ifc });
+      });
+    }
+
     it("gives a node narrowed from a union of cells the labels of every cell's value", async () => {
       const { narrowed } = await narrowedSchema(
         "{ narrowed: { a: string } }",

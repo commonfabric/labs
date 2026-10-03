@@ -52,6 +52,20 @@ export default pattern<{ secret: Confidential<Secret, ["top"]> }>(
     expect(capture.secret).toEqual(A_ONLY({ confidentiality: ["top"] }));
   });
 
+  it("keeps a label declared on a cell itself", async () => {
+    const capture = await captureOf(`
+interface Item { id: string }
+export default pattern<{
+  items: Confidential<Writable<Item[]>, ["top"]>;
+  maybe: Confidential<Writable<Secret>, ["top"]> | undefined;
+}>(({ items, maybe }) => ({
+  out: computed(() => items.get().length + (maybe?.get().a.length ?? 0)),
+}));`);
+
+    expect(capture.items).toMatchObject({ ifc: { confidentiality: ["top"] } });
+    expect(capture.maybe).toMatchObject({ ifc: { confidentiality: ["top"] } });
+  });
+
   it("keeps a label on a value read by an optional chain", async () => {
     const capture = await captureOf(`
 export default pattern<{ maybe: Confidential<Secret, ["top"]> | undefined }>(
