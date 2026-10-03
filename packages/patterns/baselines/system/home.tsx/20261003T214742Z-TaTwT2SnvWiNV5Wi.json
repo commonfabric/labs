@@ -351,7 +351,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setAvatar"
                   ]
@@ -377,7 +377,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setBio"
                   ]
@@ -402,7 +402,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "mutateElements"
                   ]
@@ -431,7 +431,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "mutateExternalProfileLinks"
                   ]
@@ -460,7 +460,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setInbox"
                   ]
@@ -491,7 +491,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "setName"
                   ]
@@ -571,7 +571,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/profile-home.tsx",
-                  "moduleIdentity": "b91IoVoRZIWrk94xLw89lALV--CuBFKWJdofbj_JTcQ",
+                  "moduleIdentity": "v6O1qWKptNPP8ItNz8nzAbIA8PRbJPP95R99QJrvmtk",
                   "path": [
                     "publishVerifiedIdentities"
                   ]
@@ -1547,14 +1547,34 @@
         "type": "object"
       },
       "TrustedDefaultProfile": {
-        "anyOf": [
-          {
-            "type": "undefined"
-          },
-          {
-            "$ref": "#/$defs/BackwardsCompatibleProfile"
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/BackwardsCompatibleProfile",
+            "ifc": {
+              "addIntegrity": [
+                "profile-link"
+              ],
+              "uiContract": {
+                "action": "SetDefaultProfile",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ProfilePickerSurface"
+                ],
+                "trustedPattern": "ProfilePickerSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-create.tsx",
+                  "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
+                  "path": [
+                    "setDefaultProfile"
+                  ]
+                }
+              }
+            }
           }
-        ]
+        },
+        "type": "object"
       },
       "TrustedProfileLink": {
         "$ref": "#/$defs/BackwardsCompatibleProfile",
@@ -1573,7 +1593,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "f5B71aBBwDqbmUETs2EqM4GqDQEQQtzNkxzEZVSkOZg",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1589,7 +1609,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "f5B71aBBwDqbmUETs2EqM4GqDQEQQtzNkxzEZVSkOZg",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
               "path": [
                 "submitProfileCreation"
               ]
@@ -1609,7 +1629,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/system/profile-create.tsx",
-              "moduleIdentity": "f5B71aBBwDqbmUETs2EqM4GqDQEQQtzNkxzEZVSkOZg",
+              "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
               "path": [
                 "setMruProfile"
               ]
@@ -1633,7 +1653,7 @@
             "writeAuthorizedBy": {
               "__ctWriterIdentityOf": {
                 "file": "/packages/patterns/system/profile-create.tsx",
-                "moduleIdentity": "f5B71aBBwDqbmUETs2EqM4GqDQEQQtzNkxzEZVSkOZg",
+                "moduleIdentity": "CgtndYvTjpmKMaoTkchBTymuRyaEsBVhPCkppVWFR8o",
                 "path": [
                   "setMruProfile"
                 ]
@@ -1785,6 +1805,9 @@
           "$ref": "#/$defs/JournalEntry"
         },
         "type": "array"
+      },
+      "legacyDefaultProfile": {
+        "$ref": "#/$defs/BackwardsCompatibleProfile"
       },
       "mru": {
         "$ref": "#/$defs/TrustedProfileMru",
