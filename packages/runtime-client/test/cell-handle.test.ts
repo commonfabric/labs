@@ -925,6 +925,16 @@ describe("cell-handle", () => {
       expect(cell.get()).toBe("the same value");
     });
 
+    it("names the missing `onRefused` to a caller that leaves it out", () => {
+      const cell = new CellHandle<string>(makeRuntime(), ref);
+
+      for (const args of [[() => {}], [() => {}, {}]]) {
+        expect(() => Reflect.apply(cell.subscribe, cell, args)).toThrow(
+          /requires `options\.onRefused`/,
+        );
+      }
+    });
+
     it("runs the cleanup a subscriber returned for the value a refusal drops", () => {
       const cell = new CellHandle<string>(makeRuntime(), ref);
       const cleaned: string[] = [];
