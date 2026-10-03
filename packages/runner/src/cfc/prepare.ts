@@ -73,7 +73,11 @@ import {
   registerSchemaDocument,
 } from "../schema-registry.ts";
 import { storedLabelMapEntries } from "./label-documents.ts";
-import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
+import {
+  readBroaderReaderRestrictions,
+  readStoredCfcMetadata,
+  StoredCfcMetadataError,
+} from "./metadata.ts";
 import {
   assertStoredPrincipalConfidentialityBound,
   bindCurrentPrincipalConfidentiality,
@@ -9360,6 +9364,9 @@ type ConsumedReadAddress = Pick<
  */
 const collectConsumedLabelImpl = (
   tx: IExtendedStorageTransaction,
+  // For a reader's measure: the transaction each broader instance's envelope
+  // is read through (`collectReaderConsumedLabel()`).
+  readerLabels?: IExtendedStorageTransaction,
 ): {
   confidentiality: readonly CfcConfClause[];
   integrity: readonly CfcAtom[];
@@ -9427,11 +9434,19 @@ const collectConsumedLabelImpl = (
     const metadataKey = stringTupleKey([read.space, read.id, scope, type]);
     if (!labelIndexes.has(metadataKey)) {
       const metadata = storedMetadataFor(tx, read.space, read.id, scope, type);
+      const entries = [
+        ...(metadata?.labelMap.entries ?? []),
+        ...(readerLabels === undefined ? [] : readBroaderReaderRestrictions(
+          readerLabels,
+          { space: read.space, id: read.id, scope, type },
+          { meta: INTERNAL_VERIFIER_META },
+        )),
+      ];
       labelIndexes.set(
         metadataKey,
-        metadata === undefined
+        metadata === undefined && entries.length === 0
           ? undefined
-          : new ConsumedLabelIndex(metadata.labelMap.entries, {
+          : new ConsumedLabelIndex(entries, {
             onQuery: (wildcard) =>
               tx.noteCfcPreparationWork?.(
                 wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
@@ -12536,11 +12551,38 @@ export const deriveFlowJoin: typeof deriveFlowJoinImpl = (tx, options) => {
 };
 
 /** Collects consumed labels and records its preparation span. */
-export const collectConsumedLabel: typeof collectConsumedLabelImpl = (tx) => {
+export const collectConsumedLabel = (
+  tx: IExtendedStorageTransaction,
+): ReturnType<typeof collectConsumedLabelImpl> => {
   const started = performance.now();
   try {
     return collectConsumedLabelImpl(tx);
   } finally {
     cfcLogger.time(started, "collectConsumedLabel");
+  }
+};
+
+/**
+ * The labels everything `tx` read answers to for a reader, a host or a render
+ * a value is shown to: as {@link collectConsumedLabel} joins them, with each
+ * read of a scoped instance also answering to the confidentiality a value
+ * read of each broader instance of its document consumes, the reader rule of
+ * `readStoredCfcLabelsForReader()`. Integrity stays each instance's own.
+ *
+ * The broader envelopes are read through `labels`: `tx` itself where `tx`
+ * never commits, else a transaction that never does, so that a committing
+ * transaction's reads, which its commit is checked against, are not added
+ * to. The flow join and the egress gates read each instance's own envelope
+ * through {@link collectConsumedLabel}.
+ */
+export const collectReaderConsumedLabel = (
+  tx: IExtendedStorageTransaction,
+  labels: IExtendedStorageTransaction = tx,
+): ReturnType<typeof collectConsumedLabelImpl> => {
+  const started = performance.now();
+  try {
+    return collectConsumedLabelImpl(tx, labels);
+  } finally {
+    cfcLogger.time(started, "collectReaderConsumedLabel");
   }
 };

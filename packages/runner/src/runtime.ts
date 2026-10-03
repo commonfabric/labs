@@ -107,7 +107,11 @@ import {
   runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
-import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
+import {
+  collectConsumedLabel,
+  collectReaderConsumedLabel,
+  deriveFlowJoin,
+} from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
 import {
   type DelegatedCarriage,
@@ -2677,12 +2681,15 @@ export class Runtime {
         // this a mixed-reason refusal — one verdict plus one unevaluable
         // input — reaches a host as nothing but a graph that stopped
         // converging.
-        this.telemetry.submit({
-          type: "cfc.prepare-reject",
-          reasons: [...refusal.reasons],
-          refusals: [...refusal.refusals],
-          terminal: refusal.terminal,
-        }, refusal.consumed);
+        this.telemetry.submit(
+          {
+            type: "cfc.prepare-reject",
+            reasons: [...refusal.reasons],
+            refusals: [...refusal.refusals],
+            terminal: refusal.terminal,
+          },
+          () => collectReaderConsumedLabel(refusal.transaction, this.readTx()),
+        );
       },
       onDigestInvalidation: () => {
         this.#cfcStats.cfcDigestInvalidations += 1;

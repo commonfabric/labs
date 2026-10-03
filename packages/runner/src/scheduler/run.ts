@@ -4,7 +4,7 @@ import { startReadStats } from "../read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { collectReaderConsumedLabel } from "../cfc/prepare.ts";
 import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
 import type { Runtime } from "../runtime.ts";
@@ -1005,7 +1005,7 @@ function finalizeSchedulerAction(
     ...(args.error !== undefined
       ? { error: args.error instanceof Error ? args.error.message : "error" }
       : {}),
-  }, () => collectConsumedLabel(args.tx));
+  }, () => collectReaderConsumedLabel(args.tx, state.runtime.readTx()));
   state.maybeAutoDebounce(args.action);
   state.markActionHasRun(args.action);
   state.markNodeHasRun(args.action);

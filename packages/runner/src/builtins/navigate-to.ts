@@ -3,7 +3,7 @@ import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
 } from "@commonfabric/memory/v2";
 import { type Cell, createCell, type SinkConsumedLabel } from "../cell.ts";
-import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { collectReaderConsumedLabel } from "../cfc/prepare.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
 import { type RawBuiltinResult } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
@@ -21,16 +21,18 @@ import { getLogger } from "@commonfabric/utils/logger";
 const logger = getLogger("navigate-to", { enabled: true, level: "warn" });
 
 /**
- * The labels `tx` has consumed, read now, while it is open, for a decision
- * made after it has closed, as a navigation is released after its commit.
- * Labels that cannot be read are not: asking for them raises the failure.
+ * The labels `tx` has consumed, as a reader of what it chose answers to them,
+ * read now, while it is open, for a decision made after it has closed, as a
+ * navigation is released after its commit. Labels that cannot be read are
+ * not: asking for them raises the failure.
  */
 function consumedSoFar(
+  runtime: Runtime,
   tx: IExtendedStorageTransaction,
 ): () => SinkConsumedLabel {
   let read: SinkConsumedLabel;
   try {
-    read = collectConsumedLabel(tx);
+    read = collectReaderConsumedLabel(tx, runtime.readTx());
   } catch (error) {
     return () => {
       throw error;
@@ -404,7 +406,7 @@ export function navigateTo(
     const navigateCallback = runtime.navigateCallback;
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
-    const consumed = consumedSoFar(tx);
+    const consumed = consumedSoFar(runtime, tx);
 
     const previousNavigated = navigated;
     const thisAttempt = ++navigationAttempt;
@@ -469,7 +471,7 @@ export function navigateTo(
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
     const navigateCallback = runtime.navigateCallback;
-    const consumed = consumedSoFar(tx);
+    const consumed = consumedSoFar(runtime, tx);
 
     const previousNavigated = navigated;
     const thisAttempt = ++navigationAttempt;

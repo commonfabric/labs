@@ -114,7 +114,10 @@ import {
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
 import { withLinkCfcLabelView } from "./cfc/link-label-view.ts";
-import { collectConsumedLabel } from "./cfc/prepare.ts";
+import {
+  type collectConsumedLabel,
+  collectReaderConsumedLabel,
+} from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -227,7 +230,7 @@ type SinkOptions = {
 
   /**
    * Join the CFC labels of everything the sink's read consumed, following
-   * links, as `collectConsumedLabel()` joins them for a transaction, and pass
+   * links, as `collectReaderConsumedLabel()` joins them for a reader, and pass
    * the join to the callback as a third argument. The label metadata is read
    * on the sink's transaction, so a label-only write to anything the read
    * reached re-fires the sink. Off by default.
@@ -4833,8 +4836,10 @@ function subscribeToReferencedDocs<T>(
       // cover what it reads: a field the schema leaves untyped holds a value
       // that reads what it holds only once it is looked at.
       const delivered = project === undefined ? newValue : project(newValue);
+      // What the sink's read answers to for a reader, the sink's transaction
+      // being one that commits no write.
       const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx)
+        ? collectReaderConsumedLabel(tx)
         : undefined;
       sink.cleanup = callback(delivered, cfcLabel, consumed);
 
@@ -5357,7 +5362,7 @@ export function readProjected<R>(
   // dropped with it.
   const tx = cellRuntime(cell).readTx();
   const value = project(cell.withTx(tx).get());
-  return { value, consumed: collectConsumedLabel(tx) };
+  return { value, consumed: collectReaderConsumedLabel(tx) };
 }
 
 /**

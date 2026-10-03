@@ -202,6 +202,176 @@ function holds(answer: unknown, text: string): boolean {
 }
 
 describe("HostReadGate, for what crosses beside a value", () => {
+  describe("scoped instances reached through a link", () => {
+    const SCOPED_SECRET = "scoped-secret-value";
+
+    /**
+     * A document whose space instance only its owner may see, and whose user
+     * instance holds a value and stores no label of its own, which a reader
+     * of it answers to its space instance's confidentiality for. Returns a
+     * link to the user instance.
+     */
+    async function scopedBehindSealedSpace(
+      docs: Awaited<ReturnType<typeof shelf>>,
+      name: string,
+    ) {
+      const tx = docs.runtime.edit();
+      const id = docs.runtime.getCell(space, name, undefined, tx)
+        .getAsNormalizedFullLink().id;
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, {
+        space,
+        id,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { note: "the space instance" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+          },
+        },
+      } as FabricValue);
+      seedStoredEnvelope(tx, {
+        space,
+        id,
+        scope: "user",
+        type: "application/json",
+        path: [],
+      }, { value: { note: SCOPED_SECRET } } as FabricValue);
+      expect((await tx.commit()).ok).toBeDefined();
+      return { "/": { "link@1": { id, path: [], scope: "user" } } };
+    }
+
+    it("refuses a visitor a record whose link reaches a scoped instance it is refused", async () => {
+      await using docs = await shelf();
+      const link = await scopedBehindSealedSpace(docs, "scoped-target");
+      const outer = await docs.write("scoped-outer", { f: link });
+
+      const toVisitor = gateFor(docs.runtime, visitor);
+      expect(toVisitor.read(outer.key("f"))).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+      });
+      const whole = toVisitor.read(outer);
+      expect(holds(whole, SCOPED_SECRET)).toBe(false);
+      expect(whole).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(gateFor(docs.runtime, owner).read(outer), SCOPED_SECRET))
+        .toBe(true);
+    });
+
+    it("withholds what an action logged of a scoped instance it read through a link", async () => {
+      const storageManager = StorageManager.emulate({ as: owner });
+      const shown: unknown[] = [];
+      let gates: HostReadGate[] = [];
+      let heard: () => void = () => {};
+      const logged = new Promise<void>((resolve) => (heard = resolve));
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager,
+        consoleHandler: ({ method, args, consumed }) => {
+          if (gates.length === 0) return args;
+          for (const gate of gates) {
+            shown.push(
+              gate.console(
+                { method },
+                args.map((arg) => toConsoleDebugValue(arg)),
+                consumed,
+              ).args,
+            );
+          }
+          heard();
+          return [];
+        },
+      });
+      try {
+        const docs = {
+          runtime,
+          write: async (id: string, value: unknown) => {
+            const tx = runtime.edit();
+            runtime.getCell(space, id, undefined, tx).set(value);
+            expect((await tx.commit()).ok).toBeDefined();
+          },
+        };
+        const tx = runtime.edit();
+        const id = runtime.getCell(space, "logged-scoped", undefined, tx)
+          .getAsNormalizedFullLink().id;
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { note: "the space instance" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        seedStoredEnvelope(tx, {
+          space,
+          id,
+          scope: "user",
+          type: "application/json",
+          path: [],
+        }, { value: { note: SCOPED_SECRET } } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        await docs.write("logged-scoped-input", {
+          n: { "/": { "link@1": { id, path: ["note"], scope: "user" } } },
+        });
+        gates = [gateFor(runtime, visitor), gateFor(runtime, owner)];
+        const compiled = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ n: string }, { out: string }>(",
+              "  ({ n }) => {",
+              "    const out = computed(() => {",
+              "      console.log('read', n);",
+              "      return 'x';",
+              "    });",
+              "    return { out };",
+              "  },",
+              ");",
+            ].join("\n"),
+          }],
+        }, { space });
+        const result = runtime.getCell(
+          space,
+          "logged-scoped-result",
+          compiled.resultSchema,
+        );
+        const run = runtime.edit();
+        runtime.run(
+          run,
+          compiled,
+          runtime.getCell(space, "logged-scoped-input"),
+          result,
+        );
+        await run.commit();
+        const cancel = result.sink(() => {});
+        await logged;
+        cancel();
+
+        // The visitor is shown the placeholder; the owner, what was logged.
+        expect(shown[0]).toEqual([PLACEHOLDER]);
+        expect(holds(shown[1], SCOPED_SECRET)).toBe(true);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
   describe("label views", () => {
     it("joins a refused document's label at its root for a label read, and keeps the owner's whole", async () => {
       await using docs = await shelf();

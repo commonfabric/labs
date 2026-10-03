@@ -2,13 +2,16 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { getTopFrame } from "../builder/pattern.ts";
 import { type Frame } from "../builder/types.ts";
-import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { collectReaderConsumedLabel } from "../cfc/prepare.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "../query-result-proxy.ts";
 import type { ErrorHandler, ErrorWithContext } from "../runtime.ts";
-import type { IMemorySpaceAddress } from "../storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+} from "../storage/interface.ts";
 import type {
   Action,
   ActionRunTraceAddress,
@@ -249,6 +252,9 @@ export function handleSchedulerError(
   state: {
     readonly errorHandlers: ReadonlySet<ErrorHandler>;
     readonly parseStack: (stack: string) => string;
+
+    /** A transaction that never commits, for reading labels apart. */
+    readonly readTx: () => IExtendedStorageTransaction;
   },
   error: Error,
   action: unknown,
@@ -272,7 +278,10 @@ export function handleSchedulerError(
   errorWithContext.action = action as ErrorWithContext["action"];
   const tx = (error as Error & { frame?: Frame }).frame?.tx;
   if (tx !== undefined) {
-    errorWithContext.consumed = () => collectConsumedLabel(tx);
+    // Read for a reader, with the broader instances' envelopes read apart
+    // from the run's transaction.
+    errorWithContext.consumed = () =>
+      collectReaderConsumedLabel(tx, state.readTx());
   }
   if (pieceId) errorWithContext.pieceId = pieceId;
   if (spellId) errorWithContext.spellId = spellId;
