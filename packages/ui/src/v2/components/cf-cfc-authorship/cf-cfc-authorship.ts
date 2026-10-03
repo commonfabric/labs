@@ -691,8 +691,10 @@ export class CFCFCAuthorship extends BaseElement {
     }, {
       includeCfcLabel: true,
       // A value the worker will not show carries no attestation here, and
-      // none is read for it.
+      // none is read for it: the watch on the cell it resolved to ends too. A
+      // later readable value starts one again.
       onRefused: () => {
+        this.#endLabelWatch("value");
         this._labelRequestId++;
         const previous = this.cfcLabel;
         this.cfcLabel = undefined;
@@ -731,8 +733,10 @@ export class CFCFCAuthorship extends BaseElement {
       this.requestUpdate("author", previous);
     }, {
       includeCfcLabel: true,
-      // An author the worker will not show makes no claim here.
+      // An author the worker will not show makes no claim here, and the
+      // watch on the cell it resolved to ends.
       onRefused: () => {
+        this.#endLabelWatch("author");
         this._authorRequestId++;
         const previous = this._authorClaim;
         this._authorClaim = undefined;
@@ -836,8 +840,9 @@ export class CFCFCAuthorship extends BaseElement {
    * marks the cell loaded and runs `refresh`, whose store read does see the
    * label; a read that still finds none once the cell has loaded ends the
    * watch. The watch ends too when a read finds the label, when `source`
-   * resolves to a different cell or to none, and when the element
-   * disconnects. An element that is not connected starts none.
+   * resolves to a different cell or to none, when the worker refuses the
+   * watched cell's read, or `source`'s own, and when the element disconnects.
+   * An element that is not connected starts none.
    */
   #watchUnloadedLabel(
     source: LabelSource,

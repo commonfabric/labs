@@ -342,6 +342,10 @@ describe("HeaderView piece list", () => {
         { id: "named", name: "Content hidden by policy" },
         { id: "untitled", name: "Piece #untitl" },
       ]);
+      // Shown, though not cached.
+      const markup = templateMarkup(view.render());
+      expect(markup).toContain("Content hidden by policy");
+      expect(markup).toContain("Piece #untitl");
 
       // Not cached: the next open asks again, and the name is admitted now.
       view.headerPieceDropdownOpen = false;

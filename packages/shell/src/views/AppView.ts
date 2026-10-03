@@ -227,10 +227,6 @@ interface ShownResolution {
 }
 
 /**
- * The origin a reference is opened under when it is read as a page. Only the
- * path is read, so which origin this is decides nothing.
- */
-/**
  * The title a piece's name read gives: the name, or the placeholder a render
  * shows where the display ceiling refuses what it holds, rather than the
  * "Untitled" of a piece that has no name.
@@ -240,6 +236,10 @@ function titleOf(read: CellHandleRead<string | undefined>): string | undefined {
   return "value" in read ? read.value : undefined;
 }
 
+/**
+ * The origin a reference is opened under when it is read as a page. Only the
+ * path is read, so which origin this is decides nothing.
+ */
 const PAGE_ORIGIN = "http://page.invalid";
 
 /**

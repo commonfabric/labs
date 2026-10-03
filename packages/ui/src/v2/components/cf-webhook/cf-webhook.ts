@@ -1,5 +1,5 @@
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
-import { CellHandle } from "@commonfabric/runtime-client";
+import { CellHandle, CellReadRefusedError } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -73,9 +73,23 @@ export class CFWebhook extends BaseElement {
   private _subscribeToConfig() {
     this._configUnsub?.();
     this._configUnsub = undefined;
-    if (this.config?.subscribe) {
+    const config = this.config;
+    if (config?.subscribe) {
       const update = () => this.requestUpdate();
-      this._configUnsub = this.config.subscribe(update, { onRefused: update });
+      this._configUnsub = config.subscribe(update, { onRefused: update });
+      // A subscription delivers nothing for a configuration that holds
+      // nothing, so one the worker has not answered is read, and the answer
+      // reaches the subscription.
+      if ("unread" in config.lastRead()) {
+        config.pull({ awaitDurability: false }).catch((error) => {
+          if (!(error instanceof CellReadRefusedError)) {
+            console.error(
+              "[cf-webhook] Reading the configuration failed:",
+              error,
+            );
+          }
+        });
+      }
     }
   }
 
@@ -193,6 +207,12 @@ export class CFWebhook extends BaseElement {
     if (this.config?.refusal !== undefined) {
       return html`
         <div class="webhook-setup">${CFC_POLICY_PLACEHOLDER_TEXT}</div>
+      `;
+    }
+    // Nor is one the worker has not answered for yet.
+    if (this.config !== undefined && "unread" in this.config.lastRead()) {
+      return html`
+        <div class="webhook-setup">Loading…</div>
       `;
     }
     const configData = this._getConfig();

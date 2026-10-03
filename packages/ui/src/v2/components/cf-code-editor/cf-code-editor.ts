@@ -642,9 +642,11 @@ export class CFCodeEditor extends BaseElement {
       }
       this._asked.add(handle);
       handle.pull({ awaitDurability: false }).catch((error) => {
-        if (!(error instanceof CellReadRefusedError)) {
-          console.error("[cf-code-editor] Reading an input failed:", error);
-        }
+        if (error instanceof CellReadRefusedError) return;
+        // Asked again at the next change the editor hears, rather than left
+        // read-only for good.
+        console.error("[cf-code-editor] Reading an input failed:", error);
+        this._asked.delete(handle);
       });
     }
   }
@@ -732,6 +734,33 @@ export class CFCodeEditor extends BaseElement {
     this._editorView.dispatch({
       effects: this._refusedComp.reconfigure(this._refusedExtension()),
     });
+    // Deferred, as this can run inside an update.
+    if (!refused) queueMicrotask(() => this._catchUp());
+  }
+
+  /**
+   * Reference keys whose token a create or a paste left without an entry
+   * because a read was withheld when it returned.
+   */
+  private readonly _strandedRefKeys = new Set<string>();
+
+  /**
+   * Makes up, once every read the editor writes from is admitted again, for
+   * what it passed over meanwhile: a token left without an entry goes, and a
+   * rename that arrived, of a backlink's piece or a reference's destination,
+   * is applied from the name each holds now.
+   */
+  private _catchUp(): void {
+    if (this._readsWithheld) return;
+    for (const key of this._strandedRefKeys) this._removeRefToken(key);
+    this._strandedRefKeys.clear();
+    for (const [key, name] of this._refNames) {
+      void this._handleExternalRefTitleChange(key, name);
+    }
+    for (const pieceId of this._pieceNameSubscriptions.keys()) {
+      const pieceCell = this.findPieceById(pieceId);
+      if (pieceCell) void this._handleExternalTitleChange(pieceId, pieceCell);
+    }
   }
 
   /** The reference map's current contents, for display. */
@@ -1346,10 +1375,14 @@ export class CFCodeEditor extends BaseElement {
     const rt = this.pattern.runtime();
     try {
       const piece = await this._createPiece(label);
-      if (!piece) return;
-      // A refusal that arrived during the create stands against telling the
-      // host, which registers the piece by writing it into a list.
-      if (this._readsWithheld) return;
+      // A refusal that arrived before or during the create stands against
+      // telling the host, which registers the piece by writing it into a
+      // list, and against the entry: the token goes once the read is
+      // admitted.
+      if (!piece || this._readsWithheld) {
+        this._strandedRefKeys.add(key);
+        return;
+      }
 
       // The piece exists whether or not its token survived, so the host hears
       // about it either way and can register it.
@@ -3269,6 +3302,10 @@ export class CFCodeEditor extends BaseElement {
         )
       ) {
         this._refKeysAtLoad?.add(key);
+      } else if (this._readsWithheld) {
+        // Its entry was not written; the token goes once the read is
+        // admitted.
+        this._strandedRefKeys.add(key);
       }
     } catch (error) {
       if (rt.signal.aborted) return;
@@ -3450,12 +3487,11 @@ export class CFCodeEditor extends BaseElement {
     const destinations = this._refMentionedPieces(refs);
     const resolvedEverything = destinations.length ===
       new Set(refs.map((ref) => ref.key)).size;
-    this._lastMentionedSignature = resolvedEverything ? signature : null;
 
     // One entry per destination, however many mentions name it. The backlinks
     // index pushes a backlink per entry, so a piece mentioned twice — or once
     // in each form — would otherwise be linked back twice.
-    if (this.mentioned) {
+    const written = this.mentioned !== undefined &&
       this._write(
         this.mentioned,
         dedupeByDestination(
@@ -3463,7 +3499,10 @@ export class CFCodeEditor extends BaseElement {
           (piece) => isCellHandle(piece) ? piece.id() : undefined,
         ),
       );
-    }
+    // Recorded only for a write that went, so one passed over is tried again.
+    this._lastMentionedSignature = written && resolvedEverything
+      ? signature
+      : null;
     this._setupPieceNameSubscriptions();
     this._setupRefDestinationSubscriptions();
   }

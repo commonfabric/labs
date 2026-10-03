@@ -63,8 +63,10 @@ class MockCellNetwork {
    */
   reads: "nothing" | "held" | { refused: CellReadRefusal } = "nothing";
 
-  /** What answers each read held so far, in order. */
-  readonly heldReads: Array<(answer: object) => void> = [];
+  /** What answers, or fails, each read held so far, in order. */
+  readonly heldReads: Array<
+    { answer: (answer: object) => void; fail: (error: Error) => void }
+  > = [];
 
   register(handle: CellHandle): void {
     this.#roots.set(this.#rootKey(handle.ref()), handle);
@@ -83,7 +85,12 @@ class MockCellNetwork {
    */
   resolveRef(ref: CellRef): CellRef {
     const root = this.#roots.get(this.#rootKey(ref));
-    let value: unknown = root?.get();
+    // A root whose read is refused, or has read nothing, holds no link to
+    // follow.
+    const read = root?.lastRead();
+    let value: unknown = read !== undefined && "value" in read
+      ? read.value
+      : undefined;
     for (const seg of ref.path ?? []) {
       if (!isObjectOrArray(value)) break;
       value = (value as Record<string, unknown>)[seg as string];
@@ -181,7 +188,9 @@ function createMockConnection(
       if (data.type === "cell:get" || data.type === "cell:pull") {
         const reads = network.reads;
         if (reads === "held") {
-          return new Promise((resolve) => network.heldReads.push(resolve));
+          return new Promise((answer, fail) =>
+            network.heldReads.push({ answer, fail })
+          );
         }
         if (reads !== "nothing") return Promise.resolve(reads);
       }
@@ -264,18 +273,23 @@ export function writesSent<T>(
 /**
  * Leaves every read (`cell:get`, `cell:pull`) the network `handle` was made
  * on is asked for unanswered, as a worker that has not answered yet does,
- * until the function it returns answers them, as the worker would, and lets
- * later reads through. A read the mock answers otherwise finds the cell
+ * until the function it returns answers them, as the worker would, or fails
+ * them with an error, and lets later reads through. A read the mock answers otherwise finds the cell
  * holding nothing.
  */
 export function holdReads<T>(
   handle: CellHandle<T>,
-): (answer: { value: T | undefined } | { refused: CellReadRefusal }) => void {
+): (
+  answer: { value: T | undefined } | { refused: CellReadRefusal } | Error,
+) => void {
   const network = networkOf(handle, "holdReads");
   network.reads = "held";
   return (answer) => {
     network.reads = "nothing";
-    for (const answerRead of network.heldReads.splice(0)) answerRead(answer);
+    for (const read of network.heldReads.splice(0)) {
+      if (answer instanceof Error) read.fail(answer);
+      else read.answer(answer);
+    }
   };
 }
 

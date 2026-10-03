@@ -492,6 +492,271 @@ describe("Fabric iframe bridge", () => {
     }
   });
 
+  it("hands a guest no value for a resolved cell that holds none yet, so its update pulls first", async () => {
+    const writes: FabricValue[] = [];
+    const counter = (holds: boolean): BridgeResource => ({
+      kind: "cell",
+      cell: {
+        get: () => 1,
+        pull: () => 4,
+        set: (value) => {
+          writes.push(value);
+        },
+        hasValue: () => holds,
+      },
+    });
+    const bridge = createFabricBridge({
+      unread: counter(false),
+      held: counter(true),
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const unread = await client.cell<number>("unread").resolve();
+      expect(unread.getSnapshot()).toEqual({ status: "loading" });
+      await unread.update((current) => current + 1);
+      // Computed from what the pull found, not from the 1 it held.
+      expect(writes).toEqual([5]);
+
+      const held = await client.cell<number>("held").resolve();
+      expect(held.get()).toBe(1);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("holds a path to the refusal a resolve finds, and refuses a write through it", async () => {
+    const writes: FabricValue[] = [];
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          pull: () => undefined,
+          set: (value) => {
+            writes.push(value);
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      await expect(client.cell<string>("secret").resolve()).rejects
+        .toMatchObject({ code: BRIDGE_READ_REFUSED });
+
+      await expect(client.cell<string>("secret").set("written blind")).rejects
+        .toMatchObject({ code: BRIDGE_READ_REFUSED });
+      expect(writes).toEqual([]);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("holds a path to the refusal a write meets, and makes no later write through it", async () => {
+    let attempts = 0;
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => undefined,
+          // A write the cell refuses as made from a read it was refused.
+          set: () => {
+            attempts++;
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const secret = client.cell<string>("secret");
+      await expect(secret.set("first")).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+      await expect(secret.set("second")).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+      // The second was refused by the host, without asking the cell.
+      expect(attempts).toBe(1);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("delivers a sink of a resource that is not a cell", async () => {
+    const bridge = createFabricBridge({
+      clock: {
+        kind: "service",
+        sink: (listener) => {
+          listener("tick");
+          return () => {};
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const heard = Promise.withResolvers<FabricValue | undefined>();
+      const stop = client.sinkResource(
+        "clock",
+        (value) => heard.resolve(value),
+      );
+      await expect(heard.promise).resolves.toBe("tick");
+      stop();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("tells a sink a snapshot listener adds on a refusal of it alone, handing it no value", async () => {
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          sink: () => () => {},
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("secret");
+      const seen: Array<string | undefined> = [];
+      let refusals = 0;
+      let cancelSink: (() => void) | undefined;
+      const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
+        if (snapshot.status !== "error" || cancelSink !== undefined) return;
+        cancelSink = cell.sink((value) => {
+          seen.push(value);
+        }, { onRefused: () => refusals++ });
+      });
+
+      await expect(cell.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(seen).toStrictEqual([]);
+      expect(refusals).toBe(1);
+      cancelSink?.();
+      cancelSnapshot();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("tells nothing to a sink a snapshot listener tears down on a refusal", async () => {
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          sink: () => () => {},
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("secret");
+      let refusals = 0;
+      const cancelSink = cell.sink(() => {}, { onRefused: () => refusals++ });
+      const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
+        if (snapshot.status === "error") cancelSink();
+      });
+
+      await expect(cell.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(refusals).toBe(0);
+      cancelSnapshot();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("keeps no sink whose listener throws as it is added", async () => {
+    let deliver: ((value: FabricValue | undefined) => void) | undefined;
+    const bridge = createFabricBridge({
+      count: {
+        kind: "cell",
+        cell: {
+          get: () => 1,
+          pull: () => 1,
+          sink: (listener) => {
+            deliver = listener;
+            return () => {};
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<number>("count");
+      const heard = Promise.withResolvers<number | undefined>();
+      const stop = cell.sink((value) => {
+        if (value !== undefined) heard.resolve(value);
+      });
+      let brokenCalls = 0;
+      expect(() =>
+        cell.sink(() => {
+          brokenCalls++;
+          throw new Error("a broken consumer");
+        })
+      ).toThrow("a broken consumer");
+
+      await client.describe();
+      deliver!(2);
+      await expect(heard.promise).resolves.toBe(2);
+
+      expect(brokenCalls).toBe(1);
+      stop();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
   it("resolves a moving array entry before sinking and writing its path", async () => {
     type Item = { title: string; done: boolean };
     const records: Record<string, Item> = {

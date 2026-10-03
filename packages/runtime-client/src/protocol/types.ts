@@ -3539,6 +3539,7 @@ export type CellRefusedAnswer = {
   refused: CellReadRefusal;
   value?: never;
   cfcLabel?: never;
+  fields?: never;
 };
 
 /** A host-read gate's answer to a read of a cell's value. */
@@ -3597,6 +3598,8 @@ export type CellFieldsResponse =
        * the cell holds no record: nothing at all, a list, or a single value.
        */
       fields?: { readonly [name: string]: CellRef };
+      /** A list is never also a refusal. */
+      refused?: never;
     }
     | CellRefusedAnswer
   );

@@ -24,10 +24,14 @@ export interface CellControllerOptions<T> {
   timing?: InputTimingOptions;
 
   /**
-   * Custom getter function for extracting values from CellHandle<T> | T
-   * Defaults to standard Cell.get() or direct value access
+   * Custom getter for what the controller reads as, from the bound
+   * `CellHandle<T>` or plain value. It is handed `undefined` while the bound
+   * cell's read is refused, for the controller's empty value, so it does not
+   * read the refused handle. Defaults to what the handle holds for display
+   * (`valueForDisplay()`: nothing while its read is refused or unanswered),
+   * or the plain value.
    */
-  getValue?: (value: CellHandle<T> | T) => Readonly<T>;
+  getValue?: (value: CellHandle<T> | T | undefined) => Readonly<T>;
 
   /**
    * Custom setter function for updating CellHandle<T> | T values
@@ -254,7 +258,7 @@ export class CellController<T> implements ReactiveController {
     // A refused read reads as the controller's empty value, as an unset
     // plain value does, rather than throw from a render. `refusal` says why.
     if (this._refusal !== undefined) {
-      return this.options.getValue(undefined as T);
+      return this.options.getValue(undefined);
     }
     // A same-cell rebind can install a handle that has not hydrated yet
     // (get() still undefined). Keep showing the last known value until its
@@ -483,7 +487,7 @@ export class CellController<T> implements ReactiveController {
   // Private methods
   //
 
-  private defaultGetValue(value: CellHandle<T> | T): T {
+  private defaultGetValue(value: CellHandle<T> | T | undefined): T {
     if (isCellHandle(value)) {
       const cellValue = valueForDisplay(value as CellHandle<T>);
       return cellValue === undefined ? (cellValue as T) : cellValue;
