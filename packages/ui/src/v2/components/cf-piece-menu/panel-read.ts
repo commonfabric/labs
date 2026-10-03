@@ -24,6 +24,12 @@ import {
  */
 export const HIDDEN_BY_POLICY: unique symbol = Symbol("hidden by policy");
 
+/**
+ * Stands in a displayed value for one the worker could not read, which is
+ * not one that holds nothing.
+ */
+export const NOT_READ: unique symbol = Symbol("not read");
+
 /** What a read holds: the value, or the refusal that stands in its place. */
 type Read =
   | { readonly value: unknown }
@@ -32,20 +38,27 @@ type Read =
 /** A field read on its own: what it holds, that it is refused, or nothing yet. */
 type FieldRead = Read | { readonly pending: true };
 
+/**
+ * The worker's answer for the list of fields, asked for while the whole is
+ * refused: refused, failed, that the cell holds no record, or the fields,
+ * each read on its own.
+ */
+type FieldList = "refused" | "failed" | "no record" | Map<string, FieldRead>;
+
 export class PanelRead {
   readonly #cell: CellHandle;
   readonly #onChange: () => void;
   #whole: Read | undefined;
-  #fields = new Map<string, FieldRead>();
+  /** The last answer for the list of fields, while the whole is refused. */
+  #list: FieldList | undefined;
+  /** Whether a list of fields has been asked for and not yet answered. */
+  #listing = false;
   #cancelFields: Cancel[] = [];
-  /** Whether the worker refused even the list of fields. */
-  #listRefused = false;
   /**
    * Advanced whenever the field reads open or close, so that a list that
    * arrives after the whole was admitted again opens nothing.
    */
   #generation = 0;
-  #listing = false;
   readonly #cancelWhole: Cancel;
 
   /**
@@ -84,18 +97,33 @@ export class PanelRead {
   }
 
   /**
-   * What the panel shows: the value, or, while the whole is refused, an
-   * object of the fields read so far, with `HIDDEN_BY_POLICY` at each field
-   * the worker refuses, or `HIDDEN_BY_POLICY` alone where the worker refuses
-   * even the list of fields.
+   * Whether the panel has what it shows: the whole value, or, while the
+   * whole is refused, the worker's answer for the list of fields.
+   */
+  get ready(): boolean {
+    const whole = this.#whole;
+    if (whole === undefined) return false;
+    return "value" in whole || this.#list !== undefined;
+  }
+
+  /**
+   * What the panel shows, once {@link ready}: the value, or, while the whole
+   * is refused, an object of the fields, with `HIDDEN_BY_POLICY` at each
+   * field the worker refuses. `HIDDEN_BY_POLICY` alone stands for the whole
+   * where the worker refuses even the list of fields, or where the cell
+   * holds no record to show field by field, and `NOT_READ` where the list
+   * could not be read. `undefined` while not ready, which is never shown as
+   * a record that holds nothing.
    */
   shown(): unknown {
     const whole = this.#whole;
-    if (whole === undefined) return undefined;
+    if (whole === undefined || !this.ready) return undefined;
     if ("value" in whole) return whole.value;
-    if (this.#listRefused) return HIDDEN_BY_POLICY;
+    const list = this.#list;
+    if (list === "failed") return NOT_READ;
+    if (!(list instanceof Map)) return HIDDEN_BY_POLICY;
     const shown: Record<string, unknown> = {};
-    for (const [name, field] of this.#fields) {
+    for (const [name, field] of list) {
       if ("pending" in field) continue;
       shown[name] = "refused" in field ? HIDDEN_BY_POLICY : field.value;
     }
@@ -109,35 +137,42 @@ export class PanelRead {
   }
 
   async #openFields(): Promise<void> {
-    if (this.#listing || this.#cancelFields.length > 0) return;
+    if (this.#listing || this.#list instanceof Map) return;
     const generation = ++this.#generation;
     this.#listing = true;
-    let fields: Record<string, CellHandle<unknown>>;
+    let fields: Record<string, CellHandle<unknown>> | undefined;
     try {
       fields = await this.#cell.fields();
     } catch (error) {
       if (generation !== this.#generation) return;
       this.#listing = false;
-      if (!(error instanceof CellReadRefusedError)) {
-        // Shown as nothing listed yet, as a field list a read failed to
-        // make; the next refusal of the whole asks again.
+      if (error instanceof CellReadRefusedError) {
+        this.#list = "refused";
+      } else {
+        // Shown as not read; the next refusal of the whole asks again.
         console.error("[PanelRead] Listing the fields failed:", error);
-        return;
+        this.#list = "failed";
       }
-      this.#listRefused = true;
       this.#onChange();
       return;
     }
     if (generation !== this.#generation) return;
     this.#listing = false;
+    if (fields === undefined) {
+      this.#list = "no record";
+      this.#onChange();
+      return;
+    }
+    const list = new Map<string, FieldRead>();
+    this.#list = list;
     for (const [name, field] of Object.entries(fields)) {
-      this.#fields.set(name, { pending: true });
+      list.set(name, { pending: true });
       this.#cancelFields.push(field.subscribe((value) => {
-        this.#fields.set(name, { value });
+        list.set(name, { value });
         this.#onChange();
       }, {
         onRefused: (refused) => {
-          this.#fields.set(name, { refused });
+          list.set(name, { refused });
           this.#onChange();
         },
       }));
@@ -147,10 +182,9 @@ export class PanelRead {
 
   #closeFields(): void {
     this.#generation++;
+    this.#list = undefined;
     this.#listing = false;
-    this.#listRefused = false;
     for (const cancel of this.#cancelFields) cancel();
     this.#cancelFields = [];
-    this.#fields = new Map();
   }
 }

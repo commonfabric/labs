@@ -538,6 +538,25 @@ describe("HostReadGate", () => {
         ),
       });
     });
+
+    it("answers a cell that holds no record with no list, and an empty record with an empty one", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const notRecords = {
+        "a-list": ["first", "second"],
+        "a-string": "a string",
+        "a-number": 7,
+      };
+      for (const [id, value] of Object.entries(notRecords)) {
+        expect(gate.fields(await docs.write(id, value))).toEqual({});
+      }
+      expect(gate.fields(docs.runtime.getCell(space, "never-written")))
+        .toEqual({});
+
+      expect(gate.fields(await docs.write("an-empty-record", {}))).toEqual({
+        fields: {},
+      });
+    });
   });
 
   describe("readMetadata()", () => {

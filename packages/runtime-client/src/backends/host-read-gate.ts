@@ -91,9 +91,12 @@ function holdsEvents(cell: Cell<unknown>): boolean {
   return isStream(cell);
 }
 
-/** The names of the fields a {@link FIELDS_SCHEMA} read listed. */
-function fieldNamesOf(value: unknown): string[] {
-  return isObjectNotArray(value) ? Object.keys(value) : [];
+/**
+ * The names of the fields a {@link FIELDS_SCHEMA} read listed, or `undefined`
+ * where the cell holds no record: nothing, a list, or a single value.
+ */
+function fieldNamesOf(value: unknown): string[] | undefined {
+  return isObjectNotArray(value) ? Object.keys(value) : undefined;
 }
 
 /** The label view a read asked for, with each caveat's source redacted. */
@@ -330,12 +333,14 @@ export class HostReadGate {
    *
    * The names come from the record, not its schema, which a host may hold
    * only as a reference it cannot resolve. An address carries no label view,
-   * and each field's own read is decided as any read is.
+   * and each field's own read is decided as any read is. A cell that holds no
+   * record, nothing at all, a list or a single value, is answered with no
+   * list, which is not the empty list of a record that holds no fields.
    */
   fields(cell: Cell<unknown>): CellFieldsResponse {
     const listed = cell.asSchema(FIELDS_SCHEMA);
     const policy = this.#policy;
-    let names: string[];
+    let names: string[] | undefined;
     if (policy === undefined) {
       names = fieldNamesOf(listed.get());
     } else {
@@ -349,6 +354,8 @@ export class HostReadGate {
       if (refusal !== undefined) return this.#refuse(refusal, policy);
       names = read.value;
     }
+    // Nothing to list, which is not a record that holds no fields.
+    if (names === undefined) return decided({});
     const fields: Record<string, CellRef> = {};
     for (const name of names) {
       const { cfcLabelView: _withheld, ...address } = createCellRef(

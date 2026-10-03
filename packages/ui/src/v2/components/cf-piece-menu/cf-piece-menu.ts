@@ -50,7 +50,7 @@ import {
   formatTimestamp,
   patternRefLabel,
 } from "./origin-view.ts";
-import { HIDDEN_BY_POLICY, PanelRead } from "./panel-read.ts";
+import { HIDDEN_BY_POLICY, NOT_READ, PanelRead } from "./panel-read.ts";
 
 /** The marker on the rendered piece while its built-in menu is open. */
 export const PIECE_MENU_OPEN_ATTRIBUTE = "data-cf-piece-menu-open";
@@ -184,6 +184,7 @@ function toDisplay(
   streamKeys?: ReadonlySet<string>,
 ): unknown {
   if (value === HIDDEN_BY_POLICY) return "[hidden by policy]";
+  if (value === NOT_READ) return "[could not be read]";
   if (isStreamHandle(value)) return "[stream]";
   if (isCellHandle(value)) {
     const ref = value.ref();
@@ -2549,7 +2550,7 @@ export class CFPieceMenu extends BaseElement {
     if (this.dataError) return this.#renderDataError("data");
     return html`
       <h3 class="section-title">Argument</h3>
-      ${this.argumentLoaded
+      ${this.argumentLoaded && (this.#argumentRead?.ready ?? true)
         ? html`
           <pre class="source">${formatPieceValue(
             this.#argumentRead?.shown() ?? this.argumentValue,
@@ -2588,9 +2589,8 @@ export class CFPieceMenu extends BaseElement {
     if (!read?.refused) return nothing;
     return html`
       <p class="note">
-        ${CFC_POLICY_PLACEHOLDER_TEXT}: part of this value. Each field its
-        schema declares is shown on its own, and a field the policy hides is
-        marked.
+        ${CFC_POLICY_PLACEHOLDER_TEXT}: part of this value. Each field it
+        holds is shown on its own, and a field the policy hides is marked.
       </p>
     `;
   }

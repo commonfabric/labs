@@ -3624,10 +3624,14 @@ function statefulPiece(
     pieceSchema?: Record<string, unknown>;
 
     /**
-     * The fields the worker lists for each document, by id, or `"refused"`
-     * where it refuses even the list.
+     * The fields the worker lists for each document, by id: `"refused"` where
+     * it refuses even the list, `"no record"` where the document holds none,
+     * and `"pending"` where it has not answered yet. A document left out
+     * fails the list.
      */
-    fields?: Readonly<Record<string, readonly string[] | "refused">>;
+    fields?: Readonly<
+      Record<string, readonly string[] | "refused" | "no record" | "pending">
+    >;
   } = {},
 ) {
   const requests: Array<Record<string, unknown>> = [];
@@ -3667,6 +3671,8 @@ function statefulPiece(
         if (listed === "refused") {
           return Promise.resolve({ refused: { refusedBy: "display-ceiling" } });
         }
+        if (listed === "no record") return Promise.resolve({});
+        if (listed === "pending") return new Promise(() => {});
         return Promise.resolve({
           fields: Object.fromEntries(
             listed.map((name) => [name, {
@@ -3857,6 +3863,31 @@ describe("the data panel", () => {
       expect(rendered).toContain('"auth": "[hidden by policy]"');
       expect(rendered.match(/\[hidden by policy\]/g)).toHaveLength(1);
     });
+
+    for (
+      const [answer, listed, mark] of [
+        ["has not answered", "pending", "Waiting for a value"],
+        ["could not read", undefined, "[could not be read]"],
+        ["found no record in", "no record", "[hidden by policy]"],
+      ] as const
+    ) {
+      it(`shows a result whose list of fields the worker ${answer} as such, not as an empty record`, async () => {
+        const piece = statefulPiece({
+          pieceSchema: schema,
+          argument: { account: "owner account" },
+          fields: listed === undefined ? {} : { "of:fid1:piece": listed },
+        });
+        const menu = openMenu(piece.cell);
+        await menu.showPanel("data");
+
+        piece.cell[$onCellRefused](REFUSED);
+        await settled();
+
+        const rendered = shows(menu);
+        expect(rendered).toContain(mark);
+        expect(rendered).not.toContain("{}");
+      });
+    }
 
     it("shows a field the schema does not declare", async () => {
       const piece = statefulPiece({

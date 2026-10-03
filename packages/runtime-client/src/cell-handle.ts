@@ -946,14 +946,17 @@ export class CellHandle<T = unknown> {
   /**
    * The fields this record cell holds, by name, each as a handle on the
    * field within it, whose reads the worker decides one by one. Nothing a
-   * field holds is read to list them, so a record whose whole read is refused
-   * for one field the viewer may not see still lists every field. The names
-   * come from the record, not its schema.
+   * field holds is read to list them. The names come from the record, not its
+   * schema. `undefined` where the cell holds no record (nothing at all, a
+   * list, or a single value), which is not the empty list of a record that
+   * holds no fields.
    *
    * @throws {CellReadRefusedError} When the worker refuses even the list, as
    *   for a record whose own label the viewer may not see.
+   * @throws When the worker could not read the record, as when its space
+   *   refused the worker access.
    */
-  async fields(): Promise<Record<string, CellHandle<unknown>>> {
+  async fields(): Promise<Record<string, CellHandle<unknown>> | undefined> {
     const response = await this.#enqueueOperation(() =>
       this.#conn.request<RequestType.CellFields>({
         type: RequestType.CellFields,
@@ -963,6 +966,7 @@ export class CellHandle<T = unknown> {
     if ("refused" in response) {
       throw new CellReadRefusedError(response.refused);
     }
+    if (response.fields === undefined) return undefined;
     const fields: Record<string, CellHandle<unknown>> = {};
     for (const [name, ref] of Object.entries(response.fields)) {
       fields[name] = new CellHandle(this.#rt, ref);

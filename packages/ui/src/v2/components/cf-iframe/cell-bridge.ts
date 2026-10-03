@@ -400,7 +400,7 @@ function cellContextResources(
  * The names of the fields `cell` holds: the keys of its value while the
  * worker admits the read, or, while it refuses it, the fields the worker
  * lists, each of which answers for its own reads. None when the worker
- * refuses even the list.
+ * refuses even the list, or answers that the cell holds no record.
  */
 async function fieldNames<T>(cell: CellHandle<T>): Promise<string[]> {
   try {
@@ -410,7 +410,7 @@ async function fieldNames<T>(cell: CellHandle<T>): Promise<string[]> {
     if (!(error instanceof CellReadRefusedError)) throw error;
   }
   try {
-    return Object.keys(await cell.fields());
+    return Object.keys((await cell.fields()) ?? {});
   } catch (error) {
     if (error instanceof CellReadRefusedError) return [];
     throw error;

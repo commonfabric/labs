@@ -3462,6 +3462,44 @@ describe("runtime-processor", () => {
         await server.close();
       }
     });
+
+    it("fails a list it could not read for want of access, rather than answer that the cell holds no record", async () => {
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost/"),
+        storageManager,
+      });
+      const space = cfcSigner.did();
+      const ref: CellRef = {
+        id: runtime.getCell(space, "fields-behind-a-refusal", undefined)
+          .getAsNormalizedFullLink().id,
+        space,
+        scope: "space",
+        path: [],
+      };
+      const processor = buildProcessor({ runtime, space });
+      const request = { type: RequestType.CellFields, cell: ref } as const;
+      try {
+        // Nothing stored and nothing refused: no record.
+        expect(await processor.handleRequest(request)).toEqual({});
+
+        const refused = stub(
+          storageManager,
+          "spaceAccessError",
+          () => new Error("lacks READ on the space"),
+        );
+        try {
+          await expect(processor.handleRequest(request)).rejects.toThrow(
+            "lacks READ on the space",
+          );
+        } finally {
+          refused.restore();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   describe("`RuntimeProcessor` CFC label IPC", () => {

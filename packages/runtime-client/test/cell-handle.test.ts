@@ -1183,10 +1183,22 @@ describe("cell-handle", () => {
       const fields = await cell.fields();
 
       expect(requests).toEqual([{ type: RequestType.CellFields, cell: ref }]);
-      expect(Object.keys(fields)).toEqual(["title", "auth"]);
-      expect(fields.title).toBeInstanceOf(CellHandle);
-      expect(fields.title.ref()).toEqual(field("title"));
-      expect(fields.auth.ref()).toEqual(field("auth"));
+      expect(Object.keys(fields ?? {})).toEqual(["title", "auth"]);
+      expect(fields?.title).toBeInstanceOf(CellHandle);
+      expect(fields?.title.ref()).toEqual(field("title"));
+      expect(fields?.auth.ref()).toEqual(field("auth"));
+    });
+
+    it("answers a cell that holds no record with no list, and an empty record with an empty one", async () => {
+      const answering = (response: object) =>
+        ({
+          [$conn]: () => ({ request: () => Promise.resolve(response) }),
+        }) as unknown as RuntimeClient;
+
+      expect(await new CellHandle(answering({}), ref).fields())
+        .toBeUndefined();
+      expect(await new CellHandle(answering({ fields: {} }), ref).fields())
+        .toEqual({});
     });
 
     it("rejects a refused list of fields", async () => {
