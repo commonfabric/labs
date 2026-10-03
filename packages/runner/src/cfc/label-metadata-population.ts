@@ -84,9 +84,9 @@ export const isLabelMetadataTemplateEntry = (
  * stamp) and `structure` (the same join stamped on container shape,
  * §8.5.6.1) — whose label contains each influencing source's confidentiality
  * by construction. Declared/authored entries, link-carried pointer labels,
- * the external-ingest mark, label-metadata templates themselves and legacy
- * (component-less) entries carry no such containment guarantee and stay
- * fail-closed (spec §4.6.4.2, merged via specs#14). Shared by the mint
+ * minted value stamps, the external-ingest mark, label-metadata templates
+ * themselves and legacy (component-less) entries carry no such containment
+ * guarantee and stay fail-closed (spec §4.6.4.2, merged via specs#14). Shared by the mint
  * (which entries GET templates) and the introspection surface (which entries'
  * fields are observable at all) so the two cannot drift.
  */

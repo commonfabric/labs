@@ -13,6 +13,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import type { CfcCellLinkRefPayload } from "../src/cfc/link-label-view.ts";
 import type { CfcWriteFloorMode, IFCLabel } from "../src/cfc/mod.ts";
 import { recordReferencedArgumentFields } from "../src/cfc/reference-initialization.ts";
@@ -81,7 +82,7 @@ const seedLabelMap = async (
   runtime: Runtime,
   id: string,
   value: FabricValue,
-  entries: { path: string[]; label: IFCLabel }[],
+  entries: { path: string[]; label: IFCLabel; origin?: "link" }[],
 ): Promise<void> => {
   const seed = runtime.edit();
   const cell = runtime.getCell(signer.did(), id, undefined, seed);
@@ -113,6 +114,185 @@ const seedLabeledDoc = (
 ): Promise<void> => seedLabelMap(runtime, id, value, [{ path, label }]);
 
 describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
+  describe("value stamp decisions", () => {
+    for (const union of ["anyOf", "oneOf"] as const) {
+      for (const matches of [false, true]) {
+        it(`${matches ? "persists the stamp credited by" : "rejects a stamp from an incompatible branch of"} an \`${union}\` floor`, async () => {
+          const storageManager = StorageManager.emulate({ as: signer });
+          const runtime = makeRuntime({
+            storageManager,
+            cfcWriteFloor: "enforce",
+          });
+          try {
+            const schema = {
+              type: "object",
+              properties: {
+                out: {
+                  [union]: [
+                    {
+                      type: "string",
+                      ifc: { requiredIntegrity: [ADMIN_ATOM] },
+                    },
+                    { type: "number", ifc: { addIntegrity: [ADMIN_ATOM] } },
+                  ],
+                },
+              },
+            } as const satisfies JSONSchema;
+            const tx = runtime.edit();
+            const sink = runtime.getCell(
+              signer.did(),
+              "union-stamp-floor",
+              schema,
+              tx,
+            );
+            sink.set({ out: matches ? 42 : "unendorsed" });
+            tx.prepareCfc();
+            const result = await tx.commit();
+            if (matches) {
+              expect(result.ok).toBeDefined();
+              const read = runtime.edit();
+              try {
+                const stored = sink.withTx(read).key("out");
+                expect(stored.get()).toBe(42);
+                expect(
+                  cfcLabelViewForCell(stored)?.entries.flatMap(
+                    (entry) => entry.label.integrity ?? [],
+                  ),
+                ).toEqual([ADMIN_ATOM]);
+              } finally {
+                read.abort();
+              }
+            } else {
+              expect(result.error?.message).toContain(
+                "write floor failed at /out",
+              );
+            }
+          } finally {
+            await runtime.dispose();
+            await storageManager.close();
+          }
+        });
+      }
+    }
+
+    for (const builtin of [false, true]) {
+      it(`${builtin ? "persists" : "refuses"} a runtime stamp ${builtin ? "credited to" : "forged by"} the write's author`, async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = makeRuntime({
+          storageManager,
+          cfcWriteFloor: "enforce",
+        });
+        try {
+          const schema = {
+            type: "object",
+            properties: {
+              out: {
+                type: "string",
+                ifc: {
+                  requiredIntegrity: [LLM_DERIVED_ATOM],
+                  addIntegrity: [LLM_DERIVED_ATOM],
+                },
+              },
+            },
+          } as const satisfies JSONSchema;
+          const tx = runtime.edit();
+          if (builtin) {
+            setCfcImplementationIdentity(tx, {
+              kind: "builtin",
+              builtinId: "floor-test",
+            });
+          }
+          const sink = runtime.getCell(
+            signer.did(),
+            "runtime-stamp-floor",
+            schema,
+            tx,
+          );
+          sink.set({ out: "authored value" });
+          setCfcImplementationIdentity(tx, undefined);
+          tx.prepareCfc();
+          const result = await tx.commit();
+          if (builtin) {
+            expect(result.ok).toBeDefined();
+            const read = runtime.edit();
+            try {
+              const stored = sink.withTx(read).key("out");
+              expect(stored.get()).toBe("authored value");
+              expect(
+                cfcLabelViewForCell(stored)?.entries.flatMap(
+                  (entry) => entry.label.integrity ?? [],
+                ),
+              ).toEqual([LLM_DERIVED_ATOM]);
+            } finally {
+              read.abort();
+            }
+          } else {
+            expect(result.error?.message).toContain(
+              "write floor failed at /out",
+            );
+          }
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
+    it("admits a value of another branch where the floor's own branch names the stamp, and stamps nothing", async () => {
+      // The floor applies whichever branch the written value takes, so a
+      // branch that both requires and stamps an atom is met by a write
+      // through the union, as a flag whose `true` branch is floored is when
+      // it is written `false`. The stamp lands only on a value of its branch.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+      try {
+        const schema = {
+          type: "object",
+          properties: {
+            out: {
+              anyOf: [
+                {
+                  type: "string",
+                  ifc: {
+                    requiredIntegrity: [ADMIN_ATOM],
+                    addIntegrity: [ADMIN_ATOM],
+                  },
+                },
+                { type: "number" },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema;
+        const tx = runtime.edit();
+        const sink = runtime.getCell(
+          signer.did(),
+          "own-branch-stamp-floor",
+          schema,
+          tx,
+        );
+        sink.set({ out: 42 });
+        tx.prepareCfc();
+        expect((await tx.commit()).ok).toBeDefined();
+
+        const read = runtime.edit();
+        try {
+          const stored = sink.withTx(read).key("out");
+          expect(stored.get()).toBe(42);
+          expect(
+            (cfcLabelViewForCell(stored)?.entries ?? []).flatMap(
+              (entry) => entry.label.integrity ?? [],
+            ),
+          ).toEqual([]);
+        } finally {
+          read.abort();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
   it("rejects an integrity-less write to a floor-declaring path under enforce", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
@@ -859,6 +1039,155 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
         tx,
       );
       sink.set({ out: src as unknown as { secret: string } });
+      tx.prepareCfc();
+      const result = await tx.commit();
+      expect(String((result.error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out/secret",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("an ancestor link cannot smuggle an unendorsed value reached through a link inside another link's target path", async () => {
+    // Floor at /out/secret; /out links to a source whose `secret` is a link to
+    // `ptr/secret` in a middle document, and `ptr` is itself a link to the
+    // document holding the unendorsed value. Reaching the value means
+    // following the link at `ptr`, partway along the first link's target
+    // path; a walk that read that path whole would find nothing there and
+    // take the floor as not applying.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      // Each document carries stored labels, none of them the floor's atom.
+      const linkTo = (id: string, path: string[] = []) => {
+        let cell = runtime.getCell<unknown>(signer.did(), id);
+        for (const segment of path) {
+          cell = (cell as unknown as { key(k: string): typeof cell }).key(
+            segment,
+          );
+        }
+        return cell.getAsLink() as unknown as FabricValue;
+      };
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-leaf",
+        { secret: "unendorsed" },
+        {},
+      );
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-middle",
+        { ptr: linkTo("wf-hop-leaf") },
+        {},
+      );
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-source",
+        { secret: linkTo("wf-hop-middle", ["ptr", "secret"]) },
+        {},
+      );
+      const nestedFloor = {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              secret: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "wf-hop-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-hop-sink",
+        nestedFloor,
+        tx,
+      );
+      sink.set({ out: source as unknown as { secret: string } });
+      tx.prepareCfc();
+      const result = await tx.commit();
+      expect(String((result.error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out/secret",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("an ancestor link cannot meet a floor with a stored link's label beside the value's own", async () => {
+    // Floor at /out/secret requiring two atoms. /out links to a source whose
+    // `secret` is a stored link carrying the first atom, and the value it
+    // reaches carries only the second. The stored link's label describes
+    // what its target held when it was written, so the value's own label is
+    // the only credit, and it meets half the floor.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      const linkTo = (id: string, path: string[] = []) => {
+        let cell = runtime.getCell<unknown>(signer.did(), id);
+        for (const segment of path) {
+          cell = (cell as unknown as { key(k: string): typeof cell }).key(
+            segment,
+          );
+        }
+        return cell.getAsLink() as unknown as FabricValue;
+      };
+      await seedLabelMap(runtime, "wf-split-leaf", { secret: "unendorsed" }, [
+        { path: ["secret"], label: { integrity: ["second-proof"] } },
+      ]);
+      await seedLabelMap(runtime, "wf-split-middle", {
+        ptr: linkTo("wf-split-leaf"),
+      }, []);
+      await seedLabelMap(runtime, "wf-split-source", {
+        secret: linkTo("wf-split-middle", ["ptr", "secret"]),
+      }, [{
+        path: ["secret"],
+        label: { integrity: [ADMIN_ATOM] },
+        origin: "link",
+      }]);
+      const splitFloor = {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              secret: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM, "second-proof"] },
+              },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "wf-split-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-split-sink",
+        splitFloor,
+        tx,
+      );
+      sink.set({ out: source as unknown as { secret: string } });
       tx.prepareCfc();
       const result = await tx.commit();
       expect(String((result.error as Error | undefined)?.message)).toContain(
