@@ -661,7 +661,7 @@ const INT64_MAX = 2n ** 63n - 1n;
  * id, an account id — is the ordinary thing to gate on, so a whole integer
  * shows the regex its decimal digits. Those are the digits SQLite shows for
  * that INTEGER, which is what makes a rule writable from the row: the read
- * side reads whole integers (`read-pool.ts` opens the labeled reads with
+ * side reads whole integers (`read-pool.ts` opens every connection with
  * `int64`) and commit evaluation renders them (`commit-eval.ts`), so the
  * digits here are the stored ones rather than a truncation of them. One value
  * has one text, so the write gate, the server commit, and read re-derivation

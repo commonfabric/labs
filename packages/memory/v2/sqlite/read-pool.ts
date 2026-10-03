@@ -1,5 +1,5 @@
-// A small LRU pool of read-only SQLite connections keyed by canonical file path
-// and by integer mode.
+// A small LRU pool of read-only SQLite connections keyed by canonical file
+// path.
 //
 // Reads (injected on-disk sources, and — once routed — cell-derived dbs) run
 // here: each connection is opened `readonly` directly on the db file and is
@@ -15,29 +15,27 @@
 // ATTACH/PRAGMA/multi-statement, so a read can't use its connection to reach
 // other files.
 //
-// Two connections per file, opened in different integer modes, because CFC
-// labeling needs whole integers and nothing else may change under it.
-// `@db/sqlite` reads an INTEGER column through the 32-bit
-// `sqlite3_column_int` unless `int64` is set, so a stored 4294967303 arrives
-// as 7 — and a per-row label derived from that gates the row as mailbox 7.
-// The labeled reads (`queryWithOrigins`, issued only for a db that declares
-// `ifc` or a row rule) therefore run on an `int64` connection, where a value
-// past 2^53 arrives as a `bigint` rather than a rounded number. Ordinary
-// reads keep the connection and the values they have always had: widening
-// them is a change to every consumer's data, which belongs to its own
-// change rather than riding in on a labeling fix.
+// Every connection opens with `int64`, so an INTEGER arrives as the integer the
+// row holds. `@db/sqlite` otherwise reads an INTEGER column through the 32-bit
+// `sqlite3_column_int`, and hands over the low 32 bits of anything wider: a
+// stored 4294967303 arrives as 7, and an epoch-millisecond timestamp as a
+// negative number. Under `int64` a value within ±(2^53 - 1) arrives as a
+// `number`, and one beyond it as a `bigint`, which a double cannot name and a
+// `FabricValue` can. A per-row label is derived from these values, so a
+// labeled read depends on them being whole; so does any consumer that sorts or
+// compares a timestamp.
 //
-// Both modes open with `parseJson: false`, so TEXT arrives as the text SQLite
-// holds. `@db/sqlite` otherwise parses a TEXT column that carries SQLite's
-// JSON subtype into a JS object or array. The JSON functions attach that
-// subtype to what they return (`json_object`, `json_group_array`, `json()`,
-// `->`, `json_extract` of a container path), and it belongs to the query plan
-// rather than to the statement: a sorter, a materialized subquery, and a CTE
-// each drop it. One statement would hand its consumer a string under one plan
-// and an object under another, and a consumer whose `Row` type says `string`
-// never runs on the object. A query's `Row` type is what decodes a column, as
-// it does for a `_cf_link`, so a JSON function's text reaches it as text under
-// every plan.
+// Every connection also opens with `parseJson: false`, so TEXT arrives as the
+// text SQLite holds. `@db/sqlite` otherwise parses a TEXT column that carries
+// SQLite's JSON subtype into a JS object or array. The JSON functions attach
+// that subtype to what they return (`json_object`, `json_group_array`,
+// `json()`, `->`, `json_extract` of a container path), and it belongs to the
+// query plan rather than to the statement: a sorter, a materialized subquery,
+// and a CTE each drop it. One statement would hand its consumer a string under
+// one plan and an object under another, and a consumer whose `Row` type says
+// `string` never runs on the object. A query's `Row` type is what decodes a
+// column, as it does for a `_cf_link`, so a JSON function's text reaches it as
+// text under every plan.
 
 import { Database } from "@db/sqlite";
 import type { SqliteNativeRow } from "../../v2.ts";
@@ -57,23 +55,20 @@ export class ReadConnectionPool {
   }
 
   /**
-   * Returns the pooled connection for `path` in the given mode, opening one
-   * on a miss and evicting the oldest past `#max`. Keyed by mode as well as
-   * path: the two modes return different JS values for the same stored row,
-   * so one connection cannot serve both.
+   * Returns the pooled connection for `path`, opening one on a miss and
+   * evicting the oldest past `#max`.
    */
-  #connection(path: string, int64: boolean): Database {
-    const key = int64 ? `int64\n${path}` : `plain\n${path}`;
-    const existing = this.#byPath.get(key);
+  #connection(path: string): Database {
+    const existing = this.#byPath.get(path);
     if (existing) {
       // LRU bump: re-insert so this path is most-recently-used.
-      this.#byPath.delete(key);
-      this.#byPath.set(key, existing);
+      this.#byPath.delete(path);
+      this.#byPath.set(path, existing);
       return existing;
     }
     const db = new Database(path, {
       readonly: true,
-      int64,
+      int64: true,
       parseJson: false,
     });
     // Match the engine connection's busy_timeout (engine.ts PRAGMAS). A pooled
@@ -82,7 +77,7 @@ export class ReadConnectionPool {
     // same store, or an external writer to a `cf link`ed disk source) would hit
     // an immediate SQLITE_BUSY at the default timeout of 0 — wait instead.
     db.exec("PRAGMA busy_timeout = 5000");
-    this.#byPath.set(key, db);
+    this.#byPath.set(path, db);
     if (this.#byPath.size > this.#max) {
       const oldest = this.#byPath.keys().next().value as string | undefined;
       if (oldest !== undefined) {
@@ -103,25 +98,20 @@ export class ReadConnectionPool {
     sql: string,
     params?: SqliteParams,
   ): Row[] {
-    return runQuery<Row>(this.#connection(path, false), sql, params);
+    return runQuery<Row>(this.#connection(path), sql, params);
   }
 
   /**
    * Like {@link query} but also returns each result column's TRUE origin
    * `(table, column)`, for CFC read-labeling. Used only when the db declares
    * per-column `ifc` or a row rule.
-   *
-   * Runs on the `int64` connection, so a label derived from an INTEGER column
-   * is derived from the integer the row holds: see the note at the top of
-   * this file for what the other mode does to one. A value past 2^53 arrives
-   * as a `bigint`, which is a `FabricValue` the JSON codec carries.
    */
   queryWithOrigins<Row extends SqliteNativeRow = SqliteNativeRow>(
     path: string,
     sql: string,
     params?: SqliteParams,
   ): { rows: Row[]; columns: QueryColumn[] } {
-    return runQueryWithOrigins<Row>(this.#connection(path, true), sql, params);
+    return runQueryWithOrigins<Row>(this.#connection(path), sql, params);
   }
 
   close(): void {
