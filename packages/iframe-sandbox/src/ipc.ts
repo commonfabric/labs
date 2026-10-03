@@ -179,6 +179,14 @@ export type BridgeError = {
   resource?: string;
 };
 
+/**
+ * The code of the bridge error that stands for a read the host was refused,
+ * and for a write the host will not make through a path whose read was
+ * refused. The guest is told so rather than handed an empty value, which
+ * would read as a cell that holds nothing.
+ */
+export const BRIDGE_READ_REFUSED = "read-refused";
+
 export type BridgeResourceDescriptor = {
   name: string;
   kind: "cell" | "stream" | "sqlite" | "service";

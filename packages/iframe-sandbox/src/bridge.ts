@@ -12,6 +12,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   BRIDGE_PROTOCOL,
+  BRIDGE_READ_REFUSED,
   BRIDGE_VERSION,
   type BridgeCellIdentity,
   type BridgeError,
@@ -23,6 +24,8 @@ import {
   isBridgeRequest,
 } from "./ipc.ts";
 
+export { BRIDGE_READ_REFUSED };
+
 /** Behavior advertised for one named bridge resource. */
 export type BridgeResourceKind = "cell" | "stream" | "sqlite" | "service";
 
@@ -33,14 +36,6 @@ export type BridgeCancel = () => void;
 export type BridgeMethod = (
   input: FabricValue | undefined,
 ) => FabricValue | undefined | Promise<FabricValue | undefined>;
-
-/**
- * The code of the bridge error that stands for a read the host was refused,
- * and for a write the host will not make from one. The guest is told so
- * rather than handed an empty value, which would read as a cell that holds
- * nothing.
- */
-export const BRIDGE_READ_REFUSED = "read-refused";
 
 /**
  * Thrown by a host's bridge cell for a read the host was refused, or a write

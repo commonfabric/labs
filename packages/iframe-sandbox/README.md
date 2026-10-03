@@ -116,7 +116,9 @@ readiness probe for that contract.
 A read the host may not show is refused, with the `read-refused` error code, and
 is never delivered as `undefined`. `pull()` rejects with it, and a sink hears it
 through its optional second argument, after the cleanup its listener returned
-for the last value runs:
+for the last value runs. A sink added while a refusal stands hears it there at
+once, and its listener is not called until a value arrives. A failed write
+changes no value, so it reaches no sink:
 
 ```ts
 const stopSecret = secret.sink(

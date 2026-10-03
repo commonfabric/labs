@@ -224,8 +224,11 @@ describe("Fabric iframe bridge", () => {
         seen.push(current);
         return () => withdrawn.push(current);
       }, (error) => errors.push(error.code));
-      // The refusal of the pull above still stands, and the sink hears it.
+      // The refusal of the pull above still stands, and the sink hears it
+      // through `onError` alone: nothing is handed to the listener in the
+      // value's place.
       expect(errors).toEqual([BRIDGE_READ_REFUSED]);
+      expect(seen).toStrictEqual([]);
       const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
         heard.resolve(
           snapshot.status === "error" ? snapshot.error.code : snapshot.status,
@@ -248,20 +251,100 @@ describe("Fabric iframe bridge", () => {
       // handed to it in the value's place.
       expect(errors).toEqual([BRIDGE_READ_REFUSED, BRIDGE_READ_REFUSED]);
       // Strict: `toEqual()` takes a trailing `undefined` for no entry at all.
-      expect(withdrawn).toStrictEqual([undefined, "shown before the seal"]);
-      expect(seen).toStrictEqual([undefined, "shown before the seal"]);
+      expect(withdrawn).toStrictEqual(["shown before the seal"]);
+      expect(seen).toStrictEqual(["shown before the seal"]);
 
       // A read admitted again ends the refusal, even one finding nothing.
       heard = Promise.withResolvers<string>();
       sinkListener!(undefined);
       await expect(heard.promise).resolves.toBe("ready");
-      expect(seen).toStrictEqual([
-        undefined,
-        "shown before the seal",
-        undefined,
-      ]);
+      expect(seen).toStrictEqual(["shown before the seal", undefined]);
       cancelSink();
       cancelSnapshot();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("leaves a guest's sinks with their value when a write fails", async () => {
+    const bridge = createFabricBridge({
+      // A cell with no `set`, so a write fails with `method-not-supported`.
+      locked: cellResource(() => "held", {
+        sink: (listener) => {
+          listener("held");
+          return () => {};
+        },
+      }),
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("locked");
+      const seen: Array<string | undefined> = [];
+      const withdrawn: Array<string | undefined> = [];
+      const errors: string[] = [];
+      const cancel = cell.sink((current) => {
+        seen.push(current);
+        return () => withdrawn.push(current);
+      }, (error) => errors.push(error.code));
+      await cell.pull();
+      const withdrawnBefore = [...withdrawn];
+
+      await expect(cell.set("written")).rejects.toMatchObject({
+        code: "method-not-supported",
+      });
+
+      // The value never changed, so the host will not deliver it again: a
+      // sink withdrawn for the failure would stay blank.
+      expect(seen.at(-1)).toBe("held");
+      expect(withdrawn).toStrictEqual(withdrawnBefore);
+      expect(errors).toEqual([]);
+      cancel();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("tells every sink of a refusal when one sink's `onError` throws, and keeps the pull's rejection", async () => {
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          // Delivers nothing, so the pull's answer is the one heard.
+          sink: () => () => {},
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("secret");
+      const heard: string[] = [];
+      const cancelBroken = cell.sink(() => {}, () => {
+        heard.push("broken");
+        throw new Error("a broken consumer");
+      });
+      const cancelSound = cell.sink(() => {}, () => heard.push("sound"));
+
+      await expect(cell.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(heard).toEqual(["broken", "sound"]);
+      cancelBroken();
+      cancelSound();
     } finally {
       client.disconnect();
       host.disconnect();
