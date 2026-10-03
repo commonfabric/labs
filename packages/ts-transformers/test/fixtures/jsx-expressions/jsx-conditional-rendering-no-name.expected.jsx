@@ -19,7 +19,7 @@ interface State {
     hasPermission: boolean;
     isPremium: boolean;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h89148dfed5bb = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -40,7 +40,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h80b473952880 = __cfHelpers.lift<{
     state: {
         score: number;
     };
@@ -61,7 +61,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h87a39eab30b0 = __cfHelpers.lift<{
     state: {
         score: number;
     };
@@ -82,7 +82,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_hf81d88ebaf5e = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -103,7 +103,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_hfd1cf776e918 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -124,7 +124,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_h8b2cca337f2b = __cfHelpers.lift<{
     state: {
         userType: string;
     };
@@ -145,7 +145,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_h1b1c89380d86 = __cfHelpers.lift<{
     state: {
         userType: string;
     };
@@ -166,7 +166,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_hbb9e3a8118a5 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -187,7 +187,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_hf41cec7a3d28 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -208,7 +208,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_h1ceb9e35cb2e = __cfHelpers.lift<{
     state: {
         score: number;
     };
@@ -229,7 +229,7 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_11 = __cfHelpers.lift<{
+const __cfLift_h9abe7ff5580a = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -287,7 +287,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["High", "Low"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h89148dfed5bb({ state: {
                 count: state.key("count")
             } }), "High", "Low")}</span>
         <span>{__cfHelpers.ifElse({
@@ -298,7 +298,7 @@ export default pattern((state) => {
             "enum": ["B", "C"]
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["B", "C", "A"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h80b473952880({ state: {
                 score: state.key("score")
             } }), "A", __cfHelpers.ifElse({
             type: "boolean"
@@ -308,7 +308,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["B", "C"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h87a39eab30b0({ state: {
                 score: state.key("score")
             } }), "B", "C"))}</span>
         <span>
@@ -320,7 +320,7 @@ export default pattern((state) => {
             "enum": ["Single", "Multiple"]
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Single", "Multiple", "Empty"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_4({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hf81d88ebaf5e({ state: {
                 count: state.key("count")
             } }), "Empty", __cfHelpers.ifElse({
             type: "boolean"
@@ -330,7 +330,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Single", "Multiple"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_5({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hfd1cf776e918({ state: {
                 count: state.key("count")
             } }), "Single", "Multiple"))}
         </span>
@@ -364,7 +364,7 @@ export default pattern((state) => {
             "enum": ["User", "Guest"]
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["User", "Guest", "Admin"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_6({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h8b2cca337f2b({ state: {
                 userType: state.key("userType")
             } }), "Admin", __cfHelpers.ifElse({
             type: "boolean"
@@ -374,7 +374,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["User", "Guest"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_7({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h1b1c89380d86({ state: {
                 userType: state.key("userType")
             } }), "User", "Guest"))}
         </span>
@@ -412,9 +412,9 @@ export default pattern((state) => {
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "boolean"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_8({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hbb9e3a8118a5({ state: {
                 count: state.key("count")
-            } }), __cfLift_9({ state: {
+            } }), __cfLift_hf41cec7a3d28({ state: {
                 count: state.key("count")
             } })), "In Range", "Out of Range")}
         </span>
@@ -433,7 +433,7 @@ export default pattern((state) => {
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "boolean"
-        } as const satisfies __cfHelpers.JSONSchema, state.key("isPremium"), __cfLift_10({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, state.key("isPremium"), __cfLift_h1ceb9e35cb2e({ state: {
                 score: state.key("score")
             } })), "Premium Features", "Basic Features")}
         </span>
@@ -465,7 +465,7 @@ export default pattern((state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_11({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_h9abe7ff5580a({ state: {
                 count: state.key("count")
             } }), <ul>
             <li>Many items: {state.key("count")}</li>
@@ -529,15 +529,26 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10,
-    __cfLift_11
+    __cfLift_h89148dfed5bb,
+    __cfLift_h80b473952880,
+    __cfLift_h87a39eab30b0,
+    __cfLift_hf81d88ebaf5e,
+    __cfLift_hfd1cf776e918,
+    __cfLift_h8b2cca337f2b,
+    __cfLift_h1b1c89380d86,
+    __cfLift_hbb9e3a8118a5,
+    __cfLift_hf41cec7a3d28,
+    __cfLift_h1ceb9e35cb2e,
+    __cfLift_h9abe7ff5580a,
+    __cfLift_1: __cfLift_h89148dfed5bb,
+    __cfLift_2: __cfLift_h80b473952880,
+    __cfLift_3: __cfLift_h87a39eab30b0,
+    __cfLift_4: __cfLift_hf81d88ebaf5e,
+    __cfLift_5: __cfLift_hfd1cf776e918,
+    __cfLift_6: __cfLift_h8b2cca337f2b,
+    __cfLift_7: __cfLift_h1b1c89380d86,
+    __cfLift_8: __cfLift_hbb9e3a8118a5,
+    __cfLift_9: __cfLift_hf41cec7a3d28,
+    __cfLift_10: __cfLift_h1ceb9e35cb2e,
+    __cfLift_11: __cfLift_h9abe7ff5580a
 });

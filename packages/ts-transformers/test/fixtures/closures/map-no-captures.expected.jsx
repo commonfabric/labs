@@ -18,7 +18,7 @@ interface Item {
 interface State {
     items: Item[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h8fb708da64cf = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<div>Item #{item.key("id")}: ${item.key("price")}</div>);
 }, {
@@ -72,7 +72,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* No captures - just uses the callback parameter */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_h8fb708da64cf, {})}
       </div>),
     };
 }, {
@@ -134,5 +134,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h8fb708da64cf,
+    __cfPattern_1: __cfPattern_h8fb708da64cf
 });

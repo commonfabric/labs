@@ -36,7 +36,7 @@ function processWithType<T>(emails: Reactive<Email[]>, _prompt: string) {
     });
 }
 __cfHardenFn(processWithType);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h12b668620a29 = __cfHelpers.lift<{
     state: {
         emails: Email[];
         prompt: string;
@@ -91,7 +91,7 @@ const __cfLift_1 = __cfHelpers.lift<{
     }
 } as const satisfies __cfHelpers.JSONSchema);
 export default pattern((state) => {
-    const results = __cfLift_1({ state: {
+    const results = __cfLift_h12b668620a29({ state: {
             emails: state.key("emails"),
             prompt: state.key("prompt")
         } }).for("results", true);
@@ -149,5 +149,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h12b668620a29,
+    __cfLift_1: __cfLift_h12b668620a29
 });

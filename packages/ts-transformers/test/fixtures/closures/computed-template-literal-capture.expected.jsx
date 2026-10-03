@@ -11,7 +11,7 @@ import { computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6053b8146eb3 = __cfHelpers.lift<{
     token: string;
 }, string>(({ token }) => `http://api.example.com?token=${token}`, {
     type: "object",
@@ -24,7 +24,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hdba1116776e0 = __cfHelpers.lift<{
     token: string;
 }, { headers: { Authorization: string; }; }>(({ token }) => ({
     headers: { Authorization: `Bearer ${token}` },
@@ -59,8 +59,8 @@ export default pattern((__cf_pattern_input: {
     token: string;
 }) => {
     const token = __cf_pattern_input.key("token");
-    const url = __cfLift_1({ token: token }).for("url", true);
-    const options = __cfLift_2({ token: token }).for("options", true);
+    const url = __cfLift_h6053b8146eb3({ token: token }).for("url", true);
+    const options = __cfLift_hdba1116776e0({ token: token }).for("options", true);
     return { url, options };
 }, {
     type: "object",
@@ -98,6 +98,8 @@ export default pattern((__cf_pattern_input: {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h6053b8146eb3,
+    __cfLift_hdba1116776e0,
+    __cfLift_1: __cfLift_h6053b8146eb3,
+    __cfLift_2: __cfLift_hdba1116776e0
 });

@@ -28,7 +28,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb4bf6788dc37 = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
     const meta = { kind: file.key("type"), label: "plain" };
     const shout = meta.label + "!";
@@ -80,7 +80,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.mapWithPattern(__cfPattern_1, {})}
+        {files.mapWithPattern(__cfPattern_hb4bf6788dc37, {})}
       </div>),
     };
 }, {
@@ -123,5 +123,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_hb4bf6788dc37,
+    __cfPattern_1: __cfPattern_hb4bf6788dc37
 });

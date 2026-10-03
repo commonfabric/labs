@@ -18,7 +18,7 @@ interface State {
     discount: number;
     selectedIndex: Cell<number>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h0433d932131d = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -51,7 +51,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h729d60abca1f = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         index: {
@@ -70,12 +70,12 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["index", "state"]
 } as const satisfies __cfHelpers.JSONSchema, (__cf_handler_event, { state, index }) => state.selectedIndex.set(index));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h33cd374e1aa8 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
-            <span>{__cfLift_1({
+            <span>{__cfLift_h0433d932131d({
         item: {
             price: item.key("price")
         },
@@ -83,7 +83,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             discount: state.key("discount")
         }
     })}</span>
-            <button type="button" onClick={__cfHandler_1({
+            <button type="button" onClick={__cfHandler_h729d60abca1f({
         state: {
             selectedIndex: state.key("selectedIndex")
         },
@@ -149,7 +149,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hd8e957cc3711 = __cfHelpers.lift<{
     state: {
         items: { price: number; }[];
         selectedIndex: __cfHelpers.Cell<number>;
@@ -184,7 +184,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hbbe16dd84b57 = __cfHelpers.lift<{
     state: {
         items: { price: number; }[];
         selectedIndex: __cfHelpers.Cell<number>;
@@ -231,18 +231,18 @@ const __cfLift_3 = __cfHelpers.lift<{
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h33cd374e1aa8, {
                 state: {
                     discount: state.key("discount"),
                     selectedIndex: state.key("selectedIndex")
                 }
             })}
         <div>
-          Selected: {__cfLift_2({ state: {
+          Selected: {__cfLift_hd8e957cc3711({ state: {
                 items: state.key("items"),
                 selectedIndex: state.key("selectedIndex")
             } })} x {state.key("discount")} ={" "}
-          {__cfLift_3({ state: {
+          {__cfLift_hbbe16dd84b57({ state: {
                 items: state.key("items"),
                 selectedIndex: state.key("selectedIndex"),
                 discount: state.key("discount")
@@ -308,9 +308,14 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfHandler_1,
-    __cfPattern_1,
-    __cfLift_2,
-    __cfLift_3
+    __cfLift_h0433d932131d,
+    __cfHandler_h729d60abca1f,
+    __cfPattern_h33cd374e1aa8,
+    __cfLift_hd8e957cc3711,
+    __cfLift_hbbe16dd84b57,
+    __cfLift_1: __cfLift_h0433d932131d,
+    __cfHandler_1: __cfHandler_h729d60abca1f,
+    __cfPattern_1: __cfPattern_h33cd374e1aa8,
+    __cfLift_2: __cfLift_hd8e957cc3711,
+    __cfLift_3: __cfLift_hbbe16dd84b57
 });

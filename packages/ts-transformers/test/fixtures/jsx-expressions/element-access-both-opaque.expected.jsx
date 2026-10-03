@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h688cce498d95 = __cfHelpers.lift<{
     items: __cfHelpers.Cell<string[]>;
     index: __cfHelpers.Cell<number>;
 }, string | undefined>(({ items, index }) => items.get()[index.get()], {
@@ -50,7 +50,7 @@ export default pattern((_state) => {
         [UI]: (<div>
         <h3>Element Access with Both Reactives</h3>
         {/* Both items and index are Reactives */}
-        <p>Selected item: {__cfLift_1({
+        <p>Selected item: {__cfLift_h688cce498d95({
             items: items,
             index: index
         })}</p>
@@ -90,5 +90,6 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h688cce498d95,
+    __cfLift_1: __cfLift_h688cce498d95
 });

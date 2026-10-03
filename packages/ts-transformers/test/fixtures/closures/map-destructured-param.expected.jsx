@@ -19,7 +19,7 @@ interface State {
     points: Point[];
     scale: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hae54a1e61729 = __cfHelpers.lift<{
     x: number;
     state: {
         scale: number;
@@ -44,7 +44,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h4cc8bf30c1a4 = __cfHelpers.lift<{
     y: number;
     state: {
         scale: number;
@@ -69,17 +69,17 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h7633819272db = __cfHelpers.pattern(__cf_pattern_input => {
     const x = __cf_pattern_input.key("element", "x");
     const y = __cf_pattern_input.key("element", "y");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
-            Point: ({__cfLift_1({
+            Point: ({__cfLift_hae54a1e61729({
         x: x,
         state: {
             scale: state.key("scale")
         }
-    })}, {__cfLift_2({
+    })}, {__cfLift_h4cc8bf30c1a4({
         y: y,
         state: {
             scale: state.key("scale")
@@ -148,7 +148,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map with destructured parameter and capture */}
-        {state.key("points").mapWithPattern(__cfPattern_1, {
+        {state.key("points").mapWithPattern(__cfPattern_h7633819272db, {
                 state: {
                     scale: state.key("scale")
                 }
@@ -217,7 +217,10 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_hae54a1e61729,
+    __cfLift_h4cc8bf30c1a4,
+    __cfPattern_h7633819272db,
+    __cfLift_1: __cfLift_hae54a1e61729,
+    __cfLift_2: __cfLift_h4cc8bf30c1a4,
+    __cfPattern_1: __cfPattern_h7633819272db
 });

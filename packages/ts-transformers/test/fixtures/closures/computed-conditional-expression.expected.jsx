@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h613504b1bcc8 = __cfHelpers.lift<{
     value: __cfHelpers.ReadonlyCell<number>;
     threshold: __cfHelpers.ReadonlyCell<number>;
     a: __cfHelpers.ReadonlyCell<number>;
@@ -57,7 +57,7 @@ export default pattern(() => {
     const b = new Writable(200, {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("b", true);
-    const result = __cfLift_1({
+    const result = __cfLift_h613504b1bcc8({
         value: value,
         threshold: threshold,
         a: a,
@@ -71,5 +71,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h613504b1bcc8,
+    __cfLift_1: __cfLift_h613504b1bcc8
 });

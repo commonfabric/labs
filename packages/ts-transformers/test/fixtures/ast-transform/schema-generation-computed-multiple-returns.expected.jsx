@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 declare const flag: boolean;
-const __cfLift_1 = __cfHelpers.lift(() => {
+const __cfLift_hd4f94169a023 = __cfHelpers.lift(() => {
     if (flag) {
         return "hello";
     }
@@ -23,10 +23,11 @@ const __cfLift_1 = __cfHelpers.lift(() => {
 //   computed(() => { ... }) → output schema is an enum union of the returned literals
 // Context: Callback has two return statements (string and number); output schema is an enum union
 // Function with multiple return statements - should infer string | number
-export const multiReturn = __cfHelpers.__cf_data(__cfLift_1().for("multiReturn", true));
+export const multiReturn = __cfHelpers.__cf_data(__cfLift_hd4f94169a023().for("multiReturn", true));
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hd4f94169a023,
+    __cfLift_1: __cfLift_hd4f94169a023
 });

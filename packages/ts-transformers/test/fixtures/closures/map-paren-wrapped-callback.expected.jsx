@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface Row {
     label: string;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he1be81448b35 = __cfHelpers.pattern(__cf_pattern_input => {
     const r = __cf_pattern_input.key("element");
     return r.key("label");
 }, {
@@ -47,7 +47,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //   reactive .map that throws at runtime
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
-    const out = rows.mapWithPattern(__cfPattern_1, {}).for("out", true);
+    const out = rows.mapWithPattern(__cfPattern_he1be81448b35, {}).for("out", true);
     return { out };
 }, {
     type: "object",
@@ -87,5 +87,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_he1be81448b35,
+    __cfPattern_1: __cfPattern_he1be81448b35
 });

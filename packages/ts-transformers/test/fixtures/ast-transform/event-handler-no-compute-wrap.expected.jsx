@@ -32,7 +32,7 @@ const handleClick = handler({
 } as const satisfies __cfHelpers.JSONSchema, (_, { count }) => {
     count.set(count.get() + 1);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h8d7014d0b3a5 = __cfHelpers.lift<{
     count: Default<number, 0>;
 }, number>(({ count }) => count + 1, {
     type: "object",
@@ -61,7 +61,7 @@ export default pattern((__cf_pattern_input) => {
     return {
         [UI]: (<div>
           {/* Regular JSX expression - should be wrapped in a lift-applied computation */}
-          <span>Count: {__cfLift_1({ count: count })}</span>
+          <span>Count: {__cfLift_h8d7014d0b3a5({ count: count })}</span>
 
           {/* Event handler with Reactive - should NOT be wrapped in a lift-applied computation */}
           <cf-button onClick={handleClick({ count })}>
@@ -122,5 +122,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     handleClick,
-    __cfLift_1
+    __cfLift_h8d7014d0b3a5,
+    __cfLift_1: __cfLift_h8d7014d0b3a5
 });

@@ -34,7 +34,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6ffc7530c62b = __cfHelpers.lift<{
     entry: {
         name: string;
     };
@@ -59,7 +59,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hca58bff417ac = __cfHelpers.lift<{
     entry: {
         name: string;
     };
@@ -84,7 +84,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h6b42d324c18f = __cfHelpers.lift<{
     entry: {
         name: string;
     };
@@ -109,25 +109,25 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_haaea8be7f307 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const prefix = __cf_pattern_input.key("params", "prefix");
     // Parenthesized: (entry).name
-    const a = __cfLift_1({
+    const a = __cfLift_h6ffc7530c62b({
         entry: {
             name: entry.key("name")
         },
         prefix: prefix
     }).for("a", true);
     // Non-null asserted: entry!.name
-    const b = __cfLift_2({
+    const b = __cfLift_hca58bff417ac({
         entry: {
             name: entry.key("name")
         },
         prefix: prefix
     }).for("b", true);
     // 'as' asserted: (entry as Entry).name
-    const c = __cfLift_3({
+    const c = __cfLift_h6b42d324c18f({
         entry: {
             name: entry.key("name")
         },
@@ -188,7 +188,7 @@ export default pattern((__cf_pattern_input) => {
     const prefix = __cf_pattern_input.key("prefix");
     return ({
         [UI]: (<div>
-      {entries.mapWithPattern(__cfPattern_1, {
+      {entries.mapWithPattern(__cfPattern_haaea8be7f307, {
                 prefix: prefix
             })}
     </div>),
@@ -231,8 +231,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1
+    __cfLift_h6ffc7530c62b,
+    __cfLift_hca58bff417ac,
+    __cfLift_h6b42d324c18f,
+    __cfPattern_haaea8be7f307,
+    __cfLift_1: __cfLift_h6ffc7530c62b,
+    __cfLift_2: __cfLift_hca58bff417ac,
+    __cfLift_3: __cfLift_h6b42d324c18f,
+    __cfPattern_1: __cfPattern_haaea8be7f307
 });

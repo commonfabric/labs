@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb7301f4eead6 = __cfHelpers.lift<{
     config: __cfHelpers.Cell<{ timeout: number | null; retries: number | undefined; }>;
 }, number>(({ config }) => (config.get().timeout ?? 30), {
     type: "object",
@@ -35,7 +35,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hf99436a4be1e = __cfHelpers.lift<{
     config: __cfHelpers.Cell<{ timeout: number | null; retries: number | undefined; }>;
 }, boolean>(({ config }) => (config.get().retries ?? 3) > 0, {
     type: "object",
@@ -54,7 +54,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h612c9c5c807d = __cfHelpers.lift<{
     items: __cfHelpers.Cell<string[]>;
 }, string | false>(({ items }) => items.get().length > 0 && (items.get()[0] ?? "empty"), {
     type: "object",
@@ -121,7 +121,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["number", "string"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ config: config }), "disabled")}</span>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hb7301f4eead6({ config: config }), "disabled")}</span>
 
         {/* ?? followed by && */}
         <span>{__cfHelpers.when({
@@ -130,7 +130,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": [false, "Will retry"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ config: config }), "Will retry")}</span>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hf99436a4be1e({ config: config }), "Will retry")}</span>
 
         {/* Mixed: ?? with && and || */}
         <span>
@@ -140,7 +140,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ items: items }), "no items")}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h612c9c5c807d({ items: items }), "no items")}
         </span>
       </div>),
     };
@@ -178,7 +178,10 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3
+    __cfLift_hb7301f4eead6,
+    __cfLift_hf99436a4be1e,
+    __cfLift_h612c9c5c807d,
+    __cfLift_1: __cfLift_hb7301f4eead6,
+    __cfLift_2: __cfLift_hf99436a4be1e,
+    __cfLift_3: __cfLift_h612c9c5c807d
 });

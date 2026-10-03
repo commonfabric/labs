@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const identity = __cfHardenFn(<T,>(value: T) => value);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4318ee2c2a91 = __cfHelpers.lift<{
     state: {
         done: boolean;
     };
@@ -33,7 +33,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     "enum": ["Done", "Pending"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h4318ee2c2a91_2 = __cfHelpers.lift<{
     state: {
         done: boolean;
     };
@@ -66,10 +66,10 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   → return lift(({ state }) => identity(state.done ? "Done" : "Pending"))({ state })
 export const objectAndArray = pattern((state) => {
     const view = {
-        value: __cfLift_1({ state: {
+        value: __cfLift_h4318ee2c2a91({ state: {
                 done: state.key("done")
             } }).for(["view", "value"], true),
-        list: [__cfLift_2({ state: {
+        list: [__cfLift_h4318ee2c2a91_2({ state: {
                     done: state.key("done")
                 } }).for(["view", "list", 0], true)]
     };
@@ -97,7 +97,7 @@ export const objectAndArray = pattern((state) => {
     },
     required: ["value", "list"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h4318ee2c2a91_3 = __cfHelpers.lift<{
     state: {
         done: boolean;
     };
@@ -118,7 +118,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     "enum": ["Done", "Pending"]
 } as const satisfies __cfHelpers.JSONSchema);
-export default pattern((state) => __cfLift_3({ state: {
+export default pattern((state) => __cfLift_h4318ee2c2a91_3({ state: {
         done: state.key("done")
     } }).for("__patternResult", true), {
     type: "object",
@@ -135,7 +135,10 @@ export default pattern((state) => __cfLift_3({ state: {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3
+    __cfLift_h4318ee2c2a91,
+    __cfLift_h4318ee2c2a91_2,
+    __cfLift_h4318ee2c2a91_3,
+    __cfLift_1: __cfLift_h4318ee2c2a91,
+    __cfLift_2: __cfLift_h4318ee2c2a91_2,
+    __cfLift_3: __cfLift_h4318ee2c2a91_3
 });

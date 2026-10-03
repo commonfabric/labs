@@ -20,7 +20,7 @@ const __cfAmdHooks = undefined;
 interface State {
     title: string;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h3748f2ada0c9 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         counter: {
@@ -53,7 +53,7 @@ export default pattern((__cf_pattern_input) => {
     const label = new Writable("Count", {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema).for("label", true);
-    const reset = __cfHandler_1({
+    const reset = __cfHandler_h3748f2ada0c9({
         counter: counter,
         label: label
     }).for({ stream: "reset" }, true);
@@ -115,5 +115,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h3748f2ada0c9,
+    __cfHandler_1: __cfHandler_h3748f2ada0c9
 });

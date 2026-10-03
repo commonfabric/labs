@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h284e66f4c6e0 = __cfHelpers.lift<{
     items: __cfHelpers.Cell<string[]>;
     isEnabled: __cfHelpers.Cell<boolean>;
 }, Readonly<boolean>>(({ items, isEnabled }) => items.get().length > 0 && isEnabled.get(), {
@@ -33,7 +33,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hcafc955c989d = __cfHelpers.lift<{
     count: __cfHelpers.Cell<number>;
     items: __cfHelpers.Cell<string[]>;
 }, boolean>(({ count, items }) => (count.get() > 10 || items.get().length > 5), {
@@ -89,7 +89,7 @@ export default pattern((_state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h284e66f4c6e0({
             items: items,
             isEnabled: isEnabled
         }), <div>Enabled with items</div>)}
@@ -109,7 +109,7 @@ export default pattern((_state) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hcafc955c989d({
             count: count,
             items: items
         }), <div>Threshold met</div>)}
@@ -149,6 +149,8 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h284e66f4c6e0,
+    __cfLift_hcafc955c989d,
+    __cfLift_1: __cfLift_h284e66f4c6e0,
+    __cfLift_2: __cfLift_hcafc955c989d
 });

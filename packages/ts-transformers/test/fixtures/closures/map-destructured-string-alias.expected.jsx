@@ -16,7 +16,7 @@ interface State {
         couponCode: string;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h8541149637f5 = __cfHelpers.pattern(__cf_pattern_input => {
     const code = __cf_pattern_input.key("element", "couponCode");
     return (<span>{code}</span>);
 }, {
@@ -61,7 +61,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_h8541149637f5, {})}
       </div>),
     };
 }, {
@@ -115,5 +115,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h8541149637f5,
+    __cfPattern_1: __cfPattern_h8541149637f5
 });

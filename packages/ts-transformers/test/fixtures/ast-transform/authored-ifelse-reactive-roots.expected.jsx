@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const identity = __cfHardenFn(<T,>(value: T) => value);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h61cc9e54c9fe = __cfHelpers.lift<{
     name: string;
 }, string>(({ name }) => identity(name.trim()), {
     type: "object",
@@ -25,7 +25,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hdc78b0cdd4c2 = __cfHelpers.lift<{
     count: number;
 }, number>(({ count }) => count + 1, {
     type: "object",
@@ -38,7 +38,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h7d69e497d98e = __cfHelpers.lift<{
     cell: __cfHelpers.Writable<number>;
 }, number>(({ cell }) => cell.get(), {
     type: "object",
@@ -52,7 +52,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h51c92805ae22 = __cfHelpers.lift<{
     name: string;
 }, string>(({ name }) => name.trim(), {
     type: "object",
@@ -65,7 +65,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h51c92805ae22_2 = __cfHelpers.lift<{
     name: string;
 }, string>(({ name }) => name.trim(), {
     type: "object",
@@ -90,7 +90,7 @@ export default pattern((__cf_pattern_input) => {
     const show = __cf_pattern_input.key("show");
     const name = __cf_pattern_input.key("name");
     const cell = __cf_pattern_input.key("cell");
-    const upper = __cfLift_1({ name: name }).for("upper", true);
+    const upper = __cfLift_h61cc9e54c9fe({ name: name }).for("upper", true);
     return {
         value: ifElse({
             type: "boolean"
@@ -100,7 +100,7 @@ export default pattern((__cf_pattern_input) => {
             type: "number"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "number"
-        } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_2({ count: count }), 0).for(["__patternResult", "value"], true),
+        } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_hdc78b0cdd4c2({ count: count }), 0).for(["__patternResult", "value"], true),
         cellValue: ifElse({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
@@ -109,7 +109,7 @@ export default pattern((__cf_pattern_input) => {
             type: "number"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "number"
-        } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_3({ cell: cell }), 0).for(["__patternResult", "cellValue"], true),
+        } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_h7d69e497d98e({ cell: cell }), 0).for(["__patternResult", "cellValue"], true),
         trimmed: ifElse({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
@@ -118,9 +118,9 @@ export default pattern((__cf_pattern_input) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_4({ name: name }), "fallback").for(["__patternResult", "trimmed"], true),
+        } as const satisfies __cfHelpers.JSONSchema, show, __cfLift_h51c92805ae22({ name: name }), "fallback").for(["__patternResult", "trimmed"], true),
         upper,
-        upperDirect: __cfLift_5({ name: name }).for(["__patternResult", "upperDirect"], true)
+        upperDirect: __cfLift_h51c92805ae22_2({ name: name }).for(["__patternResult", "upperDirect"], true)
     };
 }, {
     type: "object",
@@ -165,9 +165,14 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5
+    __cfLift_h61cc9e54c9fe,
+    __cfLift_hdc78b0cdd4c2,
+    __cfLift_h7d69e497d98e,
+    __cfLift_h51c92805ae22,
+    __cfLift_h51c92805ae22_2,
+    __cfLift_1: __cfLift_h61cc9e54c9fe,
+    __cfLift_2: __cfLift_hdc78b0cdd4c2,
+    __cfLift_3: __cfLift_h7d69e497d98e,
+    __cfLift_4: __cfLift_h51c92805ae22,
+    __cfLift_5: __cfLift_h51c92805ae22_2
 });

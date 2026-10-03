@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h72e9809a4df5 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<div>
                 {__cfHelpers.when({
@@ -101,7 +101,7 @@ export default pattern((_state) => {
                     properties: {}
                 }]
         } as const satisfies __cfHelpers.JSONSchema, showList, <div>
-            {items.mapWithPattern(__cfPattern_1, {})}
+            {items.mapWithPattern(__cfPattern_h72e9809a4df5, {})}
           </div>)}
       </div>),
     };
@@ -139,5 +139,6 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_h72e9809a4df5,
+    __cfPattern_1: __cfPattern_h72e9809a4df5
 });

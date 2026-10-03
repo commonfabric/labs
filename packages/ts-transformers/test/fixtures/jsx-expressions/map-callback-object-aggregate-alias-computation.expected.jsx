@@ -28,7 +28,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h4c78e6e15064 = __cfHelpers.lift<{
     meta: {
         kind: string;
     };
@@ -49,10 +49,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h2c300a803ab3 = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
     const meta = { kind: file.key("type") };
-    const isFolder = __cfLift_1({ meta: {
+    const isFolder = __cfLift_h4c78e6e15064({ meta: {
             kind: meta.kind
         } }).for("isFolder", true);
     return <span>{__cfHelpers.ifElse({
@@ -111,7 +111,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.mapWithPattern(__cfPattern_1, {})}
+        {files.mapWithPattern(__cfPattern_h2c300a803ab3, {})}
       </div>),
     };
 }, {
@@ -154,6 +154,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h4c78e6e15064,
+    __cfPattern_h2c300a803ab3,
+    __cfLift_1: __cfLift_h4c78e6e15064,
+    __cfPattern_1: __cfPattern_h2c300a803ab3
 });

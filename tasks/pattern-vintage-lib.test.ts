@@ -1915,6 +1915,9 @@ describe("derived-hoist classification", () => {
   it("recognizes a transformer-emitted pattern hoist", () => {
     expect(isDerivedHoistSymbol("__cfPattern_4")).toBe(true);
     expect(isDerivedHoistSymbol("__cfPattern_12")).toBe(true);
+    // Content-addressed canonical names, bare and twin-ordinal-suffixed.
+    expect(isDerivedHoistSymbol("__cfPattern_h0123456789ab")).toBe(true);
+    expect(isDerivedHoistSymbol("__cfPattern_h0123456789ab_2")).toBe(true);
   });
 
   it("returns false for authored exports and other synthetics", () => {
@@ -1923,6 +1926,12 @@ describe("derived-hoist classification", () => {
     expect(isDerivedHoistSymbol("__cfLift_2")).toBe(false);
     expect(isDerivedHoistSymbol("__cfPattern_")).toBe(false);
     expect(isDerivedHoistSymbol("x__cfPattern_4")).toBe(false);
+    // Malformed content names: short digest, uppercase, ordinal 1 (never
+    // minted — the first twin keeps the bare name), lift-prefixed.
+    expect(isDerivedHoistSymbol("__cfPattern_h0123")).toBe(false);
+    expect(isDerivedHoistSymbol("__cfPattern_hABCDEF789012")).toBe(false);
+    expect(isDerivedHoistSymbol("__cfPattern_h0123456789ab_1")).toBe(false);
+    expect(isDerivedHoistSymbol("__cfLift_h0123456789ab")).toBe(false);
   });
 
   it("returns false for numbers the per-file counter never mints", () => {

@@ -86,7 +86,7 @@ interface State {
         }>;
     };
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h71e9d701c801 = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -132,7 +132,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_he21c0225beb1 = __cfHelpers.lift<{
     state: {
         user: {
             age: number;
@@ -161,7 +161,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h9e8d04319c76 = __cfHelpers.lift<{
     state: {
         user: {
             age: number;
@@ -190,7 +190,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h60141b04cf72 = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -232,7 +232,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h92e2b22acbf8 = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -261,7 +261,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_hdcaaec4b17d4 = __cfHelpers.lift<{
     state: {
         config: {
             theme: {
@@ -316,7 +316,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_hb13699ae58ef = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -345,7 +345,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_h60316a6a3ad1 = __cfHelpers.lift<{
     state: {
         user: {
             email: string;
@@ -392,7 +392,7 @@ export default pattern((state) => {
         {/* String concatenation with multiple property accesses */}
         <p>
           Full profile:{" "}
-          {__cfLift_1({ state: {
+          {__cfLift_h71e9d701c801({ state: {
                 user: {
                     name: state.key("user", "name"),
                     profile: {
@@ -405,12 +405,12 @@ export default pattern((state) => {
 
         {/* Arithmetic with multiple properties from same base */}
         <p>
-          Age calculation: {__cfLift_2({ state: {
+          Age calculation: {__cfLift_he21c0225beb1({ state: {
                 user: {
                     age: state.key("user", "age")
                 }
             } })} months, or{" "}
-          {__cfLift_3({ state: {
+          {__cfLift_h9e8d04319c76({ state: {
                 user: {
                     age: state.key("user", "age")
                 }
@@ -495,14 +495,14 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, state.key("user", "settings", "notifications"), __cfLift_4({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, state.key("user", "settings", "notifications"), __cfLift_h60141b04cf72({ state: {
                 user: {
                     name: state.key("user", "name"),
                     settings: {
                         theme: state.key("user", "settings", "theme")
                     }
                 }
-            } }), __cfLift_5({ state: {
+            } }), __cfLift_h92e2b22acbf8({ state: {
                 user: {
                     name: state.key("user", "name")
                 }
@@ -511,7 +511,7 @@ export default pattern((state) => {
 
         {/* Computed expression with shared base */}
         <p>
-          Spacing calc: {__cfLift_6({ state: {
+          Spacing calc: {__cfLift_hdcaaec4b17d4({ state: {
                 config: {
                     theme: {
                         spacing: {
@@ -547,12 +547,12 @@ export default pattern((state) => {
         <h3>Method Calls on Shared Bases</h3>
         {/* Multiple method calls on properties from same base */}
         <p>
-          Formatted: {__cfLift_7({ state: {
+          Formatted: {__cfLift_hb13699ae58ef({ state: {
                 user: {
                     name: state.key("user", "name")
                 }
             } })} -{" "}
-          {__cfLift_8({ state: {
+          {__cfLift_h60316a6a3ad1({ state: {
                 user: {
                     email: state.key("user", "email")
                 }
@@ -963,12 +963,20 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8
+    __cfLift_h71e9d701c801,
+    __cfLift_he21c0225beb1,
+    __cfLift_h9e8d04319c76,
+    __cfLift_h60141b04cf72,
+    __cfLift_h92e2b22acbf8,
+    __cfLift_hdcaaec4b17d4,
+    __cfLift_hb13699ae58ef,
+    __cfLift_h60316a6a3ad1,
+    __cfLift_1: __cfLift_h71e9d701c801,
+    __cfLift_2: __cfLift_he21c0225beb1,
+    __cfLift_3: __cfLift_h9e8d04319c76,
+    __cfLift_4: __cfLift_h60141b04cf72,
+    __cfLift_5: __cfLift_h92e2b22acbf8,
+    __cfLift_6: __cfLift_hdcaaec4b17d4,
+    __cfLift_7: __cfLift_hb13699ae58ef,
+    __cfLift_8: __cfLift_h60316a6a3ad1
 });

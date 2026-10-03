@@ -17,7 +17,7 @@ interface Spot {
 interface State {
     spots: Spot[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_haef5fc049b98 = __cfHelpers.pattern(__cf_pattern_input => {
     const spot = __cf_pattern_input.key("element");
     const sn = spot.key("spotNumber");
     return <li>{sn}</li>;
@@ -69,7 +69,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<ul>
-        {state.key("spots").mapWithPattern(__cfPattern_1, {})}
+        {state.key("spots").mapWithPattern(__cfPattern_haef5fc049b98, {})}
       </ul>),
     };
 }, {
@@ -128,5 +128,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_haef5fc049b98,
+    __cfPattern_1: __cfPattern_haef5fc049b98
 });

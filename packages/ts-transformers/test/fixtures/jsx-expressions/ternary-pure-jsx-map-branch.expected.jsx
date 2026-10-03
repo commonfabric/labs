@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface TagEvent {
     label: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd28349b3dbd1 = __cfHelpers.lift<{
     recentEvents: TagEvent[];
 }, boolean>(({ recentEvents }) => recentEvents.length === 0, {
     type: "object",
@@ -30,7 +30,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h558563f72c28 = __cfHelpers.pattern(__cf_pattern_input => {
     const event = __cf_pattern_input.key("element");
     const idx = __cf_pattern_input.key("index");
     return (<cf-hstack key={idx} gap="2">
@@ -107,8 +107,8 @@ export default pattern((__cf_pattern_input) => {
                     type: "object",
                     properties: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ recentEvents: recentEvents }), <span>No events yet</span>, <div>
-            {recentEvents.mapWithPattern(__cfPattern_1, {})}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hd28349b3dbd1({ recentEvents: recentEvents }), <span>No events yet</span>, <div>
+            {recentEvents.mapWithPattern(__cfPattern_h558563f72c28, {})}
           </div>)}
     </div>),
     });
@@ -168,6 +168,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hd28349b3dbd1,
+    __cfPattern_h558563f72c28,
+    __cfLift_1: __cfLift_hd28349b3dbd1,
+    __cfPattern_1: __cfPattern_h558563f72c28
 });

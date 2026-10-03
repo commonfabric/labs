@@ -11,7 +11,7 @@ import { cell, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h3c7cdbd4b59e = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, boolean>(({ user }) => user.get().name.length > 0, {
     type: "object",
@@ -31,7 +31,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h5da851da8897 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, string>(({ user }) => `Hello, ${user.get().name}!`, {
     type: "object",
@@ -51,7 +51,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h813665f2b200 = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, boolean>(({ user }) => user.get().age > 18, {
     type: "object",
@@ -71,7 +71,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h705bdbd2337e = __cfHelpers.lift<{
     user: __cfHelpers.Cell<{ name: string; age: number; }>;
 }, number>(({ user }) => user.get().age, {
     type: "object",
@@ -121,7 +121,7 @@ export default pattern((_state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["boolean", "string"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ user: user }), __cfLift_2({ user: user }))}</p>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h3c7cdbd4b59e({ user: user }), __cfLift_h5da851da8897({ user: user }))}</p>
 
         {/* Non-JSX right side: number expression */}
         <p>Age: {__cfHelpers.when({
@@ -130,7 +130,7 @@ export default pattern((_state) => {
             type: "number"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["boolean", "number"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ user: user }), __cfLift_4({ user: user }))}</p>
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h813665f2b200({ user: user }), __cfLift_h705bdbd2337e({ user: user }))}</p>
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {
@@ -167,8 +167,12 @@ export default pattern((_state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4
+    __cfLift_h3c7cdbd4b59e,
+    __cfLift_h5da851da8897,
+    __cfLift_h813665f2b200,
+    __cfLift_h705bdbd2337e,
+    __cfLift_1: __cfLift_h3c7cdbd4b59e,
+    __cfLift_2: __cfLift_h5da851da8897,
+    __cfLift_3: __cfLift_h813665f2b200,
+    __cfLift_4: __cfLift_h705bdbd2337e
 });

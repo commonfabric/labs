@@ -15,7 +15,7 @@ interface TodoItem {
     title: string;
     done: boolean;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hd349f6e34126 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return item.key("title");
 }, {
@@ -43,7 +43,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h7731df73031f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     return ({
@@ -99,9 +99,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     // Map on opaque ref arrays should be transformed to mapWithPattern
-    const mapped = items.mapWithPattern(__cfPattern_1, {}).for("mapped", true);
+    const mapped = items.mapWithPattern(__cfPattern_hd349f6e34126, {}).for("mapped", true);
     // This should also be transformed
-    const filtered = items.mapWithPattern(__cfPattern_2, {}).for("filtered", true);
+    const filtered = items.mapWithPattern(__cfPattern_h7731df73031f, {}).for("filtered", true);
     return { mapped, filtered };
 }, {
     type: "object",
@@ -162,6 +162,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_hd349f6e34126,
+    __cfPattern_h7731df73031f,
+    __cfPattern_1: __cfPattern_hd349f6e34126,
+    __cfPattern_2: __cfPattern_h7731df73031f
 });

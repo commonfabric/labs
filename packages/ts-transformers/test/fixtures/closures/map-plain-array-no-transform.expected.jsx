@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface State {
     multiplier: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h8ee54f7adb93 = __cfHelpers.lift<{
     state: {
         multiplier: number;
     };
@@ -51,7 +51,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Plain array should NOT be transformed, even with captures */}
-        {plainArray.map((n) => (<span>{__cfLift_1({
+        {plainArray.map((n) => (<span>{__cfLift_h8ee54f7adb93({
                 state: {
                     multiplier: state.multiplier
                 },
@@ -101,5 +101,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h8ee54f7adb93,
+    __cfLift_1: __cfLift_h8ee54f7adb93
 });

@@ -21,7 +21,7 @@ interface State {
     }>, [
     ]>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_hb20549a97e67 = __cfHelpers.handler({
     type: "object",
     properties: {
         name: {
@@ -42,7 +42,7 @@ const __cfHandler_1 = __cfHelpers.handler({
     },
     required: ["assignName"]
 } as const satisfies __cfHelpers.JSONSchema, (p, { assignName }) => assignName.set(p.name));
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hec8401e03c4b = __cfHelpers.lift<{
     people: __cfHelpers.PerSpace<__cfHelpers.Cell<Person[]>>;
 }, readonly Person[]>(({ people }) => people.get(), {
     type: "object",
@@ -87,7 +87,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h2a93a514867f = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         p: {
@@ -112,10 +112,10 @@ const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["p", "setAssign"]
 } as const satisfies __cfHelpers.JSONSchema, (__cf_handler_event, { setAssign, p }) => setAssign.send({ name: p.name }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h82f00529d775 = __cfHelpers.pattern(__cf_pattern_input => {
     const p = __cf_pattern_input.key("element");
     const setAssign = __cf_pattern_input.key("params", "setAssign");
-    return (<button type="button" onClick={__cfHandler_2({
+    return (<button type="button" onClick={__cfHandler_h2a93a514867f({
         setAssign: setAssign,
         p: {
             name: p.key("name")
@@ -179,13 +179,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h425affd75001 = __cfHelpers.pattern(__cf_pattern_input => {
     const row = __cf_pattern_input.key("element");
     const people = __cf_pattern_input.key("params", "people");
     const setAssign = __cf_pattern_input.key("params", "setAssign");
     return (<div>
             <span>{row.key("label")}</span>
-            {(__cfLift_1({ people: people }) ?? []).mapWithPattern(__cfPattern_1, {
+            {(__cfLift_hec8401e03c4b({ people: people }) ?? []).mapWithPattern(__cfPattern_h82f00529d775, {
             setAssign: setAssign
         })}
           </div>);
@@ -302,12 +302,12 @@ export default pattern((__cf_pattern_input) => {
         type: "string",
         scope: "space"
     } as const satisfies __cfHelpers.JSONSchema).for("assignName", true);
-    const setAssign = __cfHandler_1({
+    const setAssign = __cfHandler_hb20549a97e67({
         assignName: assignName
     }).for({ stream: "setAssign" }, true);
     return {
         [UI]: (<div>
-        {rows.mapWithPattern(__cfPattern_2, {
+        {rows.mapWithPattern(__cfPattern_h425affd75001, {
                 people: people,
                 setAssign: setAssign
             })}
@@ -368,9 +368,14 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfLift_1,
-    __cfHandler_2,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfHandler_hb20549a97e67,
+    __cfLift_hec8401e03c4b,
+    __cfHandler_h2a93a514867f,
+    __cfPattern_h82f00529d775,
+    __cfPattern_h425affd75001,
+    __cfHandler_1: __cfHandler_hb20549a97e67,
+    __cfLift_1: __cfLift_hec8401e03c4b,
+    __cfHandler_2: __cfHandler_h2a93a514867f,
+    __cfPattern_1: __cfPattern_h82f00529d775,
+    __cfPattern_2: __cfPattern_h425affd75001
 });

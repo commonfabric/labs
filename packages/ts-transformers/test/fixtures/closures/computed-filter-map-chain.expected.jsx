@@ -15,7 +15,7 @@ interface Preference {
     ingredient: string;
     preference: "liked" | "disliked";
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h83138ab16fd1 = __cfHelpers.lift<{
     state: {
         preferences: {
             ingredient: string;
@@ -64,7 +64,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   .filter() and .map() are standard Array methods — they must remain
 //   untransformed. This is a negative test for the reactive method detection.
 export default pattern((state) => {
-    const liked = __cfLift_1({ state: {
+    const liked = __cfLift_h83138ab16fd1({ state: {
             preferences: state.key("preferences")
         } }).for("liked", true);
     return { liked };
@@ -109,5 +109,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h83138ab16fd1,
+    __cfLift_1: __cfLift_h83138ab16fd1
 });

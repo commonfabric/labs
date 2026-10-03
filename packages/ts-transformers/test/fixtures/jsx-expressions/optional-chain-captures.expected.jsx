@@ -22,7 +22,7 @@ interface State {
     };
     items: Item[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_heb4680985495 = __cfHelpers.lift<{
     item: {
         maybe?: { value: number; } | undefined;
     };
@@ -48,9 +48,9 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_haeccc601a30f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return (<span>{__cfLift_1({ item: {
+    return (<span>{__cfLift_heb4680985495({ item: {
             maybe: item.key("maybe")
         } })}</span>);
 }, {
@@ -107,7 +107,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         <span>{state.key("maybe", "value")}</span>
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_haeccc601a30f, {})}
       </div>),
     };
 }, {
@@ -180,6 +180,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_heb4680985495,
+    __cfPattern_haeccc601a30f,
+    __cfLift_1: __cfLift_heb4680985495,
+    __cfPattern_1: __cfPattern_haeccc601a30f
 });

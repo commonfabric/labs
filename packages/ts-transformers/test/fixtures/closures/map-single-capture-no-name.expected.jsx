@@ -17,7 +17,7 @@ interface State {
     }>;
     discount: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h0433d932131d = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -50,10 +50,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h27008255a1a1 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
-    return (<span>{__cfLift_1({
+    return (<span>{__cfLift_h0433d932131d({
         item: {
             price: item.key("price")
         },
@@ -118,7 +118,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state: State) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h27008255a1a1, {
                 state: {
                     discount: state.key("discount")
                 }
@@ -179,6 +179,8 @@ export default pattern((state: State) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h0433d932131d,
+    __cfPattern_h27008255a1a1,
+    __cfLift_1: __cfLift_h0433d932131d,
+    __cfPattern_1: __cfPattern_h27008255a1a1
 });

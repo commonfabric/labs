@@ -67,7 +67,7 @@ const castVote = handler({
         event,
     ]);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hb6b80ab5da8b = __cfHelpers.lift<{
     castVote: __cfHelpers.HandlerFactory<VoteEvent, { votes: __cfHelpers.Cell<VoteEvent[]>; }, void>;
     state: {
         votes: VoteEvent[];
@@ -124,7 +124,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h404d9c845282 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         item: {
@@ -160,7 +160,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     id: item.id,
     step: "single",
 }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h29244172d48f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     const boundCastVote = __cf_pattern_input.key("params", "boundCastVote");
@@ -179,7 +179,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 type: "object",
                 properties: {}
             }]
-    } as const satisfies __cfHelpers.JSONSchema, state.key("canVote"), <button type="button" onClick={__cfHandler_1({
+    } as const satisfies __cfHelpers.JSONSchema, state.key("canVote"), <button type="button" onClick={__cfHandler_h404d9c845282({
         boundCastVote: boundCastVote,
         item: {
             id: item.key("id")
@@ -270,7 +270,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // Context: The conditional branch makes expression rewriting recurse into the
 // handler subtree; the authored handler arrow must be treated as safe context.
 export default pattern((state) => {
-    const boundCastVote = __cfLift_1({
+    const boundCastVote = __cfLift_hb6b80ab5da8b({
         castVote: castVote,
         state: {
             votes: state.key("votes")
@@ -278,7 +278,7 @@ export default pattern((state) => {
     }).for({ stream: "boundCastVote" }, true);
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_h29244172d48f, {
                 state: {
                     canVote: state.key("canVote")
                 },
@@ -367,7 +367,10 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     castVote,
-    __cfLift_1,
-    __cfHandler_1,
-    __cfPattern_1
+    __cfLift_hb6b80ab5da8b,
+    __cfHandler_h404d9c845282,
+    __cfPattern_h29244172d48f,
+    __cfLift_1: __cfLift_hb6b80ab5da8b,
+    __cfHandler_1: __cfHandler_h404d9c845282,
+    __cfPattern_1: __cfPattern_h29244172d48f
 });

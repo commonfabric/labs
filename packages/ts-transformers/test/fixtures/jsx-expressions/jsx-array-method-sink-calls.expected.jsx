@@ -16,7 +16,7 @@ interface State {
     threshold: number;
     factor: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hf710939c6dec = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -44,7 +44,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h86830e31d06f = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -76,7 +76,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h71f22e3fcaa9 = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -104,7 +104,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_hdfcc753b3edd = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -145,14 +145,14 @@ export default pattern((state) => {
         [UI]: (<div>
         <p>
           Filter joined:{" "}
-          {__cfLift_1({ state: {
+          {__cfLift_hf710939c6dec({ state: {
                 items: state.key("items"),
                 threshold: state.key("threshold")
             } })}
         </p>
         <p>
           Filter map joined:{" "}
-          {__cfLift_2({ state: {
+          {__cfLift_h86830e31d06f({ state: {
                 items: state.key("items"),
                 threshold: state.key("threshold"),
                 factor: state.key("factor")
@@ -160,14 +160,14 @@ export default pattern((state) => {
         </p>
         <p>
           Filter joined upper:{" "}
-          {__cfLift_3({ state: {
+          {__cfLift_h71f22e3fcaa9({ state: {
                 items: state.key("items"),
                 threshold: state.key("threshold")
             } })}
         </p>
         <p>
           Filter joined upper trimmed:{" "}
-          {__cfLift_4({ state: {
+          {__cfLift_hdfcc753b3edd({ state: {
                 items: state.key("items"),
                 threshold: state.key("threshold")
             } })}
@@ -225,8 +225,12 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4
+    __cfLift_hf710939c6dec,
+    __cfLift_h86830e31d06f,
+    __cfLift_h71f22e3fcaa9,
+    __cfLift_hdfcc753b3edd,
+    __cfLift_1: __cfLift_hf710939c6dec,
+    __cfLift_2: __cfLift_h86830e31d06f,
+    __cfLift_3: __cfLift_h71f22e3fcaa9,
+    __cfLift_4: __cfLift_hdfcc753b3edd
 });

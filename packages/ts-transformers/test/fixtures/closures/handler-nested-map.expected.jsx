@@ -17,7 +17,7 @@ interface State {
     }>;
     multiplier: number;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h078ba45a8e11 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         state: {
@@ -53,7 +53,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 // Context: .map() on a plain array inside a handler remains a normal JS .map(), not a reactive transform
 export default pattern((state) => {
     return {
-        [UI]: (<button type="button" onClick={__cfHandler_1({
+        [UI]: (<button type="button" onClick={__cfHandler_h078ba45a8e11({
             state: {
                 items: state.key("items"),
                 multiplier: state.key("multiplier")
@@ -116,5 +116,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h078ba45a8e11,
+    __cfHandler_1: __cfHandler_h078ba45a8e11
 });

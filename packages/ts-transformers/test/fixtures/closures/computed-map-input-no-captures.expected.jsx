@@ -24,7 +24,7 @@ interface Item {
     id: number;
     value: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h2f22449ca56e = __cfHelpers.lift<{
     items: __cfHelpers.ReadonlyCell<Item[]>;
 }, number>(({ items }) => items.get().map((item) => item.value).length, {
     type: "object",
@@ -62,7 +62,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     // items is a captured cell; .get() yields a plain array, so .map() stays plain.
-    const count = __cfLift_1({ items: items }).for("count", true);
+    const count = __cfLift_h2f22449ca56e({ items: items }).for("count", true);
     return { count };
 }, {
     type: "object",
@@ -103,5 +103,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h2f22449ca56e,
+    __cfLift_1: __cfLift_h2f22449ca56e
 });

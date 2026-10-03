@@ -12,11 +12,11 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const config = __cfHelpers.__cf_data({ bar: "module-level" });
-const __cfLift_1 = __cfHelpers.lift(() => ({ bar: 1 }), false, undefined, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift(() => {
+const __cfLift_hb5b929fdfa70 = __cfHelpers.lift(() => ({ bar: 1 }), false, undefined, { completeSchedulerScopeSummary: true });
+const __cfLift_h986341a2479f = __cfHelpers.lift(() => {
     const condition = 1 > 0;
     if (condition) {
-        const config = __cfLift_1().for("config", true);
+        const config = __cfLift_hb5b929fdfa70().for("config", true);
         return config.key("bar");
     }
     return config.bar;
@@ -29,7 +29,7 @@ const __cfLift_2 = __cfHelpers.lift(() => {
 // Context: The pre-scan collects opaque roots by name; it must not leak
 //   across lexical scopes and incorrectly rewrite unrelated same-named accesses.
 export default pattern(() => {
-    const outer = __cfLift_2().for("outer", true);
+    const outer = __cfLift_h986341a2479f().for("outer", true);
     return outer;
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "string"]
@@ -38,6 +38,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hb5b929fdfa70,
+    __cfLift_h986341a2479f,
+    __cfLift_1: __cfLift_hb5b929fdfa70,
+    __cfLift_2: __cfLift_h986341a2479f
 });

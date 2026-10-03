@@ -23,7 +23,7 @@ interface State {
     discount: number;
     taxRate: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h2a59c1898c48 = __cfHelpers.lift<{
     state: {
         items: {
             name: string;
@@ -59,7 +59,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hd75a5a4a2b41 = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -92,7 +92,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hdd8535926630 = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -130,14 +130,14 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h54d847ceb4b0 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<li key={item.key("id")}>
               <span>{item.key("name")}</span>
               <span>- Original: ${item.key("price")}</span>
               <span>
-                - Discounted: ${__cfLift_2({
+                - Discounted: ${__cfLift_hd75a5a4a2b41({
         item: {
             price: item.key("price")
         },
@@ -148,7 +148,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
               </span>
               <span>
                 - With tax:
-                ${__cfLift_3({
+                ${__cfLift_hdd8535926630({
         item: {
             price: item.key("price")
         },
@@ -226,7 +226,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h4a3f5c27f005 = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -256,7 +256,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_hfcbdbf9c0faf = __cfHelpers.lift<{
     state: {
         discount: number;
     };
@@ -277,7 +277,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_h8096a0efba94 = __cfHelpers.lift<{
     state: {
         taxRate: number;
     };
@@ -298,7 +298,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_hbae4b7d842de = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -328,7 +328,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_h4d6d1265abb7 = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -358,7 +358,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h6ad1d5ba034c = __cfHelpers.lift<{
     state: {
         items: Item[];
     };
@@ -388,7 +388,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_h34931f5c6931 = __cfHelpers.lift<{
     state: {
         filter: {
             length: number;
@@ -431,7 +431,7 @@ export default pattern((state) => {
         <p>Total items: {state.key("items", "length")}</p>
         <p>
           Filtered count:{" "}
-          {__cfLift_1({ state: {
+          {__cfLift_h2a59c1898c48({ state: {
                 items: state.key("items"),
                 filter: state.key("filter")
             } })}
@@ -439,7 +439,7 @@ export default pattern((state) => {
 
         <h3>Array with Complex Expressions</h3>
         <ul>
-          {state.key("items").mapWithPattern(__cfPattern_1, {
+          {state.key("items").mapWithPattern(__cfPattern_h54d847ceb4b0, {
                 state: {
                     discount: state.key("discount"),
                     taxRate: state.key("taxRate")
@@ -449,15 +449,15 @@ export default pattern((state) => {
 
         <h3>Array Methods</h3>
         <p>Item count: {state.key("items", "length")}</p>
-        <p>Active items: {__cfLift_4({ state: {
+        <p>Active items: {__cfLift_h4a3f5c27f005({ state: {
                 items: state.key("items")
             } })}</p>
 
         <h3>Simple Operations</h3>
-        <p>Discount percent: {__cfLift_5({ state: {
+        <p>Discount percent: {__cfLift_hfcbdbf9c0faf({ state: {
                 discount: state.key("discount")
             } })}%</p>
-        <p>Tax percent: {__cfLift_6({ state: {
+        <p>Tax percent: {__cfLift_h8096a0efba94({ state: {
                 taxRate: state.key("taxRate")
             } })}%</p>
 
@@ -470,7 +470,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_7({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hbae4b7d842de({ state: {
                 items: state.key("items")
             } }), "Yes", "No")}</p>
         <p>Any active: {__cfHelpers.ifElse({
@@ -481,7 +481,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_8({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h4d6d1265abb7({ state: {
                 items: state.key("items")
             } }), "Yes", "No")}</p>
         <p>
@@ -494,13 +494,13 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_9({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h6ad1d5ba034c({ state: {
                 items: state.key("items")
             } }), "Yes", "No")}
         </p>
 
         <h3>Object Operations</h3>
-        <div data-item-count={state.key("items", "length")} data-has-filter={__cfLift_10({ state: {
+        <div data-item-count={state.key("items", "length")} data-has-filter={__cfLift_h34931f5c6931({ state: {
                 filter: {
                     length: state.key("filter", "length")
                 }
@@ -583,15 +583,26 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10
+    __cfLift_h2a59c1898c48,
+    __cfLift_hd75a5a4a2b41,
+    __cfLift_hdd8535926630,
+    __cfPattern_h54d847ceb4b0,
+    __cfLift_h4a3f5c27f005,
+    __cfLift_hfcbdbf9c0faf,
+    __cfLift_h8096a0efba94,
+    __cfLift_hbae4b7d842de,
+    __cfLift_h4d6d1265abb7,
+    __cfLift_h6ad1d5ba034c,
+    __cfLift_h34931f5c6931,
+    __cfLift_1: __cfLift_h2a59c1898c48,
+    __cfLift_2: __cfLift_hd75a5a4a2b41,
+    __cfLift_3: __cfLift_hdd8535926630,
+    __cfPattern_1: __cfPattern_h54d847ceb4b0,
+    __cfLift_4: __cfLift_h4a3f5c27f005,
+    __cfLift_5: __cfLift_hfcbdbf9c0faf,
+    __cfLift_6: __cfLift_h8096a0efba94,
+    __cfLift_7: __cfLift_hbae4b7d842de,
+    __cfLift_8: __cfLift_h4d6d1265abb7,
+    __cfLift_9: __cfLift_h6ad1d5ba034c,
+    __cfLift_10: __cfLift_h34931f5c6931
 });

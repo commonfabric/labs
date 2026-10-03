@@ -15,7 +15,7 @@ interface Point {
     x: number;
     y: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h7011fbc61833 = __cfHelpers.lift<{
     point: __cfHelpers.ReadonlyCell<Point>;
     multiplier: __cfHelpers.ReadonlyCell<number>;
 }, number>(({ point, multiplier }) => {
@@ -72,7 +72,7 @@ export default pattern(() => {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("multiplier", true);
     // Destructuring requires .get() first since the captured cell is not unwrapped
-    const result = __cfLift_1({
+    const result = __cfLift_h7011fbc61833({
         point: point,
         multiplier: multiplier
     }).for("result", true);
@@ -84,5 +84,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h7011fbc61833,
+    __cfLift_1: __cfLift_h7011fbc61833
 });

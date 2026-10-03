@@ -11,9 +11,9 @@ import { computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift(() => ({ bar: 1 }), false, undefined, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift(() => {
-    const foo = __cfLift_1().for("foo", true);
+const __cfLift_hb5b929fdfa70 = __cfHelpers.lift(() => ({ bar: 1 }), false, undefined, { completeSchedulerScopeSummary: true });
+const __cfLift_h5f15451fda8c = __cfHelpers.lift(() => {
+    const foo = __cfLift_hb5b929fdfa70().for("foo", true);
     return foo.key("bar");
 }, false, undefined, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-in-computed-property-access
@@ -24,7 +24,7 @@ const __cfLift_2 = __cfHelpers.lift(() => {
 //   inside a lift-applied callback need .key() rewriting even though they are not
 //   captured from an outer scope.
 export default pattern(() => {
-    const outer = __cfLift_2().for("outer", true);
+    const outer = __cfLift_h5f15451fda8c().for("outer", true);
     return outer;
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
@@ -33,6 +33,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hb5b929fdfa70,
+    __cfLift_h5f15451fda8c,
+    __cfLift_1: __cfLift_hb5b929fdfa70,
+    __cfLift_2: __cfLift_h5f15451fda8c
 });

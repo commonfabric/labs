@@ -137,7 +137,7 @@ const comparable = lift((input: Writable<State>) => input.equals(input), {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfe30f5cc84bb = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return item.key("id");
 }, {
@@ -165,7 +165,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const opaqueMap = lift((input: Writable<Item[]>) => input.mapWithPattern(__cfPattern_1, {}), {
+const opaqueMap = lift((input: Writable<Item[]>) => input.mapWithPattern(__cfPattern_hfe30f5cc84bb, {}), {
     type: "array",
     items: {
         $ref: "#/$defs/Item"
@@ -196,5 +196,6 @@ export { comparable, opaqueMap, pushOnly, readOnly, readWrite, setOnly, updateOn
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_hfe30f5cc84bb,
+    __cfPattern_1: __cfPattern_hfe30f5cc84bb
 });

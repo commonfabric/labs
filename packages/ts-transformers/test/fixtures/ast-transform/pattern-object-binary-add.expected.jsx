@@ -11,7 +11,7 @@ import { pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hef9d746c0d70 = __cfHelpers.lift<{
     state: {
         count: number;
     };
@@ -39,7 +39,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   return { next: state.count + 1 }
 //   → return { next: lift(({ state }) => state.count + 1)({ state }) }
 export default pattern((state) => ({
-    next: __cfLift_1({ state: {
+    next: __cfLift_hef9d746c0d70({ state: {
             count: state.key("count")
         } }).for(["__patternResult", "next"], true)
 }), {
@@ -63,5 +63,6 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hef9d746c0d70,
+    __cfLift_1: __cfLift_hef9d746c0d70
 });

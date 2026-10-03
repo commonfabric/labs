@@ -42,7 +42,7 @@ const removeItem = handler({
         items.set(currentItems.toSpliced(index, 1));
     }
 });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc7fc4f5f7121 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const items = __cf_pattern_input.key("params", "items");
     return (<div>
@@ -129,7 +129,7 @@ export default pattern((__cf_pattern_input) => {
                         properties: {}
                     }]
             } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, hasItems, <div>
-              {items.mapWithPattern(__cfPattern_1, {
+              {items.mapWithPattern(__cfPattern_hc7fc4f5f7121, {
                     items: items
                 })}
             </div>, <div>No items</div>)}
@@ -198,5 +198,6 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     removeItem,
-    __cfPattern_1
+    __cfPattern_hc7fc4f5f7121,
+    __cfPattern_1: __cfPattern_hc7fc4f5f7121
 });

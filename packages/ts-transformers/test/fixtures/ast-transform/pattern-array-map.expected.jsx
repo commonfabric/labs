@@ -28,7 +28,7 @@ const adder = handler(false as const satisfies __cfHelpers.JSONSchema, {
 }) => {
     state.values.push(Math.random().toString(36).substring(2, 15));
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h9981af11a1a9 = __cfHelpers.lift<{
     values: unknown[];
 }, void>(({ values }) => {
     console.log("values#", values?.length);
@@ -46,7 +46,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     asCell: ["opaque"]
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hef2f7d69be51 = __cfHelpers.pattern(__cf_pattern_input => {
     const value = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
     return (<div>
@@ -93,13 +93,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // Context: Destructured pattern parameter; combines array map transform with computed and handler schemas
 export default pattern((__cf_pattern_input) => {
     const values = __cf_pattern_input.key("values");
-    __cfLift_1({ values: values });
+    __cfLift_h9981af11a1a9({ values: values });
     return {
         [NAME]: str `Simple Value: ${values.key("length")}`,
         [UI]: (<div>
           <button type="button" onClick={adder({ values })}>Add Value</button>
           <div>
-            {values.mapWithPattern(__cfPattern_1, {})}
+            {values.mapWithPattern(__cfPattern_hef2f7d69be51, {})}
           </div>
         </div>),
         values,
@@ -159,6 +159,8 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     adder,
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h9981af11a1a9,
+    __cfPattern_hef2f7d69be51,
+    __cfLift_1: __cfLift_h9981af11a1a9,
+    __cfPattern_1: __cfPattern_hef2f7d69be51
 });

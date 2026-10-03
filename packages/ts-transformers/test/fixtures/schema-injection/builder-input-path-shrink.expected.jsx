@@ -32,8 +32,8 @@ const deriveInput: Writable<{
     foo: string;
     bar: string;
 }> = __cfHelpers.__cf_data({} as never);
-const __cfLift_1 = __cfHelpers.lift(() => deriveInput.key("foo").get(), false, undefined, { completeSchedulerScopeSummary: true });
-const computedObserved = __cfHelpers.__cf_data(__cfLift_1().for("computedObserved", true));
+const __cfLift_hbc33c525c128 = __cfHelpers.lift(() => deriveInput.key("foo").get(), false, undefined, { completeSchedulerScopeSummary: true });
+const computedObserved = __cfHelpers.__cf_data(__cfLift_hbc33c525c128().for("computedObserved", true));
 const handlerObserved = handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
@@ -130,7 +130,7 @@ const liftExplicit = lift((input) => input.key("foo").get(), {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h92f4cf8b6b9f = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         input: {
@@ -150,7 +150,7 @@ const actionPattern = pattern((input: Writable<{
     foo: string;
     bar: string;
 }>) => {
-    const a = __cfHandler_1({
+    const a = __cfHandler_h92f4cf8b6b9f({
         input: input
     }).for({ stream: "a" }, true);
     return a;
@@ -184,12 +184,14 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     liftOptional,
-    __cfLift_1,
+    __cfLift_hbc33c525c128,
     handlerObserved,
     handlerExplicit,
     liftInterprocedural,
     liftWriteOnly,
     liftExplicit,
     actionPattern,
-    __cfHandler_1
+    __cfHandler_h92f4cf8b6b9f,
+    __cfLift_1: __cfLift_hbc33c525c128,
+    __cfHandler_1: __cfHandler_h92f4cf8b6b9f
 });

@@ -11,7 +11,7 @@ import { pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_ha520b347478a = __cfHelpers.lift<{
     state: {
         task: {
             done: boolean;
@@ -40,7 +40,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h10bbe946665d = __cfHelpers.lift<{
     state: {
         label?: string | null | undefined;
     };
@@ -83,7 +83,7 @@ export default pattern((state) => ({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "boolean"
-    } as const satisfies __cfHelpers.JSONSchema, state.key("showCompleted"), __cfLift_1({ state: {
+    } as const satisfies __cfHelpers.JSONSchema, state.key("showCompleted"), __cfLift_ha520b347478a({ state: {
             task: {
                 done: state.key("task", "done")
             }
@@ -120,7 +120,7 @@ export default pattern((state) => ({
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, state.key("fallbackLabel"), "C"))}</p>
-      <p>{__cfLift_2({ state: {
+      <p>{__cfLift_h10bbe946665d({ state: {
             label: state.key("label")
         } })}</p>
     </div>),
@@ -191,6 +191,8 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_ha520b347478a,
+    __cfLift_h10bbe946665d,
+    __cfLift_1: __cfLift_ha520b347478a,
+    __cfLift_2: __cfLift_h10bbe946665d
 });

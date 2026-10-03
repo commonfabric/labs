@@ -22,7 +22,7 @@ import { computed, ifElse, pattern, UI, Writable } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h2cec5ba7cbc2 = __cfHelpers.lift<{
     secondToggle: __cfHelpers.ReadonlyCell<boolean>;
 }, { background: string; }>(({ secondToggle }) => {
     const val = secondToggle.get();
@@ -45,7 +45,7 @@ const __cfLift_1 = __cfHelpers.lift<{
     },
     required: ["background"]
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h2cec5ba7cbc2_2 = __cfHelpers.lift<{
     secondToggle: __cfHelpers.ReadonlyCell<boolean>;
 }, { background: string; }>(({ secondToggle }) => {
     // This .get() should NOT be wrapped in an extra lift-applied computation
@@ -86,7 +86,7 @@ export default pattern(() => {
     return {
         [UI]: (<div>
         {/* Case A: Top-level computed - always worked */}
-        <div style={__cfLift_1({ secondToggle: secondToggle })}>Case A</div>
+        <div style={__cfLift_h2cec5ba7cbc2({ secondToggle: secondToggle })}>Case A</div>
 
         {/* Case B: Computed inside ifElse - this was the bug */}
         {ifElse({
@@ -102,7 +102,7 @@ export default pattern(() => {
                         type: "object",
                         properties: {}
                     }]
-            } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, showOuter, <div style={__cfLift_2({ secondToggle: secondToggle })}>Case B</div>, <div>Hidden</div>)}
+            } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, showOuter, <div style={__cfLift_h2cec5ba7cbc2_2({ secondToggle: secondToggle })}>Case B</div>, <div>Hidden</div>)}
       </div>),
     };
 }, {
@@ -143,6 +143,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h2cec5ba7cbc2,
+    __cfLift_h2cec5ba7cbc2_2,
+    __cfLift_1: __cfLift_h2cec5ba7cbc2,
+    __cfLift_2: __cfLift_h2cec5ba7cbc2_2
 });

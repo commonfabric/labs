@@ -34,7 +34,7 @@ interface PatternInput {
     items?: Cell<Default<Item[], [
     ]>>;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h3e4089b7ce19 = __cfHelpers.lift<{
     items: __cfHelpers.ReadonlyCell<unknown[]>;
 }, boolean>(({ items }) => items.get().length > 0, {
     type: "object",
@@ -51,7 +51,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hed11891c86ff = __cfHelpers.lift<{
     i: number;
     item: {
         selectedIndex: number;
@@ -76,7 +76,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc18144a802d5 = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     const i = __cf_pattern_input.key("index");
     const item = __cf_pattern_input.key("params", "item");
@@ -89,7 +89,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         "enum": ["", "* "]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_hed11891c86ff({
         i: i,
         item: {
             selectedIndex: item.key("selectedIndex")
@@ -155,12 +155,12 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h5f4600c84b6a = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<div>
               <strong>{item.key("label")}</strong>
               <ul>
-                {item.key("tags").mapWithPattern(__cfPattern_1, {
+                {item.key("tags").mapWithPattern(__cfPattern_hc18144a802d5, {
             item: {
                 selectedIndex: item.key("selectedIndex")
             }
@@ -236,7 +236,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 //   both the outer and inner levels.
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    const hasItems = __cfLift_1({ items: items }).for("hasItems", true);
+    const hasItems = __cfLift_h3e4089b7ce19({ items: items }).for("hasItems", true);
     return {
         [UI]: (<div>
         {__cfHelpers.ifElse({
@@ -257,7 +257,7 @@ export default pattern((__cf_pattern_input) => {
                     type: "array",
                     items: {}
                 }]
-        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_2, {}), <p>No items</p>)}
+        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_h5f4600c84b6a, {}), <p>No items</p>)}
       </div>),
     };
 }, {
@@ -335,8 +335,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_h3e4089b7ce19,
+    __cfLift_hed11891c86ff,
+    __cfPattern_hc18144a802d5,
+    __cfPattern_h5f4600c84b6a,
+    __cfLift_1: __cfLift_h3e4089b7ce19,
+    __cfLift_2: __cfLift_hed11891c86ff,
+    __cfPattern_1: __cfPattern_hc18144a802d5,
+    __cfPattern_2: __cfPattern_h5f4600c84b6a
 });

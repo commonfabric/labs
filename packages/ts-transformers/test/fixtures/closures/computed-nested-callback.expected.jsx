@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h8ca9cd70b32b = __cfHelpers.lift<{
     numbers: __cfHelpers.ReadonlyCell<number[]>;
     multiplier: __cfHelpers.ReadonlyCell<number>;
 }, number[]>(({ numbers, multiplier }) => numbers.get().map((n) => n * multiplier.get()), {
@@ -52,7 +52,7 @@ export default pattern(() => {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("multiplier", true);
     // Nested callback - the inner array map runs on the unwrapped plain array
-    const result = __cfLift_1({
+    const result = __cfLift_h8ca9cd70b32b({
         numbers: numbers,
         multiplier: multiplier
     }).for("result", true);
@@ -67,5 +67,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h8ca9cd70b32b,
+    __cfLift_1: __cfLift_h8ca9cd70b32b
 });

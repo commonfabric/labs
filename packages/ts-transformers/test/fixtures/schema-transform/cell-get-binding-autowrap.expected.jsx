@@ -11,7 +11,7 @@ import { pattern, Writable } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h0939521a2ccd = __cfHelpers.lift<{
     layout: __cfHelpers.Writable<string>;
 }, number>(({ layout }) => layout.get().trim().length, {
     type: "object",
@@ -36,7 +36,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   `cell-get-terminal-binding-autowrap`.
 export default pattern((__cf_pattern_input) => {
     const layout = __cf_pattern_input.key("layout");
-    const len = __cfLift_1({ layout: layout }).for("len", true);
+    const len = __cfLift_h0939521a2ccd({ layout: layout }).for("len", true);
     return { len };
 }, {
     type: "object",
@@ -60,5 +60,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h0939521a2ccd,
+    __cfLift_1: __cfLift_h0939521a2ccd
 });

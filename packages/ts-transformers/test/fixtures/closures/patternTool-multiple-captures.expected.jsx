@@ -20,7 +20,7 @@ const prefix = __cfHelpers.__cf_data(new Writable("Result: ", {
 type Output = {
     tool: PatternToolResult<Record<string, never>>;
 };
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd3fe53f71737 = __cfHelpers.lift<{
     value: number;
 }, string>(({ value }) => {
     return prefix.get() + String(value * multiplier.get());
@@ -35,11 +35,11 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = pattern((__cf_pattern_input: {
+const __cfPattern_h5ae6df945493 = pattern((__cf_pattern_input: {
     value: number;
 }) => {
     const value = __cf_pattern_input.key("value");
-    return __cfLift_1({ value: value }).for("__patternResult", true);
+    return __cfLift_hd3fe53f71737({ value: value }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -61,7 +61,7 @@ const __cfPattern_1 = pattern((__cf_pattern_input: {
 // Context: Both `prefix` and `multiplier` are module-scoped new Writable() values;
 //   `value` is the pattern's only per-call input.
 export default pattern(() => {
-    const tool = patternTool(__cfPattern_1);
+    const tool = patternTool(__cfPattern_h5ae6df945493);
     return { tool };
 }, {
     type: "object",
@@ -110,6 +110,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hd3fe53f71737,
+    __cfPattern_h5ae6df945493,
+    __cfLift_1: __cfLift_hd3fe53f71737,
+    __cfPattern_1: __cfPattern_h5ae6df945493
 });

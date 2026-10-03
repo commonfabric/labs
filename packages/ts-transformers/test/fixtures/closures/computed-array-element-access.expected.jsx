@@ -11,7 +11,7 @@ import { Writable, computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h9b6aa85acc88 = __cfHelpers.lift<{
     value: __cfHelpers.ReadonlyCell<number>;
     factors: number[];
 }, number>(({ value, factors }) => value.get() * factors[1]!, {
@@ -41,7 +41,7 @@ export default pattern(() => {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("value", true);
     const factors = [2, 3, 4];
-    const result = __cfLift_1({
+    const result = __cfLift_h9b6aa85acc88({
         value: value,
         factors: factors
     }).for("result", true);
@@ -53,5 +53,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h9b6aa85acc88,
+    __cfLift_1: __cfLift_h9b6aa85acc88
 });

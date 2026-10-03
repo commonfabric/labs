@@ -18,7 +18,7 @@ interface State {
     row: number;
     col: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h18bda725b619 = __cfHelpers.lift<{
     state: {
         items: string[];
         index: number;
@@ -46,7 +46,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_he8e8823883f4 = __cfHelpers.lift<{
     state: {
         items: string[];
     };
@@ -70,7 +70,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h860446cd1638 = __cfHelpers.lift<{
     state: {
         matrix: number[][];
         row: number;
@@ -115,18 +115,18 @@ export default pattern((state) => {
         [UI]: (<div>
         <h3>Dynamic Element Access</h3>
         {/* Basic dynamic index */}
-        <p>Item: {__cfLift_1({ state: {
+        <p>Item: {__cfLift_h18bda725b619({ state: {
                 items: state.key("items"),
                 index: state.key("index")
             } })}</p>
 
         {/* Computed index */}
-        <p>Last: {__cfLift_2({ state: {
+        <p>Last: {__cfLift_he8e8823883f4({ state: {
                 items: state.key("items")
             } })}</p>
 
         {/* Double indexing */}
-        <p>Matrix: {__cfLift_3({ state: {
+        <p>Matrix: {__cfLift_h860446cd1638({ state: {
                 matrix: state.key("matrix"),
                 row: state.key("row"),
                 col: state.key("col")
@@ -196,7 +196,10 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3
+    __cfLift_h18bda725b619,
+    __cfLift_he8e8823883f4,
+    __cfLift_h860446cd1638,
+    __cfLift_1: __cfLift_h18bda725b619,
+    __cfLift_2: __cfLift_he8e8823883f4,
+    __cfLift_3: __cfLift_h860446cd1638
 });

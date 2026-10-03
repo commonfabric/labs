@@ -121,15 +121,29 @@ export default pattern<State>((state) => {
       expect(symbols.some((s) => s.startsWith("__cfPattern_"))).toBe(true);
       expect(symbols.some((s) => s.startsWith("__cfLift_"))).toBe(true);
 
+      const HOIST_ALIAS = /^__cf[A-Za-z]+_\d+$/;
       for (const symbol of symbols) {
-        // Reverse: { identity, symbol } resolves synchronously to a live value.
+        // Reverse: { identity, symbol } resolves synchronously to a live value
+        // under BOTH spellings — canonical content name and positional alias.
         const value = pm.artifactFromIdentitySync(identity, symbol);
         expect(value).toBeDefined();
-        // Forward: that live value reports the same { identity, symbol }.
-        expect(pm.getArtifactEntryRef(value as never)).toEqual({
-          identity,
-          symbol,
-        });
+        const forward = pm.getArtifactEntryRef(value as never);
+        expect(forward?.identity).toBe(identity);
+        if (HOIST_ALIAS.test(symbol)) {
+          // A positional alias resolves to the same live value, but the
+          // value's forward ref is its CANONICAL spelling — canonicals
+          // register first and the forward map is first-write-wins, which is
+          // what makes NEW serializations content-addressed while the numeric
+          // names keep the stored archive loadable.
+          expect(forward!.symbol).toMatch(
+            /^__cf[A-Za-z]+_h[0-9a-f]+(?:_\d+)?$/,
+          );
+          expect(pm.artifactFromIdentitySync(identity, forward!.symbol))
+            .toBe(value);
+        } else {
+          // Forward: a canonical or authored name round-trips identically.
+          expect(forward).toEqual({ identity, symbol });
+        }
       }
     } finally {
       await runtime.dispose();

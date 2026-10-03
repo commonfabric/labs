@@ -60,7 +60,7 @@ const Item = pattern((__cf_pattern_input) => {
     },
     required: ["id", "label", "$NAME"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_h7f101cf62941 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         items: {
@@ -99,7 +99,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
         return navigateTo(existing);
     }
 });
-const __cfHandler_2 = __cfHelpers.handler({
+const __cfHandler_h69a1e74752ae = __cfHelpers.handler({
     type: "object",
     properties: {
         label: {
@@ -166,13 +166,13 @@ export default pattern((__cf_pattern_input) => {
     // `goToAllNotesAction` — reads `items.get()`, filters, conditionally
     // navigates. Triggers `items` to be classified `readonly` in this
     // action's captures schema.
-    const read = __cfHandler_1({
+    const read = __cfHandler_h7f101cf62941({
         items: items
     }).for({ stream: "read" }, true);
     // `write` action: matches the shape of notebook.tsx's
     // `createNoteStreamAction` — pushes a new item, returns it. Should
     // get a schema with `items` classified `writeonly` (plus `self`).
-    const write = __cfHandler_2({
+    const write = __cfHandler_h69a1e74752ae({
         self: self,
         items: items
     }).for({ stream: "write" }, true);
@@ -230,6 +230,8 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     Item,
-    __cfHandler_1,
-    __cfHandler_2
+    __cfHandler_h7f101cf62941,
+    __cfHandler_h69a1e74752ae,
+    __cfHandler_1: __cfHandler_h7f101cf62941,
+    __cfHandler_2: __cfHandler_h69a1e74752ae
 });

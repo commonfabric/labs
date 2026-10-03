@@ -13,7 +13,7 @@ const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 // Simulates `any` leaking through a generic function (like generateObject)
 declare function fetchAny(): any;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hba4cf0446c2a = __cfHelpers.lift<{
     result: any;
     prompt: string;
 }, any>(({ result, prompt }) => result?.title || prompt || "Untitled", {
@@ -35,7 +35,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 export const TypedFromAny = pattern((__cf_pattern_input) => {
     const prompt = __cf_pattern_input.key("prompt");
     const result = fetchAny();
-    return __cfLift_1({
+    return __cfLift_hba4cf0446c2a({
         result: result,
         prompt: prompt
     });
@@ -80,5 +80,6 @@ export const TypedUIOutput = pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hba4cf0446c2a,
+    __cfLift_1: __cfLift_hba4cf0446c2a
 });

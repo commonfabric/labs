@@ -20,7 +20,7 @@ interface State {
     discount: number;
     threshold: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h190d601dc2cf = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -53,7 +53,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h83368a347e7e = __cfHelpers.lift<{
     item: {
         price: number;
     };
@@ -86,7 +86,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc63611996d3d = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
     return (<div>
@@ -98,14 +98,14 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "number"
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h190d601dc2cf({
         item: {
             price: item.key("price")
         },
         state: {
             threshold: state.key("threshold")
         }
-    }), __cfLift_2({
+    }), __cfLift_h83368a347e7e({
         item: {
             price: item.key("price")
         },
@@ -184,7 +184,7 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Ternary with captures in map callback */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_hc63611996d3d, {
                 state: {
                     threshold: state.key("threshold"),
                     discount: state.key("discount")
@@ -257,7 +257,10 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1
+    __cfLift_h190d601dc2cf,
+    __cfLift_h83368a347e7e,
+    __cfPattern_hc63611996d3d,
+    __cfLift_1: __cfLift_h190d601dc2cf,
+    __cfLift_2: __cfLift_h83368a347e7e,
+    __cfPattern_1: __cfPattern_hc63611996d3d
 });

@@ -133,24 +133,26 @@ const PATTERN_COVERAGE_CACHE_VARIANT = "pattern-coverage";
 
 /**
  * The compiler's hoist namespace. `builder-call-hoisting` mints
- * `__cfPattern_<n>` (n counting from 1) for the anonymous sub-patterns it
- * derives, and registers them through `__cfReg` — never as exports.
- * Registration refuses an AUTHORED builder-artifact export under these names,
- * which is what lets everything downstream that must tell a derived hoist
- * from an authored artifact — the pattern-update gates among them — read
- * provenance from the spelling alone: a `__cfPattern_<n>` in the artifact
- * index can only be the transformer's.
+ * `__cfPattern_h<digest>` (content-addressed canonical names, optionally
+ * `_k`-ordinal-suffixed for identical twins) for the anonymous sub-patterns
+ * it derives, plus visit-order aliases `__cfPattern_<n>` (n counting from 1)
+ * that keep pointers stored under the historical numbering loadable, and
+ * registers both through `__cfReg` — never as exports. Registration refuses
+ * an AUTHORED builder-artifact export under either spelling, which is what
+ * lets everything downstream that must tell a derived hoist from an authored
+ * artifact — the pattern-update gates among them — read provenance from the
+ * spelling alone: a symbol in this namespace can only be the transformer's.
  *
  * What is PROHIBITED here is deliberately wider than what the compiler
  * MINTS, and wider than what a consumer recognizes as a hoist (the gate's
- * `isDerivedHoistSymbol` matches `_1` upward, since that is what actually
- * gets emitted). `_0` and `_01` are minted by nothing, so reserving them
- * costs authors nothing real — and leaving them authorable would leave the
- * confusable spellings, the ones a reader cannot tell from a hoist at a
- * glance, as the only ones anybody could take. A prohibition may safely
- * exceed the convention it protects; a recognizer may not.
+ * `isDerivedHoistSymbol` matches exactly what gets emitted). `_0` and `_01`
+ * are minted by nothing, and neither is a bare-`h` or malformed-digest name,
+ * so reserving them costs authors nothing real — and leaving them authorable
+ * would leave the confusable spellings, the ones a reader cannot tell from a
+ * hoist at a glance, as the only ones anybody could take. A prohibition may
+ * safely exceed the convention it protects; a recognizer may not.
  */
-const RESERVED_HOIST_EXPORT = /^__cfPattern_\d+$/;
+const RESERVED_HOIST_EXPORT = /^__cfPattern_(?:\d+|h[0-9a-z]+(?:_\d+)?)$/;
 
 /**
  * Throw if any module in an evaluated bundle exports a builder artifact in
@@ -173,7 +175,8 @@ function assertNoReservedHoistExports(
       ) {
         throw new Error(
           `module ${identity} exports the builder artifact ` +
-            `"${exportName}": the __cfPattern_<n> names are the compiler's ` +
+            `"${exportName}": the __cfPattern_<n> / __cfPattern_h<digest> ` +
+            `names are the compiler's ` +
             `own hoist namespace, and an authored artifact under one reads ` +
             `as a derived hoist wherever provenance matters — export it ` +
             `under another name`,

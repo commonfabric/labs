@@ -18,7 +18,7 @@ type ItemTuple = [
 interface State {
     items: ItemTuple[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb6e87fc67996 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element", "0");
     return (<div data-item={item}>{item}</div>);
 }, {
@@ -58,7 +58,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hcb04fddf85c5 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element", "0");
     const count = __cf_pattern_input.key("element", "1");
     const index = __cf_pattern_input.key("index");
@@ -116,10 +116,10 @@ export default pattern((__cf_pattern_input) => {
         [UI]: (<div>
         {/* Array destructured parameter - without fix, 'item' would be
                 incorrectly captured in params due to shorthand usage in JSX */}
-        {items.mapWithPattern(__cfPattern_1, {})}
+        {items.mapWithPattern(__cfPattern_hb6e87fc67996, {})}
 
         {/* Multiple array destructured params */}
-        {items.mapWithPattern(__cfPattern_2, {})}
+        {items.mapWithPattern(__cfPattern_hcb04fddf85c5, {})}
       </div>),
     };
 }, {
@@ -175,6 +175,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_hb6e87fc67996,
+    __cfPattern_hcb04fddf85c5,
+    __cfPattern_1: __cfPattern_hb6e87fc67996,
+    __cfPattern_2: __cfPattern_hcb04fddf85c5
 });

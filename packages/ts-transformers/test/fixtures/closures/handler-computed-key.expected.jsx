@@ -20,7 +20,7 @@ function nextKey(): string {
     return `key-${counter}`;
 }
 __cfHardenFn(nextKey);
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_haae222600d44 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         recordMap: {
@@ -41,7 +41,7 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 export default pattern((state) => {
     const recordMap = state.key("records");
     return {
-        [UI]: (<button type="button" onClick={__cfHandler_1({
+        [UI]: (<button type="button" onClick={__cfHandler_haae222600d44({
             recordMap: recordMap
         })}>
         Step
@@ -94,5 +94,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_haae222600d44,
+    __cfHandler_1: __cfHandler_haae222600d44
 });

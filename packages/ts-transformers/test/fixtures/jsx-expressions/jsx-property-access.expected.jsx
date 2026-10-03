@@ -42,7 +42,7 @@ interface State {
     index: number;
     numbers: number[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hac88b0f3cc94 = __cfHelpers.lift<{
     state: {
         user: {
             age: number;
@@ -71,7 +71,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hb13699ae58ef = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -100,7 +100,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hf8eb9f36e610 = __cfHelpers.lift<{
     state: {
         user: {
             profile: {
@@ -137,7 +137,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h18bda725b619 = __cfHelpers.lift<{
     state: {
         items: string[];
         index: number;
@@ -165,7 +165,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_he8e8823883f4 = __cfHelpers.lift<{
     state: {
         items: string[];
     };
@@ -189,7 +189,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_h1f8a7cf17de9 = __cfHelpers.lift<{
     state: {
         numbers: number[];
         index: number;
@@ -217,7 +217,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_hf77db0ecd45b = __cfHelpers.lift<{
     state: {
         config: {
             theme: {
@@ -254,7 +254,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_hb093995257fe = __cfHelpers.lift<{
     state: {
         user: {
             name: string;
@@ -295,7 +295,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h7d60d3cae9dd = __cfHelpers.lift<{
     state: {
         config: {
             theme: {
@@ -372,13 +372,13 @@ export default pattern((state) => {
         </p>
 
         <h3>Property Access with Operations</h3>
-        <p>Age + 1: {__cfLift_1({ state: {
+        <p>Age + 1: {__cfLift_hac88b0f3cc94({ state: {
                 user: {
                     age: state.key("user", "age")
                 }
             } })}</p>
         <p>Name length: {state.key("user", "name", "length")}</p>
-        <p>Uppercase name: {__cfLift_2({ state: {
+        <p>Uppercase name: {__cfLift_hb13699ae58ef({ state: {
                 user: {
                     name: state.key("user", "name")
                 }
@@ -393,7 +393,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_hf8eb9f36e610({ state: {
                 user: {
                     profile: {
                         location: state.key("user", "profile", "location")
@@ -403,15 +403,15 @@ export default pattern((state) => {
         </p>
 
         <h3>Array Element Access</h3>
-        <p>Item at index: {__cfLift_4({ state: {
+        <p>Item at index: {__cfLift_h18bda725b619({ state: {
                 items: state.key("items"),
                 index: state.key("index")
             } })}</p>
         <p>First item: {state.key("items", "0")}</p>
-        <p>Last item: {__cfLift_5({ state: {
+        <p>Last item: {__cfLift_he8e8823883f4({ state: {
                 items: state.key("items")
             } })}</p>
-        <p>Number at index: {__cfLift_6({ state: {
+        <p>Number at index: {__cfLift_h1f8a7cf17de9({ state: {
                 numbers: state.key("numbers"),
                 index: state.key("index")
             } })}</p>
@@ -419,7 +419,7 @@ export default pattern((state) => {
         <h3>Config Access with Styles</h3>
         <p style={{
             color: state.key("config", "theme", "primaryColor"),
-            fontSize: __cfLift_7({ state: {
+            fontSize: __cfLift_hf77db0ecd45b({ state: {
                     config: {
                         theme: {
                             fontSize: state.key("config", "theme", "fontSize")
@@ -445,7 +445,7 @@ export default pattern((state) => {
         </div>
 
         <h3>Complex Property Chains</h3>
-        <p>{__cfLift_8({ state: {
+        <p>{__cfLift_hb093995257fe({ state: {
                 user: {
                     name: state.key("user", "name"),
                     profile: {
@@ -453,7 +453,7 @@ export default pattern((state) => {
                     }
                 }
             } })}</p>
-        <p>Font size + 2: {__cfLift_9({ state: {
+        <p>Font size + 2: {__cfLift_h7d60d3cae9dd({ state: {
                 config: {
                     theme: {
                         fontSize: state.key("config", "theme", "fontSize")
@@ -614,13 +614,22 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9
+    __cfLift_hac88b0f3cc94,
+    __cfLift_hb13699ae58ef,
+    __cfLift_hf8eb9f36e610,
+    __cfLift_h18bda725b619,
+    __cfLift_he8e8823883f4,
+    __cfLift_h1f8a7cf17de9,
+    __cfLift_hf77db0ecd45b,
+    __cfLift_hb093995257fe,
+    __cfLift_h7d60d3cae9dd,
+    __cfLift_1: __cfLift_hac88b0f3cc94,
+    __cfLift_2: __cfLift_hb13699ae58ef,
+    __cfLift_3: __cfLift_hf8eb9f36e610,
+    __cfLift_4: __cfLift_h18bda725b619,
+    __cfLift_5: __cfLift_he8e8823883f4,
+    __cfLift_6: __cfLift_h1f8a7cf17de9,
+    __cfLift_7: __cfLift_hf77db0ecd45b,
+    __cfLift_8: __cfLift_hb093995257fe,
+    __cfLift_9: __cfLift_h7d60d3cae9dd
 });

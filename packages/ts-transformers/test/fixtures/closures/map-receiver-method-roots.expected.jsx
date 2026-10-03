@@ -12,7 +12,7 @@ const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const identity = __cfHardenFn(<T,>(value: T) => value);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h8ee1135a2ccf = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => item.toUpperCase(), {
     type: "object",
@@ -25,9 +25,9 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hbc17ca4d1b2f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return <span>{__cfLift_1({ item: item })}</span>;
+    return <span>{__cfLift_h8ee1135a2ccf({ item: item })}</span>;
 }, {
     type: "object",
     properties: {
@@ -57,7 +57,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hbaa31b91b83b = __cfHelpers.lift<{
     item: string;
 }, string>(({ item }) => identity(item.toUpperCase()), {
     type: "object",
@@ -70,9 +70,9 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb5c2e134399f = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return <span>{__cfLift_2({ item: item })}</span>;
+    return <span>{__cfLift_hbaa31b91b83b({ item: item })}</span>;
 }, {
     type: "object",
     properties: {
@@ -110,8 +110,8 @@ export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return ({
         [UI]: (<div>
-      {items.mapWithPattern(__cfPattern_1, {})}
-      {items.mapWithPattern(__cfPattern_2, {})}
+      {items.mapWithPattern(__cfPattern_hbc17ca4d1b2f, {})}
+      {items.mapWithPattern(__cfPattern_hb5c2e134399f, {})}
     </div>),
     });
 }, {
@@ -159,8 +159,12 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfLift_2,
-    __cfPattern_2
+    __cfLift_h8ee1135a2ccf,
+    __cfPattern_hbc17ca4d1b2f,
+    __cfLift_hbaa31b91b83b,
+    __cfPattern_hb5c2e134399f,
+    __cfLift_1: __cfLift_h8ee1135a2ccf,
+    __cfPattern_1: __cfPattern_hbc17ca4d1b2f,
+    __cfLift_2: __cfLift_hbaa31b91b83b,
+    __cfPattern_2: __cfPattern_hb5c2e134399f
 });

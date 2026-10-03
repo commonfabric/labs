@@ -63,7 +63,7 @@ const selectTask = handler({
     },
     required: ["selectedTaskId", "hoveredSectionId", "sectionId", "taskId", "sectionIndex", "taskIndex"]
 } as const satisfies __cfHelpers.JSONSchema, (_event, state) => state);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h684f660abd51 = __cfHelpers.lift<{
     state: {
         sections: __cfHelpers.ReadonlyCell<unknown[]>;
     };
@@ -88,7 +88,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h78fd377906a6 = __cfHelpers.lift<{
     task: {
         note?: string | undefined;
     };
@@ -108,7 +108,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h45179e144554 = __cfHelpers.lift<{
     tagIndex: number;
     taskIndex: number;
 }, boolean>(({ tagIndex, taskIndex }) => tagIndex === taskIndex, {
@@ -125,7 +125,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_heaa3a32a7fcf = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     const tagIndex = __cf_pattern_input.key("index");
     const taskIndex = __cf_pattern_input.key("params", "taskIndex");
@@ -141,7 +141,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h45179e144554({
             tagIndex: tagIndex,
             taskIndex: taskIndex
         }), `${section.key("title")}:${tag}`, __cfHelpers.ifElse({
@@ -228,7 +228,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he515ddba3102 = __cfHelpers.pattern(__cf_pattern_input => {
     const task = __cf_pattern_input.key("element");
     const taskIndex = __cf_pattern_input.key("index");
     const selectedTaskId = __cf_pattern_input.key("params", "selectedTaskId");
@@ -276,14 +276,14 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "boolean"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ task: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h78fd377906a6({ task: {
                 note: task.key("note")
             } }), task.key("note") !== ""), <strong>{task.key("label")}</strong>, <em>{task.key("label")}</em>))}
                         </button>
                         {/* [TRANSFORM] .map() → mapWithPattern: task.tags is reactive pattern-owned data (nested inside sections map) */}
                         {/* [TRANSFORM] closure captures: taskIndex, section, state, task (all via params) */}
                         {/* [TRANSFORM] ternary lowered: tagIndex===taskIndex ? `${section.title}:${tag}` : (showCompleted||!task.done ? tag : "") */}
-                        {task.key("tags").mapWithPattern(__cfPattern_1, {
+                        {task.key("tags").mapWithPattern(__cfPattern_heaa3a32a7fcf, {
             taskIndex: taskIndex,
             section: {
                 title: section.key("title")
@@ -392,7 +392,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_hdc8e33263517 = __cfHelpers.lift<{
     section: {
         tasks: {
             length: number;
@@ -449,7 +449,7 @@ section.tasks.length > 0
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h4dcc24e464fa = __cfHelpers.pattern(__cf_pattern_input => {
     const section = __cf_pattern_input.key("element");
     const sectionIndex = __cf_pattern_input.key("index");
     const state = __cf_pattern_input.key("params", "state");
@@ -486,7 +486,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, section.key("expanded"), <div>
                     {/* [TRANSFORM] .map() → mapWithPattern: section.tasks is reactive pattern-owned data */}
                     {/* [TRANSFORM] closure captures: selectedTaskId, hoveredSectionId, section, sectionIndex, state (all via params) */}
-                    {section.key("tasks").mapWithPattern(__cfPattern_2, {
+                    {section.key("tasks").mapWithPattern(__cfPattern_he515ddba3102, {
                 selectedTaskId: selectedTaskId,
                 hoveredSectionId: hoveredSectionId,
                 section: {
@@ -498,7 +498,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
                     showCompleted: state.key("showCompleted")
                 }
             })}
-                  </div>, __cfLift_4({ section: {
+                  </div>, __cfLift_hdc8e33263517({ section: {
                 tasks: {
                     length: section.key("tasks", "length")
                 },
@@ -624,7 +624,7 @@ export default pattern((state) => {
         type: ["string", "undefined"]
     } as const satisfies __cfHelpers.JSONSchema).for("hoveredSectionId", true);
     // [TRANSFORM] computed() -> lift(): captures state.sections (asCell — Writable<Section[]>)
-    const hasSections = __cfLift_1({ state: {
+    const hasSections = __cfLift_h684f660abd51({ state: {
             sections: state.key("sections")
         } }).for("hasSections", true);
     return {
@@ -645,7 +645,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, hasSections, <div>
             {/* [TRANSFORM] .map() → mapWithPattern: state.sections is Writable<Section[]> — reactive, pattern context */}
             {/* [TRANSFORM] closure captures: state (reactive), selectedTaskId (Writable), hoveredSectionId (Writable) */}
-            {state.key("sections").mapWithPattern(__cfPattern_3, {
+            {state.key("sections").mapWithPattern(__cfPattern_h4dcc24e464fa, {
                 state: {
                     globalAccent: state.key("globalAccent"),
                     showCompleted: state.key("showCompleted")
@@ -770,11 +770,18 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     selectTask,
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1,
-    __cfPattern_2,
-    __cfLift_4,
-    __cfPattern_3
+    __cfLift_h684f660abd51,
+    __cfLift_h78fd377906a6,
+    __cfLift_h45179e144554,
+    __cfPattern_heaa3a32a7fcf,
+    __cfPattern_he515ddba3102,
+    __cfLift_hdc8e33263517,
+    __cfPattern_h4dcc24e464fa,
+    __cfLift_1: __cfLift_h684f660abd51,
+    __cfLift_2: __cfLift_h78fd377906a6,
+    __cfLift_3: __cfLift_h45179e144554,
+    __cfPattern_1: __cfPattern_heaa3a32a7fcf,
+    __cfPattern_2: __cfPattern_he515ddba3102,
+    __cfLift_4: __cfLift_hdc8e33263517,
+    __cfPattern_3: __cfPattern_h4dcc24e464fa
 });

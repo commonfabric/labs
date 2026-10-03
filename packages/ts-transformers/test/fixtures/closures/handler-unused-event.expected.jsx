@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 interface State {
     counter: Cell<number>;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_h277e99ce2f8f = __cfHelpers.handler({
     type: "unknown"
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
@@ -38,7 +38,7 @@ const __cfHandler_1 = __cfHelpers.handler({
 // Context: Event param is named _ (unused); transformer emits a generic event schema placeholder
 export default pattern((state) => {
     return {
-        [UI]: (<button type="button" onClick={__cfHandler_1({
+        [UI]: (<button type="button" onClick={__cfHandler_h277e99ce2f8f({
             state: {
                 counter: state.key("counter")
             }
@@ -89,5 +89,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_h277e99ce2f8f,
+    __cfHandler_1: __cfHandler_h277e99ce2f8f
 });

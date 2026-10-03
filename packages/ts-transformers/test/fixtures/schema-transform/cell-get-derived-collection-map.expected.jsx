@@ -15,7 +15,7 @@ interface Row {
     label: string;
     keep: boolean;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h6e93f541fe6d = __cfHelpers.lift<{
     rows: __cfHelpers.Writable<Row[]>;
 }, readonly Row[]>(({ rows }) => rows.get(), {
     type: "object",
@@ -63,7 +63,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h370484f37ccb = __cfHelpers.pattern(__cf_pattern_input => {
     const r = __cf_pattern_input.key("element");
     return r.key("keep");
 }, {
@@ -91,7 +91,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_ha854a0c40711 = __cfHelpers.lift<{
     view: Row[];
 }, boolean>(({ view }) => view.length > 0, {
     type: "object",
@@ -107,7 +107,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h578460d853bc = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     return v.key("label");
 }, {
@@ -135,7 +135,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfd5c00670ad6 = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     return <li>{v.key("label")}</li>;
 }, {
@@ -181,7 +181,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he8f19eda4470 = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     return <em>{v.key("label")}</em>;
 }, {
@@ -242,13 +242,13 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
 //   boolean-consumer lift over the same local.
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
-    const view = __cfLift_1({ rows: rows }).filterWithPattern(__cfPattern_1, {}).for("view", true);
-    const hasAny = __cfLift_2({ view: view }).for("hasAny", true);
-    const labels = view.mapWithPattern(__cfPattern_2, {}).for("labels", true);
+    const view = __cfLift_h6e93f541fe6d({ rows: rows }).filterWithPattern(__cfPattern_h370484f37ccb, {}).for("view", true);
+    const hasAny = __cfLift_ha854a0c40711({ view: view }).for("hasAny", true);
+    const labels = view.mapWithPattern(__cfPattern_h578460d853bc, {}).for("labels", true);
     return {
         [UI]: (<section>
         <ul>
-          {view.mapWithPattern(__cfPattern_3, {})}
+          {view.mapWithPattern(__cfPattern_hfd5c00670ad6, {})}
         </ul>
         {__cfHelpers.ifElse({
             type: "boolean"
@@ -267,7 +267,7 @@ export default pattern((__cf_pattern_input) => {
                     properties: {}
                 }]
         } as const satisfies __cfHelpers.JSONSchema, hasAny, <div>
-              {view.mapWithPattern(__cfPattern_4, {})}
+              {view.mapWithPattern(__cfPattern_he8f19eda4470, {})}
             </div>, null)}
       </section>),
         labels,
@@ -338,10 +338,16 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfLift_2,
-    __cfPattern_2,
-    __cfPattern_3,
-    __cfPattern_4
+    __cfLift_h6e93f541fe6d,
+    __cfPattern_h370484f37ccb,
+    __cfLift_ha854a0c40711,
+    __cfPattern_h578460d853bc,
+    __cfPattern_hfd5c00670ad6,
+    __cfPattern_he8f19eda4470,
+    __cfLift_1: __cfLift_h6e93f541fe6d,
+    __cfPattern_1: __cfPattern_h370484f37ccb,
+    __cfLift_2: __cfLift_ha854a0c40711,
+    __cfPattern_2: __cfPattern_h578460d853bc,
+    __cfPattern_3: __cfPattern_hfd5c00670ad6,
+    __cfPattern_4: __cfPattern_he8f19eda4470
 });

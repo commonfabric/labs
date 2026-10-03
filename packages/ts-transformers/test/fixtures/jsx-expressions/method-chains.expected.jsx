@@ -33,7 +33,7 @@ interface State {
     words: string[];
     separator: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h9081a474aad4 = __cfHelpers.lift<{
     state: {
         text: string;
     };
@@ -54,7 +54,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h7896aef8ca05 = __cfHelpers.lift<{
     state: {
         text: string;
         searchTerm: string;
@@ -79,7 +79,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hb6912d2577b2 = __cfHelpers.lift<{
     state: {
         text: string;
     };
@@ -100,7 +100,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h2d7ef0946ff7 = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -128,7 +128,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h0cd385b3067d = __cfHelpers.lift<{
     x: number;
     state: {
         threshold: number;
@@ -153,10 +153,10 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h9107ac6a272b = __cfHelpers.pattern(__cf_pattern_input => {
     const x = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
-    return __cfLift_5({
+    return __cfLift_h0cd385b3067d({
         x: x,
         state: {
             threshold: state.key("threshold")
@@ -188,7 +188,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_hbe5543f09e91 = __cfHelpers.lift<{
     x: number;
     state: {
         factor: number;
@@ -213,10 +213,10 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h04d76eaa28e8 = __cfHelpers.pattern(__cf_pattern_input => {
     const x = __cf_pattern_input.key("element");
     const state = __cf_pattern_input.key("params", "state");
-    return (<li>Value: {__cfLift_6({
+    return (<li>Value: {__cfLift_hbe5543f09e91({
         x: x,
         state: {
             factor: state.key("factor")
@@ -266,7 +266,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_h1d2655fb4465 = __cfHelpers.lift<{
     state: {
         items: number[];
         start: number;
@@ -298,7 +298,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_h14aff5984dc5 = __cfHelpers.lift<{
     state: {
         items: number[];
         start: number;
@@ -330,7 +330,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_h871b40cef8a2 = __cfHelpers.lift<{
     state: {
         names: string[];
         prefix: string;
@@ -358,7 +358,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_hf34b0d1503fb = __cfHelpers.lift<{
     state: {
         names: string[];
         searchTerm: string;
@@ -386,7 +386,7 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_11 = __cfHelpers.lift<{
+const __cfLift_h4986244d6780 = __cfHelpers.lift<{
     name: string;
 }, string>(({ name }) => name.trim().toLowerCase().replace(" ", "-"), {
     type: "object",
@@ -399,9 +399,9 @@ const __cfLift_11 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h549de416cfc5 = __cfHelpers.pattern(__cf_pattern_input => {
     const name = __cf_pattern_input.key("element");
-    return (<li>{__cfLift_11({ name: name })}</li>);
+    return (<li>{__cfLift_h4986244d6780({ name: name })}</li>);
 }, {
     type: "object",
     properties: {
@@ -431,7 +431,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_12 = __cfHelpers.lift<{
+const __cfLift_hc866279bad4e = __cfHelpers.lift<{
     state: {
         prices: number[];
         discount: number;
@@ -459,7 +459,7 @@ const __cfLift_12 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_13 = __cfHelpers.lift<{
+const __cfLift_h9ba75e82a891 = __cfHelpers.lift<{
     state: {
         items: number[];
         factor: number;
@@ -488,7 +488,7 @@ const __cfLift_13 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_14 = __cfHelpers.lift<{
+const __cfLift_hbcd3098f4f0f = __cfHelpers.lift<{
     state: {
         prices: number[];
         discount: number;
@@ -516,7 +516,7 @@ const __cfLift_14 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_15 = __cfHelpers.lift<{
+const __cfLift_h67e5639d1c3a = __cfHelpers.lift<{
     state: {
         text: string;
         prefix: string;
@@ -541,7 +541,7 @@ const __cfLift_15 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_16 = __cfHelpers.lift<{
+const __cfLift_hab2ab062f23d = __cfHelpers.lift<{
     state: {
         text: string;
         prefix: string;
@@ -567,7 +567,7 @@ const __cfLift_16 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_17 = __cfHelpers.lift<{
+const __cfLift_h2e85ccda6ac5 = __cfHelpers.lift<{
     state: {
         users: { name: string; age: number; active: boolean; }[];
         minAge: number;
@@ -604,7 +604,7 @@ const __cfLift_17 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_18 = __cfHelpers.lift<{
+const __cfLift_hf623a67f2f2a = __cfHelpers.lift<{
     u: {
         name: string;
     };
@@ -625,7 +625,7 @@ const __cfLift_18 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_19 = __cfHelpers.lift<{
+const __cfLift_hfa7da76579e9 = __cfHelpers.lift<{
     u: {
         name: string;
     };
@@ -646,7 +646,7 @@ const __cfLift_19 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h5c631ca7072d = __cfHelpers.pattern(__cf_pattern_input => {
     const u = __cf_pattern_input.key("element");
     return (<li>{__cfHelpers.ifElse({
         type: "boolean"
@@ -656,9 +656,9 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
-    } as const satisfies __cfHelpers.JSONSchema, u.key("active"), __cfLift_18({ u: {
+    } as const satisfies __cfHelpers.JSONSchema, u.key("active"), __cfLift_hf623a67f2f2a({ u: {
             name: u.key("name")
-        } }), __cfLift_19({ u: {
+        } }), __cfLift_hfa7da76579e9({ u: {
             name: u.key("name")
         } }))}</li>);
 }, {
@@ -702,7 +702,7 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_20 = __cfHelpers.lift<{
+const __cfLift_h8c8befaf28ff = __cfHelpers.lift<{
     state: {
         users: { name: string; age: number; active: boolean; }[];
         minAge: number;
@@ -736,7 +736,7 @@ const __cfLift_20 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_21 = __cfHelpers.lift<{
+const __cfLift_h52dd955df9f1 = __cfHelpers.lift<{
     state: {
         users: { name: string; age: number; active: boolean; }[];
     };
@@ -766,7 +766,7 @@ const __cfLift_21 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_22 = __cfHelpers.lift<{
+const __cfLift_hd48812c2edec = __cfHelpers.lift<{
     state: {
         text: string;
         prefix: string;
@@ -791,7 +791,7 @@ const __cfLift_22 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_23 = __cfHelpers.lift<{
+const __cfLift_h8cec59f2be0f = __cfHelpers.lift<{
     state: {
         text: string;
         threshold: number;
@@ -816,7 +816,7 @@ const __cfLift_23 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_24 = __cfHelpers.lift<{
+const __cfLift_he375e7e47c26 = __cfHelpers.lift<{
     state: {
         words: string[];
         separator: string;
@@ -855,14 +855,14 @@ export default pattern((state) => {
         [UI]: (<div>
         <h3>Chained String Methods</h3>
         {/* Simple chain */}
-        <p>Trimmed lower: {__cfLift_1({ state: {
+        <p>Trimmed lower: {__cfLift_h9081a474aad4({ state: {
                 text: state.key("text")
             } })}</p>
 
         {/* Chain with reactive argument */}
         <p>
           Contains search:{" "}
-          {__cfLift_2({ state: {
+          {__cfLift_h7896aef8ca05({ state: {
                 text: state.key("text"),
                 searchTerm: state.key("searchTerm")
             } })}
@@ -871,7 +871,7 @@ export default pattern((state) => {
         {/* Longer chain */}
         <p>
           Processed:{" "}
-          {__cfLift_3({ state: {
+          {__cfLift_hb6912d2577b2({ state: {
                 text: state.key("text")
             } })}
         </p>
@@ -880,7 +880,7 @@ export default pattern((state) => {
         {/* Filter then length */}
         <p>
           Count above threshold:{" "}
-          {__cfLift_4({ state: {
+          {__cfLift_h2d7ef0946ff7({ state: {
                 items: state.key("items"),
                 threshold: state.key("threshold")
             } })}
@@ -888,11 +888,11 @@ export default pattern((state) => {
 
         {/* Filter then map */}
         <ul>
-          {state.key("items").filterWithPattern(__cfPattern_1, {
+          {state.key("items").filterWithPattern(__cfPattern_h9107ac6a272b, {
                 state: {
                     threshold: state.key("threshold")
                 }
-            }).mapWithPattern(__cfPattern_2, {
+            }).mapWithPattern(__cfPattern_h04d76eaa28e8, {
                 state: {
                     factor: state.key("factor")
                 }
@@ -902,7 +902,7 @@ export default pattern((state) => {
         {/* Multiple filters */}
         <p>
           Double filter count:{" "}
-          {__cfLift_7({ state: {
+          {__cfLift_h1d2655fb4465({ state: {
                 items: state.key("items"),
                 start: state.key("start"),
                 end: state.key("end")
@@ -912,7 +912,7 @@ export default pattern((state) => {
         <h3>Methods with Reactive Arguments</h3>
         {/* Slice with reactive indices */}
         <p>
-          Sliced items: {__cfLift_8({ state: {
+          Sliced items: {__cfLift_h14aff5984dc5({ state: {
                 items: state.key("items"),
                 start: state.key("start"),
                 end: state.key("end")
@@ -922,7 +922,7 @@ export default pattern((state) => {
         {/* String methods with reactive args */}
         <p>
           Starts with:{" "}
-          {__cfLift_9({ state: {
+          {__cfLift_h871b40cef8a2({ state: {
                 names: state.key("names"),
                 prefix: state.key("prefix")
             } })}
@@ -930,7 +930,7 @@ export default pattern((state) => {
 
         {/* Array find with reactive predicate */}
         <p>
-          First match: {__cfLift_10({ state: {
+          First match: {__cfLift_hf34b0d1503fb({ state: {
                 names: state.key("names"),
                 searchTerm: state.key("searchTerm")
             } })}
@@ -939,12 +939,12 @@ export default pattern((state) => {
         <h3>Complex Method Combinations</h3>
         {/* Map with chained operations inside */}
         <ul>
-          {state.key("names").mapWithPattern(__cfPattern_3, {})}
+          {state.key("names").mapWithPattern(__cfPattern_h549de416cfc5, {})}
         </ul>
 
         {/* Reduce with reactive accumulator */}
         <p>
-          Total with discount: {__cfLift_12({ state: {
+          Total with discount: {__cfLift_hc866279bad4e({ state: {
                 prices: state.key("prices"),
                 discount: state.key("discount")
             } })}
@@ -953,7 +953,7 @@ export default pattern((state) => {
         {/* Method result used in computation */}
         <p>
           Average * factor:{" "}
-          {__cfLift_13({ state: {
+          {__cfLift_h9ba75e82a891({ state: {
                 items: state.key("items"),
                 factor: state.key("factor")
             } })}
@@ -962,7 +962,7 @@ export default pattern((state) => {
         <h3>Methods on Computed Values</h3>
         {/* Method on binary expression result */}
         <p>
-          Formatted price: {__cfLift_14({ state: {
+          Formatted price: {__cfLift_hbcd3098f4f0f({ state: {
                 prices: state.key("prices"),
                 discount: state.key("discount")
             } })}
@@ -971,7 +971,7 @@ export default pattern((state) => {
         {/* Method on conditional result */}
         <p>
           Conditional trim:{" "}
-          {__cfLift_15({ state: {
+          {__cfLift_h67e5639d1c3a({ state: {
                 text: state.key("text"),
                 prefix: state.key("prefix")
             } })}
@@ -980,7 +980,7 @@ export default pattern((state) => {
         {/* Method chain on computed value */}
         <p>
           Complex:{" "}
-          {__cfLift_16({ state: {
+          {__cfLift_hab2ab062f23d({ state: {
                 text: state.key("text"),
                 prefix: state.key("prefix")
             } })}
@@ -990,7 +990,7 @@ export default pattern((state) => {
         {/* Filter with multiple conditions */}
         <p>
           Active adults:{" "}
-          {__cfLift_17({ state: {
+          {__cfLift_h2e85ccda6ac5({ state: {
                 users: state.key("users"),
                 minAge: state.key("minAge")
             } })}
@@ -998,7 +998,7 @@ export default pattern((state) => {
 
         {/* Map with conditional logic */}
         <ul>
-          {state.key("users").mapWithPattern(__cfPattern_4, {})}
+          {state.key("users").mapWithPattern(__cfPattern_h5c631ca7072d, {})}
         </ul>
 
         {/* Some/every with reactive predicates */}
@@ -1012,7 +1012,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_20({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h8c8befaf28ff({ state: {
                 users: state.key("users"),
                 minAge: state.key("minAge")
             } }), "Yes", "No")}
@@ -1025,14 +1025,14 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_21({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h52dd955df9f1({ state: {
                 users: state.key("users")
             } }), "Yes", "No")}</p>
 
         <h3>Method Calls in Expressions</h3>
         {/* Method result in arithmetic */}
         <p>
-          Length sum: {__cfLift_22({ state: {
+          Length sum: {__cfLift_hd48812c2edec({ state: {
                 text: state.key("text"),
                 prefix: state.key("prefix")
             } })}
@@ -1048,14 +1048,14 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["Yes", "No"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_23({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h8cec59f2be0f({ state: {
                 text: state.key("text"),
                 threshold: state.key("threshold")
             } }), "Yes", "No")}
         </p>
 
         {/* Multiple method results combined */}
-        <p>Joined: {__cfLift_24({ state: {
+        <p>Joined: {__cfLift_he375e7e47c26({ state: {
                 words: state.key("words"),
                 separator: state.key("separator")
             } })}</p>
@@ -1175,32 +1175,60 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfPattern_1,
-    __cfLift_6,
-    __cfPattern_2,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10,
-    __cfLift_11,
-    __cfPattern_3,
-    __cfLift_12,
-    __cfLift_13,
-    __cfLift_14,
-    __cfLift_15,
-    __cfLift_16,
-    __cfLift_17,
-    __cfLift_18,
-    __cfLift_19,
-    __cfPattern_4,
-    __cfLift_20,
-    __cfLift_21,
-    __cfLift_22,
-    __cfLift_23,
-    __cfLift_24
+    __cfLift_h9081a474aad4,
+    __cfLift_h7896aef8ca05,
+    __cfLift_hb6912d2577b2,
+    __cfLift_h2d7ef0946ff7,
+    __cfLift_h0cd385b3067d,
+    __cfPattern_h9107ac6a272b,
+    __cfLift_hbe5543f09e91,
+    __cfPattern_h04d76eaa28e8,
+    __cfLift_h1d2655fb4465,
+    __cfLift_h14aff5984dc5,
+    __cfLift_h871b40cef8a2,
+    __cfLift_hf34b0d1503fb,
+    __cfLift_h4986244d6780,
+    __cfPattern_h549de416cfc5,
+    __cfLift_hc866279bad4e,
+    __cfLift_h9ba75e82a891,
+    __cfLift_hbcd3098f4f0f,
+    __cfLift_h67e5639d1c3a,
+    __cfLift_hab2ab062f23d,
+    __cfLift_h2e85ccda6ac5,
+    __cfLift_hf623a67f2f2a,
+    __cfLift_hfa7da76579e9,
+    __cfPattern_h5c631ca7072d,
+    __cfLift_h8c8befaf28ff,
+    __cfLift_h52dd955df9f1,
+    __cfLift_hd48812c2edec,
+    __cfLift_h8cec59f2be0f,
+    __cfLift_he375e7e47c26,
+    __cfLift_1: __cfLift_h9081a474aad4,
+    __cfLift_2: __cfLift_h7896aef8ca05,
+    __cfLift_3: __cfLift_hb6912d2577b2,
+    __cfLift_4: __cfLift_h2d7ef0946ff7,
+    __cfLift_5: __cfLift_h0cd385b3067d,
+    __cfPattern_1: __cfPattern_h9107ac6a272b,
+    __cfLift_6: __cfLift_hbe5543f09e91,
+    __cfPattern_2: __cfPattern_h04d76eaa28e8,
+    __cfLift_7: __cfLift_h1d2655fb4465,
+    __cfLift_8: __cfLift_h14aff5984dc5,
+    __cfLift_9: __cfLift_h871b40cef8a2,
+    __cfLift_10: __cfLift_hf34b0d1503fb,
+    __cfLift_11: __cfLift_h4986244d6780,
+    __cfPattern_3: __cfPattern_h549de416cfc5,
+    __cfLift_12: __cfLift_hc866279bad4e,
+    __cfLift_13: __cfLift_h9ba75e82a891,
+    __cfLift_14: __cfLift_hbcd3098f4f0f,
+    __cfLift_15: __cfLift_h67e5639d1c3a,
+    __cfLift_16: __cfLift_hab2ab062f23d,
+    __cfLift_17: __cfLift_h2e85ccda6ac5,
+    __cfLift_18: __cfLift_hf623a67f2f2a,
+    __cfLift_19: __cfLift_hfa7da76579e9,
+    __cfPattern_4: __cfPattern_h5c631ca7072d,
+    __cfLift_20: __cfLift_h8c8befaf28ff,
+    __cfLift_21: __cfLift_h52dd955df9f1,
+    __cfLift_22: __cfLift_hd48812c2edec,
+    __cfLift_23: __cfLift_h8cec59f2be0f,
+    __cfLift_24: __cfLift_he375e7e47c26
 });

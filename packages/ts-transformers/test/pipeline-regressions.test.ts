@@ -1248,7 +1248,7 @@ export default pattern<{ values: string[] }>(({ values }) => {
     const liftApply = forCall.expression.expression;
     assert(
       ts.isCallExpression(liftApply) && ts.isIdentifier(liftApply.expression) &&
-        /^__cfLift_\d+$/.test(liftApply.expression.text),
+        /^__cfLift_h[0-9a-f]+(?:_\d+)?$/.test(liftApply.expression.text),
       "expected the .for receiver to be a hoisted __cfLift_N application",
     );
     const liftArg = liftApply.arguments[0];

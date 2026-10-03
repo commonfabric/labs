@@ -1178,21 +1178,28 @@ export function isClean(
 /**
  * Whether a recorded instantiation is a transformer-emitted pattern hoist —
  * an anonymous sub-pattern the compiler derives from the source (a mapped
- * row's body), as opposed to a pattern an author exports. The `__cfPattern_N`
- * name is the transformer's own emission convention, and N is a builder node
- * id with no stability across edits — which is exactly why nothing durable
- * may be addressed by it. The per-file counter starts at 1, so
- * `__cfPattern_0` is not a name the transformer mints.
+ * row's body), as opposed to a pattern an author exports. Two spellings are
+ * the transformer's own emission convention:
+ *
+ *   - `__cfPattern_h<digest>` (optionally `_k` twin-ordinal-suffixed) — the
+ *     content-addressed CANONICAL name: stable under insertion and reorder of
+ *     other hoists, re-keyed only when the hoisted call's own content changes.
+ *   - `__cfPattern_N` — the visit-order POSITIONAL alias, kept registered so
+ *     pointers stored under the historical numbering stay loadable. N is
+ *     positional with no stability across edits — which is exactly why new
+ *     durable references serialize under the canonical name instead. The
+ *     per-file counter starts at 1, so `__cfPattern_0` is not a name the
+ *     transformer mints.
  *
  * Spelling IS provenance, because registration enforces it: the runner
  * refuses an authored builder-artifact export in this namespace
  * (`RESERVED_HOIST_EXPORT`, `pattern-manager.ts`), and every path that runs
  * a pattern — the runtime's, and this gate's own capture and replay
- * compiles — goes through that seam. A symbol with this shape in a manifest
+ * compiles — goes through that seam. A symbol with either shape in a manifest
  * or the artifact index is the transformer's.
  */
 export function isDerivedHoistSymbol(symbol: string): boolean {
-  return /^__cfPattern_[1-9]\d*$/.test(symbol);
+  return /^__cfPattern_(?:[1-9]\d*|h[0-9a-f]{12}(?:_[2-9]\d*)?)$/.test(symbol);
 }
 
 /**

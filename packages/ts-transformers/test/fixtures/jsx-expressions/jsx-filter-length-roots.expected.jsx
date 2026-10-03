@@ -11,7 +11,7 @@ import { pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h2d7ef0946ff7 = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -39,7 +39,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h221c3b85ff3f = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -67,7 +67,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h221c3b85ff3f_2 = __cfHelpers.lift<{
     state: {
         items: number[];
         threshold: number;
@@ -104,11 +104,11 @@ const __cfLift_3 = __cfHelpers.lift<{
 // Context: all three shapes should lower without leaking callback locals.
 export default pattern((state) => ({
     [UI]: (<div>
-      <p>{__cfLift_1({ state: {
+      <p>{__cfLift_h2d7ef0946ff7({ state: {
             items: state.key("items"),
             threshold: state.key("threshold")
         } })}</p>
-      <p>{__cfLift_2({ state: {
+      <p>{__cfLift_h221c3b85ff3f({ state: {
             items: state.key("items"),
             threshold: state.key("threshold")
         } })}</p>
@@ -121,7 +121,7 @@ export default pattern((state) => ({
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
         "enum": ["Yes", "No"]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: {
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h221c3b85ff3f_2({ state: {
             items: state.key("items"),
             threshold: state.key("threshold")
         } }), "Yes", "No")}
@@ -175,7 +175,10 @@ export default pattern((state) => ({
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3
+    __cfLift_h2d7ef0946ff7,
+    __cfLift_h221c3b85ff3f,
+    __cfLift_h221c3b85ff3f_2,
+    __cfLift_1: __cfLift_h2d7ef0946ff7,
+    __cfLift_2: __cfLift_h221c3b85ff3f,
+    __cfLift_3: __cfLift_h221c3b85ff3f_2
 });

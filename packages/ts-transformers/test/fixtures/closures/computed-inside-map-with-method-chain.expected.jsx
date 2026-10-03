@@ -24,7 +24,7 @@ interface Item {
 interface State {
     items: Item[];
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h98f519c27816 = __cfHelpers.lift<{
     item: {
         subItems: SubItem[];
     };
@@ -68,13 +68,13 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hae21efa457c8 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return (<div>
             <h2>{item.key("title")}</h2>
             <p>
               Active items:{" "}
-              {__cfLift_1({ item: {
+              {__cfLift_h98f519c27816({ item: {
                 subItems: item.key("subItems")
             } })}
             </p>
@@ -156,7 +156,7 @@ export default pattern((state) => {
                 - inside the computed, item.subItems unwraps to a plain JS array
                 - .filter() returns a plain JS array
                 - Plain arrays don't have .mapWithPattern() */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_hae21efa457c8, {})}
       </div>),
     };
 }, {
@@ -239,6 +239,8 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h98f519c27816,
+    __cfPattern_hae21efa457c8,
+    __cfLift_1: __cfLift_h98f519c27816,
+    __cfPattern_1: __cfPattern_hae21efa457c8
 });

@@ -15,7 +15,7 @@ interface Item {
     id: string;
     tags?: string[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfe30f5cc84bb = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return item.key("id");
 }, {
@@ -46,7 +46,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h935d88238b37 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     return item.key("tags") ?? [];
 }, {
@@ -80,7 +80,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he09e68784816 = __cfHelpers.pattern(__cf_pattern_input => {
     const tag = __cf_pattern_input.key("element");
     return <span>{tag}</span>;
 }, {
@@ -121,7 +121,7 @@ export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return {
         [UI]: (<div>
-        {(items ?? []).filterWithPattern(__cfPattern_1, {}).flatMapWithPattern(__cfPattern_2, {}).mapWithPattern(__cfPattern_3, {})}
+        {(items ?? []).filterWithPattern(__cfPattern_hfe30f5cc84bb, {}).flatMapWithPattern(__cfPattern_h935d88238b37, {}).mapWithPattern(__cfPattern_he09e68784816, {})}
       </div>),
     };
 }, {
@@ -185,7 +185,10 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfPattern_2,
-    __cfPattern_3
+    __cfPattern_hfe30f5cc84bb,
+    __cfPattern_h935d88238b37,
+    __cfPattern_he09e68784816,
+    __cfPattern_1: __cfPattern_hfe30f5cc84bb,
+    __cfPattern_2: __cfPattern_h935d88238b37,
+    __cfPattern_3: __cfPattern_he09e68784816
 });

@@ -15,7 +15,7 @@ interface Vote {
     optionId: string;
     voterName: string;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hce3149656a01 = __cfHelpers.lift<{
     v: {
         optionId: string;
     };
@@ -40,10 +40,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hcee6c5aa0bde = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     const oid = __cf_pattern_input.key("params", "oid");
-    return __cfLift_1({
+    return __cfLift_hce3149656a01({
         v: {
             optionId: v.key("optionId")
         },
@@ -83,7 +83,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he9a21d43b468 = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     return <i>{v.key("voterName")}</i>;
 }, {
@@ -129,7 +129,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hce3149656a01_2 = __cfHelpers.lift<{
     v: {
         optionId: string;
     };
@@ -154,10 +154,10 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hfd78bb41cc8e = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     const oid = __cf_pattern_input.key("params", "oid");
-    return __cfLift_2({
+    return __cfLift_hce3149656a01_2({
         v: {
             optionId: v.key("optionId")
         },
@@ -197,7 +197,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hce3149656a01_3 = __cfHelpers.lift<{
     v: {
         optionId: string;
     };
@@ -222,10 +222,10 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hef1cb02287df = __cfHelpers.pattern(__cf_pattern_input => {
     const v = __cf_pattern_input.key("element");
     const oid = __cf_pattern_input.key("params", "oid");
-    return [__cfLift_3({
+    return [__cfLift_hce3149656a01_3({
             v: {
                 optionId: v.key("optionId")
             },
@@ -286,16 +286,16 @@ export default pattern((__cf_pattern_input) => {
         [UI]: (<div>
         {/* filter predicate: the comparison must be lifted to value level */}
         <div>
-          {votes.filterWithPattern(__cfPattern_1, {
+          {votes.filterWithPattern(__cfPattern_hcee6c5aa0bde, {
                 oid: oid
-            }).mapWithPattern(__cfPattern_2, {})}
+            }).mapWithPattern(__cfPattern_he9a21d43b468, {})}
         </div>
         {/* map to a bare non-JSX boolean: the comparison must be lifted */}
-        <div>{votes.mapWithPattern(__cfPattern_3, {
+        <div>{votes.mapWithPattern(__cfPattern_hfd78bb41cc8e, {
             oid: oid
         })}</div>
         {/* flatMap returning an array whose element is a comparison: must be lifted */}
-        <div>{votes.flatMapWithPattern(__cfPattern_4, {
+        <div>{votes.flatMapWithPattern(__cfPattern_hef1cb02287df, {
             oid: oid
         })}</div>
       </div>),
@@ -362,11 +362,18 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1,
-    __cfPattern_2,
-    __cfLift_2,
-    __cfPattern_3,
-    __cfLift_3,
-    __cfPattern_4
+    __cfLift_hce3149656a01,
+    __cfPattern_hcee6c5aa0bde,
+    __cfPattern_he9a21d43b468,
+    __cfLift_hce3149656a01_2,
+    __cfPattern_hfd78bb41cc8e,
+    __cfLift_hce3149656a01_3,
+    __cfPattern_hef1cb02287df,
+    __cfLift_1: __cfLift_hce3149656a01,
+    __cfPattern_1: __cfPattern_hcee6c5aa0bde,
+    __cfPattern_2: __cfPattern_he9a21d43b468,
+    __cfLift_2: __cfLift_hce3149656a01_2,
+    __cfPattern_3: __cfPattern_hfd78bb41cc8e,
+    __cfLift_3: __cfLift_hce3149656a01_3,
+    __cfPattern_4: __cfPattern_hef1cb02287df
 });

@@ -30,7 +30,7 @@ function visibleEntries(entries: Writable<Default<Entry[], [
     return list.filter((entry) => prefix.length === 0 || entry.name.startsWith(prefix));
 }
 __cfHardenFn(visibleEntries);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hfd50a862864e = __cfHelpers.lift<{
     path: __cfHelpers.Cell<string[]>;
 }, readonly string[]>(({ path }) => path.get(), {
     type: "object",
@@ -50,7 +50,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hea53e36dd1c6 = __cfHelpers.lift<{
     entries: Writable<Default<Entry[], [
     ]>>;
     p: readonly string[];
@@ -101,7 +101,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_h760c82446a9c = __cfHelpers.lift<{
     entry: {
         name: string;
     };
@@ -127,10 +127,10 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hd1bda252591e = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     const labelPrefix = __cf_pattern_input.key("params", "labelPrefix");
-    return __cfLift_3({
+    return __cfLift_h760c82446a9c({
         entry: {
             name: entry.key("name")
         },
@@ -168,7 +168,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hc8ed09c750dc = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     return <button type="button">{entry.key("name")}</button>;
 }, {
@@ -238,15 +238,15 @@ export default pattern((__cf_pattern_input) => {
                     items: {
                         type: "string"
                     }
-                } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ path: path }).for(["p", 3], true), []).for("p", true);
-                const visible = __cfLift_2({
+                } as const satisfies __cfHelpers.JSONSchema, __cfLift_hfd50a862864e({ path: path }).for(["p", 3], true), []).for("p", true);
+                const visible = __cfLift_hea53e36dd1c6({
                     entries: entries,
                     p: p
                 }).for("visible", true);
-                const filtered = visible.filterWithPattern(__cfPattern_1, {
+                const filtered = visible.filterWithPattern(__cfPattern_hd1bda252591e, {
                     labelPrefix: labelPrefix
                 }).for("filtered", true);
-                return filtered.mapWithPattern(__cfPattern_2, {});
+                return filtered.mapWithPattern(__cfPattern_hc8ed09c750dc, {});
             })()}
       </div>)
     };
@@ -287,9 +287,14 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_hfd50a862864e,
+    __cfLift_hea53e36dd1c6,
+    __cfLift_h760c82446a9c,
+    __cfPattern_hd1bda252591e,
+    __cfPattern_hc8ed09c750dc,
+    __cfLift_1: __cfLift_hfd50a862864e,
+    __cfLift_2: __cfLift_hea53e36dd1c6,
+    __cfLift_3: __cfLift_h760c82446a9c,
+    __cfPattern_1: __cfPattern_hd1bda252591e,
+    __cfPattern_2: __cfPattern_hc8ed09c750dc
 });

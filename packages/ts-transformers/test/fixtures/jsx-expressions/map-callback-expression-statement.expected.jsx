@@ -29,7 +29,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h7edd79c9f7d5 = __cfHelpers.lift<{
     file: {
         name: string;
         type: string;
@@ -54,9 +54,9 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     asCell: ["opaque"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h94959f643484 = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
-    __cfLift_1({ file: {
+    __cfLift_h7edd79c9f7d5({ file: {
             name: file.key("name"),
             type: file.key("type")
         } });
@@ -108,7 +108,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.mapWithPattern(__cfPattern_1, {})}
+        {files.mapWithPattern(__cfPattern_h94959f643484, {})}
       </div>),
     };
 }, {
@@ -151,6 +151,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h7edd79c9f7d5,
+    __cfPattern_h94959f643484,
+    __cfLift_1: __cfLift_h7edd79c9f7d5,
+    __cfPattern_1: __cfPattern_h94959f643484
 });

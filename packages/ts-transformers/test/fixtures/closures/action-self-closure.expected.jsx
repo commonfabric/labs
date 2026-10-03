@@ -21,7 +21,7 @@ interface TestOutput {
     title: string;
     count: number;
 }
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_h0d1f87bd007c = __cfHelpers.handler({
     type: "object",
     properties: {},
     additionalProperties: false
@@ -42,7 +42,7 @@ const __cfHandler_1 = __cfHelpers.handler({
 } as const satisfies __cfHelpers.JSONSchema, (_, { self }) => {
     console.log("self.title:", self.title);
 });
-const __cfHandler_2 = __cfHelpers.handler({
+const __cfHandler_h855f350abb36 = __cfHelpers.handler({
     type: "object",
     properties: {},
     additionalProperties: false
@@ -94,13 +94,13 @@ export default pattern((__cf_pattern_input) => {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("count", true);
     // Action closing over `self` — works because all inputs use Default<>
-    const showSelf = __cfHandler_1({
+    const showSelf = __cfHandler_h0d1f87bd007c({
         self: {
             title: self.key("title")
         }
     }).for({ stream: "showSelf" }, true);
     // Action closing over both `self` and `count`
-    const incrementWithSelf = __cfHandler_2({
+    const incrementWithSelf = __cfHandler_h855f350abb36({
         self: self,
         count: count
     }).for({ stream: "incrementWithSelf" }, true);
@@ -144,6 +144,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1,
-    __cfHandler_2
+    __cfHandler_h0d1f87bd007c,
+    __cfHandler_h855f350abb36,
+    __cfHandler_1: __cfHandler_h0d1f87bd007c,
+    __cfHandler_2: __cfHandler_h855f350abb36
 });

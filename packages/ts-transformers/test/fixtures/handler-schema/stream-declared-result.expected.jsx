@@ -59,7 +59,7 @@ const renameTopic = handler({
         },
         required: ["topic"]
     } as const satisfies __cfHelpers.JSONSchema });
-const __cfHandler_1 = __cfHelpers.handler({
+const __cfHandler_h8f543109e761 = __cfHelpers.handler({
     type: "object",
     properties: {
         title: {
@@ -94,7 +94,7 @@ const __cfHandler_1 = __cfHelpers.handler({
         },
         required: ["topic"]
     } as const satisfies __cfHelpers.JSONSchema });
-const __cfHandler_2 = __cfHelpers.handler({
+const __cfHandler_h8adce53a36df = __cfHelpers.handler({
     type: "object",
     properties: {
         title: {
@@ -121,11 +121,11 @@ export default pattern(() => {
     // A verb that declares what it produces (verb contract rule 3). The result
     // rides `Stream`'s second type parameter and is opt-in by naming both type
     // arguments — it is never inferred from the body.
-    const addTopic = __cfHandler_1({
+    const addTopic = __cfHandler_h8f543109e761({
         count: count
     }).for({ stream: "addTopic" }, true);
     // The value-less shape, unchanged, for contrast.
-    const touch = __cfHandler_2({
+    const touch = __cfHandler_h8adce53a36df({
         count: count
     }).for({ stream: "touch" }, true);
     // Returned against the `Verbs` annotation on `pattern<>` above, so the
@@ -198,6 +198,8 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     renameTopic,
-    __cfHandler_1,
-    __cfHandler_2
+    __cfHandler_h8f543109e761,
+    __cfHandler_h8adce53a36df,
+    __cfHandler_1: __cfHandler_h8f543109e761,
+    __cfHandler_2: __cfHandler_h8adce53a36df
 });

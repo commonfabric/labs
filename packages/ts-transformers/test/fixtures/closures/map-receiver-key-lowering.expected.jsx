@@ -19,7 +19,7 @@ interface Item {
 interface Input {
     items: Item[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h660817dcb292 = __cfHelpers.pattern(__cf_pattern_input => {
     const subItem = __cf_pattern_input.key("element");
     return subItem.key("value");
 }, {
@@ -39,9 +39,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h809ee353f610 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return item.key("subItems").mapWithPattern(__cfPattern_1, {}).for("__patternResult", true);
+    return item.key("subItems").mapWithPattern(__cfPattern_h660817dcb292, {}).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -83,7 +83,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 // Context: No captures; receiver expression item.subItems is lowered to item.key("subItems")
 const _p = pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    return items.mapWithPattern(__cfPattern_2, {});
+    return items.mapWithPattern(__cfPattern_h809ee353f610, {});
 }, {
     type: "object",
     properties: {
@@ -129,6 +129,8 @@ function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
     _p,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfPattern_h660817dcb292,
+    __cfPattern_h809ee353f610,
+    __cfPattern_1: __cfPattern_h660817dcb292,
+    __cfPattern_2: __cfPattern_h809ee353f610
 });

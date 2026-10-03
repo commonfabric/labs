@@ -22,7 +22,7 @@ type Output = {
         offset: number;
     }>;
 };
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h11ccdccd43c8 = __cfHelpers.lift<{
     value: number;
     offset: number;
 }, number>(({ value, offset }) => {
@@ -41,13 +41,13 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = pattern((__cf_pattern_input: {
+const __cfPattern_h4e99b307fa7d = pattern((__cf_pattern_input: {
     value: number;
     offset: number;
 }) => {
     const value = __cf_pattern_input.key("value");
     const offset = __cf_pattern_input.key("offset");
-    return __cfLift_1({
+    return __cfLift_h11ccdccd43c8({
         value: value,
         offset: offset
     }).for("__patternResult", true);
@@ -74,7 +74,7 @@ const __cfPattern_1 = pattern((__cf_pattern_input: {
 //   began requiring an explicit pattern.
 //   patternTool(pattern(({ value, offset }) => …multiplier.get()…), { offset })
 export default pattern(() => {
-    const tool = patternTool(__cfPattern_1, { offset: offset.for(["tool", 1, "offset"], true) });
+    const tool = patternTool(__cfPattern_h4e99b307fa7d, { offset: offset.for(["tool", 1, "offset"], true) });
     return { tool };
 }, {
     type: "object",
@@ -127,6 +127,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_h11ccdccd43c8,
+    __cfPattern_h4e99b307fa7d,
+    __cfLift_1: __cfLift_h11ccdccd43c8,
+    __cfPattern_1: __cfPattern_h4e99b307fa7d
 });

@@ -17,7 +17,7 @@ interface State {
     }>;
     threshold: number;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hb9399f42a1a3 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const label = __cf_pattern_input.params.label;
     const derived = __cf_pattern_input.key("params", "derived");
@@ -90,7 +90,7 @@ export default pattern((state) => {
     const derived = state.key("threshold");
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_hb9399f42a1a3, {
                 label: label,
                 derived: derived,
                 limit: limit
@@ -151,5 +151,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_hb9399f42a1a3,
+    __cfPattern_1: __cfPattern_hb9399f42a1a3
 });

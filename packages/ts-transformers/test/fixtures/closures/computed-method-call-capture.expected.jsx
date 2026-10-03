@@ -16,7 +16,7 @@ interface State {
         value: number;
     };
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hdea8c73a15e8 = __cfHelpers.lift<{
     value: __cfHelpers.ReadonlyCell<number>;
     state: {
         counter: {
@@ -59,7 +59,7 @@ export default pattern((state: State) => {
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema).for("value", true);
     // Capture a deep property path on the pattern input
-    const result = __cfLift_1({
+    const result = __cfLift_hdea8c73a15e8({
         value: value,
         state: {
             counter: {
@@ -89,5 +89,6 @@ export default pattern((state: State) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_hdea8c73a15e8,
+    __cfLift_1: __cfLift_hdea8c73a15e8
 });

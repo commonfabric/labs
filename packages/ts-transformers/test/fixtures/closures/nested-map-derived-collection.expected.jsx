@@ -42,7 +42,7 @@ const tallyOptions = __cfHardenFn((options: Option[], votes: Vote[]): OptionTall
     voters: votes.map((v) => ({ name: v.voterName })),
 })));
 const enrichTallies = __cfHardenFn((tallies: OptionTally[]): OptionTally[] => tallies.map((t): OptionTally => ({ option: t.option, voters: t.voters })));
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h90ef09089cf2 = __cfHelpers.lift<{
     options: Option[];
     votes: Vote[];
 }, OptionTally[]>(({ options, votes }) => tallyOptions(options, votes), {
@@ -123,7 +123,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h93f64cb4fad6 = __cfHelpers.lift<{
     ranked: OptionTally[];
 }, OptionTally[]>(({ ranked }) => enrichTallies(ranked), {
     type: "object",
@@ -206,7 +206,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h3fd665e8a85e = __cfHelpers.pattern(__cf_pattern_input => {
     const voter = __cf_pattern_input.key("element");
     return <span>{voter.key("name")}</span>;
 }, {
@@ -244,9 +244,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_he33b6c12f867 = __cfHelpers.pattern(__cf_pattern_input => {
     const tally = __cf_pattern_input.key("element");
-    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_1, {})}</div>);
+    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_h3fd665e8a85e, {})}</div>);
 }, {
     type: "object",
     properties: {
@@ -308,7 +308,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h3fd665e8a85e_2 = __cfHelpers.pattern(__cf_pattern_input => {
     const voter = __cf_pattern_input.key("element");
     return <span>{voter.key("name")}</span>;
 }, {
@@ -346,9 +346,9 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hbce8dac4f201 = __cfHelpers.pattern(__cf_pattern_input => {
     const tally = __cf_pattern_input.key("element");
-    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_3, {})}</div>);
+    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_h3fd665e8a85e_2, {})}</div>);
 }, {
     type: "object",
     properties: {
@@ -413,18 +413,18 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const votes = __cf_pattern_input.key("votes");
     const options = __cf_pattern_input.key("options");
-    const ranked = __cfLift_1({
+    const ranked = __cfLift_h90ef09089cf2({
         options: options,
         votes: votes
     }).for("ranked", true);
-    const enriched = __cfLift_2({ ranked: ranked }).for("enriched", true);
+    const enriched = __cfLift_h93f64cb4fad6({ ranked: ranked }).for("enriched", true);
     return {
         [UI]: (<div>
           <div>
-            {ranked.mapWithPattern(__cfPattern_2, {})}
+            {ranked.mapWithPattern(__cfPattern_he33b6c12f867, {})}
           </div>
           <div>
-            {enriched.mapWithPattern(__cfPattern_4, {})}
+            {enriched.mapWithPattern(__cfPattern_hbce8dac4f201, {})}
           </div>
         </div>),
     };
@@ -502,10 +502,16 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_1,
-    __cfPattern_2,
-    __cfPattern_3,
-    __cfPattern_4
+    __cfLift_h90ef09089cf2,
+    __cfLift_h93f64cb4fad6,
+    __cfPattern_h3fd665e8a85e,
+    __cfPattern_he33b6c12f867,
+    __cfPattern_h3fd665e8a85e_2,
+    __cfPattern_hbce8dac4f201,
+    __cfLift_1: __cfLift_h90ef09089cf2,
+    __cfLift_2: __cfLift_h93f64cb4fad6,
+    __cfPattern_1: __cfPattern_h3fd665e8a85e,
+    __cfPattern_2: __cfPattern_he33b6c12f867,
+    __cfPattern_3: __cfPattern_h3fd665e8a85e_2,
+    __cfPattern_4: __cfPattern_hbce8dac4f201
 });

@@ -14,7 +14,7 @@ const __cfAmdHooks = undefined;
 type Output = {
     tool: PatternToolResult<Record<string, never>>;
 };
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_he09a421517d6 = __cfHelpers.lift<{
     query: string;
     content: string;
 }, string[]>(({ content, query }) => {
@@ -36,13 +36,13 @@ const __cfLift_1 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = pattern((__cf_pattern_input: {
+const __cfPattern_h01d651c494bf = pattern((__cf_pattern_input: {
     query: string;
     content: string;
 }) => {
     const query = __cf_pattern_input.key("query");
     const content = __cf_pattern_input.key("content");
-    return __cfLift_1({
+    return __cfLift_he09a421517d6({
         content: content,
         query: query
     }).for("__patternResult", true);
@@ -69,7 +69,7 @@ const __cfPattern_1 = pattern((__cf_pattern_input: {
 // Context: The pattern callback only references its own parameters (query,
 //   content) and no module-scoped reactive variables, so no extraParams.
 export default pattern(() => {
-    const tool = patternTool(__cfPattern_1);
+    const tool = patternTool(__cfPattern_h01d651c494bf);
     return { tool };
 }, {
     type: "object",
@@ -118,6 +118,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_he09a421517d6,
+    __cfPattern_h01d651c494bf,
+    __cfLift_1: __cfLift_he09a421517d6,
+    __cfPattern_1: __cfPattern_h01d651c494bf
 });

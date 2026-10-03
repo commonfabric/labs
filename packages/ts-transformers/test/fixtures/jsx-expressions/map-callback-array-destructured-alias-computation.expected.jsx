@@ -31,7 +31,7 @@ interface Input {
 interface Output {
     [UI]: VNode;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hefcd2f624156 = __cfHelpers.lift<{
     kind: string;
 }, boolean>(({ kind }) => kind === "folder", {
     type: "object",
@@ -44,10 +44,10 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h6fd00dccaaaa = __cfHelpers.pattern(__cf_pattern_input => {
     const file = __cf_pattern_input.key("element");
     const __cf_destructure_1 = file.key("tags"), kind = __cf_destructure_1.key("0");
-    const isFolder = __cfLift_1({ kind: kind }).for("isFolder", true);
+    const isFolder = __cfLift_hefcd2f624156({ kind: kind }).for("isFolder", true);
     return <span>{__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
@@ -107,7 +107,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.mapWithPattern(__cfPattern_1, {})}
+        {files.mapWithPattern(__cfPattern_h6fd00dccaaaa, {})}
       </div>),
     };
 }, {
@@ -153,6 +153,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfPattern_1
+    __cfLift_hefcd2f624156,
+    __cfPattern_h6fd00dccaaaa,
+    __cfLift_1: __cfLift_hefcd2f624156,
+    __cfPattern_1: __cfPattern_h6fd00dccaaaa
 });

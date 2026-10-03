@@ -16,7 +16,7 @@ interface State {
         0: number;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_heebd878ced06 = __cfHelpers.pattern(__cf_pattern_input => {
     const first = __cf_pattern_input.key("element", "0");
     return (<span>{first}</span>);
 }, {
@@ -61,7 +61,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("entries").mapWithPattern(__cfPattern_1, {})}
+        {state.key("entries").mapWithPattern(__cfPattern_heebd878ced06, {})}
       </div>),
     };
 }, {
@@ -115,5 +115,6 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1
+    __cfPattern_heebd878ced06,
+    __cfPattern_1: __cfPattern_heebd878ced06
 });

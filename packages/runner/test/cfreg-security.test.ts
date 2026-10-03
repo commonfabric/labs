@@ -168,11 +168,35 @@ __cfReg({
     expect(() => verifyCompiledModuleBody(body, "/main.tsx")).toThrow();
   });
 
-  it("does NOT approve a key:value (non-shorthand) registration", () => {
-    // Only shorthand identifiers are a valid registration; `key: value` lets the
-    // value be an arbitrary expression, so the call shape is refused.
+  it("does NOT approve a key:value registration outside the alias form", () => {
+    // A `key: value` entry is valid ONLY as a positional alias
+    // (`__cf<Kind>_<n>: __cf<Kind>_h<digest>` over a declared binding); any
+    // other value expression is refused — the value could otherwise be an
+    // arbitrary expression.
     const body =
       `${IMPORT}\nconst __cfLift_1 = (0, cf.lift)((x) => x);\n__cfReg({ __cfLift_1: globalThis });`;
+    expect(() => verifyCompiledModuleBody(body, "/main.tsx")).toThrow();
+  });
+
+  it("approves a positional alias naming a declared canonical hoist", () => {
+    const body = `${IMPORT}
+const __cfLift_h0123456789ab = (0, cf.lift)((x) => x);
+__cfReg({ __cfLift_h0123456789ab, __cfLift_1: __cfLift_h0123456789ab });`;
+    expect(verifyCompiledModuleBody(body, "/main.tsx").hasHoistRegistration)
+      .toBe(true);
+  });
+
+  it("does NOT approve an alias whose canonical was never declared", () => {
+    const body = `${IMPORT}\n__cfReg({ __cfLift_1: __cfLift_h0123456789ab });`;
+    expect(() => verifyCompiledModuleBody(body, "/main.tsx")).toThrow();
+  });
+
+  it("does NOT approve an alias over a non-hoist-shaped value name", () => {
+    // The alias VALUE must be a content-addressed hoist name, so an authored
+    // binding cannot be smuggled behind the compiler's numeric namespace.
+    const body = `${IMPORT}
+const helper = (0, cf.lift)((x) => x);
+__cfReg({ helper, __cfLift_1: helper });`;
     expect(() => verifyCompiledModuleBody(body, "/main.tsx")).toThrow();
   });
 

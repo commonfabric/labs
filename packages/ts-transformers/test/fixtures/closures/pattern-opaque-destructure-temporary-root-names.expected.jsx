@@ -11,7 +11,7 @@ import { computed, generateObject, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h35f6b154a7fa = __cfHelpers.lift<{
     messages: string[];
 }, string>(({ messages }) => messages[0] ?? "", {
     type: "object",
@@ -27,7 +27,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h2805ae6f8be9 = __cfHelpers.lift<{
     result?: any;
 }, any>(({ result }) => result?.title ?? "Untitled", {
     type: "object",
@@ -43,7 +43,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   fires while pending, keeping the `?? "Untitled"` fallback live.
 export default pattern((__cf_pattern_input) => {
     const messages = __cf_pattern_input.key("messages");
-    const preview = __cfLift_1({ messages: messages }).for("preview", true);
+    const preview = __cfLift_h35f6b154a7fa({ messages: messages }).for("preview", true);
     const __cf_destructure_1 = generateObject({
         prompt: preview,
         schema: {
@@ -54,7 +54,7 @@ export default pattern((__cf_pattern_input) => {
             required: ["title"],
         },
     }), result = __cf_destructure_1.key("result").for("result", true);
-    return <div>{__cfLift_2({ result: result })}</div>;
+    return <div>{__cfLift_h2805ae6f8be9({ result: result })}</div>;
 }, {
     type: "object",
     properties: {
@@ -91,6 +91,8 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_h35f6b154a7fa,
+    __cfLift_h2805ae6f8be9,
+    __cfLift_1: __cfLift_h35f6b154a7fa,
+    __cfLift_2: __cfLift_h2805ae6f8be9
 });

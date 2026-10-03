@@ -11,7 +11,7 @@ import { computed, fetchText, ifElse, pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hd8360bf3dee1 = __cfHelpers.lift<{
     pending: boolean;
     result: string;
 }, boolean>(({ pending, result }) => pending || !result, {
@@ -28,7 +28,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h682d6b85c3f2 = __cfHelpers.lift<{
     result: string;
 }, boolean>(({ result }) => !!result, {
     type: "object",
@@ -78,7 +78,7 @@ export default pattern(() => {
                 },
                 required: ["result"]
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_hd8360bf3dee1({
         pending: pending,
         result: result
     }).for(["output1", 4], true), undefined, { result }).for("output1", true);
@@ -107,7 +107,7 @@ export default pattern(() => {
                 },
                 required: ["data"]
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ result: result }).for(["output2", 4], true), { data: result }, undefined).for("output2", true);
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h682d6b85c3f2({ result: result }).for(["output2", 4], true), { data: result }, undefined).for("output2", true);
     return {
         [UI]: (<div>
         <span>{output1}</span>
@@ -152,6 +152,8 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2
+    __cfLift_hd8360bf3dee1,
+    __cfLift_h682d6b85c3f2,
+    __cfLift_1: __cfLift_hd8360bf3dee1,
+    __cfLift_2: __cfLift_h682d6b85c3f2
 });

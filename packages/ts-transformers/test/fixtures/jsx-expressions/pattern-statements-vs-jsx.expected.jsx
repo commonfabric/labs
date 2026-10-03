@@ -42,7 +42,7 @@ const decrement = handler(false as const satisfies __cfHelpers.JSONSchema, {
 }) => {
     state.value.set(state.value.get() - 1);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h7a4ce95fb921 = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -63,7 +63,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_hf91f105c3f4a = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -84,7 +84,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_he3dc8b96511a = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -105,7 +105,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h318c05695b48 = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -142,15 +142,15 @@ export default pattern((state) => {
           {/* These SHOULD be transformed (JSX expression context) */}
           Current: {state.key("value")}
           <br />
-          Next number: {__cfLift_1({ state: {
+          Next number: {__cfLift_h7a4ce95fb921({ state: {
                 value: state.key("value")
             } })}
           <br />
-          Previous: {__cfLift_2({ state: {
+          Previous: {__cfLift_hf91f105c3f4a({ state: {
                 value: state.key("value")
             } })}
           <br />
-          Doubled: {__cfLift_3({ state: {
+          Doubled: {__cfLift_he3dc8b96511a({ state: {
                 value: state.key("value")
             } })}
           <br />
@@ -162,7 +162,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["High", "Low"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_4({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h318c05695b48({ state: {
                 value: state.key("value")
             } }), "High", "Low")}
         </p>
@@ -221,8 +221,12 @@ __cfHardenFn(h);
 __cfReg({
     increment,
     decrement,
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4
+    __cfLift_h7a4ce95fb921,
+    __cfLift_hf91f105c3f4a,
+    __cfLift_he3dc8b96511a,
+    __cfLift_h318c05695b48,
+    __cfLift_1: __cfLift_h7a4ce95fb921,
+    __cfLift_2: __cfLift_hf91f105c3f4a,
+    __cfLift_3: __cfLift_he3dc8b96511a,
+    __cfLift_4: __cfLift_h318c05695b48
 });

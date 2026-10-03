@@ -49,7 +49,7 @@ interface Input {
 interface Output {
     trigger: Stream<void>;
 }
-const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
+const __cfHandler_heb6a7002a08c = __cfHelpers.handler(false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         fileId: {
@@ -92,7 +92,7 @@ export default pattern((__cf_pattern_input) => {
     const content = __cf_pattern_input.key("content");
     const savedContent = __cf_pattern_input.key("savedContent");
     const onSaveFile = __cf_pattern_input.key("onSaveFile");
-    const trigger = __cfHandler_1({
+    const trigger = __cfHandler_heb6a7002a08c({
         fileId: fileId,
         content: content,
         savedContent: savedContent,
@@ -145,5 +145,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfHandler_1
+    __cfHandler_heb6a7002a08c,
+    __cfHandler_1: __cfHandler_heb6a7002a08c
 });

@@ -11,12 +11,12 @@ import { computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift(() => 42, false, undefined, { completeSchedulerScopeSummary: true });
+const __cfLift_h480d04a41b50 = __cfHelpers.lift(() => 42, false, undefined, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-no-captures
 // Verifies: computed(() => expr) with no external captures is transformed to
 // lift(false, fn)() with no input object.
 export default pattern(() => {
-    const result = __cfLift_1().for("result", true);
+    const result = __cfLift_h480d04a41b50().for("result", true);
     return result;
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
@@ -25,5 +25,6 @@ export default pattern(() => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h480d04a41b50,
+    __cfLift_1: __cfLift_h480d04a41b50
 });

@@ -19,7 +19,7 @@ interface Assignment {
     aisle: string;
     item: Item;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_hdfdd4a0a93ef = __cfHelpers.lift<{
     items: Item[];
 }, { aisle: string; item: Item; }[]>(({ items }) => items.map((item, idx) => ({
     aisle: `Aisle ${(idx % 3) + 1}`,
@@ -80,7 +80,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h62deca37e9c0 = __cfHelpers.lift<{
     itemsWithAisles: { aisle: string; item: Item; }[];
 }, Record<string, Assignment[]>>(({ itemsWithAisles }) => {
     const groups: Record<string, Assignment[]> = {};
@@ -163,7 +163,7 @@ const __cfLift_2 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_hfe4fb97e8dd9 = __cfHelpers.lift<{
     groupedByAisle: Record<string, Assignment[]>;
 }, string[]>(({ groupedByAisle }) => Object.keys(groupedByAisle).sort(), {
     type: "object",
@@ -213,7 +213,7 @@ const __cfLift_3 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h4cc04b1fdb7a = __cfHelpers.lift<{
     groupedByAisle: Record<string, Assignment[]>;
     aisleName: string;
 }, Assignment[] | undefined>(({ groupedByAisle, aisleName }) => groupedByAisle[aisleName], {
@@ -298,7 +298,7 @@ const __cfLift_4 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h343da164a877 = __cfHelpers.pattern(__cf_pattern_input => {
     const assignment = __cf_pattern_input.key("element");
     return (<div>
                   <span>{assignment.key("item", "name")}</span>
@@ -360,15 +360,15 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h44e336242e82 = __cfHelpers.pattern(__cf_pattern_input => {
     const aisleName = __cf_pattern_input.key("element");
     const groupedByAisle = __cf_pattern_input.key("params", "groupedByAisle");
     return (<div>
               <h3>{aisleName}</h3>
-              {__cfLift_4({
+              {__cfLift_h4cc04b1fdb7a({
             groupedByAisle: groupedByAisle,
             aisleName: aisleName
-        })!.mapWithPattern(__cfPattern_1, {})}
+        })!.mapWithPattern(__cfPattern_h343da164a877, {})}
             </div>);
 }, {
     type: "object",
@@ -453,18 +453,18 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     // Create assignments with aisle data (whole-array map kept inside computed)
-    const itemsWithAisles = __cfLift_1({ items: items }).for("itemsWithAisles", true);
+    const itemsWithAisles = __cfLift_hdfdd4a0a93ef({ items: items }).for("itemsWithAisles", true);
     // Group by aisle - returns Record<string, Assignment[]>
-    const groupedByAisle = __cfLift_2({ itemsWithAisles: itemsWithAisles }).for("groupedByAisle", true);
+    const groupedByAisle = __cfLift_h62deca37e9c0({ itemsWithAisles: itemsWithAisles }).for("groupedByAisle", true);
     // Derive sorted aisle names from grouped object
-    const aisleNames = __cfLift_3({ groupedByAisle: groupedByAisle }).for("aisleNames", true);
+    const aisleNames = __cfLift_hfe4fb97e8dd9({ groupedByAisle: groupedByAisle }).for("aisleNames", true);
     // The pattern from CT-1036:
     // - Map over derived keys (aisleNames)
     // - Access derived object with derived key (groupedByAisle[aisleName])
     // - Map over the result
     return {
         [UI]: (<div>
-          {aisleNames.mapWithPattern(__cfPattern_2, {
+          {aisleNames.mapWithPattern(__cfPattern_h44e336242e82, {
                 groupedByAisle: groupedByAisle
             })}
         </div>),
@@ -529,10 +529,16 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfPattern_1,
-    __cfPattern_2
+    __cfLift_hdfdd4a0a93ef,
+    __cfLift_h62deca37e9c0,
+    __cfLift_hfe4fb97e8dd9,
+    __cfLift_h4cc04b1fdb7a,
+    __cfPattern_h343da164a877,
+    __cfPattern_h44e336242e82,
+    __cfLift_1: __cfLift_hdfdd4a0a93ef,
+    __cfLift_2: __cfLift_h62deca37e9c0,
+    __cfLift_3: __cfLift_hfe4fb97e8dd9,
+    __cfLift_4: __cfLift_h4cc04b1fdb7a,
+    __cfPattern_1: __cfPattern_h343da164a877,
+    __cfPattern_2: __cfPattern_h44e336242e82
 });

@@ -57,7 +57,7 @@ interface Message {
     id: string;
     type: "chat" | "system";
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_h6be15d4c8476 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
     return ifElse({
         type: "boolean"
@@ -117,7 +117,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h1379edb67d59 = __cfHelpers.lift<{
     msg: {
         type: string;
     };
@@ -138,7 +138,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hf2fadcd49d39 = __cfHelpers.pattern(__cf_pattern_input => {
     const msg = __cf_pattern_input.key("element");
     const selectedId = __cf_pattern_input.key("params", "selectedId");
     return ifElse({
@@ -153,7 +153,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                 type: "object",
                 properties: {}
             }]
-    } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ msg: {
+    } as const satisfies __cfHelpers.JSONSchema, {} as const satisfies __cfHelpers.JSONSchema, __cfLift_h1379edb67d59({ msg: {
             type: msg.key("type")
         } }), <span>{msg.key("id")}</span>, <button type="button" onClick={selectMessage({ selectedId, msgId: msg.key("id") })}>
                 open
@@ -220,8 +220,8 @@ export default pattern((__cf_pattern_input) => {
     } as const satisfies __cfHelpers.JSONSchema).for("selectedId", true);
     return {
         [UI]: (<div>
-          {entries.mapWithPattern(__cfPattern_1, {})}
-          {messages.mapWithPattern(__cfPattern_2, {
+          {entries.mapWithPattern(__cfPattern_h6be15d4c8476, {})}
+          {messages.mapWithPattern(__cfPattern_hf2fadcd49d39, {
                 selectedId: selectedId
             })}
         </div>),
@@ -307,7 +307,10 @@ __cfHardenFn(h);
 __cfReg({
     moduleHasSettings,
     selectMessage,
-    __cfPattern_1,
-    __cfLift_1,
-    __cfPattern_2
+    __cfPattern_h6be15d4c8476,
+    __cfLift_h1379edb67d59,
+    __cfPattern_hf2fadcd49d39,
+    __cfPattern_1: __cfPattern_h6be15d4c8476,
+    __cfLift_1: __cfLift_h1379edb67d59,
+    __cfPattern_2: __cfPattern_hf2fadcd49d39
 });

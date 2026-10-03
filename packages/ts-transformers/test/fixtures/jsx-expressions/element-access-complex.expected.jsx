@@ -31,7 +31,7 @@ interface State {
     selectedUser: number;
     selectedScore: number;
 }
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h860446cd1638 = __cfHelpers.lift<{
     state: {
         matrix: number[][];
         row: number;
@@ -66,7 +66,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h9c7d581e4e10 = __cfHelpers.lift<{
     state: {
         nested: {
             arrays: string[][];
@@ -109,7 +109,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_3 = __cfHelpers.lift<{
+const __cfLift_he8e8823883f4 = __cfHelpers.lift<{
     state: {
         items: string[];
     };
@@ -133,7 +133,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
+const __cfLift_h52574bf035a0 = __cfHelpers.lift<{
     state: {
         arr: number[];
     };
@@ -157,7 +157,7 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_5 = __cfHelpers.lift<{
+const __cfLift_h769ee8901e64 = __cfHelpers.lift<{
     state: {
         arr: number[];
         a: number;
@@ -189,7 +189,7 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_6 = __cfHelpers.lift<{
+const __cfLift_hb65ad4a78287 = __cfHelpers.lift<{
     state: {
         items: string[];
         row: number;
@@ -217,7 +217,7 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_7 = __cfHelpers.lift<{
+const __cfLift_ha0897c0f9871 = __cfHelpers.lift<{
     state: {
         arr: number[];
         a: number;
@@ -245,7 +245,7 @@ const __cfLift_7 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_8 = __cfHelpers.lift<{
+const __cfLift_h68d29bbf3148 = __cfHelpers.lift<{
     state: {
         users: { name: string; scores: number[]; }[];
         selectedUser: number;
@@ -289,7 +289,7 @@ const __cfLift_8 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_9 = __cfHelpers.lift<{
+const __cfLift_haff7a419013e = __cfHelpers.lift<{
     state: {
         items: string[];
         indices: number[];
@@ -320,7 +320,7 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_10 = __cfHelpers.lift<{
+const __cfLift_h48090f780881 = __cfHelpers.lift<{
     state: {
         arr: number[];
     };
@@ -344,7 +344,7 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_11 = __cfHelpers.lift<{
+const __cfLift_h9a449c893c58 = __cfHelpers.lift<{
     state: {
         nested: {
             arrays: string[][];
@@ -383,7 +383,7 @@ const __cfLift_11 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_12 = __cfHelpers.lift<{
+const __cfLift_h26eb61961c4f = __cfHelpers.lift<{
     state: {
         users: { name: string; scores: number[]; }[];
         selectedUser: number;
@@ -423,7 +423,7 @@ const __cfLift_12 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_13 = __cfHelpers.lift<{
+const __cfLift_h4df3f753c34a = __cfHelpers.lift<{
     state: {
         arr: number[];
         a: number;
@@ -451,7 +451,7 @@ const __cfLift_13 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_14 = __cfHelpers.lift<{
+const __cfLift_h4835bfaf53dc = __cfHelpers.lift<{
     state: {
         items: string[];
         b: number;
@@ -479,7 +479,7 @@ const __cfLift_14 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_15 = __cfHelpers.lift<{
+const __cfLift_h80544c1076c9 = __cfHelpers.lift<{
     state: {
         matrix: number[][];
         row: number;
@@ -514,7 +514,7 @@ const __cfLift_15 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_16 = __cfHelpers.lift<{
+const __cfLift_heea236e134c8 = __cfHelpers.lift<{
     state: {
         arr: number[];
         a: number;
@@ -546,7 +546,7 @@ const __cfLift_16 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_17 = __cfHelpers.lift<{
+const __cfLift_h23c3da2b9c6a = __cfHelpers.lift<{
     state: {
         items: string[];
         indices: number[];
@@ -577,7 +577,7 @@ const __cfLift_17 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_18 = __cfHelpers.lift<{
+const __cfLift_hc317dc01eb04 = __cfHelpers.lift<{
     state: {
         arr: number[];
     };
@@ -612,14 +612,14 @@ export default pattern((state) => {
         [UI]: (<div>
         <h3>Nested Element Access</h3>
         {/* Double indexing into matrix */}
-        <p>Matrix value: {__cfLift_1({ state: {
+        <p>Matrix value: {__cfLift_h860446cd1638({ state: {
                 matrix: state.key("matrix"),
                 row: state.key("row"),
                 col: state.key("col")
             } })}</p>
 
         {/* Triple nested access */}
-        <p>Deep nested: {__cfLift_2({ state: {
+        <p>Deep nested: {__cfLift_h9c7d581e4e10({ state: {
                 nested: {
                     arrays: state.key("nested", "arrays"),
                     index: state.key("nested", "index")
@@ -631,32 +631,32 @@ export default pattern((state) => {
         {/* Same array accessed multiple times with different indices */}
         <p>
           First and last: {state.key("items", "0")} and{" "}
-          {__cfLift_3({ state: {
+          {__cfLift_he8e8823883f4({ state: {
                 items: state.key("items")
             } })}
         </p>
 
         {/* Array used in computation and access */}
-        <p>Sum of ends: {__cfLift_4({ state: {
+        <p>Sum of ends: {__cfLift_h52574bf035a0({ state: {
                 arr: state.key("arr")
             } })}</p>
 
         <h3>Computed Indices</h3>
         {/* Index from multiple state values */}
-        <p>Computed index: {__cfLift_5({ state: {
+        <p>Computed index: {__cfLift_h769ee8901e64({ state: {
                 arr: state.key("arr"),
                 a: state.key("a"),
                 b: state.key("b")
             } })}</p>
 
         {/* Index from computation involving array */}
-        <p>Modulo index: {__cfLift_6({ state: {
+        <p>Modulo index: {__cfLift_hb65ad4a78287({ state: {
                 items: state.key("items"),
                 row: state.key("row")
             } })}</p>
 
         {/* Complex index expression */}
-        <p>Complex: {__cfLift_7({ state: {
+        <p>Complex: {__cfLift_ha0897c0f9871({ state: {
                 arr: state.key("arr"),
                 a: state.key("a")
             } })}</p>
@@ -665,7 +665,7 @@ export default pattern((state) => {
         {/* Element access returning array, then accessing that */}
         <p>
           User score:{" "}
-          {__cfLift_8({ state: {
+          {__cfLift_h68d29bbf3148({ state: {
                 users: state.key("users"),
                 selectedUser: state.key("selectedUser"),
                 selectedScore: state.key("selectedScore")
@@ -673,19 +673,19 @@ export default pattern((state) => {
         </p>
 
         {/* Using one array element as index for another */}
-        <p>Indirect: {__cfLift_9({ state: {
+        <p>Indirect: {__cfLift_haff7a419013e({ state: {
                 items: state.key("items"),
                 indices: state.key("indices")
             } })}</p>
 
         {/* Array element used as index for same array */}
-        <p>Self reference: {__cfLift_10({ state: {
+        <p>Self reference: {__cfLift_h48090f780881({ state: {
                 arr: state.key("arr")
             } })}</p>
 
         <h3>Mixed Property and Element Access</h3>
         {/* Property access followed by element access with computed index */}
-        <p>Mixed: {__cfLift_11({ state: {
+        <p>Mixed: {__cfLift_h9a449c893c58({ state: {
                 nested: {
                     arrays: state.key("nested", "arrays"),
                     index: state.key("nested", "index")
@@ -693,7 +693,7 @@ export default pattern((state) => {
             } })}</p>
 
         {/* Element access followed by property access */}
-        <p>User name length: {__cfLift_12({ state: {
+        <p>User name length: {__cfLift_h26eb61961c4f({ state: {
                 users: state.key("users"),
                 selectedUser: state.key("selectedUser")
             } })}</p>
@@ -710,10 +710,10 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_13({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h4df3f753c34a({ state: {
                 arr: state.key("arr"),
                 a: state.key("a")
-            } }), __cfLift_14({ state: {
+            } }), __cfLift_h4835bfaf53dc({ state: {
                 items: state.key("items"),
                 b: state.key("b")
             } }), state.key("items", "0")!)}
@@ -729,7 +729,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["positive", "non-positive"]
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_15({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_h80544c1076c9({ state: {
                 matrix: state.key("matrix"),
                 row: state.key("row"),
                 col: state.key("col")
@@ -738,20 +738,20 @@ export default pattern((state) => {
 
         <h3>Element Access with Operators</h3>
         {/* Element access with arithmetic */}
-        <p>Product: {__cfLift_16({ state: {
+        <p>Product: {__cfLift_heea236e134c8({ state: {
                 arr: state.key("arr"),
                 a: state.key("a"),
                 b: state.key("b")
             } })}</p>
 
         {/* Element access with string concatenation */}
-        <p>Concat: {__cfLift_17({ state: {
+        <p>Concat: {__cfLift_h23c3da2b9c6a({ state: {
                 items: state.key("items"),
                 indices: state.key("indices")
             } })}</p>
 
         {/* Multiple element accesses in single expression */}
-        <p>Sum: {__cfLift_18({ state: {
+        <p>Sum: {__cfLift_hc317dc01eb04({ state: {
                 arr: state.key("arr")
             } })}</p>
       </div>),
@@ -876,22 +876,40 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1,
-    __cfLift_2,
-    __cfLift_3,
-    __cfLift_4,
-    __cfLift_5,
-    __cfLift_6,
-    __cfLift_7,
-    __cfLift_8,
-    __cfLift_9,
-    __cfLift_10,
-    __cfLift_11,
-    __cfLift_12,
-    __cfLift_13,
-    __cfLift_14,
-    __cfLift_15,
-    __cfLift_16,
-    __cfLift_17,
-    __cfLift_18
+    __cfLift_h860446cd1638,
+    __cfLift_h9c7d581e4e10,
+    __cfLift_he8e8823883f4,
+    __cfLift_h52574bf035a0,
+    __cfLift_h769ee8901e64,
+    __cfLift_hb65ad4a78287,
+    __cfLift_ha0897c0f9871,
+    __cfLift_h68d29bbf3148,
+    __cfLift_haff7a419013e,
+    __cfLift_h48090f780881,
+    __cfLift_h9a449c893c58,
+    __cfLift_h26eb61961c4f,
+    __cfLift_h4df3f753c34a,
+    __cfLift_h4835bfaf53dc,
+    __cfLift_h80544c1076c9,
+    __cfLift_heea236e134c8,
+    __cfLift_h23c3da2b9c6a,
+    __cfLift_hc317dc01eb04,
+    __cfLift_1: __cfLift_h860446cd1638,
+    __cfLift_2: __cfLift_h9c7d581e4e10,
+    __cfLift_3: __cfLift_he8e8823883f4,
+    __cfLift_4: __cfLift_h52574bf035a0,
+    __cfLift_5: __cfLift_h769ee8901e64,
+    __cfLift_6: __cfLift_hb65ad4a78287,
+    __cfLift_7: __cfLift_ha0897c0f9871,
+    __cfLift_8: __cfLift_h68d29bbf3148,
+    __cfLift_9: __cfLift_haff7a419013e,
+    __cfLift_10: __cfLift_h48090f780881,
+    __cfLift_11: __cfLift_h9a449c893c58,
+    __cfLift_12: __cfLift_h26eb61961c4f,
+    __cfLift_13: __cfLift_h4df3f753c34a,
+    __cfLift_14: __cfLift_h4835bfaf53dc,
+    __cfLift_15: __cfLift_h80544c1076c9,
+    __cfLift_16: __cfLift_heea236e134c8,
+    __cfLift_17: __cfLift_h23c3da2b9c6a,
+    __cfLift_18: __cfLift_hc317dc01eb04
 });

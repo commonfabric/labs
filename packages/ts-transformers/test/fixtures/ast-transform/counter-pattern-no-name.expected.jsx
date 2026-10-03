@@ -45,7 +45,7 @@ const decrement = handler(false as const satisfies __cfHelpers.JSONSchema, {
 }) => {
     state.value.set(state.value.get() - 1);
 });
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h7a4ce95fb921 = __cfHelpers.lift<{
     state: {
         value: number;
     };
@@ -87,7 +87,7 @@ export default pattern((state) => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: ["number", "string"]
-        } as const satisfies __cfHelpers.JSONSchema, state.key("value"), __cfLift_1({ state: {
+        } as const satisfies __cfHelpers.JSONSchema, state.key("value"), __cfLift_h7a4ce95fb921({ state: {
                 value: state.key("value")
             } }), "unknown")}</li>
         </ul>
@@ -146,5 +146,6 @@ __cfHardenFn(h);
 __cfReg({
     increment,
     decrement,
-    __cfLift_1
+    __cfLift_h7a4ce95fb921,
+    __cfLift_1: __cfLift_h7a4ce95fb921
 });

@@ -11,7 +11,7 @@ import { computed, pattern } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h597481f99252 = __cfHelpers.lift<{
     req: string;
     opt?: string;
     ud: string;
@@ -76,7 +76,7 @@ export default pattern((__cf_pattern_input) => {
     const ud = __cf_pattern_input.key("ud");
     const renamed = __cf_pattern_input.key("ren");
     const qOpt = __cf_pattern_input.key("q-opt");
-    const body = __cfLift_1({
+    const body = __cfLift_h597481f99252({
         req: req,
         opt: opt,
         ud: ud,
@@ -129,5 +129,6 @@ export default pattern((__cf_pattern_input) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfLift_1
+    __cfLift_h597481f99252,
+    __cfLift_1: __cfLift_h597481f99252
 });

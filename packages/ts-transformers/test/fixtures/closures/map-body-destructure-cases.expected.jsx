@@ -22,7 +22,7 @@ interface State {
     spots: Spot[];
     people: Person[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_haef5fc049b98 = __cfHelpers.pattern(__cf_pattern_input => {
     const spot = __cf_pattern_input.key("element");
     const sn = spot.key("spotNumber");
     return <li>{sn}</li>;
@@ -66,7 +66,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_1 = __cfHelpers.lift<{
+const __cfLift_h08a94ce500b2 = __cfHelpers.lift<{
     spotPreferences: string[];
 }, boolean>(({ spotPreferences }) => spotPreferences.length > 0, {
     type: "object",
@@ -82,7 +82,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_2 = __cfHelpers.lift<{
+const __cfLift_h7c1de21101a8 = __cfHelpers.lift<{
     spotPreferences: string[];
 }, string>(({ spotPreferences }) => spotPreferences.map((n) => "#" + n).join(", "), {
     type: "object",
@@ -98,7 +98,7 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_hce187d7e99a4 = __cfHelpers.pattern(__cf_pattern_input => {
     const person = __cf_pattern_input.key("element");
     const name = person.key("name"), spotPreferences = person.key("spotPreferences");
     return (<li>
@@ -119,7 +119,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                 type: "object",
                 properties: {}
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ spotPreferences: spotPreferences }), <span>{__cfLift_2({ spotPreferences: spotPreferences })}</span>, null)}
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_h08a94ce500b2({ spotPreferences: spotPreferences }), <span>{__cfLift_h7c1de21101a8({ spotPreferences: spotPreferences })}</span>, null)}
               </li>);
 }, {
     type: "object",
@@ -178,11 +178,11 @@ export default pattern((state) => {
     return {
         [UI]: (<section>
         <ul>
-          {state.key("spots").mapWithPattern(__cfPattern_1, {})}
+          {state.key("spots").mapWithPattern(__cfPattern_haef5fc049b98, {})}
         </ul>
 
         <ul>
-          {state.key("people").mapWithPattern(__cfPattern_2, {})}
+          {state.key("people").mapWithPattern(__cfPattern_hce187d7e99a4, {})}
         </ul>
       </section>),
     };
@@ -263,8 +263,12 @@ export default pattern((state) => {
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
 __cfReg({
-    __cfPattern_1,
-    __cfLift_1,
-    __cfLift_2,
-    __cfPattern_2
+    __cfPattern_haef5fc049b98,
+    __cfLift_h08a94ce500b2,
+    __cfLift_h7c1de21101a8,
+    __cfPattern_hce187d7e99a4,
+    __cfPattern_1: __cfPattern_haef5fc049b98,
+    __cfLift_1: __cfLift_h08a94ce500b2,
+    __cfLift_2: __cfLift_h7c1de21101a8,
+    __cfPattern_2: __cfPattern_hce187d7e99a4
 });
