@@ -36,7 +36,7 @@
 //   home-ness from the ACL (self-owned = home) and passes it in.
 
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
-import type { GenesisRoot } from "@commonfabric/memory/v2";
+import type { GenesisRoot, SourcedGenesisRoot } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
 import type { Cell } from "./cell.ts";
@@ -177,7 +177,7 @@ export type SpaceRootCreationHooks = {
 export async function createSpaceRootIfAbsent(
   runtime: Runtime,
   space: MemorySpace,
-  config: GenesisRoot & { source: string },
+  config: SourcedGenesisRoot,
   hooks: SpaceRootCreationHooks = {},
 ): Promise<{ createdByThisCall: boolean; error?: CommitError }> {
   const timePhase = hooks.timePhase ?? runPhase;
@@ -343,8 +343,7 @@ export async function ensureSpaceRootPattern(
   }
 
   const { genesisRoot } = options;
-  const source = genesisRoot?.source;
-  if (genesisRoot !== undefined && source === undefined) {
+  if (genesisRoot !== undefined && genesisRoot.source === undefined) {
     return { outcome: "awaiting-creator" };
   }
 
@@ -366,9 +365,7 @@ export async function ensureSpaceRootPattern(
   const created = await createSpaceRootIfAbsent(
     runtime,
     space,
-    genesisRoot === undefined || source === undefined
-      ? spaceRootPatternConfig(options.isHomeSpace)
-      : { ...genesisRoot, source },
+    genesisRoot ?? spaceRootPatternConfig(options.isHomeSpace),
     {
       ...(options.stampCreationTx !== undefined
         ? { stampCreationTx: options.stampCreationTx }

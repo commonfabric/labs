@@ -2,8 +2,8 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import * as Engine from "../v2/engine.ts";
-import { encodeMemoryBoundary } from "../v2.ts";
-import { readGenesisRoot } from "../v2/genesis-root.ts";
+import { encodeMemoryBoundary, type GenesisRoot } from "../v2.ts";
+import { isGenesisRoot, readGenesisRoot } from "../v2/genesis-root.ts";
 
 const space = "did:key:root-test-space";
 const root = {
@@ -116,6 +116,29 @@ describe("v2-genesis-root", () => {
     } finally {
       Engine.close(engine);
     }
+  });
+
+  it("types a reservation naming no source as one naming nothing to create the root from", () => {
+    const creatorPlaced: GenesisRoot = { cause: "creator-root" };
+    const sourced: GenesisRoot = {
+      ...root,
+      sourceRoots: ["system:loom/main.test.tsx"],
+    };
+    // @ts-expect-error: `sourceRoots` without a `source`.
+    const withSourceRoots: GenesisRoot = {
+      cause: "creator-root",
+      sourceRoots: ["system:loom/main.test.tsx"],
+    };
+    // @ts-expect-error: `argument` without a `source`.
+    const withArgument: GenesisRoot = {
+      cause: "creator-root",
+      argument: { title: "A Loom" },
+    };
+    expect([creatorPlaced, sourced].map(isGenesisRoot)).toEqual([true, true]);
+    expect([withSourceRoots, withArgument].map(isGenesisRoot)).toEqual([
+      false,
+      false,
+    ]);
   });
 
   it("retains the root reservation atomically across a store restart", async () => {
