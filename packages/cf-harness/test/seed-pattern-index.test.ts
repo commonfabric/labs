@@ -189,6 +189,7 @@ describe("seed-pattern-index", () => {
         "sortable-table.tsx",
         "source-row-count.tsx",
         "spend-by-category.tsx",
+        "transactions-table.tsx",
       ]);
     });
   });
@@ -488,16 +489,16 @@ describe("seed-pattern-index", () => {
         r.deps,
       );
       expect(code).toBe(0);
-      expect(r.published.length).toBe(12);
+      expect(r.published.length).toBe(13);
       expect(r.recorded).toEqual(r.published);
-      expect(r.lines.at(-1)).toContain("12 published, 0 already held");
+      expect(r.lines.at(-1)).toContain("13 published, 0 already held");
     });
 
     it("publishes nothing in a dry run, having compiled everything", async () => {
       const r = recorder();
       const code = await runSeed({ dryRun: true, only: [], directory }, r.deps);
       expect(code).toBe(0);
-      expect(r.compiled.length).toBe(12);
+      expect(r.compiled.length).toBe(13);
       expect(r.published).toEqual([]);
       expect(r.recorded).toEqual([]);
       expect(r.lines.at(-1)).toContain("nothing published");
@@ -533,7 +534,7 @@ describe("seed-pattern-index", () => {
       );
       expect(code).toBe(0);
       expect(r.recorded).toEqual([]);
-      expect(r.lines.at(-1)).toContain("0 published, 12 already held");
+      expect(r.lines.at(-1)).toContain("0 published, 13 already held");
     });
 
     it("publishes nothing when an atom compiles to no durable identity", async () => {
@@ -819,7 +820,7 @@ describe("seed-pattern-index", () => {
     it("seeds every atom and answers success", async () => {
       const h = io();
       expect(await main([], h.io)).toBe(0);
-      expect(h.published.length).toBe(12);
+      expect(h.published.length).toBe(13);
     });
 
     it("publishes nothing on a dry run", async () => {

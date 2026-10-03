@@ -1,0 +1,180 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "TransactionRow": {
+        "properties": {
+          "account_id": {
+            "default": "",
+            "type": "string"
+          },
+          "category_primary": {
+            "default": "",
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "iso_currency_code": {
+            "default": "",
+            "type": "string"
+          },
+          "merchant_name": {
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "type": "string"
+          },
+          "pending": {
+            "default": 0,
+            "type": "number"
+          },
+          "signed_amount": {
+            "type": "number"
+          },
+          "status": {
+            "default": "",
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "date",
+          "signed_amount",
+          "merchant_name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "rows": {
+        "default": [],
+        "description": "The transactions to show. Read only; the table never writes to them.",
+        "items": {
+          "$ref": "#/$defs/TransactionRow"
+        },
+        "type": "array"
+      },
+      "title": {
+        "default": "Transactions",
+        "description": "Heading above the table.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "primitives/transactions-table.tsx",
+  "resultSchema": {
+    "$defs": {
+      "DisplayedTransaction": {
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "amountLabel": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "dateLabel": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "date",
+          "dateLabel",
+          "description",
+          "category",
+          "account",
+          "amount",
+          "amountLabel",
+          "status",
+          "pending"
+        ],
+        "type": "object"
+      },
+      "SortKey": {
+        "enum": [
+          "date",
+          "description",
+          "category",
+          "account",
+          "amount",
+          "status"
+        ]
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "ascending": {
+        "type": "boolean"
+      },
+      "rowCount": {
+        "type": "number"
+      },
+      "sortBy": {
+        "$ref": "#/$defs/SortKey"
+      },
+      "sortByColumn": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Sorts by a column, reversing when it is already the sort column.",
+        "properties": {
+          "column": {
+            "$ref": "#/$defs/SortKey"
+          }
+        },
+        "required": [
+          "column"
+        ],
+        "type": "object"
+      },
+      "sortedRows": {
+        "description": "The rows in the order the table shows them.",
+        "items": {
+          "$ref": "#/$defs/DisplayedTransaction"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "sortedRows",
+      "rowCount",
+      "sortBy",
+      "ascending",
+      "sortByColumn",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
