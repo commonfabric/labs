@@ -334,7 +334,10 @@ Each is bounded and mostly independent. Several are fail-safe today.
 - **§6.5 intent-consumption / attempt-cell contract.** Commit-point single-use
   intent consumption + bounded-retry attempt-cell ledger (`attemptCellId`/
   `consumedCellId`). This is runner-remit even though the rest of the Ch.6 refiner
-  chain is not.
+  chain is not. [Reviewed intents](./cfc-reviewed-intent.md) mint the
+  single-use record a consumer claims attempts against (`idempotencyKey`, `exp`,
+  `maxAttempts`); whether the ledger itself belongs to the runner or to the
+  consumer is an open question there.
 - **Projection binding-scoped atom survival (§8.3).** A value-bound atom should
   survive a projection only if the runtime verifies the projected value still
   matches its scope digest. No per-atom conditional survival today (safe: drops or

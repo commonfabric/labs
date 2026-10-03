@@ -1782,3 +1782,39 @@ What this costs, and what is not covered:
 - **Same-origin relays.** `/api/link-preview/<url>` fetches any URL it is
   given. The gate keys on labels, not URLs, so a labelled value does not get
   through; an unlabelled one is outside this entry.
+
+## From the reviewed-intent build (2026-10-02)
+
+**SC-57 [normative] A trusted surface's gesture mints a consumed-once intent
+record — §6.4.3, §6.4.4, §6.5, §3.8.1, §3.8.4, §8.10.7.** `open`. The spec
+describes `IntentOnce` as a refinement of a gesture whose parameters were
+rendered (§3.8.1) and whose destination carries integrity (§3.8.4), consumed
+once and verified again when its effect happens (§8.10.7), but names no
+artifact that carries it from the gesture to the application that acts outside
+the fabric. The runner now writes one. A host surface previews the
+destinations a pattern binds against a descriptor the consumer publishes;
+after a renderer-trusted gesture on the host's own surface, a builtin writes a
+create-only record of the operation, the descriptor's digest, the consumer,
+the subject, the parameters and their digest, an idempotency key, `at`, `exp`,
+`maxAttempts`, and the gesture's evidence, stamped
+`TransformedBy{builtin cfc-reviewed-intent}`; the consumer verifies that stamp
+before it acts. The CFC author ruled on 2026-10-01 that for a send the gesture
+is the release, and that a short intent lasts ten minutes, so `exp` is at most
+ten minutes after the gesture.
+
+Proposed edit: §6.4.3 names the reviewed-intent record as the persisted form
+of `IntentOnce` that a trusted surface produces, with its verification (a
+derived root `TransformedBy` naming the minting builtin, in the subject's own
+space; a stored writer claim is not evidence) and the consumer's checks
+(consumer, descriptor digest, subject, payload digest over what is sent,
+destination resolved again and never substituted, window). Five points need
+the spec owner's ruling, recorded as open questions in
+[reviewed intents](./cfc-reviewed-intent.md#open-questions-for-the-cfc-author):
+whether destination integrity may start as a deployment-chosen atom; whether
+the ten-minute ruling waives §6.4.4's short bound and its display and
+cancellation requirement for longer intents; whether §8.10.7 should call an
+attempt with no sent record unknown, rather than known not sent, for an
+at-most-once actuator; whether the record carries `IntentOnce`'s `audience`;
+and whether the §6.5 attempt and consumption ledger belongs to the runner or to
+the consumer. Implemented in `packages/runner/src/cfc/reviewed-intent.ts`;
+described in [reviewed intents](./cfc-reviewed-intent.md).
