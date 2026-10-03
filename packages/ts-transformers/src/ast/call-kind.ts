@@ -299,16 +299,20 @@ export function detectCellFactoryCallKind(
   checker: ts.TypeChecker,
 ): Extract<CallKind, { kind: "cell-factory" }> | undefined {
   const callee = stripWrappers(call.expression);
-  const symbol = ts.isIdentifier(callee)
-    ? checker.getSymbolAtLocation(callee)
-    : undefined;
-  const factoryName = symbol
-    ? getImportedCommonFabricNamedExport(symbol, CELL_FUNCTION_NAMES) &&
-      "Cell"
-    : ts.isPropertyAccessExpression(callee) &&
-        CELL_FACTORY_NAMES.has(callee.name.text)
-    ? detectCellConstructorExpressionName(callee.expression, checker, new Set())
-    : undefined;
+  const factoryName = ts.isPropertyAccessExpression(callee) &&
+      CELL_FACTORY_NAMES.has(callee.name.text)
+    ? detectCellConstructorExpressionName(
+      callee.expression,
+      checker,
+      new Set(),
+    )
+    // `cell<T>(…)`, under whatever name or namespace reaches it.
+    : detectCommonFabricExportName(
+      callee,
+      checker,
+      new Set(),
+      CELL_FUNCTION_NAMES,
+    ) && "Cell";
   return factoryName ? { kind: "cell-factory", factoryName } : undefined;
 }
 
@@ -2314,6 +2318,34 @@ function detectCellConstructorExpressionName(
     );
   }
 
+  return detectCommonFabricExportName(
+    target,
+    checker,
+    seen,
+    CELL_LIKE_CLASSES,
+    detectCellConstructorExpressionName,
+  );
+}
+
+/**
+ * The name of the `commonfabric` export among `names` that `expression`
+ * refers to: directly or through a namespace import, an import alias or
+ * re-export, or a `const` initialized with such a reference, which `follow`
+ * reads (this function by default).
+ */
+function detectCommonFabricExportName(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Symbol>,
+  names: ReadonlySet<string>,
+  follow: (
+    expression: ts.Expression,
+    checker: ts.TypeChecker,
+    seen: Set<ts.Symbol>,
+  ) => string | undefined = (initializer, checker, seen) =>
+    detectCommonFabricExportName(initializer, checker, seen, names),
+): string | undefined {
+  const target = stripWrappers(expression);
   if (!ts.isIdentifier(target) && !ts.isPropertyAccessExpression(target)) {
     return undefined;
   }
@@ -2325,10 +2357,7 @@ function detectCellConstructorExpressionName(
   if (seen.has(symbol)) return undefined;
   seen.add(symbol);
 
-  const importedName = getImportedCommonFabricNamedExport(
-    symbol,
-    CELL_LIKE_CLASSES,
-  );
+  const importedName = getImportedCommonFabricNamedExport(symbol, names);
   if (importedName) return importedName;
 
   const resolved = resolveAlias(symbol, checker, new Set());
@@ -2336,7 +2365,7 @@ function detectCellConstructorExpressionName(
 
   const name = resolved.getName();
   if (
-    CELL_LIKE_CLASSES.has(name) &&
+    names.has(name) &&
     (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved))
   ) {
     return name;
@@ -2349,11 +2378,7 @@ function detectCellConstructorExpressionName(
       declaration.initializer &&
       shouldFollowConstructorInitializer(declaration.initializer)
     ) {
-      const nested = detectCellConstructorExpressionName(
-        declaration.initializer,
-        checker,
-        seen,
-      );
+      const nested = follow(declaration.initializer, checker, seen);
       if (nested) return nested;
     }
   }

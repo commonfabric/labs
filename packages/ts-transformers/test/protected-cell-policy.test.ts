@@ -866,10 +866,15 @@ export default pattern(() => {
 
     const constructed =
       `const items = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");`;
-    const transform = async (result: string, declaration = constructed) =>
+    const transform = async (
+      result: string,
+      declaration = constructed,
+      imports = "",
+    ) =>
       parseModule(
         await transformSource(
           `import { Cfc, CurrentPrincipal, cell, computed, Default, handler, pattern, RepresentsCurrentUser, UI, wish, Writable, WriteAuthorizedBy } from "commonfabric";
+${imports}
 type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
 interface Item { id: string }
 const removeItem = handler<void, { items: Writable<Item[]>; id: string }>((_, { items, id }) => {
@@ -960,6 +965,26 @@ export default pattern(() => {
         computedKeepsPolicy(await transform(count, made));
       });
 
+      it("keeps the cell's writer where an alias of the function makes it", async () => {
+        computedKeepsPolicy(
+          await transform(
+            count,
+            `const make = cell;
+  const items = make<Owned<Item[], typeof removeItem>>([]);`,
+          ),
+        );
+      });
+
+      it("keeps the cell's writer where the function is reached through a namespace", async () => {
+        computedKeepsPolicy(
+          await transform(
+            count,
+            `const items = cf.cell<Owned<Item[], typeof removeItem>>([]);`,
+            `import * as cf from "commonfabric";`,
+          ),
+        );
+      });
+
       it("keeps the writer of a cell its writer alone protects", async () => {
         const root = await transform(
           count,
@@ -985,6 +1010,22 @@ export default pattern(() => {
       const root = await transform(
         count,
         `const { items } = { items: new Writable<Owned<Item[], typeof removeItem>>([]).for("items"), ...{} };`,
+      );
+      const items = (callSchemas(root, "lift")[0] as {
+        properties?: { items?: { ifc?: Record<string, unknown> } };
+      }).properties?.items;
+      expect(items?.ifc?.writeAuthorizedBy).toBeUndefined();
+    });
+
+    it("does not follow a property of an object literal that a later computed property may replace", async () => {
+      // `key` may name `items`, so the property is not the value the binding
+      // receives, and its writer is not the binding's.
+      const root = await transform(
+        count,
+        `const key: string = "items";
+  const other = new Writable<Item[]>([]).for("other");
+  const { items, ...rest } = { items: new Writable<Owned<Item[], typeof removeItem>>([]).for("items"), [key]: other };
+  void rest;`,
       );
       const items = (callSchemas(root, "lift")[0] as {
         properties?: { items?: { ifc?: Record<string, unknown> } };

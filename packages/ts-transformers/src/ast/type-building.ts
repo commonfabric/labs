@@ -630,9 +630,15 @@ function destructuredLiteralValue(
     getPropertyNameText(property.name) === name
   );
   const property = literal.properties[index];
+  // A later member that may supply the same key replaces the property: a
+  // spread, a computed key, or a method or accessor of the same name.
   if (
     !property ||
-    literal.properties.slice(index + 1).some(ts.isSpreadAssignment)
+    literal.properties.slice(index + 1).some((member) =>
+      ts.isSpreadAssignment(member) ||
+      ts.isComputedPropertyName(member.name) ||
+      getPropertyNameText(member.name) === name
+    )
   ) {
     return undefined;
   }
