@@ -110,8 +110,10 @@ none of the value, and the floor credits the label of the document the walk
 ends in alone. A walk that cannot finish there, at a cycle, a path that grows
 without end, a narrower scope the reader may not follow, or a document not yet
 present, credits nothing. Where the document the walk ends in holds nothing at
-the floor's path, nothing lands there through the link, and the floor, which
-governs values, has nothing to judge through it. A link a write sets, rather
+the floor's path, nothing lands there through the link, and the floor is met
+as a write through the slot's schema would meet it: where that schema mints
+what the floor requires, nothing more is judged through the link, and where it
+does not, nothing credits the floor. A link a write sets, rather
 than one the runtime stages, keeps the floor's credit as before: its source's
 own label at the path.
 

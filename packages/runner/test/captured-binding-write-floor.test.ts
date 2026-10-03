@@ -68,12 +68,14 @@ describe("captured-binding-write-floor", () => {
    * to a sub-pattern that maps its rows with a callback reading the registry,
    * sets the registry's admins to `admins` through their writer unless that is
    * undefined, adds two rows, and returns what each row reads. The callback
-   * captures what `captured` names.
+   * captures what `captured` names. The sub-pattern's `admins` mints the
+   * endorsement its floor requires unless `mints` is false.
    */
   async function run(
     registry: string,
     admins: string[] | undefined,
     captured: keyof typeof captures = "registry",
+    mints = true,
   ): Promise<unknown> {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
@@ -102,7 +104,9 @@ describe("captured-binding-write-floor", () => {
           );
           type Admins = RequiresIntegrity<
             WriteAuthorizedBy<
-              AddIntegrity<string[], readonly ["admin"]>,
+              ${
+          mints ? 'AddIntegrity<string[], readonly ["admin"]>' : "string[]"
+        },
               typeof editAdmins
             >,
             readonly ["admin"]
@@ -170,6 +174,15 @@ describe("captured-binding-write-floor", () => {
     expect(await run(plain, undefined)).toEqual([false, false]);
     expect(reasons.filter((reason) => reason.includes("write floor"))).toEqual(
       [],
+    );
+  });
+
+  it("refuses a captured argument whose caller's cell holds nothing at a field whose schema mints nothing its floor requires", async () => {
+    // Nothing lands through the capture, so only a write through the slot's
+    // schema could meet the floor, and this one mints nothing.
+    expect(await run(plain, undefined, "registry", false)).toEqual([]);
+    expect(reasons).toContain(
+      "write floor failed at /params/registry/admins (requiredIntegrity, §8.12.4.1)",
     );
   });
 

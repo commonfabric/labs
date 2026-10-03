@@ -35,18 +35,24 @@ const ADMIN = "admin-approved";
 
 /**
  * A string whose value has to carry the `ADMIN` endorsement, read under
- * `scope` where one is given.
+ * `scope` where one is given, and minted by a write through it where `mints`.
  */
-const floored = (scope?: SchemaScope): JSONSchema => ({
+const floored = (
+  { scope, mints = false }: { scope?: SchemaScope; mints?: boolean } = {},
+): JSONSchema => ({
   type: "string",
   ...(scope !== undefined && { scope }),
-  ifc: { requiredIntegrity: [ADMIN] },
+  ifc: {
+    requiredIntegrity: [ADMIN],
+    ...(mints && { addIntegrity: [ADMIN] }),
+  },
 });
 
 /**
  * The argument a list builtin stages captures into: one captured record at
- * `params/record`, whose `secret` is floored, and one captured field at
- * `params/secret`, floored itself. `cap` declares the scope the reader of the
+ * `params/record`, whose `secret` is floored, and captured fields at
+ * `params/secret`, floored itself, and `params/minted`, floored and minting
+ * what its floor requires. `cap` declares the scope the reader of the
  * record's `secret` may follow links in.
  */
 const argumentSchema = (cap?: SchemaScope): JSONSchema => ({
@@ -58,10 +64,11 @@ const argumentSchema = (cap?: SchemaScope): JSONSchema => ({
         record: {
           type: "object",
           properties: {
-            secret: floored(cap),
+            secret: floored({ scope: cap }),
           },
         },
         secret: floored(),
+        minted: floored({ mints: true }),
       },
     },
   },
@@ -140,7 +147,7 @@ describe("cfc-staged-link-floor", () => {
    * is false, when the link is an ordinary write. Returns the commit's error.
    */
   async function stage(
-    at: "record" | "secret",
+    at: "record" | "secret" | "minted",
     id: string,
     path: string[],
     { cap, staged = true }: { cap?: SchemaScope; staged?: boolean } = {},
@@ -192,11 +199,20 @@ describe("cfc-staged-link-floor", () => {
     );
   });
 
-  it("commits a captured field whose source holds nothing there", async () => {
+  it("commits a captured field whose source holds nothing there where the field's schema mints its floor", async () => {
     await seed("empty", {});
     await seed("via", { secret: linkTo("empty", ["secret"]) });
-    expect(await stage("secret", "empty", ["secret"])).toBeUndefined();
-    expect(await stage("secret", "via", ["secret"])).toBeUndefined();
+    expect(await stage("minted", "empty", ["secret"])).toBeUndefined();
+    expect(await stage("minted", "via", ["secret"])).toBeUndefined();
+  });
+
+  it("refuses a captured field whose source holds nothing there where the field's schema mints nothing", async () => {
+    // Nothing lands through the capture, so only a write through the field's
+    // schema could meet the floor, and this one mints nothing.
+    await seed("empty", {});
+    expect(await stage("secret", "empty", ["secret"])).toContain(
+      refusedAt("secret"),
+    );
   });
 
   for (const crossDocument of [false, true]) {

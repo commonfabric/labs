@@ -8585,8 +8585,10 @@ const createLinkLabelDeriver = (
   // The reader starts at the receiving slot, so the walk crosses the staged
   // link and every link after it under the reader's cycle, length and scope
   // rules. Where every link it crosses was written in this transaction, the
-  // recorded chain derives the value's label (`labelAt`), as it derives one
-  // the walk cannot finish, such as a reference back into its own object. A
+  // recorded chain derives the value's label (`labelAt`), with the static
+  // integrity of the containers holding those links (pinned by
+  // `staged-reference-derivation.test.ts`), as it derives one the walk cannot
+  // finish, such as a reference back into its own object. A
   // link stored before the transaction is no part of that chain: the document
   // holding it holds none of the value, so its label at the path is no
   // evidence about the value, and the value is credited with the label of the
@@ -10088,8 +10090,31 @@ const verifyWriteFloor = function* (
     // A link the runtime staged, a capture or a binding, writes none of the
     // value it names and mints none of the slot's integrity, so the value is
     // credited where a reader finds it (`stagedCredit`). Where the document
-    // holding it holds nothing there, nothing lands through that link, and
-    // the floor governs values, not absence.
+    // holding it holds nothing there, nothing lands through that link. The
+    // floor is then met as a write through the slot's schema would meet it:
+    // where the schema mints what the floor requires, nothing more is judged
+    // through the link, and where it does not, nothing credits the floor, as
+    // before captures were recorded.
+    let schemaMintsFloor: boolean | undefined;
+    const slotSchemaMintsFloor = () =>
+      schemaMintsFloor ??= cfcIntegritySatisfiesFloor(
+        gateRuntimeMintedIntegrity(
+          derivePersistedLabel(
+            tx,
+            entry.schema,
+            entry.label,
+            entryLabels,
+            target.space,
+            {
+              ...labelMintOptionsAt(tx, target, entry.path),
+              mintSchemaIntegrity: true,
+            },
+          ),
+          ctx.identityForPath(entry.path),
+        ).integrity ?? [],
+        floor,
+        trust,
+      );
     const stagedCredit = function* (
       input: LinkWritePolicyInput,
       relative: readonly string[],
@@ -10105,7 +10130,7 @@ const verifyWriteFloor = function* (
       );
       switch (held.kind) {
         case "absent":
-          return undefined;
+          return slotSchemaMintsFloor() ? undefined : [];
         case "chain":
           return chain.integrity ?? [];
         case "label":
