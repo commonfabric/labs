@@ -1212,6 +1212,12 @@ export async function runTestPattern(
         experimental: experimentalOptionsFromEnv(Deno.env.get),
         moduleByteCache: options.moduleByteCache ??
           getDefaultModuleByteCache(),
+        // The collector is the runtime's, which makes every compile an
+        // instrumented one and names the instrumented variant wherever the
+        // runtime reads or writes a compiled closure. Replicating a pattern
+        // instantiated with `inSpace()` reads the test's closure that way, so
+        // the variant it asks for is the one the test's compile wrote.
+        ...(patternCoverage !== undefined ? { patternCoverage } : {}),
         // Inject a fetch that honors test-declared `fetchMocks` (scoped to this
         // runtime; no process-global mutation).
         fetch: mockFetch,
@@ -1365,7 +1371,7 @@ export async function runTestPattern(
       () =>
         runtime.patternManager.compileAndRegisterModules(
           program,
-          { patternCoverage },
+          undefined,
           options.compileOnly ? undefined : {
             space,
             when: (result) =>
