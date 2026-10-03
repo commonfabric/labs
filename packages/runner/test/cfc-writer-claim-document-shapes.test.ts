@@ -219,6 +219,77 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
     tx.abort();
   });
 
+  describe("fresh data an inferred result returns under an owner policy", () => {
+    // The result document holds that data itself, whatever shape the object
+    // returning it takes, so it stores the whole policy or compilation fails.
+
+    for (
+      const [shape, body, returned] of [
+        [
+          "a spread object",
+          "",
+          '{ ...{ value: "seed" as Owned<string, typeof writerA> } }',
+        ],
+        [
+          "a spread constant",
+          'const fresh = { value: "seed" as Owned<string, typeof writerA> };',
+          "{ ...fresh }",
+        ],
+        [
+          "a static computed key",
+          "",
+          '{ box: { ["value"]: "seed" as Owned<string, typeof writerA> } }',
+        ],
+        [
+          "an array spread",
+          "",
+          '{ list: [...["seed" as Owned<string, typeof writerA>]] }',
+        ],
+      ] as const
+    ) {
+      it(`refuses it through ${shape}`, async () => {
+        const tx = runtime.edit();
+        await expect(
+          runtime.patternManager.compilePattern(
+            program(
+              "export default pattern<{ initial: string }>((input) => {",
+              body,
+              returned,
+            ),
+            { space, tx },
+          ),
+        ).rejects.toThrow("could not be read");
+        tx.abort();
+      });
+    }
+  });
+
+  it("refuses a writer an input schema passed through a constant cannot read", async () => {
+    // The constant's `toSchema` call defines the argument document, as it
+    // would written in place.
+    const source: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+import { handler, pattern, toSchema, Writable, type WriteAuthorizedBy } from "commonfabric";
+export const writerA = handler<{ v: string }, { value: Writable<string> }>(
+  ({ v }, { value }) => { value.set(v); },
+);
+type Box<W> = { value: [W][0] };
+type In = Box<WriteAuthorizedBy<string, typeof writerA>>;
+const schema = toSchema<In>();
+export default pattern((input: In) => ({ value: input.value }), schema);
+`,
+      }],
+    };
+    const tx = runtime.edit();
+    await expect(
+      runtime.patternManager.compilePattern(source, { space, tx }),
+    ).rejects.toThrow("could not be read");
+    tx.abort();
+  });
+
   describe("fresh data a callback's return annotation types", () => {
     // No document the result links to stores the policy: the result document
     // holds the data itself, and stores the policy the annotation declares.

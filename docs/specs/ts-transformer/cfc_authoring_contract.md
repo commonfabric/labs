@@ -235,7 +235,8 @@ Normative behavior:
    its result document where the author wrote the result type (as a type
    argument or as the callback's return annotation), or a created cell stores
    its policy envelope from, whether the compiler writes it or the author does
-   with `toSchema` — must carry every writer policy its type declares, or
+   with `toSchema`, in place or through a constant — must carry every writer
+   policy its type declares, or
    compilation must fail with
    `cfc-write-authorized-by:unread`. Without the claim the document stores no
    write restriction, and any writer writes the field. So a writer the schema
@@ -246,10 +247,11 @@ Normative behavior:
    whose stored envelope already binds its writers, so a writer such a view
    reads from a type alone is left out of it and not reported. A result
    inferred from the pattern's callback is such a view: its fields link to the
-   documents they come from, which store their own envelopes. Fresh data it
-   returns under a writer policy — a literal, an object or array literal, or a
-   constant bound to one — is the exception: the result document holds that
-   data itself, so its schema defines the document there. A view reads a
+   documents they come from, which store their own envelopes. Anything else it
+   returns under a writer policy — a literal, an object or array literal, a
+   spread, a constant, a plain call's result: any value that is not a reactive
+   reference — is the exception: the result document holds that data itself,
+   so its schema defines the document there. A view reads a
    writer policy whole or not at all: where its writer cannot be read, the
    principal claims that need a writer, an `ownerPrincipal` and integrity
    naming the current principal, are left out with it, since either alone

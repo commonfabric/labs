@@ -143,17 +143,25 @@ present; no stage handles a missing one.
      result where the author wrote the result type (`pattern<In, Out>`, or the
      callback's return annotation), or a cell `new Writable(…)`,
      `Writable.of(…)`, `cell(…)` and the other cell factories create.
-     SchemaInjection sets it on the call it creates, and on a `toSchema` call
-     the author wrote in that call's place. SchemaGeneration passes it to the
-     schema generator as its `definesDocument` option, under which a writer it
-     cannot read is an error. Like `patternResultAnchor`, a plain identity
-     lookup with **no** `getOriginalNode` fallback. A result inferred from the
-     callback that returns fresh data under a writer policy — a literal, an
-     object or array literal, or a constant bound to one, where the value's
-     type carries the policy — is rebuilt from the returned object, and each
-     such value's type node carries the `definesDocument` schema hint, which
-     the generator reads the same way for that value alone. A returned value
-     the rebuild cannot read member by member marks the whole result.
+     SchemaInjection sets it on the call it creates, and on the `toSchema`
+     call that generates a schema the author passes in that call's place:
+     written there, or reached through a `const` binding, an import of one, or
+     a property of a `const` object literal. A `toSchema` call in another
+     module is generated there as a view; passed where a document is defined,
+     it is reported (`cfc-write-authorized-by:unread`) when its type holds a
+     writer policy. SchemaGeneration passes the flag to the schema generator as
+     its `definesDocument` option, under which a writer it cannot read is an
+     error. Like `patternResultAnchor`, a plain identity lookup with **no**
+     `getOriginalNode` fallback. A result inferred from the callback is a view
+     where it returns a reactive reference: the pattern's argument, a cell, a
+     reactive call's result, or a member of one. Any other data it returns
+     under a writer policy is data its result document holds: a literal, an
+     object or array literal (spreads and computed keys included), a constant,
+     a plain call's result. That result is rebuilt from the returned object,
+     and each such member's type node carries the `definesDocument` schema
+     hint, which the generator reads the same way for that member alone. A
+     returned value the rebuild cannot read member by member, such as one
+     holding a spread, marks the whole result.
    - `printedFrom` — for a type node printed from a type, that type. Both
      printers record it: `typeToTypeNodeWithRegistry()`, including the
      `unknown` it puts in place of a type the checker will not print, and the
@@ -1158,8 +1166,9 @@ report these through the same collector (deduplicated via §2.2's
   reports a second writer policy the root's type carries; the validator above
   checks its spelling. A schema that defines a document (§2.2's
   `definesDocument`: an authored pattern's input, its authored result type, a
-  created cell's schema, fresh data an inferred result returns under a writer
-  policy) also reports every writer it reaches where no
+  created cell's schema, data an inferred result returns under a writer
+  policy that is not a reactive reference) also reports every writer it
+  reaches where no
   syntax names it: through a parameter bound to an argument with no syntax, an
   index signature, a tuple, a carrier's metadata read from a type alone, or a
   cell value whose type is inferred. Any other schema read from a type alone,
@@ -1167,7 +1176,9 @@ report these through the same collector (deduplicated via §2.2's
   from its callback, or the argument of a pattern lowered from an array
   method's callback, is not reported; it reads the policy whole or not at all,
   leaving out with an unread writer the `ownerPrincipal` and current-principal
-  integrity that the runtime enforces only beside one. See §11 of the
+  integrity that the runtime enforces only beside one. SchemaInjection reports
+  it too, for a `toSchema` call another module generates, holding a writer
+  policy, passed where a document is defined (§2.2). See §11 of the
   schema-generator mapping spec,
   rules 8 and 9 of `cfc_authoring_contract.md`,
   `test/protected-cell-policy.test.ts`, and

@@ -10,7 +10,7 @@ import {
   patternSchemas,
 } from "./transformed-ast.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
-import { transformSource } from "./utils.ts";
+import { transformFiles, transformSource } from "./utils.ts";
 
 const PRELUDE = `/// <cts-enable />
 import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, toSchema, wish } from "commonfabric";
@@ -20,6 +20,12 @@ type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPri
 
 /** The policy the cases protect fields with, written in place. */
 const POLICY = "WriteAuthorizedBy<string, typeof setName>";
+
+/**
+ * A type reaching `POLICY` where no syntax names its writer, so a schema that
+ * defines a document fails on it and one that views a document drops it.
+ */
+const UNREAD = `{ byId: { [key: string]: ${POLICY} } }`;
 
 /**
  * What became of a writer policy a document's schema reaches: its claim is in
@@ -188,43 +194,43 @@ export default pattern<${input}>((input) => ({ input }));`);
 
   describe("a schema the author wrote with `toSchema`", () => {
     // Written where SchemaInjection would otherwise inject one, it defines
-    // the same document.
+    // the same document, written in place or through a constant.
 
-    it("keeps or refuses a writer a pattern's input schema reaches through a generic alias", async () => {
-      const result = await transform(`type Box<T> = { value: T };
-export default pattern(({ value }: Box<${POLICY}>) => ({ value }), toSchema<Box<${POLICY}>>());`);
+    it("refuses a writer a pattern's input schema reads where no syntax names it", async () => {
+      const result = await transform(`
+export default pattern((input: ${UNREAD}) => ({ input }), toSchema<${UNREAD}>());`);
 
-      expect(outcome(result, [inputSchema(result.root)])).not.toBe("dropped");
+      expect(outcome(result, [inputSchema(result.root)])).toBe("refused");
     });
 
     for (
       const [which, input, output] of [
-        ["input", `Box<${POLICY}>`, "{ value: string }"],
-        ["result", "{ value: string }", `Box<${POLICY}>`],
+        ["input", UNREAD, "{ value: string }"],
+        ["result", "{ value: string }", UNREAD],
       ] as const
     ) {
-      it(`keeps or refuses a writer a pattern's ${which} schema, written beside the other, reaches through a generic alias`, async () => {
-        const result = await transform(`type Box<T> = { value: T };
+      it(`refuses a writer a pattern's ${which} schema, written beside the other, reads where no syntax names it`, async () => {
+        const result = await transform(`
 export default pattern(
-  ({ value }: { value: string }) => ({ value }),
+  (_: { value: string }) => ({ value: "" }),
   toSchema<${input}>(),
   toSchema<${output}>(),
 );`);
 
         expect(outcome(result, defaultPatternSchemas(result.root)))
-          .not.toBe("dropped");
+          .toBe("refused");
       });
     }
 
-    it("keeps or refuses a writer the callback's return annotation reaches through a generic alias, beside an authored input schema", async () => {
-      const result = await transform(`type Box<T> = { value: T };
+    it("refuses a writer the callback's return annotation reads where no syntax names it, beside an authored input schema", async () => {
+      const result = await transform(`
 export default pattern(
-  (_: { value: string }): Box<${POLICY}> => ({ value: "" }),
+  (_: { value: string }): ${UNREAD} => ({ byId: {} }),
   toSchema<{ value: string }>(),
 );`);
 
       expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
-        .not.toBe("dropped");
+        .toBe("refused");
     });
 
     for (
@@ -233,18 +239,85 @@ export default pattern(
         "Writable.of",
       ] as const
     ) {
-      it(`keeps or refuses a writer the schema of a cell \`${creation}\` creates reaches through a generic alias`, async () => {
-        const result = await transform(`type Box<T> = { value: T };
+      it(`refuses a writer the schema of a cell \`${creation}\` creates reads where no syntax names it`, async () => {
+        const result = await transform(`
 export default pattern<{}>(() => {
-  const a = ${creation}({ value: "" }, toSchema<Box<${POLICY}>>()).for("a");
+  const a = ${creation}({ byId: {} }, toSchema<${UNREAD}>()).for("a");
   return { a };
 });`);
 
-        expect(outcome(result, creationSchemas(result.root))).not.toBe(
-          "dropped",
-        );
+        expect(outcome(result, creationSchemas(result.root))).toBe("refused");
       });
     }
+
+    for (
+      const [how, declaration, reference] of [
+        ["a constant", `const schema = toSchema<${UNREAD}>();`, "schema"],
+        [
+          "a constant's property",
+          `const schemas = { input: toSchema<${UNREAD}>() } as const;`,
+          "schemas.input",
+        ],
+        [
+          "a constant bound to a constant",
+          `const generated = toSchema<${UNREAD}>();\nconst schema = generated;`,
+          "schema",
+        ],
+      ] as const
+    ) {
+      it(`refuses a writer a pattern's input schema, passed through ${how}, reads where no syntax names it`, async () => {
+        const result = await transform(`${declaration}
+export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
+
+        expect(result.diagnostics.filter(isUnreadWriter)).not.toEqual([]);
+      });
+    }
+
+    for (
+      const [what, schemaType, reported] of [
+        ["holding a writer policy", `{ value: ${POLICY} }`, true],
+        ["holding none", "{ value: string }", false],
+      ] as const
+    ) {
+      it(
+        `${
+          reported ? "reports" : "reports nothing for"
+        } an imported schema ${what}, which its own module generates as one that views a document`,
+        async () => {
+          const diagnostics: TransformationDiagnostic[] = [];
+          await transformFiles({
+            "/schemas.ts": `/// <cts-enable />
+import { Writable, WriteAuthorizedBy, handler, toSchema } from "commonfabric";
+export const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+export const inputSchema = toSchema<${schemaType}>();`,
+            "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+import { inputSchema } from "./schemas.ts";
+export default pattern((input: { value: string }) => ({ input }), inputSchema);`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          });
+
+          expect(
+            diagnostics.filter(isUnreadWriter).map((diagnostic) =>
+              diagnostic.message.includes("in another module")
+            ),
+          ).toEqual(reported ? [true] : []);
+        },
+      );
+    }
+
+    it("refuses a writer the schema of a created cell, passed through a constant, reads where no syntax names it", async () => {
+      const result = await transform(`const schema = toSchema<${UNREAD}>();
+export default pattern<{}>(() => {
+  const a = new Writable({ byId: {} }, schema).for("a");
+  return { a };
+});`);
+
+      expect(result.diagnostics.filter(isUnreadWriter)).not.toEqual([]);
+    });
   });
 
   describe("an authored pattern's result", () => {
@@ -264,12 +337,12 @@ export default pattern<{ value: ${POLICY} }, { box: Box<${POLICY}> }>(
       ])).not.toBe("dropped");
     });
 
-    it("keeps or refuses a writer the callback's return annotation reaches through a generic alias", async () => {
-      const result = await transform(`type Box<T> = { value: T };
-export default pattern<{}>((): Box<${POLICY}> => ({ value: "" }));`);
+    it("refuses a writer the callback's return annotation reads where no syntax names it", async () => {
+      const result = await transform(`
+export default pattern<{}>((): ${UNREAD} => ({ byId: {} }));`);
 
       expect(outcome(result, defaultPatternSchemas(result.root).slice(1)))
-        .not.toBe("dropped");
+        .toBe("refused");
     });
 
     for (
@@ -291,6 +364,46 @@ export default pattern<{}>((): Box<${POLICY}> => ({ value: "" }));`);
         [
           "returns beside a spread",
           `return { ...{ count: 1 }, value: "" as ${POLICY} };`,
+        ],
+        [
+          "returns inside a spread object",
+          `return { ...{ value: "" as ${POLICY} } };`,
+        ],
+        [
+          "returns through a spread constant",
+          `const fresh = { value: "" as ${POLICY} };\n  return { ...fresh };`,
+        ],
+        [
+          "returns under a static computed key",
+          `return { box: { ["value"]: "" as ${POLICY} } };`,
+        ],
+        [
+          "returns under a static computed key, in an object cast to the policy's type",
+          `return { box: { ["value"]: "" } as Box<${POLICY}> };`,
+        ],
+        [
+          "returns nested past the bound on reading it",
+          `return { a: { b: { c: { d: { e: { f: { g: { h: { i: { value: "" as ${POLICY} } } } } } } } } } };`,
+        ],
+        [
+          "returns as a constant holding the whole result",
+          `const result = { value: "" as ${POLICY} };\n  return result;`,
+        ],
+        [
+          "returns under a dynamic computed key",
+          `const key = "value" as string;\n  return { box: { [key]: "" as ${POLICY} } };`,
+        ],
+        [
+          "returns inside an array spread",
+          `return { list: [...["" as ${POLICY}]] };`,
+        ],
+        [
+          "returns through a `let` binding",
+          `let value = "" as ${POLICY};\n  return { value };`,
+        ],
+        [
+          "returns as a plain function's result",
+          `const make = () => "" as ${POLICY};\n  return { value: make() };`,
         ],
       ] as const
     ) {
@@ -330,6 +443,17 @@ export default pattern<{ owned: Owned<string, typeof setName> }>(({ owned }) => 
       expect(JSON.stringify(output.properties)).not.toMatch(
         /ownerPrincipal|__ctCurrentPrincipal/,
       );
+    });
+
+    it("reports nothing for an inferred result that returns a constant bound to its input's field", async () => {
+      // The constant links to the input's document, which stores the policy.
+      const result = await transform(`
+export default pattern<{ value: Owned<string, typeof setName> }>((input) => {
+  const value = input.value;
+  return { value };
+});`);
+
+      expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
     });
 
     it("reports nothing for an inferred result that returns a protected value through a generic alias", async () => {
