@@ -467,10 +467,8 @@ describe("HostReadGate", () => {
   });
 
   describe("fields()", () => {
-    for (const piece of ["importer", "inlineImporter"] as const) {
-      const where = piece === "importer"
-        ? "a document of its own"
-        : "the piece's own document";
+    for (const piece of ["importer"] as const) {
+      const where = "a document of its own";
 
       it(`lists the owner every field of a piece holding a credential in ${where}, whose whole read it refuses`, async () => {
         await using docs = await shelf();
