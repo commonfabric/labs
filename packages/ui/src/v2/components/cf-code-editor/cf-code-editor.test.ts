@@ -1575,7 +1575,7 @@ describe("CFCodeEditor while the worker refuses a read its mentions are made fro
     );
     const references = bound(
       createMockCellHandle<MentionRefMap>(
-        { [KEY]: { destination, modifiedTitle: false } } as MentionRefMap,
+        { [KEY]: { destination, modifiedTitle: false } },
         { id: "of:references" as CellRef["id"] },
       ),
     );

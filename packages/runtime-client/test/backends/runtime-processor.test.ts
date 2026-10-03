@@ -3478,10 +3478,11 @@ describe("runtime-processor", () => {
         path: [],
       };
       const processor = buildProcessor({ runtime, space });
-      const request = { type: RequestType.CellFields, cell: ref } as const;
+      const list = () =>
+        processor.handleRequest({ type: RequestType.CellFields, cell: ref });
       try {
         // Nothing stored and nothing refused: no record.
-        expect(await processor.handleRequest(request)).toEqual({});
+        expect(await list()).toEqual({});
 
         const refused = stub(
           storageManager,
@@ -3489,7 +3490,7 @@ describe("runtime-processor", () => {
           () => new Error("lacks READ on the space"),
         );
         try {
-          await expect(processor.handleRequest(request)).rejects.toThrow(
+          await expect(list()).rejects.toThrow(
             "lacks READ on the space",
           );
         } finally {
