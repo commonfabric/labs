@@ -11,6 +11,7 @@ import type { ReactiveControllerHost } from "lit";
 
 import {
   createMockCellHandle,
+  holdReads,
   pushRefusal,
   pushUpdate,
   writesSent,
@@ -770,6 +771,102 @@ describe("CellController — a refusal that arrives while a write waits", () => 
     expect(ctrl.getValue()).toBe("");
     expect(handleErrors(() => time.tick(200))).toEqual([]);
     expect(writesSent(cell)).toEqual([]);
+  });
+});
+
+describe("CellController — a handle that has read nothing yet", () => {
+  // A handle the worker has not answered for holds nothing, which is not a
+  // cell that holds nothing: a toggle computed from it would write `true`
+  // over a value nobody was shown.
+  const REFUSAL = { refusedBy: "display-ceiling" } as const;
+  const RELABELED: CellRef["cfcLabelView"] = {
+    version: 1,
+    entries: [{ path: [], label: { integrity: ["relabeled"] } }],
+  };
+
+  it("keeps a refusal across a rebind to a fresh handle for the same cell, and computes nothing from it", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const first = createMockCellHandle(true);
+    ctrl.bind(first);
+    pushRefusal(first, REFUSAL);
+    // The same cell under a new label view: a fresh handle, which has read
+    // nothing, and whose read the worker has not answered.
+    const rebound = createMockCellHandle<boolean>(undefined, {
+      cfcLabelView: RELABELED,
+    });
+    holdReads(rebound);
+    ctrl.bind(rebound);
+
+    ctrl.toggle();
+
+    expect(ctrl.refusal).toEqual(REFUSAL);
+    expect(writesSent(rebound)).toEqual([]);
+  });
+
+  it("computes no toggle until the worker answers the handle's read", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle<boolean>();
+    holdReads(cell);
+    ctrl.bind(cell);
+
+    ctrl.toggle();
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("toggles a cell that holds nothing once the worker answers so", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle<boolean>();
+    ctrl.bind(cell);
+
+    // Settles once the worker answered the read it waits on.
+    await ctrl.toggle();
+
+    expect(writesSent(cell)).toEqual([
+      expect.objectContaining({ type: "cell:set", value: true }),
+    ]);
+  });
+
+  it("still writes a value typed in, which is computed from nothing it read", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<string>();
+    holdReads(cell);
+    ctrl.bind(cell);
+
+    ctrl.setValue("typed");
+
+    expect(writesSent(cell)).toEqual([
+      expect.objectContaining({ type: "cell:set", value: "typed" }),
+    ]);
+  });
+});
+
+describe("CellController — a refusal, then an admission, while a write waits", () => {
+  let time: FakeTime;
+
+  beforeEach(() => {
+    time = new FakeTime();
+  });
+  afterEach(() => {
+    time.restore();
+  });
+
+  it("drops the write typed before the refusal, rather than make it over the admitted value", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "debounce", delay: 500 },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    ctrl.setValue("typed");
+
+    pushRefusal(cell, { refusedBy: "display-ceiling" });
+    pushUpdate(cell, "after admission");
+    time.tick(500);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe("after admission");
   });
 });
 

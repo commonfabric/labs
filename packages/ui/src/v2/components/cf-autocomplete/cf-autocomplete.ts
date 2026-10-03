@@ -1008,7 +1008,12 @@ export class CFAutocomplete extends BaseElement {
       const current =
         (this._getCurrentValue() as readonly string[] | undefined) || [];
       if (!current.includes(item.value)) {
-        this._cellController.setValue([...current, item.value]);
+        // Computed from what the cell holds, so made from the worker's
+        // answer where the cell has read nothing yet.
+        void this._cellController.updateValue((held) => [
+          ...(typeof held === "string" ? [] : held),
+          item.value,
+        ]);
       }
     } else {
       // Replace single value
@@ -1038,7 +1043,12 @@ export class CFAutocomplete extends BaseElement {
       const current =
         (this._getCurrentValue() as readonly string[] | undefined) || [];
       if (!current.includes(customValue)) {
-        this._cellController.setValue([...current, customValue]);
+        // Computed from what the cell holds, so made from the worker's
+        // answer where the cell has read nothing yet.
+        void this._cellController.updateValue((held) => [
+          ...(typeof held === "string" ? [] : held),
+          customValue,
+        ]);
       }
     } else {
       // Replace single value

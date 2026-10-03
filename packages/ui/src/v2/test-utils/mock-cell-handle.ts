@@ -15,6 +15,8 @@
  *   `$onCellRefused`
  * - `writesSent(cell)` — the writes the handle, or a handle reached from it
  *   through `key()`, sent the mock runtime
+ * - `holdReads(cell)` — leave every read the handle's network is asked for
+ *   unanswered, as a worker that has not answered yet does
  */
 
 import {
@@ -52,6 +54,9 @@ class MockCellNetwork {
 
   /** Every write request sent through this network, in order. */
   readonly writes: { type: string; cell?: CellRef; value?: unknown }[] = [];
+
+  /** Whether reads (`cell:get`, `cell:pull`) go unanswered. */
+  readsHeld = false;
 
   register(handle: CellHandle): void {
     this.#roots.set(this.#rootKey(handle.ref()), handle);
@@ -165,6 +170,12 @@ function createMockConnection(
       if (data.type === "cell:resolveAsCell" && data.cell) {
         return Promise.resolve({ cell: network.resolveRef(data.cell) } as any);
       }
+      if (
+        network.readsHeld &&
+        (data.type === "cell:get" || data.type === "cell:pull")
+      ) {
+        return new Promise(() => {});
+      }
       return Promise.resolve({} as any);
     },
     subscribe: () => Promise.resolve(),
@@ -220,12 +231,12 @@ export function createMockCellHandle<T>(
     value === undefined ? { unread: true } : { value },
   );
   network.register(handle as CellHandle<unknown>);
-  networks.set(handle as CellHandle<unknown>, network);
+  networks.set(handle, network);
   return handle;
 }
 
 /** The network each mock handle was made on. */
-const networks = new WeakMap<CellHandle<unknown>, MockCellNetwork>();
+const networks = new WeakMap<object, MockCellNetwork>();
 
 /**
  * The writes (`CellSet` and `CellPush` requests) sent on the network
@@ -234,11 +245,24 @@ const networks = new WeakMap<CellHandle<unknown>, MockCellNetwork>();
 export function writesSent<T>(
   handle: CellHandle<T>,
 ): readonly { type: string; cell?: CellRef; value?: unknown }[] {
-  const network = networks.get(handle as CellHandle<unknown>);
+  const network = networks.get(handle);
   if (network === undefined) {
     throw new Error("writesSent() takes a handle createMockCellHandle() made");
   }
   return network.writes;
+}
+
+/**
+ * Leaves every read (`cell:get`, `cell:pull`) the network `handle` was made
+ * on is asked for unanswered, as a worker that has not answered yet does.
+ * A read the mock answers otherwise finds the cell holding nothing.
+ */
+export function holdReads<T>(handle: CellHandle<T>): void {
+  const network = networks.get(handle);
+  if (network === undefined) {
+    throw new Error("holdReads() takes a handle createMockCellHandle() made");
+  }
+  network.readsHeld = true;
 }
 
 /**
