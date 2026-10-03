@@ -55,7 +55,8 @@ Carry the append intent through the transaction so the commit emits a
 tail-relative, mergeable operation instead of a reconstructed whole-array diff.
 
 An append commits as a dedicated `append` patch op (`{ op: "append", path,
-values }`), except from a transaction that emits whole documents (below). On
+values }`), except where the commit falls back to a value write (the cases
+under *Semantics and limitations*). On
 the server this op inserts its elements at the array's *live* tail, creating
 the array (and the path to it) if it is absent. Because the
 position is resolved on the server against durable state, the op is correct
@@ -407,12 +408,11 @@ first, since the op carries only the delta.
   `buildMergeableOps` deletes and poisons the path, and it runs inside
   `getNativeCommit`, ahead of the narrowing, so both sides see the same intents.
 
-  In every case reachable today the reshaping write also leaves an unmarked read
-  at the path, which keeps it in the conflict set regardless — so the delete is
-  belt and braces rather than a demonstrated behavior change, and no test
-  asserts a conflict outcome that depends on it. It is kept because the
-  guarantee should not rest on that coincidence: nothing obliges a reshape to
-  read what it overwrites.
+  The op's own read of the value is among those reads, and it can be the only
+  one: nothing obliges a reshape to read what it overwrites, and a write made
+  straight to the transaction reads nothing. With the intent gone that read is
+  back in the conflict set, which is what refuses the replacing write from a
+  session whose view of the value is stale.
 
 - **A whole-document transaction abandons every intent it holds.** A
   transaction marked `markWholeDocumentWrites` — or `markAuthoritativeWrites`,
@@ -442,9 +442,22 @@ first, since the op carries only the delta.
   no document either. An op resolves against whatever the store holds and
   makes no such claim, so sending the two together would land the other write
   on a document its author never saw. `getNativeCommit` therefore abandons the
-  document's intents and emits the `set`, whose reads carry the claim: the
-  store refuses it where it holds the document, and the transaction runs again
-  with the document loaded, where it has a base and the op merges. The cost is
+  document's intents and emits the `set`, and records a read of the whole
+  document to go with it. The reads the transaction made are per path and
+  would refuse the `set` only where another session wrote one of those paths,
+  while the `set` replaces every field; the read at the document root
+  conflicts with any revision since the transaction's view. So the store
+  refuses the `set` where it holds the document, and the transaction runs
+  again with the document loaded, where it has a base and the op merges. The
+  read is not particular to this fallback: every whole-document `set` the
+  commit computes from a document's absence goes out with it, a plain
+  `key("count").set(1)` from a session that has not loaded the document
+  included. A write to the document root, and a whole-document or
+  authoritative transaction, carry no such read. A blind UI-input write does
+  carry it: the blind treatment covers the reads its assignment makes, and
+  ends before the commit is built, so a typed value that would replace a
+  document the session has not loaded is refused and lands on the retry
+  beside what the store held. The cost is
   that the push creating a list is not conflict-free when it carries another
   write to that document; two sessions creating it at once conflict, and the
   one refused retries onto the list the other created.

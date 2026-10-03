@@ -2814,9 +2814,7 @@ describe("mergeable op guards and single-session branches", () => {
     it("is refused beside another write when another session's push created the list first", async () => {
       // Both sessions see no document. The first one's push lands as an op and
       // creates the list. The second one's set would replace that list with
-      // its own single element, so it has to be refused. Its write beside the
-      // push goes straight to the transaction and reads nothing, so the
-      // push's own read of the list is the only one that can refuse it.
+      // its own single element, so it has to be refused.
       const cause = "push-creates-list-store-holds-document";
       const tx0 = rt.edit();
       rt.getCell<string[]>(space, cause, stringListSchema, tx0).push("a");
@@ -2847,6 +2845,151 @@ describe("mergeable op guards and single-session branches", () => {
         "a",
       ]);
     });
+  });
+
+  it("a push that creates its list beside another write is refused when another session created a different field first", async () => {
+    // The second session's writes touch `tags` and `count`, and the first
+    // session's `other` is neither, so no read of those paths can refuse the
+    // commit. Sent as a whole-document set it would delete `other`.
+    const docSchema = {
+      type: "object",
+      properties: {
+        other: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "push-creates-list-store-holds-other-field";
+    const tx0 = rt.edit();
+    (rt.getCell(space, cause, docSchema, tx0).key("other") as unknown as Cell<
+      string[]
+    >).push("keep");
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const storage2 = EmulatedStorageManager.connectTo(server, { as: signer });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx = rt2.edit();
+      const doc = rt2.getCell(space, cause, docSchema, tx);
+      (doc.key("tags") as unknown as Cell<string[]>).push("x");
+      (doc.key("count") as unknown as Cell<number>).set(1);
+      const result = await tx.commit({ resolveAt: "verdict" });
+      expect(result.error?.name).toBe("ConflictError");
+    } finally {
+      await rt2.dispose();
+      await storage2.close();
+    }
+
+    expect(await readDurableValue(server, cause, docSchema)).toEqual({
+      other: ["keep"],
+    });
+  });
+
+  it("a `set()` of one field of a document the session has not loaded is refused when another session created a different field first", async () => {
+    // No mergeable op on the second session's side: a plain field write from
+    // an absent base is a whole-document set as well, and would delete
+    // `other` the same way.
+    const docSchema = {
+      type: "object",
+      properties: {
+        other: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "set-field-store-holds-other-field";
+    const tx0 = rt.edit();
+    (rt.getCell(space, cause, docSchema, tx0).key("other") as unknown as Cell<
+      string[]
+    >).push("keep");
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const storage2 = EmulatedStorageManager.connectTo(server, { as: signer });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx = rt2.edit();
+      (rt2.getCell(space, cause, docSchema, tx).key("count") as unknown as Cell<
+        number
+      >).set(1);
+      const result = await tx.commit({ resolveAt: "verdict" });
+      expect(result.error?.name).toBe("ConflictError");
+    } finally {
+      await rt2.dispose();
+      await storage2.close();
+    }
+
+    expect(await readDurableValue(server, cause, docSchema)).toEqual({
+      other: ["keep"],
+    });
+  });
+
+  it("a push that creates its list beside another write keeps another session's field once it runs again", async () => {
+    // The same two sessions through a retrying edit: the refused attempt runs
+    // again with the document loaded, where it has a base, and its writes
+    // land beside the first session's field.
+    const docSchema = {
+      type: "object",
+      properties: {
+        other: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "push-creates-list-retry-keeps-other-field";
+    const retryServer = newSharedServer();
+    const firstStorage = EmulatedStorageManager.connectTo(retryServer, {
+      as: signer,
+    });
+    const secondStorage = EmulatedStorageManager.connectTo(retryServer, {
+      as: signer,
+    });
+    const first = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: firstStorage,
+    });
+    const second = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: secondStorage,
+    });
+    try {
+      const created = await first.editWithRetry((tx) => {
+        (first.getCell(space, cause, docSchema, tx).key(
+          "other",
+        ) as unknown as Cell<string[]>).push("keep");
+      });
+      expect(created.error).toBeUndefined();
+      await first.storageManager.synced();
+
+      const written = await second.editWithRetry((tx) => {
+        const doc = second.getCell(space, cause, docSchema, tx);
+        (doc.key("tags") as unknown as Cell<string[]>).push("x");
+        (doc.key("count") as unknown as Cell<number>).set(1);
+      });
+      expect(written.error).toBeUndefined();
+      await second.storageManager.synced();
+
+      expect(await readDurableValue(retryServer, cause, docSchema)).toEqual({
+        other: ["keep"],
+        tags: ["x"],
+        count: 1,
+      });
+    } finally {
+      await second.dispose();
+      await first.dispose();
+      await secondStorage.close();
+      await firstStorage.close();
+      await retryServer.close();
+    }
   });
 
   it("a push after a write to the document root emits a set and drops the push's intent", async () => {

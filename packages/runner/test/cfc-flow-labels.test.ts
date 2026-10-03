@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { URI } from "@commonfabric/memory/interface";
+import type { FabricValue } from "@commonfabric/data-model";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
@@ -61,6 +62,177 @@ const recordSecretWritePolicy = (
     schemaHash: SECRET_FIELD_SCHEMA.taggedHashString,
     schema: SECRET_FIELD_SCHEMA.schema,
   });
+};
+
+const COUNTED_ITEMS_SCHEMA = internSchema(
+  {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: { type: "string" },
+        ifc: { confidentiality: ["count-secret"], observes: "enumerate" },
+      },
+    },
+  } as JSONSchema,
+  true,
+);
+
+/**
+ * The write policy for a write that leaves anything at `items`, keeping the
+ * label the seeded documents give the array's membership.
+ */
+const LABELED_ITEMS_SCHEMA = internSchema(
+  {
+    type: "object",
+    properties: { items: { ifc: { confidentiality: ["count-secret"] } } },
+  } as JSONSchema,
+  true,
+);
+
+type ItemsWrite = (
+  runtime: Runtime,
+  id: URI,
+  items: FabricValue,
+) => Promise<void>;
+
+/**
+ * Writes `items` to a document through a schema that labels the array's
+ * membership, the way a query result array is declared.
+ */
+const writeThroughCountedSchema: ItemsWrite = async (runtime, id, items) => {
+  const tx = runtime.edit();
+  tx.writeOrThrow(
+    { space: signer.did(), scope: "space", id, path: ["value"] },
+    { items },
+  );
+  tx.recordCfcWritePolicyInput({
+    kind: "schema",
+    target: { space: signer.did(), scope: "space", id, path: [] },
+    schemaHash: COUNTED_ITEMS_SCHEMA.taggedHashString,
+    schema: COUNTED_ITEMS_SCHEMA.schema,
+  });
+  tx.prepareCfc();
+  expect((await tx.commit()).ok).toBeDefined();
+};
+
+/**
+ * Returns a write that stores `items` with one label map entry, on the array
+ * itself, whose kind `entry` names.
+ */
+const seedItemsLabeled = (
+  entry: { origin: "declared"; observes: "enumerate" } | {
+    origin: "structure";
+  },
+): ItemsWrite =>
+async (runtime, id, items) => {
+  const tx = runtime.edit();
+  writeSeedEnvelopeDoc(tx, signer.did());
+  seedStoredEnvelope(tx, {
+    space: signer.did(),
+    scope: "space",
+    id,
+    path: [],
+  }, {
+    value: { items },
+    cfc: {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [{
+          path: ["items"],
+          label: { confidentiality: ["count-secret"] },
+          ...entry,
+        }],
+      },
+    },
+  });
+  expect((await tx.commit()).ok).toBeDefined();
+};
+
+/**
+ * Runs an effect that reads `items.length` of a document `write` stores as
+ * two items, stores `next` in their place with `write`, and returns the
+ * confidentiality of the label the rerun's own write derives. The rerun reads
+ * the count again only when `rereads` is set, and writes `rerunWrites` to
+ * `items` itself when it is given. Only the first rerun writes, so the label
+ * is that rerun's even when its own write schedules another.
+ */
+const derivedLabelAfterCountChange = async (
+  name: string,
+  write: ItemsWrite,
+  { rereads = false, next = ["a", "b", "c"], rerunWrites }: {
+    rereads?: boolean;
+    next?: FabricValue;
+    rerunWrites?: FabricValue;
+  } = {},
+): Promise<readonly string[] | undefined> => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL("https://example.com"),
+    storageManager,
+    cfcEnforcementMode: "enforce-explicit",
+    cfcFlowLabels: "persist",
+  });
+  try {
+    const setup = runtime.edit();
+    const source = runtime.getCell<{ items: string[] }>(
+      signer.did(),
+      `cfc-count-${name}-source`,
+      undefined,
+      setup,
+    );
+    const flag = runtime.getCell(
+      signer.did(),
+      `cfc-count-${name}-flag`,
+      undefined,
+      setup,
+    );
+    setup.abort();
+    const id = source.getAsNormalizedFullLink().id;
+    await write(runtime, id, ["a", "b"]);
+    await runtime.idle();
+
+    let runs = 0;
+    const action: Action = (atx) => {
+      runs++;
+      if (runs === 1 || (runs === 2 && rereads)) {
+        source.withTx(atx).key("items").key("length").getRaw();
+      }
+      if (runs !== 2) return;
+      if (rerunWrites !== undefined) {
+        atx.writeOrThrow(
+          { space: signer.did(), scope: "space", id, path: ["value", "items"] },
+          rerunWrites,
+        );
+        atx.recordCfcWritePolicyInput({
+          kind: "schema",
+          target: { space: signer.did(), scope: "space", id, path: [] },
+          schemaHash: LABELED_ITEMS_SCHEMA.taggedHashString,
+          schema: LABELED_ITEMS_SCHEMA.schema,
+        });
+      }
+      flag.withTx(atx).set({ ran: runs });
+    };
+    runtime.scheduler.subscribe(
+      action,
+      { reads: [], shallowReads: [], writes: [] },
+      { isEffect: true },
+    );
+    await runtime.idle();
+    expect(runs).toBe(1);
+
+    await write(runtime, id, next);
+    await runtime.idle();
+    expect(runs).toBeGreaterThan(1);
+
+    return replicaEntries(storageManager, flag.getAsNormalizedFullLink().id)
+      .find((entry) => entry.origin === "derived")?.label.confidentiality;
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
 };
 
 describe("CFC flow labels (default transition)", () => {
@@ -989,6 +1161,175 @@ describe("CFC flow labels (default transition)", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  it("joins only the labels of the read whose change scheduled the rerun", async () => {
+    // Run 1 reads `pub` of a document that does not exist yet. The write
+    // that schedules the rerun creates the whole document, `secret`
+    // included, but a change to `secret` alone would schedule nothing, so
+    // its label does not reach the rerun's write. `pub` is labeled too, so a
+    // rerun that joined no trigger at all would fail this case as well.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+      cfcFlowLabels: "persist",
+    });
+    try {
+      const setup = runtime.edit();
+      const source = runtime.getCell<{ pub: string; secret: string }>(
+        signer.did(),
+        "cfc-trigger-narrow-source",
+        undefined,
+        setup,
+      );
+      const flag = runtime.getCell(
+        signer.did(),
+        "cfc-trigger-narrow-flag",
+        undefined,
+        setup,
+      );
+      setup.abort();
+
+      let runs = 0;
+      const action: Action = (atx) => {
+        runs++;
+        if (runs === 1) {
+          source.withTx(atx).key("pub").getRaw();
+        } else {
+          flag.withTx(atx).set({ ran: runs });
+        }
+      };
+      runtime.scheduler.subscribe(
+        action,
+        { reads: [], shallowReads: [], writes: [] },
+        { isEffect: true },
+      );
+      await runtime.idle();
+      expect(runs).toBe(1);
+
+      const create = runtime.edit();
+      writeSeedEnvelopeDoc(create, signer.did());
+      seedStoredEnvelope(create, {
+        space: signer.did(),
+        scope: "space",
+        id: source.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: { pub: "p1", secret: "v1" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [
+              { path: ["pub"], label: { confidentiality: ["pub-label"] } },
+              { path: ["secret"], label: { confidentiality: ["secret"] } },
+            ],
+          },
+        },
+      });
+      expect((await create.commit()).ok).toBeDefined();
+      await runtime.idle();
+      expect(runs).toBeGreaterThan(1);
+
+      const flagId = flag.getAsNormalizedFullLink().id;
+      const entry = replicaEntries(storageManager, flagId).find((e) =>
+        e.origin === "derived"
+      );
+      expect(entry?.label.confidentiality).toContainEqual("pub-label");
+      expect(entry?.label.confidentiality).not.toContainEqual("secret");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  describe("a rerun scheduled by a change to an array's count", () => {
+    // Run 1 reads `items.length`. Adding an item changes it and schedules
+    // the rerun, whose branch writes without reading the count again. A read
+    // of an array's `length` observes the array's membership, so the trigger
+    // read joins the array's own label exactly as that read in the journal
+    // does.
+
+    it("joins a schema-declared enumerate label on the array", async () => {
+      expect(
+        await derivedLabelAfterCountChange(
+          "schema-enumerate",
+          writeThroughCountedSchema,
+        ),
+      ).toContainEqual("count-secret");
+    });
+
+    it("joins a stored enumerate label on the array", async () => {
+      expect(
+        await derivedLabelAfterCountChange(
+          "stored-enumerate",
+          seedItemsLabeled({ origin: "declared", observes: "enumerate" }),
+        ),
+      ).toContainEqual("count-secret");
+    });
+
+    it("joins a structure label on the array", async () => {
+      expect(
+        await derivedLabelAfterCountChange(
+          "stored-structure",
+          seedItemsLabeled({ origin: "structure" }),
+        ),
+      ).toContainEqual("count-secret");
+    });
+
+    it("joins the same label when the rerun reads the count again", async () => {
+      expect(
+        await derivedLabelAfterCountChange(
+          "schema-enumerate-reread",
+          writeThroughCountedSchema,
+          { rereads: true },
+        ),
+      ).toContainEqual("count-secret");
+    });
+
+    // The change that schedules the rerun may replace the array with
+    // something that is not one, and the count it read still changed. The
+    // array's own label joins the rerun whatever the array was replaced by.
+    for (
+      const [kind, entry] of [
+        ["an enumerate", { origin: "declared", observes: "enumerate" }],
+        ["a structure", { origin: "structure" }],
+      ] as const
+    ) {
+      for (
+        const [replacement, next] of [
+          ["a string", "gone"],
+          ["null", null],
+          ["an object with a length field", { length: 3 }],
+        ] as const
+      ) {
+        it(`joins ${kind} label when the array is replaced by ${replacement}`, async () => {
+          expect(
+            await derivedLabelAfterCountChange(
+              `${kind}-replaced-by-${replacement}`.replaceAll(" ", "-"),
+              seedItemsLabeled(entry),
+              { next },
+            ),
+          ).toContainEqual("count-secret");
+        });
+      }
+    }
+
+    it("joins the label when the rerun itself replaces the array", async () => {
+      // The rerun's own write is in the transaction its labels are prepared
+      // in, so what it leaves at `items` does not decide what the count read.
+      expect(
+        await derivedLabelAfterCountChange(
+          "stored-enumerate-rerun-replaces",
+          seedItemsLabeled({ origin: "declared", observes: "enumerate" }),
+          { rerunWrites: "gone" },
+        ),
+      ).toContainEqual("count-secret");
+    });
   });
 
   it("keeps trigger-read labels across a RetryImmediately rerun", async () => {

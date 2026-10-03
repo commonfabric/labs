@@ -196,6 +196,90 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
     }
   });
 
+  // The run was scheduled by a change to `items.length`, and the label sits on
+  // the array's membership, not on `length`. A read of an array's `length`
+  // observes its membership, so the egress is rejected, whatever `items` holds
+  // by the time the run prepares.
+  for (
+    const [holding, items] of [
+      ["the array", ["a", "b", "c"]],
+      ["a string that replaced the array", "gone"],
+    ] as const
+  ) {
+    it(`flag ON: a trigger read of a length carries its parent's membership label, the parent holding ${holding}`, async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        // Pinned: the commit below asserts the ceiling rejection, which only a
+        // gated trigger read produces.
+        cfcTriggerReadGating: true,
+        // Pinned: with the flow dial off, the trigger read reaches the sink gate
+        // only through the gated consumed set.
+        cfcFlowLabels: "off",
+        cfcSinkMaxConfidentiality: { fetchJson: [] },
+      });
+      try {
+        const seed = runtime.edit();
+        const itemsId = runtime.getCell(
+          signer.did(),
+          `h5-length-items-${typeof items}`,
+          undefined,
+          seed,
+        ).getAsNormalizedFullLink().id;
+        writeSeedEnvelopeDoc(seed, signer.did());
+        seedStoredEnvelope(seed, {
+          space: signer.did(),
+          scope: "space",
+          id: itemsId,
+          path: [],
+        }, {
+          value: { items },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["items"],
+                label: { confidentiality: ["medical"] },
+                origin: "declared",
+                observes: "enumerate",
+              }],
+            },
+          },
+        });
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        runtime.getCell(signer.did(), "h5-length-out", OUT_SCHEMA.schema, tx)
+          .set({ v: "computed" });
+        tx.addCfcTriggerReads([{
+          space: signer.did(),
+          id: itemsId,
+          type: "application/json",
+          path: ["value", "items", "length"],
+        }]);
+        enqueueSinkRequestPostCommitEffect(
+          tx,
+          "fetchJson",
+          "fetchJson:length",
+          createFrozenRequestSnapshot({ url: "https://example.com/exfil" }),
+          "fetchJson-start",
+          () => {},
+        );
+        tx.prepareCfc();
+        const result = await tx.commit();
+        expect(isCfcEnforcementRejection(result.error)).toBe(true);
+        expect(String((result.error as Error).message)).toContain(
+          "exceeds ceiling for fetchJson",
+        );
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+
   it("flag ON but no trigger read: an unrelated scheduled egress still passes", async () => {
     // The gate only folds in ACTUAL trigger reads — a run scheduled by a
     // non-confidential write (no confidential trigger) is not over-blocked.

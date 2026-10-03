@@ -3183,7 +3183,8 @@ export class CfHarnessPromptLoop {
       requestedToolIds.filter((toolId) =>
         !withheld.has(toolId) &&
         (isSubagent || !isSubagentOnlyToolId(toolId)) &&
-        (!isSubagent || toolId !== "finish_task")
+        (!isSubagent ||
+          (toolId !== "finish_task" && toolId !== "weaver_action"))
       ),
     );
     this.#nativeModelToolIds = options.nativeModelToolIds ?? [];
@@ -3239,6 +3240,7 @@ export class CfHarnessPromptLoop {
       loomAuthoringAvailable: this.engine.config.loomAuthoring !== undefined,
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
       structuredResultAvailable: this.engine.structuredResultAvailable,
+      clientActionsAvailable: this.engine.clientActionsAvailable,
     };
   }
 
@@ -4311,7 +4313,12 @@ export class CfHarnessPromptLoop {
    * opaque tokens it describes and binds. `loom_compose` also proves
    * membership before resolving a Pattern Instance. `finish_task` preserves
    * its user-facing message as text, and `submit_result` its value: a token
-   * in a structured result is what the result writer resolves. Returns
+   * in a structured result is what the result writer resolves.
+   * `weaver_action` is exempt because its input leaves the harness for the
+   * person's client: the strict action reader accepts only a loom id, a
+   * one-line command, or an http(s) url, so a handle token is refused rather
+   * than swapped for the canonical address string a client would then open or
+   * run, and the person approves exactly the text the model wrote. Returns
    * `input` itself
    * when no substitution applies.
    */
@@ -4322,6 +4329,7 @@ export class CfHarnessPromptLoop {
     if (
       toolId === "delegate_task" || toolId === "describe_handle" ||
       toolId === "research" || toolId === "finish_task" ||
+      toolId === "weaver_action" ||
       toolId === "loom_compose" || toolId === "submit_result"
     ) {
       return input;

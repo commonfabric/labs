@@ -89,11 +89,10 @@ export interface MergeableBuildContext {
  * reads out of the commit's conflict set on behalf of an op that is no longer
  * being sent, and the whole-value diff replacing it is entitled to those reads.
  *
- * In today's reachable cases the reshaping write also leaves an unmarked read at
- * the path, which keeps it in the conflict set anyway — so this is belt and
- * braces rather than a demonstrated behavior change. It is kept because the
- * guarantee should not rest on that coincidence: nothing makes a reshape
- * obliged to read what it overwrites.
+ * The op's own read of the value is among those reads, and it can be the only
+ * one, since nothing makes a reshape obliged to read what it overwrites. With
+ * the intent dropped that read is back in the conflict set, which is what
+ * refuses the replacing write from a session whose view of the value is stale.
  */
 export interface MergeableBuildResult {
   ops: PatchOp[];

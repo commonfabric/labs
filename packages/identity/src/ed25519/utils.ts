@@ -102,6 +102,23 @@ export function bytesToDid(publicKey: Uint8Array): DIDKey {
   return `${DID_KEY_PREFIX}${base58btc.encode(bytes)}`;
 }
 
+/** Whether a value is the canonical DID of one Ed25519 public key. */
+export function isCanonicalEd25519DID(value: unknown): value is DIDKey {
+  if (
+    typeof value !== "string" || value.length > 64 ||
+    !value.startsWith("did:key:z")
+  ) return false;
+  try {
+    const did = value as DIDKey;
+    const bytes = didToBytes(did);
+    const point = ed25519.Point.fromBytes(bytes);
+    return bytesToDid(bytes) === did && arrayEqual(point.toBytes(), bytes) &&
+      !point.isSmallOrder();
+  } catch {
+    return false;
+  }
+}
+
 // Convert DID key into public key bytes.
 export function didToBytes(did: DIDKey): Uint8Array {
   const bytes = base58btc.decode(did.slice(DID_KEY_PREFIX_SIZE));

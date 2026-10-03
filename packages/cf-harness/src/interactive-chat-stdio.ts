@@ -18,6 +18,10 @@ import {
   HARNESS_BROWSER_ACCESS_LEASE_TYPE,
   HARNESS_BROWSER_ACCESS_PROFILE_MODES,
 } from "./contracts/browser-access.ts";
+import {
+  HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
+  isHarnessClientActionOutcomeKind,
+} from "./contracts/client-action.ts";
 import { normalizePromptSlotBinding } from "./contracts/prompt-slot.ts";
 import {
   HARNESS_SUBAGENT_PROFILES,
@@ -386,6 +390,7 @@ const SUPPORTED_REQUEST_METHODS = new Set<HarnessChatRequestMethod>([
   "start_turn",
   "cancel_turn",
   "close_session",
+  "resolve_client_action",
   "status",
   "list_events",
   "list_turns",
@@ -527,11 +532,15 @@ const isValidRequestParams = (
           isObjectNotArray(params.capabilities)) &&
         (params.browserAccess === undefined ||
           isValidBrowserAccessParam(params.browserAccess)) &&
+        (params.clientActions === undefined ||
+          typeof params.clientActions === "boolean") &&
         (params.metadata === undefined || isObjectNotArray(params.metadata));
     case "start_turn":
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "turnId") &&
         isValidTurnInputParam(params.input) &&
+        (params.clientActions === undefined ||
+          typeof params.clientActions === "boolean") &&
         (params.context === undefined || isObjectNotArray(params.context)) &&
         (params.policy === undefined ||
           isValidChatPolicyParam(params.policy)) &&
@@ -545,6 +554,14 @@ const isValidRequestParams = (
     case "close_session":
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "reason");
+    case "resolve_client_action":
+      return isNonEmptyString(params.sessionId) &&
+        isNonEmptyString(params.actionId) &&
+        isHarnessClientActionOutcomeKind(params.outcome) &&
+        (params.result === undefined ||
+          (typeof params.result === "string" &&
+            params.result.length <=
+              HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH));
     case "status":
       return hasOptionalString(params, "sessionId");
     case "list_events":

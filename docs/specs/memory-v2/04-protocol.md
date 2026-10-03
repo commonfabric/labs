@@ -1767,3 +1767,10 @@ rejoins every room the session was in, delivers the new snapshot — the server
 assigned a new participant id with the new connection — and republishes the
 last record at a fresh revision. A session that terminates ends its rooms with
 a `failure` event carrying the cause, and nothing follows it.
+
+## Routed public-stage Mode A
+
+The opt-in router path uses the dedicated [Mode A contract](routed-mode-a.md):
+router-audience client signatures, attested issuance and exact-byte receipt,
+single-use socket-bound tickets, durable replay custody and independent toolshed
+ACL/ownership checks. Direct Memory hosts keep the protocol described above.

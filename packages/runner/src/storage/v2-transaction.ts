@@ -96,6 +96,7 @@ import {
 import {
   getBlindStructuralTarget,
   ignoreReadForCommit,
+  ignoreReadForScheduling,
   isDurableReadTx,
   isInternalVerifierRead,
   isMutableTransactionReadAllowed,
@@ -106,6 +107,7 @@ import {
   registerCommitRejectionListener,
   stableInternalVerifierRead,
   takeCoverageWaits,
+  writeDestinationRead,
 } from "./reactivity-log.ts";
 import {
   ReadOnlyAddressError,
@@ -199,6 +201,13 @@ type WritableDocumentEntry = {
   // says what the value is, and an op landing on whatever the store holds
   // would add to a value the transaction replaced. Keyed like mergeableOps.
   mergeableOpsPoisoned?: Set<string>;
+
+  /**
+   * Whether the commit has recorded its read of the document root, the one
+   * a whole-document `set` from an absent base goes out with (see
+   * `V2StorageTransaction.#recordDocumentRootRead()`).
+   */
+  documentRootRead?: boolean;
 };
 
 type DocumentEntry = ReadDocumentEntry | WritableDocumentEntry;
@@ -1521,7 +1530,9 @@ export class V2StorageTransaction implements IStorageTransaction {
       // A write to the document root takes the same emission. No patch
       // expresses one, so the set is what carries it, and a mergeable op
       // sent in its place would leave the root write out of the commit.
-      if (!this.#emitsWholeDocuments && !this.#writesDocumentRoot(doc)) {
+      const diffed = !this.#emitsWholeDocuments &&
+        !this.#writesDocumentRoot(doc);
+      if (diffed) {
         const mergeable = this.#buildMergeableOps(doc);
         // A document with no base goes whole, as a `set`. Mergeable ops that
         // are the transaction's only writes to it are the exception: they
@@ -1530,11 +1541,11 @@ export class V2StorageTransaction implements IStorageTransaction {
         // replacing it. Any other write to the document was computed from
         // its absence, the label envelope among them, and is sound only where
         // the store holds no document either. Ops beside such a write are
-        // abandoned for the `set`, whose reads carry that claim: the store
-        // refuses it where it holds the document, and the transaction runs
-        // again with the document loaded. The diff against the empty document
-        // is what finds those other writes, holding nothing when the ops'
-        // suppressions cover every write.
+        // abandoned for the `set`, which the store refuses where it holds the
+        // document (see below), and the transaction runs again with the
+        // document loaded. The diff against the empty document is what finds
+        // those other writes, holding nothing when the ops' suppressions
+        // cover every write.
         const hasBase = doc.initial.value !== undefined;
         const base = doc.initial.value ??
           (mergeable.ops.length > 0 ? emptyEntityDocument() : undefined);
@@ -1567,15 +1578,24 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#abandonMergeableOps(doc);
       }
 
-      operations.push(
-        doc.current.value === undefined ? { op: "delete", id, type, scope } : {
-          op: "set",
-          id,
-          type,
-          scope,
-          value: doc.current.value,
-        },
-      );
+      if (doc.current.value === undefined) {
+        operations.push({ op: "delete", id, type, scope });
+        continue;
+      }
+      // A `set` that the diff above fell through to, for a document with no
+      // base, replaces the whole of a document the transaction saw as
+      // absent. It goes out with a read of the document root, so that the
+      // store refuses it where it holds the document.
+      if (diffed && doc.initial.value === undefined) {
+        this.#recordDocumentRootRead(space, id, scope, doc);
+      }
+      operations.push({
+        op: "set",
+        id,
+        type,
+        scope,
+        value: doc.current.value,
+      });
     }
 
     if (
@@ -3686,6 +3706,41 @@ export class V2StorageTransaction implements IStorageTransaction {
     assertNoIndexedArrayStructuralOps(patches);
 
     return { op: "patch", id, type, scope, patches, value: doc.current.value };
+  }
+
+  /**
+   * Records a read of the whole of `doc`, for a commit about to replace it
+   * with a `set` computed from its absence. The reads the transaction made on
+   * the way are per path, so they refuse the commit only where another
+   * session wrote one of those paths: the `set` would still replace a field
+   * that session created anywhere else in the document. A read at the
+   * document root conflicts with every revision since the transaction's view
+   * of it, which is the claim the `set` rests on.
+   *
+   * The read is the write machinery's, like the diff's read of each path it
+   * writes, and it is taken at commit: it joins no flow label and schedules
+   * nothing.
+   */
+  #recordDocumentRootRead(
+    space: MemorySpace,
+    id: URI,
+    scope: CellScope,
+    doc: WritableDocumentEntry,
+  ): void {
+    // Building the commit more than once records the read once.
+    if (doc.documentRootRead) {
+      return;
+    }
+    doc.documentRootRead = true;
+    this.#recordReadActivity({
+      space,
+      scope,
+      id,
+      path: toDocumentPath([]),
+      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+      journalIndex: this.#activityClock++,
+    });
+    doc.validated = true;
   }
 
   /**

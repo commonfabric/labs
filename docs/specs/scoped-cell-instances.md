@@ -374,6 +374,26 @@ or projected with `key()`. A stored value or reference retains its own scope;
 a reference to a missing target is still an existing reference. An unresolved
 or scope-blocked ancestor cannot authorize creation of a scoped default.
 
+A pattern-owned cell narrower than its result starts from its declared default
+for each actor instance. The setup that first declares the cell commits its
+manifest and default together. On a later independently owned start, an accepted
+manifest authorizes filling an absent actor instance in a separate transaction
+for that cell, before execution. Reading another private argument or another
+actor's cell during setup must not taint this constant default. The current
+pattern pointer, manifest declaration, and absence remain commit dependencies;
+existing values and ordinary CFC label and write-authority checks still apply.
+Dependency synchronization alone never initializes a default. A speculative
+start keeps its initialization in the speculative transaction and cannot vouch
+for durable initialization on a later authored start. A caller-owned
+setup keeps initialization in the caller's commit, including its abort. A run
+whose preparation sees a superseded declaration, or that continues after
+dependency loading rejects, initializes within the commit that accepts its
+requested setup, under the same CFC checks. Neither case vouches for completed
+preparation in the naming cache. A cold start by a non-serving client with a
+confirmed READ-only space membership can resume persisted output without
+writing the viewer's absent scoped defaults. Their schema defaults remain
+readable; an explicit write still requires write access.
+
 Pattern argument setup materializes missing declared scoped properties even
 when the caller supplies the argument object through a Cell reference. The
 redirect stays at the input slot so existing child bindings follow subsequent
