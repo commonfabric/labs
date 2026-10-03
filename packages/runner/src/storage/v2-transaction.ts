@@ -40,6 +40,10 @@ import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
+import {
+  isDocumentLocalCommit,
+  rememberCommitSettlement,
+} from "./commit-readiness.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
 import type {
   Activity,
@@ -64,6 +68,7 @@ import type {
   NativeCommitOptions,
   NativeStorageCommit,
   NativeStorageCommitOperation,
+  PendingCommitDocument,
   ReadError,
   Result,
   StorageTransactionFailed,
@@ -2542,11 +2547,31 @@ export class V2StorageTransaction implements IStorageTransaction {
       this,
       (rejection) => this.#verdict.resolve({ error: rejection }),
     );
+    const documents: readonly PendingCommitDocument[] = Object.freeze([
+      ...[...this.#branches].flatMap(([space, branch]) =>
+        [...branch.docs.values()].map((doc) =>
+          Object.freeze({ space, id: doc.initial.address.id })
+        )
+      ),
+      ...[...this.#commitPreconditions].flatMap(([space, conditions]) =>
+        conditions.flatMap((condition) =>
+          "id" in condition ? [Object.freeze({ space, id: condition.id })] : []
+        )
+      ),
+      ...[...this.#createOnlyMarks].flatMap(([space, marks]) =>
+        [...marks.values()].map(({ id }) => Object.freeze({ space, id }))
+      ),
+    ]);
+    const hasGlobalOperations = this.#sqliteOps.size > 0 ||
+      [...this.#commitPreconditions.values()].some((conditions) =>
+        conditions.some((condition) => condition.kind === "origin-committed")
+      );
     const promise = this.#commitImpl(
       options?.holdSyncedUntilCovered === false
         ? { resolveAt: "verdict" }
         : undefined,
     );
+    rememberCommitSettlement(this, promise);
     // Backstop for the verdict signal: paths that never reach a push (zero
     // writes, pre-storage rejections) determine their fate exactly when the
     // commit promise resolves. The push path resolves #verdict earlier —
@@ -2572,6 +2597,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#storage.trackPendingCommit(
       promise,
       () => this.#pendingCommitContext("transaction"),
+      () =>
+        isDocumentLocalCommit(this) && !hasGlobalOperations
+          ? { kind: "documents", documents }
+          : { kind: "global" },
     );
     return createTransactionCommitReceipt(
       promise,
@@ -2911,6 +2940,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     sink: ITransactionSealSink,
   ): Promise<Result<Unit, CommitError>> {
     const promise = this.#sealImpl(sink);
+    rememberCommitSettlement(this, promise);
     // Same durability-barrier registration as commit(): by the time
     // sealInto() returns, the in-flight close is visible to
     // hasPendingCommits().

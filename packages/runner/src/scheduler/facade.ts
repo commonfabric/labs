@@ -28,6 +28,7 @@ import type {
   IMemorySpaceAddress,
   IStorageSubscription,
   MemorySpace,
+  PendingCommitDocument,
   StorageNotification,
 } from "../storage/interface.ts";
 import { ReplicaLoadFailureError } from "../storage/interface.ts";
@@ -1016,9 +1017,14 @@ export class Scheduler {
    * quiescence are one joint fixpoint; this reuses the same recursive
    * convergence `idle()` uses (no separate retry loop, no round cap) and, like
    * `idle()`, never resolves for a system that genuinely never settles.
+   * A document provider retains unknown-impact work and commits intersecting
+   * the supplied documents. Returning undefined selects the full barrier.
+   * The provider is re-evaluated on each quiescence recheck.
    */
-  idleWithPendingCommits(): Promise<void> {
-    return this.#waitForQuiescence(true);
+  idleWithPendingCommits(
+    documents?: () => readonly PendingCommitDocument[] | undefined,
+  ): Promise<void> {
+    return this.#waitForQuiescence(true, documents);
   }
 
   /**
@@ -1059,9 +1065,12 @@ export class Scheduler {
     return this.#gates.hasWakeTimer();
   }
 
-  #waitForQuiescence(awaitPendingCommits: boolean): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const blocker = this.#quiescenceBlocker(awaitPendingCommits);
+  #waitForQuiescence(
+    awaitPendingCommits: boolean,
+    documents?: () => readonly PendingCommitDocument[] | undefined,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const blocker = this.#quiescenceBlocker(awaitPendingCommits, documents);
       if (blocker === undefined) {
         this.#resetConvergenceHoldPasses();
         resolve();
@@ -1070,7 +1079,10 @@ export class Scheduler {
       // Re-evaluate every condition from scratch once the thing we are waiting
       // on settles.
       const recheck = () =>
-        this.#waitForQuiescence(awaitPendingCommits).then(resolve);
+        this.#waitForQuiescence(awaitPendingCommits, documents).then(
+          resolve,
+          reject,
+        );
       // A parked waiter (idlePromises) is released when the scheduler drains,
       // and draining settles only the conditions the execute loop owns. Two
       // things can still be outstanding at that moment: a commit in flight,
@@ -1091,7 +1103,7 @@ export class Scheduler {
       };
       switch (blocker.kind) {
         case "settle":
-          blocker.settled().then(recheck);
+          blocker.settled().then(recheck, reject);
           break;
         case "pull":
           this.queueExecution();
@@ -1116,6 +1128,7 @@ export class Scheduler {
    */
   #quiescenceBlocker(
     awaitPendingCommits: boolean,
+    documents?: () => readonly PendingCommitDocument[] | undefined,
   ): QuiescenceBlocker | undefined {
     const running = this.runningPromise;
     if (running) {
@@ -1138,15 +1151,18 @@ export class Scheduler {
       // releases the held wakes first, then awaits the commits they produce.
       return { kind: "settle", settled: () => this.#wakeShaper.whenDrained() };
     }
+    const targetDocuments = awaitPendingCommits ? documents?.() : undefined;
     if (
-      awaitPendingCommits && this.runtime.storageManager.hasPendingCommits()
+      awaitPendingCommits &&
+      this.runtime.storageManager.hasPendingCommits(targetDocuments)
     ) {
       // In-flight commits. Wait for them to settle (server confirmation or
       // terminal failure) and then re-check: a landed commit can dirty
       // readers and re-trigger scheduler work.
       return {
         kind: "settle",
-        settled: () => this.runtime.storageManager.pendingCommitsSettled(),
+        settled: () =>
+          this.runtime.storageManager.pendingCommitsSettled(targetDocuments),
       };
     }
     if (
@@ -2352,8 +2368,24 @@ export class Scheduler {
   //
 
   /**
-   * Returns the action's static write surface.
+   * Includes every active action's scheduling reads in an initialization wait.
+   * Unknown dependencies retain the full barrier. Document matching ignores
+   * scope and path so invalidation can never be narrowed by an output surface.
    */
+  getPendingCommitReadinessDocuments(
+    targets: readonly PendingCommitDocument[],
+  ): readonly PendingCommitDocument[] | undefined {
+    const documents = [...targets];
+    for (const node of this.#nodes.nodes()) {
+      const log = this.#dependencies.get(node.action);
+      if (log === undefined) return undefined;
+      for (const read of log.reads) documents.push(read);
+      for (const read of log.shallowReads) documents.push(read);
+    }
+    return documents;
+  }
+
+  /** Returns the action's static write surface. */
   getMightWrite(action: Action): IMemorySpaceAddress[] | undefined {
     return this.#writeIndex.getSchedulingWrites(action);
   }

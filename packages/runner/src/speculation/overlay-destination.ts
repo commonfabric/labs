@@ -101,6 +101,7 @@ import type {
 } from "../storage/interface.ts";
 import type { PostCommitSideEffect } from "../cfc/types.ts";
 import { createTransactionCommitReceipt } from "../storage/commit-receipt.ts";
+import { declareDocumentLocalCommit } from "../storage/commit-readiness.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
 
 const logger = getLogger("speculation-overlay", {
@@ -568,6 +569,7 @@ export class SpeculationOverlayDestination
       // today. Scheduler-stamped runs — derivations since Phase 2,
       // event handlers since Phase 3 (events.md §7: the F10 interim's
       // handler-write commit path is DELETED) — divert below.
+      declareDocumentLocalCommit(tx.tx);
       return tx.tx.commit();
     }
     return createTransactionCommitReceipt(this.#sealSpeculative(tx));
