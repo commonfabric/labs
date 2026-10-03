@@ -8,9 +8,11 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 // Runs the shipped `profile-picker.tsx` and reads the badge it renders per
 // row. Each profile lives in its own space, as `ProfileHome.inSpace()` puts
-// it, and the home's `defaultProfile` links to one of them — the shape the
-// home Profile tab shows. The row for the default must say "default"; every
-// other row offers "Set default".
+// it, and the home's `defaultProfile` holds a link to one of them under
+// `profile` — the shape the home Profile tab shows. The row for the default
+// must say "default"; every other row offers "Set default". A default held as
+// a link at the root of a cell, `legacyDefaultProfile`, is the default while
+// the slot holds none, and with no slot bound no row offers "Set default".
 //
 // The pin exists because the badge compared the default link against the map
 // callback's element parameter, which inside a `computed` is the opaque
@@ -75,9 +77,15 @@ describe("profile-picker default badge", () => {
     await manager.close();
   });
 
+  /**
+   * The badges of a picker over profiles `a` and `b`, given the profile the
+   * slot names (`"none"` for an empty slot, `"unbound"` for no slot) and the
+   * profile a legacy cell links to at its root, if any.
+   */
   async function renderPicker(
     cause: string,
-    defaultProfile: "a" | "b" | undefined,
+    defaultProfile: "a" | "b" | "none" | "unbound",
+    legacyDefaultProfile?: "a" | "b",
   ): Promise<string[]> {
     let tx = rt.edit();
     rt.getCell(spaceA, "profile", undefined, tx).set({
@@ -99,6 +107,13 @@ describe("profile-picker default badge", () => {
     });
     const a = rt.getCell(spaceA, "profile", undefined, tx);
     const b = rt.getCell(spaceB, "profile", undefined, tx);
+    const legacy = legacyDefaultProfile === undefined ? undefined : rt.getCell(
+      home,
+      `${cause} legacy`,
+      undefined,
+      tx,
+    );
+    legacy?.set(legacyDefaultProfile === "a" ? a : b);
     const resultCell = rt.getCell<Record<string, unknown>>(
       home,
       cause,
@@ -111,11 +126,14 @@ describe("profile-picker default badge", () => {
       pattern as any,
       {
         profiles: [a, b],
-        defaultProfile: defaultProfile === "a"
-          ? a
-          : defaultProfile === "b"
-          ? b
-          : undefined,
+        ...(defaultProfile === "unbound" ? { offersSetDefault: false } : {
+          defaultProfile: defaultProfile === "a"
+            ? { profile: a }
+            : defaultProfile === "b"
+            ? { profile: b }
+            : {},
+        }),
+        ...(legacy ? { legacyDefaultProfile: legacy } : {}),
         mru: [],
       },
       resultCell,
@@ -150,9 +168,27 @@ describe("profile-picker default badge", () => {
   });
 
   it("offers Set default on every row when no default is set", async () => {
-    expect(await renderPicker("picker badge no default", undefined)).toEqual([
+    expect(await renderPicker("picker badge no default", "none")).toEqual([
       "Set default",
       "Set default",
     ]);
+  });
+
+  it("lights the row of the legacy default while the slot holds none", async () => {
+    expect(
+      await renderPicker("picker badge legacy default b", "none", "b"),
+    ).toEqual(["Set default", "default"]);
+  });
+
+  it("lights the row of the slot's default over the legacy one", async () => {
+    expect(
+      await renderPicker("picker badge slot over legacy", "a", "b"),
+    ).toEqual(["default", "Set default"]);
+  });
+
+  it("offers no Set default when no slot is bound", async () => {
+    expect(
+      await renderPicker("picker badge legacy only", "unbound", "b"),
+    ).toEqual(["default"]);
   });
 });

@@ -207,17 +207,23 @@ type LabelEntry = {
   label: { integrity?: readonly unknown[] };
 };
 
-/** The `represents-principal` subjects among `entries`' integrity atoms. */
-const representedSubjects = (entries: readonly LabelEntry[]): string[] =>
+/** The subjects of `kind` claims among `entries`' integrity atoms. */
+const claimSubjects = (
+  entries: readonly LabelEntry[],
+  kind: "authored-by" | "represents-principal",
+): string[] =>
   entries.flatMap((entry) =>
     (entry.label.integrity ?? []).flatMap((atom) => {
       const claim = atom as { kind?: unknown; subject?: unknown };
-      return claim.kind === "represents-principal" &&
-          typeof claim.subject === "string"
+      return claim.kind === kind && typeof claim.subject === "string"
         ? [claim.subject]
         : [];
     })
   );
+
+/** The `represents-principal` subjects among `entries`' integrity atoms. */
+const representedSubjects = (entries: readonly LabelEntry[]): string[] =>
+  claimSubjects(entries, "represents-principal");
 
 /** Sends `event` to `stream` and waits for its transaction to settle. */
 const sendAndSettle = (
@@ -383,6 +389,37 @@ describe("loom-root", () => {
         }),
       }),
     );
+  });
+
+  it("records the registering principal as a panel's adder, with an `authored-by` entry declared at the field", async () => {
+    const target = runtime.getCell(
+      pieces.getSpace(),
+      "loom-root-registered-target",
+    );
+    await pieces.add([target]);
+    const panels = await root.asSchema(rootSchema).key("panels").pull();
+    expect(panels.length).toBe(1);
+    const panel = panels[0].resolveAsCell();
+    const value = await panel.asSchema({
+      type: "object",
+      properties: { addedBy: { type: "string" } },
+    }).pull();
+    expect(value.addedBy).toBe(signer.did());
+    const read = runtime.edit();
+    const entries = (readStoredCfcMetadata(
+      read,
+      panel.getAsNormalizedFullLink(),
+    )?.labelMap.entries ?? []) as readonly LabelEntry[];
+    read.abort();
+    expect(
+      claimSubjects(
+        entries.filter((entry) =>
+          entry.origin !== "link" &&
+          entry.path.length === 1 && entry.path[0] === "addedBy"
+        ),
+        "authored-by",
+      ),
+    ).toEqual([signer.did()]);
   });
 
   for (const atRoot of [false, true]) {

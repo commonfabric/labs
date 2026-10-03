@@ -890,7 +890,7 @@ const handlers: Record<
       tx,
     );
     defaultPattern.key("profiles").set([profile]);
-    defaultPattern.key("defaultProfile").set(profile);
+    defaultPattern.key("defaultProfile").set({ profile });
     home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
       .key("defaultPattern").set(defaultPattern);
     const { error } = await tx.commit().settled;

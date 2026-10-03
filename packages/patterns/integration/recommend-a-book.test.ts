@@ -165,7 +165,7 @@ describe("personalized book invitation", () => {
         tx,
       );
       home.key("profiles").set([profile]);
-      home.key("defaultProfile").set(profile);
+      home.key("defaultProfile").set({ profile });
       const library = runtime.run(
         tx,
         factory,

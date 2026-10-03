@@ -17,6 +17,12 @@ import { encodeSqliteParams } from "../src/index.ts";
 import { decodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { areNormalizedLinksSame } from "../src/link-utils.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 type SqliteDbCell = {
   exec(
@@ -348,6 +354,68 @@ describe("SqliteDb .exec (commit-folded write)", () => {
       "SELECT count(*) AS c FROM people",
     );
     expect((r.rows[0] as { c: number }).c).toBe(2);
+  });
+
+  it("refuses a bound cell whose label cannot be read under a column ceiling", async () => {
+    // A user-scoped instance whose own envelope this build cannot read,
+    // beside a space instance labeled outside the column's ceiling.
+    const seed = runtime.edit();
+    const link = runtime.getCell(space, "ceiling-scoped", undefined, seed)
+      .getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: "slot",
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{ path: [], label: { confidentiality: ["secret"] } }],
+        },
+      },
+    });
+    seedStoredEnvelope(seed, {
+      ...toMemorySpaceAddress({ ...link, scope: "user" }),
+      path: [],
+    }, {
+      value: "narrowed",
+      cfc: {
+        version: 99,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const tx = runtime.edit();
+    const db = sqliteDb(
+      {
+        id: `of:exec-ceiling-${crypto.randomUUID()}`,
+        tables: {
+          people: table({
+            id: "integer primary key",
+            author_cf_link: {
+              sqlType: "text",
+              type: "string",
+              ifc: { maxConfidentiality: ["support"] },
+            },
+          }),
+        },
+      },
+      tx,
+      "db-h",
+    );
+    const scoped = runtime.getCell(
+      space,
+      "ceiling-scoped",
+      undefined,
+      tx,
+      "user",
+    );
+    expect(() =>
+      db.exec("INSERT INTO people (author_cf_link) VALUES (?)", [scoped])
+    ).toThrow(/maxConfidentiality/);
+    tx.abort();
   });
 
   it("rejects a Cell bound where the target column can't be verified", () => {

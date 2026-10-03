@@ -82,7 +82,7 @@ const seedLabelMap = async (
   runtime: Runtime,
   id: string,
   value: FabricValue,
-  entries: { path: string[]; label: IFCLabel }[],
+  entries: { path: string[]; label: IFCLabel; origin?: "link" }[],
 ): Promise<void> => {
   const seed = runtime.edit();
   const cell = runtime.getCell(signer.did(), id, undefined, seed);
@@ -1039,6 +1039,155 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
         tx,
       );
       sink.set({ out: src as unknown as { secret: string } });
+      tx.prepareCfc();
+      const result = await tx.commit().settled;
+      expect(String((result.error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out/secret",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("an ancestor link cannot smuggle an unendorsed value reached through a link inside another link's target path", async () => {
+    // Floor at /out/secret; /out links to a source whose `secret` is a link to
+    // `ptr/secret` in a middle document, and `ptr` is itself a link to the
+    // document holding the unendorsed value. Reaching the value means
+    // following the link at `ptr`, partway along the first link's target
+    // path; a walk that read that path whole would find nothing there and
+    // take the floor as not applying.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      // Each document carries stored labels, none of them the floor's atom.
+      const linkTo = (id: string, path: string[] = []) => {
+        let cell = runtime.getCell<unknown>(signer.did(), id);
+        for (const segment of path) {
+          cell = (cell as unknown as { key(k: string): typeof cell }).key(
+            segment,
+          );
+        }
+        return cell.getAsLink() as unknown as FabricValue;
+      };
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-leaf",
+        { secret: "unendorsed" },
+        {},
+      );
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-middle",
+        { ptr: linkTo("wf-hop-leaf") },
+        {},
+      );
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-source",
+        { secret: linkTo("wf-hop-middle", ["ptr", "secret"]) },
+        {},
+      );
+      const nestedFloor = {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              secret: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "wf-hop-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-hop-sink",
+        nestedFloor,
+        tx,
+      );
+      sink.set({ out: source as unknown as { secret: string } });
+      tx.prepareCfc();
+      const result = await tx.commit().settled;
+      expect(String((result.error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out/secret",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("an ancestor link cannot meet a floor with a stored link's label beside the value's own", async () => {
+    // Floor at /out/secret requiring two atoms. /out links to a source whose
+    // `secret` is a stored link carrying the first atom, and the value it
+    // reaches carries only the second. The stored link's label describes
+    // what its target held when it was written, so the value's own label is
+    // the only credit, and it meets half the floor.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      const linkTo = (id: string, path: string[] = []) => {
+        let cell = runtime.getCell<unknown>(signer.did(), id);
+        for (const segment of path) {
+          cell = (cell as unknown as { key(k: string): typeof cell }).key(
+            segment,
+          );
+        }
+        return cell.getAsLink() as unknown as FabricValue;
+      };
+      await seedLabelMap(runtime, "wf-split-leaf", { secret: "unendorsed" }, [
+        { path: ["secret"], label: { integrity: ["second-proof"] } },
+      ]);
+      await seedLabelMap(runtime, "wf-split-middle", {
+        ptr: linkTo("wf-split-leaf"),
+      }, []);
+      await seedLabelMap(runtime, "wf-split-source", {
+        secret: linkTo("wf-split-middle", ["ptr", "secret"]),
+      }, [{
+        path: ["secret"],
+        label: { integrity: [ADMIN_ATOM] },
+        origin: "link",
+      }]);
+      const splitFloor = {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              secret: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM, "second-proof"] },
+              },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "wf-split-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-split-sink",
+        splitFloor,
+        tx,
+      );
+      sink.set({ out: source as unknown as { secret: string } });
       tx.prepareCfc();
       const result = await tx.commit().settled;
       expect(String((result.error as Error | undefined)?.message)).toContain(

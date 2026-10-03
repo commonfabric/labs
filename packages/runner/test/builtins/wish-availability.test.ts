@@ -91,7 +91,7 @@ describe("wish-availability", () => {
         runtime.getHomeSpaceCell(tx).asSchema(undefined).set({
           defaultPattern: {
             profiles: [profile],
-            defaultProfile: profile,
+            defaultProfile: { profile },
             backlinksIndex: { mentionable: [missing] },
           },
         });

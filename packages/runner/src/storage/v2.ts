@@ -2219,7 +2219,9 @@ export class StorageManager implements IStorageManager {
       return impact === undefined || impact.kind === "global" ||
         impact.documents.some((affected) =>
           documents.some((target) =>
-            affected.space === target.space && affected.id === target.id
+            affected.space === target.space && affected.id === target.id &&
+            (affected.scope === undefined || target.scope === undefined ||
+              affected.scope === target.scope)
           )
         );
     }).map(([promise]) => promise);

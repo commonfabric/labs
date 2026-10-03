@@ -103,7 +103,7 @@ describe("cf wish headless read on a cold replica", () => {
     );
     mruCell.set([]);
     homeDefaultCell.key("profiles").set([profileLink]);
-    homeDefaultCell.key("defaultProfile").set(profileLink);
+    homeDefaultCell.key("defaultProfile").set({ profile: profileLink });
     homeDefaultCell.key("mru").set(mruCell);
     // deno-lint-ignore no-explicit-any
     (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);

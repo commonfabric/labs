@@ -2369,8 +2369,8 @@ export class Scheduler {
 
   /**
    * Includes every active action's scheduling reads in an initialization wait.
-   * Unknown dependencies retain the full barrier. Document matching ignores
-   * scope and path so invalidation can never be narrowed by an output surface.
+   * Unknown dependencies retain the full barrier. Document matching uses
+   * known normalized scopes and ignores paths and output surfaces.
    */
   getPendingCommitReadinessDocuments(
     targets: readonly PendingCommitDocument[],

@@ -246,6 +246,9 @@ export type StoreReadThrough = (
 export type PendingCommitDocument = {
   readonly space: MemorySpace;
   readonly id: string;
+
+  /** Normalized scope kind; omission conservatively matches every scope. */
+  readonly scope?: CellScope;
 };
 
 /** The conservative readiness footprint of one pending commit registration. */
@@ -524,6 +527,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * terminal failure). One round only: commits issued after the call starts
    * are not awaited — callers that need a fixpoint re-check `hasPendingCommits`
    * after each round, as the scheduler's client-facing idle does.
+   * With documents supplied, waits for intersecting document registrations
+   * and global or unspecified-impact registrations. Disjoint document work
+   * remains pending; each call takes a new snapshot of the selected promises.
    */
   pendingCommitsSettled(
     documents?: readonly PendingCommitDocument[],
