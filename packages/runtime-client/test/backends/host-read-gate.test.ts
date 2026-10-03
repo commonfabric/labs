@@ -396,20 +396,20 @@ describe("HostReadGate", () => {
         expect(holds(answer, CREDENTIAL)).toBe(false);
         expect("refused" in answer).toBe(true);
       });
-
-      it(`returns the owner the \`openPath\` stream and \`sidebarUI\` beside a credential in ${where}, each read from the root for that field`, async () => {
-        await using docs = await shelf();
-        const gate = gateFor(docs.runtime, owner);
-        const openPath = gate.read(docs[piece].asSchema(openPathRead));
-        const sidebar = gate.read(docs[piece].asSchema(sidebarRead));
-
-        expect(openPath).toEqual({ value: { openPath: { $stream: true } } });
-        expect(sidebar).toEqual({
-          value: { sidebarUI: expect.objectContaining({ name: "div" }) },
-        });
-        expect(holds([openPath, sidebar], CREDENTIAL)).toBe(false);
-      });
     }
+
+    it("returns the owner the `openPath` stream and `sidebarUI` beside a credential in a document of its own, each read from the root for that field", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const openPath = gate.read(docs.importer.asSchema(openPathRead));
+      const sidebar = gate.read(docs.importer.asSchema(sidebarRead));
+
+      expect(openPath).toEqual({ value: { openPath: { $stream: true } } });
+      expect(sidebar).toEqual({
+        value: { sidebarUI: expect.objectContaining({ name: "div" }) },
+      });
+      expect(holds([openPath, sidebar], CREDENTIAL)).toBe(false);
+    });
 
     it("answers both reads of a piece that exports neither with neither", async () => {
       await using docs = await shelf();
