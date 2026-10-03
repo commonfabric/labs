@@ -150,7 +150,7 @@ describe("reference-initialization", () => {
           );
         }
         runtime.prepareTxForCommit(tx);
-        const error = (await tx.commit()).error?.message;
+        const error = (await tx.commit().settled).error?.message;
 
         if (recorded) expect(error).toBeUndefined();
         else expect(error).toContain("writeAuthorizedBy");
@@ -168,7 +168,9 @@ describe("reference-initialization", () => {
       );
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+      expect((await tx.commit().settled).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
     });
 
     it("refuses a runtime-recorded reference whose value is no link", async () => {
@@ -183,7 +185,9 @@ describe("reference-initialization", () => {
       argument.set({ element: { body: "forged" } });
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+      expect((await tx.commit().settled).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
     });
 
     it("refuses a reference recorded without the runtime's mark", async () => {
@@ -198,7 +202,9 @@ describe("reference-initialization", () => {
       });
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+      expect((await tx.commit().settled).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
     });
 
     it("accepts a link staged again over a field that holds that link already", async () => {
@@ -214,7 +220,7 @@ describe("reference-initialization", () => {
         ["element"],
       );
       runtime.prepareTxForCommit(first);
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
 
       const again = runtime.edit();
       const held = runtime.getCell(space, "argument", argumentSchema, again);
@@ -228,7 +234,7 @@ describe("reference-initialization", () => {
       );
       runtime.prepareTxForCommit(again);
 
-      expect((await again.commit()).error).toBeUndefined();
+      expect((await again.commit().settled).error).toBeUndefined();
     });
 
     // A stored envelope in which `element` carries a UI contract and no writer
@@ -285,7 +291,7 @@ describe("reference-initialization", () => {
         note: "saved",
       });
       runtime.prepareTxForCommit(seed);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const first = runtime.edit();
       const created = runtime.getCell(space, "argument", storedSchema, first);
@@ -295,7 +301,7 @@ describe("reference-initialization", () => {
       }, { guarded: [], note: "saved" });
       created.set({ guarded: [], note: "saved" });
       runtime.prepareTxForCommit(first);
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
       expect(readStoredCfcMetadata(runtime.edit(), link)).toBeDefined();
       return link;
     }
@@ -310,7 +316,7 @@ describe("reference-initialization", () => {
       recordReferencedArgumentFields(again, link, ["element"]);
       runtime.prepareTxForCommit(again);
 
-      expect((await again.commit()).error?.message).toContain(
+      expect((await again.commit().settled).error?.message).toContain(
         "trusted-event",
       );
     });
@@ -331,7 +337,7 @@ describe("reference-initialization", () => {
       });
       runtime.prepareTxForCommit(again);
 
-      expect((await again.commit()).error).toBeUndefined();
+      expect((await again.commit().settled).error).toBeUndefined();
       expect(runtime.getCell(space, "argument").key("element").get()).toEqual({
         body: "a",
       });
@@ -345,7 +351,7 @@ describe("reference-initialization", () => {
       recordReferencedArgumentFields(again, link, ["element"]);
       runtime.prepareTxForCommit(again);
 
-      const message = (await again.commit()).error?.message;
+      const message = (await again.commit().settled).error?.message;
       expect(message).toContain("trusted-event");
       expect(message).not.toContain("writeAuthorizedBy");
     });
@@ -360,7 +366,7 @@ describe("reference-initialization", () => {
         ["element"],
       );
       runtime.prepareTxForCommit(first);
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
 
       const second = runtime.edit();
       const held = runtime.getCell(space, "argument", argumentSchema, second);
@@ -372,7 +378,7 @@ describe("reference-initialization", () => {
       );
       runtime.prepareTxForCommit(second);
 
-      expect((await second.commit()).error?.message).toContain(
+      expect((await second.commit().settled).error?.message).toContain(
         "writeAuthorizedBy",
       );
       expect(runtime.getCell(space, "argument").key("element").get()).toEqual({
@@ -403,7 +409,7 @@ describe("reference-initialization", () => {
       const seed = runtime.edit();
       runtime.getCell(space, "inbox", undefined, seed).set({ note: "saved" });
       runtime.prepareTxForCommit(seed);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
 
       const first = runtime.edit();
       first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
@@ -418,7 +424,7 @@ describe("reference-initialization", () => {
       );
       inbox.set({ message: { body: "a" }, note: "saved" });
       runtime.prepareTxForCommit(first);
-      expect((await first.commit()).error).toBeUndefined();
+      expect((await first.commit().settled).error).toBeUndefined();
     }
 
     /** Stages a reference to the message as `stager`, and commits. */
@@ -437,7 +443,7 @@ describe("reference-initialization", () => {
       );
       runtime.prepareTxForCommit(stage);
       return {
-        error: (await stage.commit()).error,
+        error: (await stage.commit().settled).error,
         argument: argument.getAsNormalizedFullLink(),
       };
     }
@@ -507,7 +513,7 @@ describe("reference-initialization", () => {
       }
       runtime.prepareTxForCommit(stage);
       return {
-        error: (await stage.commit()).error,
+        error: (await stage.commit().settled).error,
         second: second.getAsNormalizedFullLink(),
       };
     }
@@ -574,7 +580,7 @@ describe("reference-initialization", () => {
       recordReferencedArgumentFields(stage, link, ["second", "first"]);
       runtime.prepareTxForCommit(stage);
 
-      expect((await stage.commit()).error).toBeUndefined();
+      expect((await stage.commit().settled).error).toBeUndefined();
       expect(authorsAt(link, ["second"])).toEqual([signer.did()]);
     });
 
@@ -600,7 +606,7 @@ describe("reference-initialization", () => {
       }
       runtime.prepareTxForCommit(stage);
 
-      expect((await stage.commit()).error).toBeUndefined();
+      expect((await stage.commit().settled).error).toBeUndefined();
       expect(authorsAt(third.getAsNormalizedFullLink(), ["element"]))
         .toEqual([signer.did()]);
     });
@@ -651,7 +657,7 @@ describe("reference-initialization", () => {
         }
         runtime.prepareTxForCommit(stage);
 
-        expect((await stage.commit()).error).toBeUndefined();
+        expect((await stage.commit().settled).error).toBeUndefined();
         const link = holder.getAsNormalizedFullLink();
         expect(authorsAt(link, ["argument", "element"])).toEqual([
           signer.did(),
@@ -727,7 +733,7 @@ describe("reference-initialization", () => {
         );
         runtime.prepareTxForCommit(stage);
 
-        const error = (await stage.commit()).error;
+        const error = (await stage.commit().settled).error;
         if (!endorsed) {
           expect(error?.message).toContain(
             "write floor failed at /element/body",
@@ -763,7 +769,7 @@ describe("reference-initialization", () => {
       expect(argument.key("element").key("index").get()).toBe(7);
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       expect(
         runtime.getCell(space, "argument").key("element")
           .key("index").get(),
@@ -817,7 +823,7 @@ describe("reference-initialization", () => {
           }
           runtime.prepareTxForCommit(tx);
 
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           expect(
             runtime.getCell(space, "first").key("element").key("element")
               .key("index").get(),
@@ -903,7 +909,7 @@ describe("reference-initialization", () => {
             stageHolder();
           }
           runtime.prepareTxForCommit(tx);
-          const error = (await tx.commit()).error;
+          const error = (await tx.commit().settled).error;
           if (!endorsed) {
             expect(error?.message).toContain(
               "write floor failed at /argument/message",
@@ -956,7 +962,7 @@ describe("reference-initialization", () => {
         ]);
         runtime.prepareTxForCommit(tx);
 
-        expect((await tx.commit()).error?.message).toContain(
+        expect((await tx.commit().settled).error?.message).toContain(
           "cyclic staged reference in link label derivation",
         );
       });
@@ -980,7 +986,7 @@ describe("reference-initialization", () => {
       expect(first.key("element").key("element").get()).toBe("value");
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     });
 
     it("refuses a pointer loop whose path grows across linked objects", async () => {
@@ -996,7 +1002,7 @@ describe("reference-initialization", () => {
       }
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit()).error?.message).toContain(
+      expect((await tx.commit().settled).error?.message).toContain(
         "cyclic staged reference in link label derivation",
       );
     });
@@ -1017,7 +1023,7 @@ describe("reference-initialization", () => {
       }
       runtime.prepareTxForCommit(stage);
 
-      expect((await stage.commit()).error?.message).toContain(
+      expect((await stage.commit().settled).error?.message).toContain(
         "cyclic staged reference in link label derivation",
       );
     });
@@ -1134,7 +1140,7 @@ describe("reference-initialization", () => {
         );
         const result = runtime.run(tx, compiled, { board }, output);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         const cancel = result.sink(() => {});
         await runtime.idle();
         result.key("send").send({ body: "a" });

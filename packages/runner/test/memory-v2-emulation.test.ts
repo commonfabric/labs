@@ -45,7 +45,7 @@ describe("Memory v2 emulation", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await storageManager.close();
     await clock.settle();
   });
@@ -53,7 +53,7 @@ describe("Memory v2 emulation", () => {
   it("persists and reloads documents through the runtime cutover seam", async () => {
     cell.set({ hello: "world" });
 
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     const provider = storageManager.open(space) as unknown as TestProvider;

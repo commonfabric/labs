@@ -157,7 +157,7 @@ describe("verified binding metadata for non-exported handlers", () => {
         );
         const r = rt.run(tx, pattern, {}, resultCell);
         rt.prepareTxForCommit(tx);
-        await tx.commit();
+        await tx.commit().settled;
         await r.pull();
 
         // The metadata is registered for both siblings...
@@ -197,7 +197,7 @@ describe("verified binding metadata for non-exported handlers", () => {
       );
       const r = rt.run(tx, pattern, { initialName: "Init" }, resultCell);
       rt.prepareTxForCommit(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await r.pull();
 
       const paths = recordedBindingPaths(rt);
@@ -227,7 +227,7 @@ describe("verified binding metadata for non-exported handlers", () => {
       );
       const r1 = rt1.run(tx1, cold, {}, resultCell1);
       rt1.prepareTxForCommit(tx1);
-      await tx1.commit();
+      await tx1.commit().settled;
       await r1.pull();
       await pm1.flushCompileCacheWrites();
       await rt1.storageManager.synced();
@@ -241,7 +241,7 @@ describe("verified binding metadata for non-exported handlers", () => {
         tx2,
       );
       rt2.prepareTxForCommit(tx2);
-      await tx2.commit();
+      await tx2.commit().settled;
       await resultCell2.sync();
       await rt2.start(resultCell2);
       await resultCell2.pull();

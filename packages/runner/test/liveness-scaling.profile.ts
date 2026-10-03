@@ -108,7 +108,7 @@ async function runBoard(topics: number): Promise<Row> {
     edgeVisits: livenessWork.edgeVisits,
   };
 
-  await tx.commit();
+  await tx.commit().settled;
   await runtime.dispose();
   await storageManager.close();
   return row;

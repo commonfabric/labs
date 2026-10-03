@@ -71,7 +71,7 @@ Deno.test("worker reconciler CFC atom admission", async (t) => {
         },
       },
     });
-    const commitResult = await tx.commit();
+    const commitResult = await tx.commit().settled;
     assertEquals(commitResult.ok !== undefined, true);
 
     const confidential = runtime.getCell<string>(

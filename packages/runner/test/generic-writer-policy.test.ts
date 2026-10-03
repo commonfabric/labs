@@ -119,7 +119,7 @@ describe("compiled generic writer policy", () => {
       );
       const result = first.run(setup, compiled, {}, resultCell);
       first.prepareTxForCommit(setup);
-      expect((await setup.commit()).error).toBeUndefined();
+      expect((await setup.commit().settled).error).toBeUndefined();
       await result.pull();
       await first.idle();
 

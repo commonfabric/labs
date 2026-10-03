@@ -136,7 +136,7 @@ describe("writing rows under the label schema persists per-field confidentiality
       requestHash: "h1",
     });
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const tx2 = runtime.edit();
     const c = runtime.getCell(space, "rl-result", undefined, tx2).withTx(tx2);
@@ -156,7 +156,7 @@ describe("writing rows under the label schema persists per-field confidentiality
       });
       expect(conf).toContainEqual("sec");
     }
-    await tx2.commit();
+    await tx2.commit().settled;
   });
 });
 
@@ -202,7 +202,7 @@ describe({
   ) => {
     const tx = runtime.edit();
     tx.recordSqliteWrite!(space, { op: "sqlite", db, sql, params });
-    return await tx.commit();
+    return await tx.commit().settled;
   };
 
   it({

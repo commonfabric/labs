@@ -98,6 +98,7 @@ import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { createTrustedBuilder } from "../../../runner/test/support/trusted-builder.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
+import { createTransactionCommitReceipt } from "../../../runner/src/storage/commit-receipt.ts";
 
 const cfcSigner = await Identity.fromPassphrase(
   "runtime-processor-cfc-label-tests",
@@ -235,7 +236,7 @@ describe("runtime-processor", () => {
           await Promise.all([empty.sync(), absent.sync(), scoped.sync()]);
           const seed = runtime.edit();
           empty.withTx(seed).set({});
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
 
           const transact = server.transact.bind(server);
           using _transact = stub(server, "transact", async (...args) => {
@@ -245,7 +246,7 @@ describe("runtime-processor", () => {
           });
           const write = runtime.edit();
           scoped.withTx(write).set({ value: 7 });
-          committing = write.commit();
+          committing = write.commit().settled;
           await entered.promise;
 
           const processor = buildProcessor({ runtime });
@@ -346,7 +347,7 @@ describe("runtime-processor", () => {
             (tx.tx as { deferRunnerStartUntilCommit?: boolean })
               .deferRunnerStartUntilCommit = true;
             runtime.run(tx, pattern, { value: 3 }, root.withTx(tx));
-            committing = tx.commit();
+            committing = tx.commit().settled;
             await entered.promise;
             const output = root.key("doubled");
             const processor = buildProcessor({ runtime });
@@ -401,7 +402,7 @@ describe("runtime-processor", () => {
           );
           const tx = runtime.edit();
           cell.withTx(tx).set(new FabricBytes(bytes));
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
           await runtime.scheduler.idleWithPendingCommits();
 
           storageManager.trackPendingCommit(release.promise);
@@ -450,7 +451,7 @@ describe("runtime-processor", () => {
         );
         const seed = runtime.edit();
         source.withTx(seed).set(1);
-        await seed.commit();
+        await seed.commit().settled;
         let runs = 0;
         const action = (tx: IExtendedStorageTransaction) => {
           runs++;
@@ -459,11 +460,11 @@ describe("runtime-processor", () => {
         const setup = runtime.edit();
         action(setup);
         const log = txToReactivityLog(setup);
-        await setup.commit();
+        await setup.commit().settled;
         runtime.scheduler.subscribe(action, log, { isEffect: false });
         const edit = runtime.edit();
         source.withTx(edit).set(3);
-        await edit.commit();
+        await edit.commit().settled;
         await runtime.scheduler.idleWithPendingCommits();
         const beforePull = runs;
         expect(output.withTx().get()).toBe(2);
@@ -506,7 +507,7 @@ describe("runtime-processor", () => {
             await cell.sync();
             const tx = runtime.edit();
             cell.withTx(tx).set(7);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
             await runtime.scheduler.idleWithPendingCommits();
 
             storageManager.trackPendingCommit(releaseCommit.promise);
@@ -584,7 +585,7 @@ describe("runtime-processor", () => {
 
         const tx = runtime.edit();
         cell.withTx(tx).set(7);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         releaseCommit.resolve();
         await expect(pull).resolves.toMatchObject({ value: 7 });
       } finally {
@@ -801,7 +802,7 @@ describe("runtime-processor", () => {
             [cfcSigner.did()]: "READ",
           },
         });
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         await storageManager.synced();
 
@@ -883,7 +884,7 @@ describe("runtime-processor", () => {
           type: "application/json",
           path: ["value"],
         }, artifact as never);
-        expect((await install.commit()).ok).toBeDefined();
+        expect((await install.commit().settled).ok).toBeDefined();
         await storageManager.synced();
 
         const resolver = renderConfidentialityResolverFor(
@@ -983,7 +984,7 @@ describe("runtime-processor", () => {
             type: "application/json",
             path: ["value"],
           }, value as never);
-          expect((await install.commit()).ok).toBeDefined();
+          expect((await install.commit().settled).ok).toBeDefined();
         };
         const aclAt = async (space: string, reader: string) => {
           const tx = runtime.edit();
@@ -993,7 +994,7 @@ describe("runtime-processor", () => {
             type: "application/json",
             path: [],
           }, { value: { [space]: "OWNER", [reader]: "READ" } });
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
         };
         for (const space of [own, shared, foreign]) {
           await manifestAt(space, artifact);
@@ -1096,7 +1097,7 @@ describe("runtime-processor", () => {
             [cfcSigner.did()]: "READ",
           },
         });
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         await storageManager.synced();
 
@@ -1587,7 +1588,7 @@ describe("runtime-processor", () => {
         }, {
           value: { [owner]: "OWNER", "*": "READ" },
         });
-        await tx.commit();
+        await tx.commit().settled;
         await runtime.idle();
         await storageManager.synced();
 
@@ -2478,7 +2479,7 @@ describe("runtime-processor", () => {
       await cell.sync();
       const tx = runtime.edit();
       cell.withTx(tx).set({ name: "test", count: 42, self: cell });
-      await tx.commit();
+      await tx.commit().settled;
 
       return {
         cell,
@@ -4380,7 +4381,7 @@ describe("runtime-processor", () => {
           messages: [{ piece: { id: "alice", body: "hello" } }],
         });
         tx.prepareCfc();
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.ok).toBeDefined();
 
         const replica = storageManager.open(cfcSigner.did())
@@ -4518,7 +4519,7 @@ describe("runtime-processor", () => {
         const seed = runtime.edit();
         root.withTx(seed).set({ messages: [] });
         seed.prepareCfc();
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         root.withTx(tx).key("messages").push({
@@ -4529,7 +4530,7 @@ describe("runtime-processor", () => {
           },
         });
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const replica = storageManager.open(cfcSigner.did())
           .replica as unknown as {
@@ -4597,12 +4598,12 @@ describe("runtime-processor", () => {
       const tx = {
         commit: () => {
           expect(prepared).toBe(true);
-          if (commitFailure) return Promise.reject(commitFailure);
-          return Promise.resolve(commitResult);
-        },
-        startCommit: () => {
-          const settled = tx.commit();
-          return { verdict: settled, settled };
+          if (commitFailure) {
+            return createTransactionCommitReceipt(
+              Promise.reject(commitFailure),
+            );
+          }
+          return createTransactionCommitReceipt(Promise.resolve(commitResult));
         },
       };
       const cellWithTx = {
@@ -4727,7 +4728,11 @@ describe("runtime-processor", () => {
         });
         await Promise.resolve();
 
-        expect(calls.map(([message]) => message)).toEqual([
+        const operationReports = calls.filter(([message]) =>
+          typeof message === "string" &&
+          message.startsWith("[RuntimeProcessor]")
+        );
+        expect(operationReports.map(([message]) => message)).toEqual([
           "[RuntimeProcessor] Cell set commit failed:",
           "[RuntimeProcessor] Cell push commit failed:",
           "[RuntimeProcessor] Cell send commit failed:",
@@ -4845,7 +4850,7 @@ describe("runtime-processor", () => {
         await cell.sync();
         const seed = runtime.edit();
         cell.withTx(seed).set([]);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const processor = buildProcessor({ runtime });
         const append = async (value: { optionId: string }) => {
@@ -4948,7 +4953,7 @@ describe("runtime-processor", () => {
         await writerCell.sync();
         const write = writerRuntime.edit();
         writerCell.withTx(write).set({ winner: "stored" });
-        expect((await write.commit()).error).toBeUndefined();
+        expect((await write.commit().settled).error).toBeUndefined();
 
         const readerCell = readerRuntime.getCell<{ winner: string }>(
           space,
@@ -5085,7 +5090,7 @@ describe("runtime-processor", () => {
 
           const append = runtime.edit();
           cell.withTx(append).key("bars").push({ id: "gamma", value: 7 });
-          expect((await append.commit()).error).toBeUndefined();
+          expect((await append.commit().settled).error).toBeUndefined();
           expect(cell.get()).toEqual({
             bars: [...initial.bars, { id: "gamma", value: 7 }],
           });
@@ -5146,7 +5151,7 @@ describe("runtime-processor", () => {
         alias.withTx(link).setRawUntyped(
           target.getAsWriteRedirectLink({ includeSchema: false }),
         );
-        expect((await link.commit()).error).toBeUndefined();
+        expect((await link.commit().settled).error).toBeUndefined();
         expect(alias.get()).toEqual(initial);
         expect(target.asSchema(undefined).getRaw()).toBeUndefined();
 
@@ -5160,7 +5165,7 @@ describe("runtime-processor", () => {
 
         const append = runtime.edit();
         alias.withTx(append).key("bars").push({ id: "gamma", value: 7 });
-        expect((await append.commit()).error).toBeUndefined();
+        expect((await append.commit().settled).error).toBeUndefined();
         expect(alias.get()).toEqual({
           bars: [...initial.bars, { id: "gamma", value: 7 }],
         });
@@ -5208,7 +5213,7 @@ describe("runtime-processor", () => {
           alias.withTx(seed).setRawUntyped(
             target.getAsWriteRedirectLink({ includeSchema: false }),
           );
-          expect((await seed.commit()).error).toBeUndefined();
+          expect((await seed.commit().settled).error).toBeUndefined();
 
           const capped = alias.asSchema<{ n: number }>(schema);
           await expect(processor.handleCellInitialize({
@@ -5240,7 +5245,7 @@ describe("runtime-processor", () => {
         await raw.sync();
         const seed = runtime.edit();
         raw.withTx(seed).set(42);
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
 
         const projected = raw.asSchema<{ n: number }>({
           type: "object",
@@ -6448,7 +6453,7 @@ describe("runtime-processor", () => {
           { did: "did:key:z6Mk-table-query", host: "http://query.test/?x=1" },
           { did: "did:key:z6Mk-table-fragment", host: "http://hash.test/#x" },
         ]);
-        await tx.commit();
+        await tx.commit().settled;
 
         const cc = new PiecesController(
           { as: cfcSigner, space: userDid },
@@ -6519,7 +6524,7 @@ describe("runtime-processor", () => {
           { did: loopbackSpace, host: "http://localhost:8001/" },
           { did: remoteSpace, host: "http://host-remote.test/" },
         ]);
-        await tx.commit();
+        await tx.commit().settled;
 
         const cc = new PiecesController(
           { as: cfcSigner, space: userDid },
@@ -6588,7 +6593,7 @@ describe("runtime-processor", () => {
           { did: movedSpace, host: "http://localhost:8001/" },
           { did: otherSpace, host: "http://host-other.test/" },
         ]);
-        await tx.commit();
+        await tx.commit().settled;
 
         const cc = new PiecesController(
           { as: cfcSigner, space: userDid },
@@ -6638,7 +6643,7 @@ describe("runtime-processor", () => {
         table.withTx(tx).set([
           { did: loopbackSpace, host: "http://localhost:8001/" },
         ]);
-        await tx.commit();
+        await tx.commit().settled;
 
         const cc = new PiecesController(
           { as: cfcSigner, space: userDid },
@@ -6831,7 +6836,7 @@ describe("runtime-processor", () => {
         tx,
       );
       cell.set("hello");
-      const commit = await tx.commit();
+      const commit = await tx.commit().settled;
       expect(commit.ok !== undefined).toBe(true);
 
       const state = buildProcessor({ runtime });
@@ -7524,7 +7529,7 @@ describe("runtime-processor", () => {
           const tx = runtime.edit();
           secret.withTx(tx).set("classified");
           runtime.prepareTxForCommit(tx);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
 
         const dbRef: SqliteDbRef = {
@@ -7552,7 +7557,7 @@ describe("runtime-processor", () => {
         {
           const tx = runtime.edit();
           database.withTx(tx).set(dbRef);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         await storageManager.synced();
 
@@ -7844,7 +7849,7 @@ describe("runtime-processor", () => {
           tx,
         );
         cell.set("hello");
-        const commit = await tx.commit();
+        const commit = await tx.commit().settled;
         expect(commit.ok !== undefined).toBe(true);
 
         const processor = buildProcessor({ runtime });

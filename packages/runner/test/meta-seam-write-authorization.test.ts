@@ -336,7 +336,7 @@ describe("meta-seam-write-authorization", () => {
             { victim: victimCell },
             attackerCell,
           );
-          await tx.commit();
+          await tx.commit().settled;
           await attacker.pull();
           await runtime.scheduler.idleWithPendingCommits();
 

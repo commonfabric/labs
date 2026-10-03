@@ -186,7 +186,7 @@ describe("CFC builtin implementation identity", () => {
       {},
       resultCell,
     );
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     expect(captured[0]).toEqual({

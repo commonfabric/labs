@@ -566,7 +566,7 @@ export class SpeculationOverlayDestination
       // today. Scheduler-stamped runs — derivations since Phase 2,
       // event handlers since Phase 3 (events.md §7: the F10 interim's
       // handler-write commit path is DELETED) — divert below.
-      return tx.tx.commit();
+      return tx.tx.commit().settled;
     }
     return this.#sealSpeculative(tx);
   }

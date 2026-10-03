@@ -100,7 +100,7 @@ const commit = async (
   tx.setCfcEnforcementMode("enforce-explicit");
   write(tx);
   tx.prepareCfc();
-  return await tx.commit();
+  return await tx.commit().settled;
 };
 
 /** Commits `elements` as the whole value of the list document `name`. */

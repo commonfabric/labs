@@ -345,7 +345,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       // moduleIdentity and path must match; neither does. File is diagnostic.
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeDefined();
     });
 
@@ -397,7 +397,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
 
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeDefined();
     });
 
@@ -452,7 +452,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       cell.set({ owned: "stolen" });
       const digest = tx.prepareCfc();
       expect(digest).toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeDefined();
     });
 
@@ -504,7 +504,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       // own commit paths run it before every commit.
       const digest = tx.prepareCfc();
       expect(digest).not.toBe("");
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     });
   });
@@ -539,7 +539,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       setCfcImplementationIdentity(tx, identity as never);
       cell.set({ owned: "x" });
       const digest = tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       return { digest, result };
     };
 
@@ -847,7 +847,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
     setCfcImplementationIdentity(tx, identity as never);
     cell.set({ owned: "x" });
     const digest = tx.prepareCfc();
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     return { digest, result };
   };
 

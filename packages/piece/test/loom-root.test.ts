@@ -147,7 +147,7 @@ const writeOwnedProfile = async (
     },
   });
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) throw result.error;
   return profile;
 };
@@ -196,7 +196,7 @@ const writeOwnedString = async (
     },
   });
   tx.prepareCfc();
-  const result = await tx.commit();
+  const result = await tx.commit().settled;
   if (result.error) throw result.error;
   return cell;
 };
@@ -350,7 +350,7 @@ describe("loom-root", () => {
       tx,
     );
     profile.set({ name: "Adder" });
-    await tx.commit();
+    await tx.commit().settled;
     const target = runtime.getCell(pieces.getSpace(), "loom-root-adder-target");
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
@@ -491,7 +491,7 @@ describe("loom-root", () => {
     const tx = runtime.edit();
     const profile = runtime.getCell(pieces.getSpace(), id, profileSchema, tx);
     profile.set({ name: "Plain" });
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) throw result.error;
     return profile;
   };
@@ -575,7 +575,7 @@ describe("loom-root", () => {
     (borrowed as Cell<unknown>).setRaw({
       name: nameCell.getAsWriteRedirectLink(),
     });
-    const written = await tx.commit();
+    const written = await tx.commit().settled;
     if (written.error) throw written.error;
 
     const output = root.asSchema(rootSchema);

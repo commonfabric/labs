@@ -248,7 +248,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, clientArg, clientResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     // A live reader IS the demand (pull-based laziness): without one
     // the computed never runs anywhere.
@@ -270,7 +270,7 @@ describe("Phase 2 speculation overlay", () => {
     // authorship, committed as today.
     const editTx = clientRuntime.edit();
     clientArg.withTx(editTx).set({ n: 6 });
-    expect((await editTx.commit()).error).toBeUndefined();
+    expect((await editTx.commit().settled).error).toBeUndefined();
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
@@ -325,7 +325,7 @@ describe("Phase 2 speculation overlay", () => {
       await runtime.storageManager.synced();
       const tx = runtime.edit();
       runtime.run(tx, served, argument, result);
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error !== undefined) {
         throw new Error(
           `serving pattern run failed: ${committed.error.message}`,
@@ -336,7 +336,7 @@ describe("Phase 2 speculation overlay", () => {
     host = newHost();
     const pokeTx = clientRuntime.edit();
     clientArg.withTx(pokeTx).set({ n: 8 });
-    expect((await pokeTx.commit()).error).toBeUndefined();
+    expect((await pokeTx.commit().settled).error).toBeUndefined();
     const pokeSeq = Engine.serverSeq(engine);
     await activated(space);
     await waitForSettled(clientRuntime, space, pokeSeq);
@@ -418,12 +418,12 @@ describe("Phase 2 speculation overlay", () => {
     {
       const seed = clientRuntime.edit();
       argument.withTx(seed).set({ value: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -520,12 +520,12 @@ describe("Phase 2 speculation overlay", () => {
     {
       const seed = clientRuntime.edit();
       argument.withTx(seed).set({ value: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
@@ -913,14 +913,14 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, clientArg, clientResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = clientResult.sink(() => {});
     await clientRuntime.idle();
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 6 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
@@ -947,7 +947,7 @@ describe("Phase 2 speculation overlay", () => {
     const observed = clientResult.withTx(authoredTx).key("total").get();
     expect(observed).toBe(42);
     copyCell.withTx(authoredTx).set({ copied: observed as number });
-    const outcome = await authoredTx.commit();
+    const outcome = await authoredTx.commit().settled;
 
     // LOUD and terminal-classified — the client's own refusal, not a
     // server round trip.
@@ -1017,14 +1017,14 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, clientArg, clientResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = clientResult.sink(() => {});
     await clientRuntime.idle();
     {
       const tx = clientRuntime.edit();
       clientArg.withTx(tx).set({ n: 6 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
@@ -1058,7 +1058,7 @@ describe("Phase 2 speculation overlay", () => {
     totalCell.withTx(blindTx).set(777);
     unmarkUiInputBlindWriteTx(blindTx);
     clientRuntime.prepareTxForCommit(blindTx);
-    const outcome = await blindTx.commit();
+    const outcome = await blindTx.commit().settled;
 
     // The write exports — no SpeculativeBasisError, no silent drop.
     expect(outcome.error).toBeUndefined();
@@ -1152,7 +1152,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draft.withTx(tx).set({ name: "durable-name" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftLink = draft.getAsNormalizedFullLink();
@@ -1163,7 +1163,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const guardTx = clientRuntime.edit();
       expect(readStoredCfcMetadata(guardTx, draftLink)).toBeDefined();
-      await guardTx.commit();
+      await guardTx.commit().settled;
     }
 
     // The standing seed echo: a SPECULATIVE overlay layer over the
@@ -1232,7 +1232,7 @@ describe("Phase 2 speculation overlay", () => {
     for (const read of verifierReads) {
       expect(read.path).toEqual(["cfc"]);
     }
-    const outcome = await blindTx.commit();
+    const outcome = await blindTx.commit().settled;
 
     // The write exports — no SpeculativeBasisError, no silent drop.
     expect(outcome.error).toBeUndefined();
@@ -1314,7 +1314,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draft.withTx(tx).set({ name: "durable-name" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftLink = draft.getAsNormalizedFullLink();
@@ -1349,7 +1349,7 @@ describe("Phase 2 speculation overlay", () => {
           type: "application/json",
           path: [],
         }, { value: stagedSchema });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await writerRuntime.storageManager.synced();
       } finally {
         await writerRuntime.dispose();
@@ -1378,7 +1378,7 @@ describe("Phase 2 speculation overlay", () => {
           schemaHash: stagedHash,
         },
       });
-      expect((await seedTx.commit()).error).toBeUndefined();
+      expect((await seedTx.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
     }
 
@@ -1429,7 +1429,7 @@ describe("Phase 2 speculation overlay", () => {
     unmarkUiInputBlindWriteTx(blindTx);
     expect(blindTx.getCfcState().relevant).toBe(true);
     clientRuntime.prepareTxForCommit(blindTx);
-    const outcome = await blindTx.commit();
+    const outcome = await blindTx.commit().settled;
 
     // The fill survives: no silent `stored schemaHash … missing or
     // unreadable` abort, no §6 refusal — one exported commit, the
@@ -1500,7 +1500,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draft.withTx(tx).set({ name: "durable-name" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftLink = draft.getAsNormalizedFullLink();
@@ -1536,7 +1536,7 @@ describe("Phase 2 speculation overlay", () => {
           type: "application/json",
           path: [],
         }, { value: registryOnlySchema });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await writerRuntime.storageManager.synced();
       } finally {
         await writerRuntime.dispose();
@@ -1565,7 +1565,7 @@ describe("Phase 2 speculation overlay", () => {
           schemaHash: registryOnlyHash,
         },
       });
-      expect((await seedTx.commit()).error).toBeUndefined();
+      expect((await seedTx.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
     }
 
@@ -1608,7 +1608,7 @@ describe("Phase 2 speculation overlay", () => {
     unmarkUiInputBlindWriteTx(blindTx);
     expect(blindTx.getCfcState().relevant).toBe(true);
     clientRuntime.prepareTxForCommit(blindTx);
-    const outcome = await blindTx.commit();
+    const outcome = await blindTx.commit().settled;
 
     // The fill survives: the registry supplied the verified content, no
     // silent abort, no §6 refusal — one exported commit, durable value.
@@ -1680,7 +1680,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draft.withTx(tx).set({ name: "durable-name" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftLink = draft.getAsNormalizedFullLink();
@@ -1715,7 +1715,7 @@ describe("Phase 2 speculation overlay", () => {
           type: "application/json",
           path: [],
         }, { value: installedSchema });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await writerRuntime.storageManager.synced();
       } finally {
         await writerRuntime.dispose();
@@ -1744,7 +1744,7 @@ describe("Phase 2 speculation overlay", () => {
           schemaHash: installedHash,
         },
       });
-      expect((await seedTx.commit()).error).toBeUndefined();
+      expect((await seedTx.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
     }
 
@@ -1787,7 +1787,7 @@ describe("Phase 2 speculation overlay", () => {
     unmarkUiInputBlindWriteTx(blindTx);
     expect(blindTx.getCfcState().relevant).toBe(true);
     clientRuntime.prepareTxForCommit(blindTx);
-    const outcome = await blindTx.commit();
+    const outcome = await blindTx.commit().settled;
 
     // No stale-confirmed-read conflict on the cid: doc: the write
     // exports and lands.
@@ -1861,7 +1861,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draft.withTx(tx).set({ name: "durable-name" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftLink = draft.getAsNormalizedFullLink();
@@ -1923,7 +1923,7 @@ describe("Phase 2 speculation overlay", () => {
             schemaHash: lateHash,
           },
         });
-        expect((await seedTx.commit()).error).toBeUndefined();
+        expect((await seedTx.commit().settled).error).toBeUndefined();
         await writerRuntime.storageManager.synced();
       } finally {
         await writerRuntime.dispose();
@@ -1985,7 +1985,7 @@ describe("Phase 2 speculation overlay", () => {
           ...base,
           value: { name: "second-frame" },
         });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await writerRuntime.storageManager.synced();
       } finally {
         await writerRuntime.dispose();
@@ -2045,7 +2045,7 @@ describe("Phase 2 speculation overlay", () => {
             path: [],
           }, write.value as never);
         }
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await writerRuntime.storageManager.synced();
       } finally {
         await writerRuntime.dispose();
@@ -2073,7 +2073,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draftB.withTx(tx).set({ name: "b-durable" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftBLink = draftB.getAsNormalizedFullLink();
@@ -2172,7 +2172,7 @@ describe("Phase 2 speculation overlay", () => {
         type: "application/json",
         path: [],
       }, { value: { seeded: true } });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await clientRuntime.storageManager.synced();
     }
     const replica = clientManager.open(space).replica;
@@ -2232,7 +2232,7 @@ describe("Phase 2 speculation overlay", () => {
           path: ["cfc"],
         }, verifierMeta),
       ).toBeUndefined();
-      await blindTx.commit();
+      await blindTx.commit().settled;
     } finally {
       // Withdraw the sealed layer so its settlement completes before
       // teardown even when an assert throws (a pending durable seal
@@ -2270,7 +2270,7 @@ describe("Phase 2 speculation overlay", () => {
       const tx = clientRuntime.edit();
       draft.withTx(tx).set({ name: "durable-name" });
       clientRuntime.prepareTxForCommit(tx);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const draftLink = draft.getAsNormalizedFullLink();
@@ -2303,7 +2303,7 @@ describe("Phase 2 speculation overlay", () => {
     // Vacuity guard: the scoping claim needs CFC prepare on this tx too.
     expect(casTx.getCfcState().relevant).toBe(true);
     clientRuntime.prepareTxForCommit(casTx);
-    const outcome = await casTx.commit();
+    const outcome = await casTx.commit().settled;
 
     expect(outcome.error).toBeDefined();
     expect(outcome.error!.name).toBe("SpeculativeBasisError");
@@ -2334,7 +2334,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       database.withTx(tx).set({ id: "db-1", rev: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
 
@@ -2375,7 +2375,7 @@ describe("Phase 2 speculation overlay", () => {
     expect(database.withTx(wrapped).get()).toEqual({ id: "db-1", rev: 1 });
     database.key("rev").withTx(wrapped).set(2);
     clientRuntime.prepareTxForCommit(tx);
-    const outcome = await tx.commit();
+    const outcome = await tx.commit().settled;
 
     expect(outcome.error).toBeUndefined();
     expect(Engine.selectCommitsSince(engine, { fromSeq: 0 }).length).toBe(
@@ -2420,7 +2420,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const seed = clientRuntime.edit();
       shared.withTx(seed).set({ n: 1 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
 
@@ -2464,7 +2464,7 @@ describe("Phase 2 speculation overlay", () => {
         {},
         witness.withTx(tx),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
     }
     await clientRuntime.storageManager.synced();
@@ -2561,7 +2561,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const seed = clientRuntime.edit();
       shared.withTx(seed).set({ n: 1 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
 
@@ -2605,7 +2605,7 @@ describe("Phase 2 speculation overlay", () => {
         {},
         witness.withTx(tx),
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
     }
     await clientRuntime.storageManager.synced();
@@ -2851,7 +2851,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       doc.withTx(tx).set({ total: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.storageManager.synced();
     const docId = doc.getAsNormalizedFullLink().id;
@@ -2902,7 +2902,7 @@ describe("Phase 2 speculation overlay", () => {
         .toBe(42);
       expect(plainTx.readOrThrow(address(["cfc"]), verifierMeta))
         .toEqual(overlayCfc);
-      await plainTx.commit();
+      await plainTx.commit().settled;
     }
 
     // The blind-write tx shape (mark → structural target → unmark):
@@ -2926,7 +2926,7 @@ describe("Phase 2 speculation overlay", () => {
         .toBeUndefined();
       expect(blindTx.readOrThrow(address(["value", "total"]))).toBe(42);
       expect(blindTx.readOrThrow(address(["cfc"]))).toEqual(overlayCfc);
-      await blindTx.commit();
+      await blindTx.commit().settled;
     }
   });
 
@@ -2995,12 +2995,12 @@ describe("Phase 2 speculation overlay", () => {
     {
       const seed = clientRuntime.edit();
       clientArg.withTx(seed).set({ n: 6, copied: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, clientArg, clientResult);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const cancelDemand = clientResult.sink(() => {});
     await clientRuntime.idle();
@@ -3410,11 +3410,11 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       clientRuntime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     const tx = clientRuntime.edit();
     argument.withTx(tx).set({ url: "https://phase-2.test/never" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
     // A floating egress would be this runtime's own tracked work.
@@ -3488,7 +3488,7 @@ describe("Phase 2 speculation overlay", () => {
       await result.sync();
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       return { argument, result, release: result.sink(() => {}) };
     };
 
@@ -3501,7 +3501,7 @@ describe("Phase 2 speculation overlay", () => {
       const seeded = await install(seeder.runtime);
       const tx = seeder.runtime.edit();
       seeded.argument.withTx(tx).set({ items: [1, 2] });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await seeder.runtime.idle();
       await waitForCellValue(
         seeder.runtime,
@@ -3559,7 +3559,7 @@ describe("Phase 2 speculation overlay", () => {
     {
       const tx = clientRuntime.edit();
       client.argument.withTx(tx).set({ items: [1, 2, 3] });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await clientRuntime.idle();
     await waitForCellValue(
@@ -3587,7 +3587,7 @@ describe("Phase 2 speculation overlay", () => {
       await arrived.sync();
       const tx = writer.runtime.edit();
       arrived.withTx(tx).set([7, 8, 9]);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await writer.runtime.storageManager.synced();
     } finally {
       await writer.runtime.dispose();

@@ -217,7 +217,7 @@ describe("parked-runtime", () => {
           writer.getCell<Doubled>(space, `result-${index}`),
         );
       }
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     } finally {
       await closeClient(writer);
     }
@@ -238,7 +238,7 @@ describe("parked-runtime", () => {
         await argument.sync();
         argument.withTx(tx).set({ value: value(index) });
       }
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     } finally {
       await closeClient(writer);
     }
@@ -578,7 +578,7 @@ describe("parked-runtime", () => {
       const tx = parked.edit();
       parked.getCell<{ value: number }>(space, "argument-2").withTx(tx)
         .set({ value: 100 });
-      const { error } = await tx.commit();
+      const { error } = await tx.commit().settled;
 
       expect(error).toMatchObject({
         name: "StorageTransactionAborted",
@@ -604,7 +604,7 @@ describe("parked-runtime", () => {
       const engine = await server.engineForSpace(space);
       const head = Engine.serverSeq(engine);
 
-      const { error } = await tx.commit();
+      const { error } = await tx.commit().settled;
 
       expect(error).toMatchObject({
         name: "StorageTransactionAborted",
@@ -633,7 +633,7 @@ describe("parked-runtime", () => {
       // The park refuses writes from its first step, and offers the runtime
       // only at its last.
       const parking = tenure.park("idle");
-      const { error } = await tx.commit();
+      const { error } = await tx.commit().settled;
       await parking;
       await closeClient(reader);
 
@@ -721,7 +721,7 @@ describe("parked-runtime", () => {
             argument,
             writer.getCell(space, "fetch-out"),
           );
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         } finally {
           await closeClient(writer);
         }

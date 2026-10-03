@@ -223,7 +223,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     });
     const tx = writer.edit();
     wm.withTx(tx).set({ seq });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await writer.storageManager.synced();
   };
 
@@ -256,12 +256,12 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       arg.withTx(tx).set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, arg, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -277,7 +277,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       typedArg.key("draft").withTx(tx).set("A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -384,7 +384,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
           },
         } as never,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await aliceAgain.storageManager.synced();
     const runsBeforeArrival = echoRunCount(alice);
@@ -595,12 +595,12 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       arg.withTx(tx).set({});
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     {
       const tx = alice.edit();
       alice.run(tx, compiled, arg, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -613,7 +613,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       typedArg.key("draft").withTx(tx).set("A");
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
     await alice.storageManager.synced();
@@ -690,7 +690,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
           },
         } as never,
       );
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await aliceAgain.storageManager.synced();
     // The arrival's seq is above W and W does not move.
@@ -1331,7 +1331,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       doc.withTx(tx).set({ value: 7 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.storageManager.synced();
     const view = (alice.storageManager.open(space).replica as unknown as {
@@ -1521,7 +1521,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       const tx = installer.edit();
       installedIdentical.withTx(tx).set(identicalStored);
       installedDivergent.withTx(tx).set(divergentStored);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await installer.storageManager.synced();
     }
 
@@ -1535,7 +1535,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     {
       const tx = alice.edit();
       input.withTx(tx).set({ n: 1 });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.storageManager.synced();
     const view = (

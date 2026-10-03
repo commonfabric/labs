@@ -58,7 +58,7 @@ describe("event-dispatch stamp identity", () => {
     const setupTx = runtime.edit();
     streamA.withTx(setupTx).set({} as { n: number });
     streamB.withTx(setupTx).set({} as { n: number });
-    await setupTx.commit();
+    await setupTx.commit().settled;
 
     const handlerA = (_tx: IExtendedStorageTransaction, _event: unknown) => {};
     const handlerB = (_tx: IExtendedStorageTransaction, _event: unknown) => {};

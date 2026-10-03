@@ -506,7 +506,7 @@ const handlers: Record<
       });
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       rt().prepareTxForCommit?.(setupTx);
-      await setupTx.commit();
+      await setupTx.commit().settled;
       await rt().idle();
     }
 
@@ -525,7 +525,7 @@ const handlers: Record<
       await setupCell.sync();
       rt().run(tx, descriptor.setup, {}, setupCell);
       rt().prepareTxForCommit?.(tx);
-      await tx.commit();
+      await tx.commit().settled;
       await settle();
     }
 
@@ -543,7 +543,7 @@ const handlers: Record<
       resultCell,
     );
     rt().prepareTxForCommit?.(tx);
-    await tx.commit();
+    await tx.commit().settled;
     if (args.continuousUI === true) {
       continuousUiCancel = await mountTestVDOM(
         resultCell.key("$UI") as Cell<unknown>,
@@ -644,7 +644,7 @@ const handlers: Record<
     rt().prepareTxForCommit?.(tx);
     // A dropped marker is a wait that never ends, so the commit's verdict is
     // read rather than assumed.
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) {
       throw new Error(
         `Announcing marker "${marker}" failed: ${result.error.message}`,

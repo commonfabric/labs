@@ -3481,7 +3481,7 @@ export class SpaceServer implements TransactionSealDestination {
           "deliveryDeferral",
         ],
       }).withTx(tx).set(checkpoint);
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       const pending = this.#pendingDeliveryCheckpointWrites.get(entry.eventId);
       if (pending?.checkpoint === checkpoint) {
         pending.wave = this.#waveByTx.get(tx);
@@ -4652,7 +4652,7 @@ export class SpaceServer implements TransactionSealDestination {
           }
         }
       }
-      const commit = tx.commit();
+      const commit = tx.commit().settled;
       if (outcome?.kind === "needs-attention") {
         const pending = this.#pendingAttentionNotices.get(entry.eventId);
         if (pending?.attention === outcome.attention) {
@@ -4778,7 +4778,7 @@ export class SpaceServer implements TransactionSealDestination {
             acks: instance.remainingAcks,
           } as never,
         );
-        tx.commit().then(({ error }) => {
+        tx.commit().settled.then(({ error }) => {
           if (error) {
             logger.warn("effects-retirement-seal-failed", () => [
               `retirement for ${instance.scopeKey} failed to seal; ` +
@@ -6416,7 +6416,7 @@ export class SpaceServer implements TransactionSealDestination {
         },
         advanceTo,
       );
-      const committed = await tx.commit();
+      const committed = await tx.commit().settled;
       if (committed.error) {
         // The advance did not enter the wave: W must not move either —
         // the doc and the metadata advance together or not at all

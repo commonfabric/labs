@@ -462,7 +462,7 @@ describe("SpaceServer", () => {
                 rawMetaWriteAuthorization,
               );
             }
-            const creationCommit = tx.commit();
+            const creationCommit = tx.commit().settled;
             await clock.settle();
             expect(creationSeq).toBeDefined();
             if (crossDeadline) {

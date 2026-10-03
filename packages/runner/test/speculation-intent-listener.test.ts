@@ -1342,12 +1342,12 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     {
       const seed = runtime.edit();
       argument.withTx(seed).set(options.seed ?? { value: 0 });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
     }
     {
       const tx = runtime.edit();
       runtime.run(tx, compiled, argument, result);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
     }
     return { argument, result };
   };

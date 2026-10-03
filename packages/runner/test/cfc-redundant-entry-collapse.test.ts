@@ -92,7 +92,7 @@ const seedSource = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 describe("CFC redundant entry collapse", () => {
@@ -120,7 +120,7 @@ describe("CFC redundant entry collapse", () => {
         seeded,
       ).set(["seed"]);
       seeded.prepareCfc();
-      expect((await seeded.commit()).ok).toBeDefined();
+      expect((await seeded.commit().settled).ok).toBeDefined();
 
       const listId = runtime
         .getCell<string[]>(
@@ -153,7 +153,7 @@ describe("CFC redundant entry collapse", () => {
             write.address.id === listId && write.address.path[0] === "cfc"
           ),
         ).toEqual([]);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
       }
 
       expect(replicaEntries(storageManager, listId)).toEqual(seededEntries);
@@ -185,7 +185,7 @@ describe("CFC redundant entry collapse", () => {
         seeded,
       ).set(["seed"]);
       seeded.prepareCfc();
-      expect((await seeded.commit()).ok).toBeDefined();
+      expect((await seeded.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const source = runtime.getCell(
@@ -202,7 +202,7 @@ describe("CFC redundant entry collapse", () => {
         tx,
       ).push(`${raw.secret}!`);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const listId = runtime
         .getCell<string[]>(
@@ -280,7 +280,7 @@ describe("CFC redundant entry collapse", () => {
           },
         },
       });
-      expect((await seedTarget.commit()).ok).toBeDefined();
+      expect((await seedTarget.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       const source = runtime.getCell(
@@ -297,7 +297,7 @@ describe("CFC redundant entry collapse", () => {
         tx,
       ).set({ copied: `${raw.secret}!` });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, targetId);
       const stamps = entries.filter((entry) => entry.origin === "derived");
@@ -381,7 +381,7 @@ describe("CFC redundant entry collapse", () => {
         },
         // deno-lint-ignore no-explicit-any
       } as any);
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       // Any further persist rebuilds the entry set and runs the collapse over
       // it, carried-forward entries included.
@@ -393,7 +393,7 @@ describe("CFC redundant entry collapse", () => {
         tx,
       ).key("added").set("2");
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, mapId);
       expect(
@@ -470,7 +470,7 @@ describe("CFC redundant entry collapse", () => {
         },
         // deno-lint-ignore no-explicit-any
       } as any);
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
 
       const tx = runtime.edit();
       runtime.getCell<Record<string, string>>(
@@ -480,7 +480,7 @@ describe("CFC redundant entry collapse", () => {
         tx,
       ).key("added").set("2");
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, mapId);
       expect(
@@ -531,7 +531,7 @@ describe("CFC redundant entry collapse", () => {
       map.set({ first: `${raw.secret}!` });
       const mapId = map.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, mapId);
       expect(
@@ -593,7 +593,7 @@ describe("CFC redundant entry collapse", () => {
       target.set({ inner: `${raw.secret}!` });
       const targetId = target.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, targetId);
       const rootStamps = entries.filter((entry) =>

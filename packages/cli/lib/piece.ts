@@ -2468,7 +2468,7 @@ async function tryResolveLivePieceToolCallable(
   );
   pieces.runtime.run(tx, pattern, input, liveResult);
   pieces.runtime.prepareTxForCommit?.(tx);
-  await tx.commit();
+  await tx.commit().settled;
   await pieces.runtime.idle();
 
   const callableCell = liveResult.key(callableName).asSchemaFromLinks();
@@ -5401,7 +5401,7 @@ export async function setCellCfcLabel(
     },
   }).applyCfcSchemaToExistingValue();
   pieces.runtime.prepareTxForCommit(tx);
-  const committed = await tx.commit();
+  const committed = await tx.commit().settled;
   if (committed.error !== undefined) {
     throw new Error(
       `Could not set the CFC label at ${

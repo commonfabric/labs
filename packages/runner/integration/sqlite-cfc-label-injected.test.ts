@@ -165,7 +165,7 @@ async function inheritedConfidentiality(
     ),
     logicalPath: [],
   });
-  await dtx.commit();
+  await dtx.commit().settled;
   return conf;
 }
 

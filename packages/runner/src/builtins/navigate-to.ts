@@ -302,7 +302,7 @@ export function navigateTo(
     // re-drain's re-run reads the result cell FALSE and re-issues
     // under the same deterministic nonce — no closure state to roll
     // back, and the engine's nonce dedupe absorbs the re-append.
-    intentTx.commit().then(({ error }) => {
+    intentTx.commit().settled.then(({ error }) => {
       if (error !== undefined) {
         runtime.notifyServedIntentSealFailure?.();
         logger.error(

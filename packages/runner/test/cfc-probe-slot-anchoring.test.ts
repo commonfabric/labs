@@ -140,7 +140,7 @@ describe("link-resolution probes and `*` templates", () => {
     } as any, tx);
     picked.set("c-alpha");
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return picked;
   };
 
@@ -149,7 +149,7 @@ describe("link-resolution probes and `*` templates", () => {
     const cell = runtime.getCell(space, cause, undefined, tx);
     cell.set(value);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return cell;
   };
 
@@ -174,7 +174,7 @@ describe("link-resolution probes and `*` templates", () => {
       setResultCell(store.withTx(create), owner);
       store.withTx(create).set({ pending: true, requestHash: "h1" });
       runtime.prepareTxForCommit(create);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
 
       // What makes these cases the ones they are: the creation minted a
       // pointer template at the store's children, carrying the label.
@@ -192,7 +192,7 @@ describe("link-resolution probes and `*` templates", () => {
       const other = runtime.getCell(space, "beside-other", undefined, later);
       other.withTx(later).set({ written: true });
       runtime.prepareTxForCommit(later);
-      expect((await later.commit()).error).toBeUndefined();
+      expect((await later.commit().settled).error).toBeUndefined();
     });
 
     it("still taints a probe of one of its members", async () => {
@@ -236,7 +236,7 @@ describe("link-resolution probes and `*` templates", () => {
           path: [],
         });
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         return list;
       };
       const list = await reconcile([first, second]);
@@ -377,7 +377,7 @@ describe("link-resolution probes and `*` templates", () => {
       } as any, write);
       list.set([first.withTx(write), second.withTx(write)]);
       runtime.prepareTxForCommit(write);
-      expect((await write.commit()).error).toBeUndefined();
+      expect((await write.commit().settled).error).toBeUndefined();
 
       expect(carriesPicked(joinOf((tx) => {
         list.withTx(tx).getRaw();

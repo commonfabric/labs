@@ -35,7 +35,7 @@ async function sendThrough(
   )?.props?.["$value"] as Cell<string>;
   const draftTx = runtime.edit();
   draft.withTx(draftTx).set(text);
-  const draftCommit = await draftTx.commit();
+  const draftCommit = await draftTx.commit().settled;
   if (draftCommit.error) throw draftCommit.error;
   await runtime.settled();
   const sendButton = renderedNodes(result["$UI"]).find((node) =>
@@ -98,7 +98,7 @@ Deno.test("a configured producer piece sends commands through its own protected 
     )?.props?.["$value"] as Cell<string>;
     const draftTx = runtime.edit();
     draft.withTx(draftTx).set(JSON.stringify({ type: "start", id: "one" }));
-    const draftCommit = await draftTx.commit();
+    const draftCommit = await draftTx.commit().settled;
     if (draftCommit.error) throw draftCommit.error;
     await runtime.settled();
     const sendButton = renderedNodes(result["$UI"]).find((node) =>

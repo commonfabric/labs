@@ -5,15 +5,32 @@ import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 
 import { Runtime } from "../src/runtime.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import type { IStorageTransaction } from "../src/storage/interface.ts";
+
+/** Compiler checks for selecting a receipt stage; this function is never run. */
+export async function commitStageTypeChecks(
+  tx: IStorageTransaction,
+): Promise<void> {
+  const receipt = tx.commit();
+  // @ts-expect-error a receipt is not a completion promise
+  await receipt;
+  // @ts-expect-error promise assimilation cannot wait for a receipt
+  await Promise.resolve(receipt);
+  // @ts-expect-error a race must select a receipt stage
+  await Promise.race([receipt]);
+  await receipt.verdict;
+  await receipt.settled;
+}
 
 const signer = await Identity.fromPassphrase("start-commit");
 
 describe("start-commit", () => {
-  for (const wrapped of [false, true]) {
+  for (const wrapped of [false, true, "raw"] as const) {
     it(`applies a single-space write before remote confirmation with wrapped=${wrapped}`, async () => {
       const server = newSharedServer();
       const storage = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -35,10 +52,12 @@ describe("start-commit", () => {
           await release.promise;
           return transact(...args);
         });
-        const committing = wrapped
+        const committing = wrapped === "raw"
+          ? tx.tx
+          : wrapped
           ? new TransactionWrapper(new TransactionWrapper(tx))
           : tx;
-        const receipt = committing.startCommit();
+        const receipt = committing.commit();
         settlement = receipt.settled;
         expect(receipt).not.toHaveProperty("then");
         expect(cell.withTx().get()).toBe(7);
@@ -50,6 +69,54 @@ describe("start-commit", () => {
         expect((await receipt.settled).error).toBeUndefined();
       } finally {
         release.resolve();
+        await settlement;
+        await runtime.dispose();
+        await storage.close();
+        await server.close();
+      }
+    });
+  }
+
+  for (const holdSyncedUntilCovered of [true, false]) {
+    it(`keeps raw settlement on coverage with holdSyncedUntilCovered=${holdSyncedUntilCovered}`, async () => {
+      const server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+      const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+      });
+      let settlement: Promise<unknown> | undefined;
+      try {
+        const cell = runtime.getCell<number>(signer.did(), "raw-stages");
+        const seed = runtime.edit();
+        cell.withTx(seed).set(1);
+        const seeded = seed.commit({ holdSyncedUntilCovered: false });
+        expect((await seeded.verdict).error).toBeUndefined();
+        await cell.sync();
+        await server.flushSessions();
+        await seeded.settled;
+        const tx = runtime.edit();
+        cell.withTx(tx).set(2);
+        const receipt = tx.tx.commit({ holdSyncedUntilCovered });
+        let settled = false;
+        settlement = receipt.settled.then(() => {
+          settled = true;
+        });
+        expect((await receipt.verdict).error).toBeUndefined();
+        let synced = false;
+        const synchronization = storage.synced().then(() => {
+          synced = true;
+        });
+        await clock.settle();
+        expect(settled).toBe(false);
+        expect(synced).toBe(!holdSyncedUntilCovered);
+        expect(storage.hasPendingCommits()).toBe(true);
+        await server.flushSessions();
+        expect((await receipt.settled).error).toBeUndefined();
+        await synchronization;
+        expect(cell.get()).toBe(2);
+      } finally {
+        await server.flushSessions();
         await settlement;
         await runtime.dispose();
         await storage.close();
@@ -73,7 +140,9 @@ describe("start-commit", () => {
         const cell = runtime.getCell<number>(signer.did(), "commit-stages");
         const seed = runtime.edit();
         cell.withTx(seed).set(1);
-        expect((await seed.commit({ resolveAt: "verdict" })).error)
+        expect(
+          (await seed.commit({ holdSyncedUntilCovered: false }).verdict).error,
+        )
           .toBeUndefined();
         await cell.sync();
         const tx = runtime.edit();
@@ -93,7 +162,7 @@ describe("start-commit", () => {
         const committing = wrapped
           ? new TransactionWrapper(new TransactionWrapper(tx))
           : tx;
-        const receipt = committing.startCommit();
+        const receipt = committing.commit();
         let settled = false;
         settlement = receipt.settled.then((result) => {
           settled = true;
@@ -122,6 +191,59 @@ describe("start-commit", () => {
     });
   }
 
+  it("waits for earlier spaces' coverage after a later space throws", async () => {
+    const server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+    });
+    const otherSpace = (await Identity.fromPassphrase("receipt other space"))
+      .did();
+    const otherReplica = storage.open(otherSpace).replica;
+    const commitNative = otherReplica.commitNative;
+    let settlement: Promise<unknown> | undefined;
+    try {
+      const first = runtime.getCell<number>(signer.did(), "partial-first");
+      const second = runtime.getCell<number>(otherSpace, "partial-second");
+      const seed = runtime.edit();
+      seed.enableMultiSpaceWrites?.([signer.did(), otherSpace]);
+      first.withTx(seed).set(1);
+      second.withTx(seed).set(1);
+      const seeded = seed.commit({ holdSyncedUntilCovered: false });
+      expect((await seeded.verdict).error).toBeUndefined();
+      await first.sync();
+      await second.sync();
+      await server.flushSessions();
+      await seeded.settled;
+      const tx = runtime.edit();
+      tx.enableMultiSpaceWrites?.([signer.did(), otherSpace]);
+      first.withTx(tx).set(2);
+      second.withTx(tx).set(2);
+      otherReplica.commitNative = undefined;
+      const receipt = tx.tx.commit();
+      let settled = false;
+      settlement = receipt.settled.then(() => {
+        settled = true;
+      });
+      expect((await receipt.verdict).error?.message).toContain("commitNative");
+      await clock.settle();
+      expect(settled).toBe(false);
+      expect(storage.hasPendingCommits()).toBe(true);
+      await server.flushSessions();
+      expect((await receipt.settled).error?.message).toContain("commitNative");
+      expect(first.get()).toBe(2);
+      expect(second.get()).toBe(1);
+    } finally {
+      otherReplica.commitNative = commitNative;
+      await server.flushSessions();
+      await settlement;
+      await runtime.dispose();
+      await storage.close();
+      await server.close();
+    }
+  });
+
   it("reports each repeated attempt's error instead of the original verdict", async () => {
     const storage = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -133,11 +255,12 @@ describe("start-commit", () => {
       await cell.sync();
       const tx = runtime.edit();
       cell.withTx(tx).set(7);
-      const original = tx.startCommit();
+      const original = tx.commit();
       for (
         const receipt of [
-          tx.startCommit(),
-          new TransactionWrapper(tx).startCommit(),
+          tx.commit(),
+          new TransactionWrapper(tx).commit(),
+          tx.tx.commit(),
         ]
       ) {
         expect((await receipt.verdict).error?.name).toBe(
@@ -150,8 +273,9 @@ describe("start-commit", () => {
       expect((await original.settled).error).toBeUndefined();
       for (
         const receipt of [
-          tx.startCommit(),
-          new TransactionWrapper(tx).startCommit(),
+          tx.commit(),
+          new TransactionWrapper(tx).commit(),
+          tx.tx.commit(),
         ]
       ) {
         expect((await receipt.verdict).error?.name).toBe(
@@ -163,14 +287,14 @@ describe("start-commit", () => {
       }
       const aborted = runtime.edit();
       aborted.abort("cancelled");
-      const receipt = aborted.startCommit();
+      const receipt = aborted.commit();
       expect((await receipt.verdict).error?.name).toBe(
         "StorageTransactionAborted",
       );
       expect((await receipt.settled).error?.name).toBe(
         "StorageTransactionAborted",
       );
-      const empty = runtime.edit().startCommit();
+      const empty = runtime.edit().commit();
       expect((await empty.verdict).error).toBeUndefined();
       expect((await empty.settled).error).toBeUndefined();
     } finally {
@@ -191,8 +315,12 @@ describe("start-commit", () => {
         if (!ready) tx.abort("closed");
         const failure = new Error("unobserved commit failure");
         using reported = stub(console, "error", () => {});
-        using _commit = stub(tx, "commit", () => Promise.reject(failure));
-        new TransactionWrapper(tx).startCommit();
+        using _commit = stub(
+          tx,
+          "commit",
+          () => createTransactionCommitReceipt(Promise.reject(failure)),
+        );
+        new TransactionWrapper(tx).commit();
         await clock.settle();
         expect(reported.calls).toHaveLength(1);
         expect(reported.calls[0].args).toContain(failure);
@@ -214,8 +342,12 @@ describe("start-commit", () => {
       const tx = runtime.edit();
       const failure = new Error("internal commit failure");
       using reported = stub(console, "error", () => {});
-      using _commit = stub(tx, "commit", () => Promise.reject(failure));
-      const receipt = new TransactionWrapper(tx).startCommit();
+      using _commit = stub(
+        tx.tx,
+        "commit",
+        () => createTransactionCommitReceipt(Promise.reject(failure)),
+      );
+      const receipt = new TransactionWrapper(tx).commit();
       await expect(receipt.settled).rejects.toBe(failure);
       await clock.settle();
       expect(reported.calls).toHaveLength(1);
@@ -233,20 +365,23 @@ describe("start-commit", () => {
       storageManager: storage,
     });
     try {
-      const accepted = await runtime.edit().commit();
+      const accepted = await runtime.edit().commit().settled;
       const tx = runtime.edit();
       const completion = Promise.withResolvers<
-        Awaited<ReturnType<typeof tx.commit>>
+        Awaited<ReturnType<typeof tx.commit>["settled"]>
       >();
       const failure = new Error("late settlement failure");
       using reported = stub(console, "error", () => {});
-      using _commit = stub(tx, "commit", () => completion.promise);
-      using _verdict = stub(
-        tx,
-        "commitVerdict",
-        () => Promise.resolve(accepted),
+      using _commit = stub(
+        tx.tx,
+        "commit",
+        () =>
+          createTransactionCommitReceipt(
+            completion.promise,
+            Promise.resolve(accepted),
+          ),
       );
-      const receipt = tx.startCommit();
+      const receipt = tx.commit();
       expect((await receipt.verdict).error).toBeUndefined();
       completion.reject(failure);
       await clock.settle();

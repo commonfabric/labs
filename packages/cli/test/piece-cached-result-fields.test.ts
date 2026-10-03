@@ -78,7 +78,7 @@ async function runLivePiece(): Promise<LivePieceReport> {
       rootCell,
     );
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     await storageManager.synced();
     await root.pull();

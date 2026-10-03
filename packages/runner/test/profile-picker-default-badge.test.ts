@@ -84,13 +84,13 @@ describe("profile-picker default badge", () => {
       name: "Ada",
       initialNameApplied: "Ada",
     });
-    await tx.commit();
+    await tx.commit().settled;
     tx = rt.edit();
     rt.getCell(spaceB, "profile", undefined, tx).set({
       name: "Alan",
       initialNameApplied: "Alan",
     });
-    await tx.commit();
+    await tx.commit().settled;
 
     tx = rt.edit();
     const pattern = await rt.patternManager.compilePattern(PROGRAM, {
@@ -121,7 +121,7 @@ describe("profile-picker default badge", () => {
       resultCell,
     );
     rt.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await result.pull();
     await rt.idle();
     await result.pull();

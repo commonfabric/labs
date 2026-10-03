@@ -4856,58 +4856,60 @@ export class Runner {
               teardownRegistrationIfCurrent();
             }
           };
-          const commitWork = actualTx.commit().then(async ({ error }) => {
-            if (error !== undefined) {
-              // A lost manifest install recovers in every posture, for the
-              // reason `refusalNamesOnlyPolicyManifests` gives.
-              if (refusalNamesOnlyPolicyManifests(error)) {
-                await recoverInstantiationOnce(error, "manifest");
+          const commitWork = actualTx.commit().settled.then(
+            async ({ error }) => {
+              if (error !== undefined) {
+                // A lost manifest install recovers in every posture, for the
+                // reason `refusalNamesOnlyPolicyManifests` gives.
+                if (refusalNamesOnlyPolicyManifests(error)) {
+                  await recoverInstantiationOnce(error, "manifest");
+                  return;
+                }
+                // A stale read recovers only where a serving side supplies the
+                // view the retry reads.
+                if (
+                  this.#runtime.experimental.serverExecution === true &&
+                  isStaleReadConflict(error)
+                ) {
+                  await recoverInstantiationOnce(error, "basis");
+                  return;
+                }
+                this.#reportPieceStartCommitFailure(instantiateActionId, error);
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
                 return;
               }
-              // A stale read recovers only where a serving side supplies the
-              // view the retry reads.
-              if (
-                this.#runtime.experimental.serverExecution === true &&
-                isStaleReadConflict(error)
-              ) {
-                await recoverInstantiationOnce(error, "basis");
-                return;
-              }
-              this.#reportPieceStartCommitFailure(instantiateActionId, error);
-              if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-              return;
-            }
-            const settlement = waveSettlementOf(actualTx);
-            if (settlement === undefined) return;
-            const settled = await settlement;
-            if (settled.error === undefined) return;
+              const settlement = waveSettlementOf(actualTx);
+              if (settlement === undefined) return;
+              const settled = await settlement;
+              if (settled.error === undefined) return;
 
-            const waveWithdrawalCause = settled.error.waveWithdrawalCause;
-            if (waveWithdrawalCause === "wave-abandoned") {
-              // Explicit abandon is clean enclosing-lifecycle teardown, not a
-              // structure-load failure. Keep it visible without incrementing
-              // the serving runtime's failure observer/health counter.
-              logger.warn("piece-start-commit-abandoned", () => [
-                `piece-start commit ${instantiateActionId} was withdrawn by ` +
-                "wave abandon; the enclosing lifecycle owns any restart",
+              const waveWithdrawalCause = settled.error.waveWithdrawalCause;
+              if (waveWithdrawalCause === "wave-abandoned") {
+                // Explicit abandon is clean enclosing-lifecycle teardown, not a
+                // structure-load failure. Keep it visible without incrementing
+                // the serving runtime's failure observer/health counter.
+                logger.warn("piece-start-commit-abandoned", () => [
+                  `piece-start commit ${instantiateActionId} was withdrawn by ` +
+                  "wave abandon; the enclosing lifecycle owns any restart",
+                  settled.error,
+                ]);
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
+                return;
+              }
+              // A WHOLE contribution drop is recoverable in the same sense the
+              // stale-read refusal is, and the helper reports only if its one
+              // retry also loses. A partial drop is not: part of the
+              // contribution stands, so there is no rolled-back view to
+              // re-instantiate against, and it takes the same terminal arm a
+              // second failure takes.
+              await recoverInstantiationOnce(
                 settled.error,
-              ]);
-              if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-              return;
-            }
-            // A WHOLE contribution drop is recoverable in the same sense the
-            // stale-read refusal is, and the helper reports only if its one
-            // retry also loses. A partial drop is not: part of the
-            // contribution stands, so there is no rolled-back view to
-            // re-instantiate against, and it takes the same terminal arm a
-            // second failure takes.
-            await recoverInstantiationOnce(
-              settled.error,
-              waveWithdrawalCause === "contribution-dropped"
-                ? "basis"
-                : "terminal",
-            );
-          }).catch((error) => {
+                waveWithdrawalCause === "contribution-dropped"
+                  ? "basis"
+                  : "terminal",
+              );
+            },
+          ).catch((error) => {
             this.#reportPieceStartCommitFailure(instantiateActionId, error);
             if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
           });
@@ -5042,7 +5044,7 @@ export class Runner {
               resultCell,
             );
             this.#runtime.prepareTxForCommit(setupTx);
-            const committed = await setupTx.commit();
+            const committed = await setupTx.commit().settled;
             if (committed.error !== undefined) {
               logger.error(
                 "pattern-swap-setup-error",
@@ -6083,7 +6085,7 @@ export class Runner {
     resultCell: Cell<any>,
   ): Promise<Result<Unit, CommitError>> {
     const committer = this.#deferredStartCommitter;
-    const commit: DeferredStartCommit = () => tx.commit();
+    const commit: DeferredStartCommit = () => tx.commit().settled;
     return committer === undefined
       ? commit()
       : committer(tx, resultCell, commit);

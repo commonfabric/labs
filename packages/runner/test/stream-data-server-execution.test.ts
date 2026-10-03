@@ -86,7 +86,7 @@ describe("streamData under EXPERIMENTAL_SERVER_EXECUTION", () => {
     runtime.run(tx, testPattern, {
       url: "http://mock-test-server.local/stream",
     }, resultCell).sink(() => {});
-    await tx.commit();
+    await tx.commit().settled;
 
     const error = await firstError.promise;
     expect(String(error)).toContain(
@@ -117,7 +117,7 @@ describe("streamData under EXPERIMENTAL_SERVER_EXECUTION", () => {
     runtime.run(tx, testPattern, {
       url: "http://mock-test-server.local/stream",
     }, resultCell).sink(() => {});
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.settled();
 
     expect(fetchCalls).toEqual(["http://mock-test-server.local/stream"]);

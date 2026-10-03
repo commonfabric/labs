@@ -89,7 +89,7 @@ const seedLabeledDoc = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
   return id;
 };
 
@@ -132,7 +132,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       // Confidentiality only: a metadata observation is not a content input,
       // so it must not seed or empty the hereditary integrity meet.
       expect(join.integrity).toEqual([]);
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -156,7 +156,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       expect(
         (prepare as { reasons: readonly string[] }).reasons,
       ).toContainEqual("label-metadata-observation-added");
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -170,7 +170,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       runtime.getCell(space, "channel-digest", undefined, bare).set({ v: 1 });
       const bareDigest = bare.prepareCfc();
       expect(bareDigest).not.toBe("");
-      await bare.commit();
+      await bare.commit().settled;
 
       const observing = runtime.edit();
       runtime.getCell(space, "channel-digest", undefined, observing).set({
@@ -185,7 +185,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       // the observation is a boundary-decision input (it changes the flow
       // join and the consumed set).
       expect(observingDigest).not.toBe(bareDigest);
-      await observing.commit();
+      await observing.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -201,7 +201,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       );
       expect(tx.getCfcState().labelMetadataObservations).toHaveLength(0);
       expect(tx.getCfcState().relevant).toBe(false);
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -225,12 +225,12 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       const out = runtime.getCell(space, "channel-out-persist", undefined, tx);
       out.set({ copied: "derived-from-metadata" });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const outId = out.getAsNormalizedFullLink().id;
       const check = runtime.edit();
       const stored = readStoredCfcMetadata(check, { space, id: outId });
-      await check.commit();
+      await check.commit().settled;
       const derived = stored?.labelMap.entries.find((entry) =>
         entry.origin === "derived"
       );
@@ -285,13 +285,13 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       );
       outA.set({ copied: "no-taint" });
       txA.prepareCfc();
-      expect((await txA.commit()).ok).toBeDefined();
-      await txB.commit();
+      expect((await txA.commit().settled).ok).toBeDefined();
+      await txB.commit().settled;
 
       const outAId = outA.getAsNormalizedFullLink().id;
       const check = runtime.edit();
       const stored = readStoredCfcMetadata(check, { space, id: outAId });
-      await check.commit();
+      await check.commit().settled;
       // The stored value pins the document the metadata is read from, so an
       // envelope carrying no derived entry is that document's own.
       expect(storedDocument(storageManager, outAId)?.value).toEqual({
@@ -380,7 +380,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       const digest2 = tx2.prepareCfc();
       expect(digest1).not.toBe("");
       expect(digest1).toBe(digest2);
-      await tx1.commit();
+      await tx1.commit().settled;
       tx2.abort(new Error("digest comparison only"));
     } finally {
       await runtime.dispose();
@@ -419,7 +419,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       expect(join.confidentiality).toEqual(["secret"]);
       // The empty record contributes nothing — not even its space.
       expect([...(join.labeledSpaces ?? [])]).toEqual([space]);
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -439,7 +439,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       );
       expect(tx.getCfcState().labelMetadataObservations).toHaveLength(1);
       expect(tx.getCfcState().relevant).toBe(true);
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -486,7 +486,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       ]);
       expect(observations[0].target.id).toBe(id);
       expect([...observations[0].confidentiality]).toContainEqual("secret");
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -538,7 +538,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       );
       target.set({ out: "derived" });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain("maxConfidentiality");
     } finally {
       await runtime.dispose();
@@ -562,7 +562,7 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
         request: { url: "https://example.com" },
       });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       // The empty (public-only) fetchJson ceiling must reject a request from
       // a transaction whose consumed set includes the protected metadata
       // observation.

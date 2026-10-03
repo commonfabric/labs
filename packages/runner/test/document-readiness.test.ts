@@ -60,7 +60,7 @@ describe("document-readiness", () => {
         const arrived = manager.edit();
         expect(arrived.write(address, { value: "Recovered" }).error)
           .toBeUndefined();
-        expect((await arrived.commit()).error).toBeUndefined();
+        expect((await arrived.commit().settled).error).toBeUndefined();
         expect(read()).toBe(true);
         release.resolve();
         await manager.crossSpaceSettled();
@@ -68,7 +68,7 @@ describe("document-readiness", () => {
         const removed = manager.edit();
         expect(removed.write(address, undefined, { delete: true }).error)
           .toBeUndefined();
-        expect((await removed.commit()).error).toBeUndefined();
+        expect((await removed.commit().settled).error).toBeUndefined();
         expect(read).toThrow(DocumentPending);
         await manager.crossSpaceSettled();
         expect(read()).toBe(false);

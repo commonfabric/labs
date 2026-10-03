@@ -1,13 +1,13 @@
 # Transaction commit stages
 
 A transaction stages writes until the caller starts its commit. Calling
-`tx.startCommit()` starts preparation and storage work and returns a
+`tx.commit()` starts preparation and storage work and returns a
 `TransactionCommitReceipt` synchronously. The receipt has two promises:
 
 | Stage | What it establishes |
 | --- | --- |
 | `verdict` | The commit's fate: accepted, rejected, or refused locally |
-| `settled` | The default commit completion: subscription coverage or rejection repair, commit callbacks, and inline post-commit effects |
+| `settled` | Completion after subscription coverage or rejection repair, commit callbacks, and inline post-commit effects |
 
 The receipt is not a promise. A caller selects the stage its next operation
 requires. Both stages return a `Result`: expected refusal is carried in
@@ -16,7 +16,7 @@ Internal exceptions are reported even when neither stage is observed. Backends
 without a separate verdict signal resolve `verdict` with settlement.
 
 For an ordinary valid single-space transaction, the local replica receives the
-optimistic writes before `startCommit()` returns. Local computation and
+optimistic writes before `commit()` returns. Local computation and
 rendering can use that state while confirmation remains pending. A local
 refusal can prevent those writes from applying; a later server refusal can
 withdraw them. An available value does not establish persistence.
@@ -65,19 +65,23 @@ declare const tx: IExtendedStorageTransaction;
 declare const cell: Cell<number>;
 
 cell.withTx(tx).set(7);
-const receipt = tx.startCommit();
+const receipt = tx.commit();
 const localValue = cell.get();
 
 const result = await receipt.verdict;
 if (result.error) throw new Error(result.error.message);
 ```
 
-`tx.commit()` is the promise-returning completion convenience and selects
-settlement by default.
-Its `resolveAt: "verdict"` option selects the earlier fate signal; it leaves
-commit callbacks, pending-commit registration, repair, and effects on their
-own timelines. `startCommit()` exposes both stages of the same attempt and
-accepts no stage-selection options.
+Both raw storage transactions and extended runtime transactions expose the
+same `commit()` receipt. TypeScript rejects awaiting the receipt itself; select
+`.verdict` or `.settled` explicitly. Promise collections also need stage
+selection, such as `Promise.all(receipts.map((receipt) => receipt.settled))`.
+
+`commit({ holdSyncedUntilCovered: false })` lets controlled-staleness fixtures
+observe accepted writes without holding replica `synced()` for coverage.
+This option changes the synchronization hold independently of the observed
+stage. The receipt's settlement and the runtime's pending-commit barrier still
+wait for coverage or rejection repair. The default keeps the coverage hold.
 
 Each receipt belongs to its own invocation. Starting a second commit on a
 transaction that is already pending or complete returns that invocation's

@@ -93,7 +93,7 @@ describe("prepareBoundaryCommit()", () => {
           value: { entry: { old: "a", new: "b" } },
           cfc: metadata,
         });
-        expect((await seed.commit()).error).toBeUndefined();
+        expect((await seed.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         try {
           const targets = ["first", "second"].map((name) =>

@@ -69,7 +69,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [...clauses] },
     }, tx);
     cell.set({ secret: "withheld content" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await cell.sync();
     return cell.getAsNormalizedFullLink();
   };
@@ -99,7 +99,7 @@ describe("cfc-cell-read-ceiling", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     return link;
   };
 
@@ -119,7 +119,7 @@ describe("cfc-cell-read-ceiling", () => {
       create,
     );
     privatePointer.set(target.getAsWriteRedirectLink());
-    expect((await create.commit()).error).toBeUndefined();
+    expect((await create.commit().settled).error).toBeUndefined();
     const reader = readerFor([A]);
     const pointer = reader.getCellFromLink(
       privatePointer.getAsNormalizedFullLink(),
@@ -218,7 +218,7 @@ describe("cfc-cell-read-ceiling", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const readTx = readerFor([A]).edit();
     try {
@@ -293,7 +293,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B] },
     }, create);
     inbox.set(["withheld content"]);
-    expect((await create.commit()).error).toBeUndefined();
+    expect((await create.commit().settled).error).toBeUndefined();
     const link = inbox.getAsNormalizedFullLink();
     const reader = readerFor([A]);
     const destination = reader.getCellFromLink<string[]>(link);
@@ -366,7 +366,7 @@ describe("cfc-cell-read-ceiling", () => {
       },
     }, tx);
     cell.set({ public: "public content", private: "private content" });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(
       cell.getAsNormalizedFullLink(),
     );
@@ -386,7 +386,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B], observes: "enumerate" },
     }, tx);
     cell.set(["public element"]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const reader = readerFor([A]);
     const projected = reader.getCellFromLink(cell.getAsNormalizedFullLink());
     await projected.sync();
@@ -412,7 +412,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B], observes: "value" },
     }, tx);
     cell.set(["private element"]);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(
       cell.getAsNormalizedFullLink(),
     );
@@ -443,7 +443,7 @@ describe("cfc-cell-read-ceiling", () => {
         },
       },
     });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(link);
     await projected.sync();
 
@@ -459,7 +459,7 @@ describe("cfc-cell-read-ceiling", () => {
       ifc: { confidentiality: [B], observes: "enumerate" },
     }, tx);
     cell.set({ length: 17 });
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const projected = readerFor([A]).getCellFromLink(
       cell.getAsNormalizedFullLink(),
     );
