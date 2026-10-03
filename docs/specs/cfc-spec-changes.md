@@ -1791,30 +1791,41 @@ describes `IntentOnce` as a refinement of a gesture whose parameters were
 rendered (§3.8.1) and whose destination carries integrity (§3.8.4), consumed
 once and verified again when its effect happens (§8.10.7), but names no
 artifact that carries it from the gesture to the application that acts outside
-the fabric. The runner now writes one. A host surface previews the
-destinations a pattern binds against a descriptor the consumer publishes;
-after a renderer-trusted gesture on the host's own surface, a builtin writes a
-create-only record of the operation, the descriptor's digest, the consumer,
-the subject, the parameters and their digest, an idempotency key, `at`, `exp`,
-`maxAttempts`, and the gesture's evidence, stamped
+the fabric. The runner now writes one. A host surface previews the cells a
+pattern binds against a descriptor the consumer publishes, and each
+destination must carry, on label entries the runtime derived, the integrity
+its parameter declares, in atom families no pattern can author. After a
+renderer-trusted gesture on the host's own surface, a builtin writes a record
+of the operation, the descriptor's digest, the consumer, the subject, the
+parameters and their digest, a random idempotency key, `at`, `exp`,
+`maxAttempts`, and informational evidence, stamped
 `TransformedBy{builtin cfc-reviewed-intent}`; the consumer verifies that stamp
-before it acts. The CFC author ruled on 2026-10-01 that for a send the gesture
-is the release, and that a short intent lasts ten minutes, so `exp` is at most
-ten minutes after the gesture.
+before it acts. Both digests are the data-model hash `hashStringOf`, specified
+byte for byte in
+[the hash byte format](./space-model-formal-spec/2-hash-byte-format.md), so a
+consumer outside the process can compute them. The CFC author ruled on
+2026-10-01 that for a send the gesture is the release, and that a short intent
+lasts ten minutes, so `exp` is at most ten minutes after the gesture.
 
 Proposed edit: §6.4.3 names the reviewed-intent record as the persisted form
 of `IntentOnce` that a trusted surface produces, with its verification (a
 derived root `TransformedBy` naming the minting builtin, in the subject's own
 space; a stored writer claim is not evidence) and the consumer's checks
 (consumer, descriptor digest, subject, payload digest over what is sent,
-destination resolved again and never substituted, window). Five points need
-the spec owner's ruling, recorded as open questions in
+destination resolved again and never substituted, window, a ledger keyed on
+the record and made of cells the consumer wrote). Six points need the spec
+owner's ruling, recorded as open questions in
 [reviewed intents](./cfc-reviewed-intent.md#open-questions-for-the-cfc-author):
 whether destination integrity may start as a deployment-chosen atom; whether
 the ten-minute ruling waives §6.4.4's short bound and its display and
 cancellation requirement for longer intents; whether §8.10.7 should call an
 attempt with no sent record unknown, rather than known not sent, for an
 at-most-once actuator; whether the record carries `IntentOnce`'s `audience`;
-and whether the §6.5 attempt and consumption ledger belongs to the runner or to
-the consumer. Implemented in `packages/runner/src/cfc/reviewed-intent.ts`;
-described in [reviewed intents](./cfc-reviewed-intent.md).
+whether the §6.5 attempt and consumption ledger belongs to the runner or to
+the consumer; and whether `UserSurfaceInput` (SC-53) stays an entered value's
+atom while the record carries the gesture's authority. The record also rests
+on a write-once convention (an unpredictable address and a writer claim at
+every location) that the spec has no primitive for; that is the open question
+[sealed custody](./cfc-custody-seal.md) raises as well. Implemented in
+`packages/runner/src/cfc/reviewed-intent.ts`; described in
+[reviewed intents](./cfc-reviewed-intent.md).

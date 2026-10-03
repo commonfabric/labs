@@ -15,14 +15,15 @@ A pattern cannot produce that fact. A surface that requires a trusted gesture
 is named by markup the pattern writes; what the user saw and what the handler
 writes are tied together only by the pattern's own code; and nothing about the
 gesture is persisted. A reviewed intent is that fact, minted by the runtime: a
-create-only record, written under a builtin identity no pattern can take, that
-the acting application verifies before it acts.
+record written under a builtin identity no pattern can take, which the acting
+application verifies before it acts.
 
 The host module is `packages/runner/src/cfc/reviewed-intent.ts`, exported to
 hosts as `@commonfabric/runner/cfc/reviewed-intent` and absent from pattern
 imports, the same arrangement as
 [reviewed snapshot copies](cfc-persisted-declassification.md#31-reviewed-snapshot-copies)
-and [sealed custody](cfc-custody-seal.md). The cases are in
+and [sealed custody](cfc-custody-seal.md). It shares its review helpers with
+both in `packages/runner/src/cfc/host-review.ts`. The cases are in
 `packages/runner/test/cfc/reviewed-intent.test.ts`.
 
 ## What is built
@@ -33,6 +34,12 @@ The `cf-reviewed-intent` component, which draws the surface and makes the
 gesture, and the runtime-client calls that connect it to this operation are not
 built yet; they are the next change. The operation's commit accepts only the
 gesture mark that host transport attaches, so nothing reaches it until then.
+
+That change must bind each trusted click to the surface it was made on and to
+that surface's consent. The operation's commit accepts any trusted gesture
+marked `ReviewedIntent` for any consent the host holds, so the host transport
+is what keeps a click on one surface from committing another surface's
+preview.
 
 ## The descriptor
 
@@ -45,10 +52,19 @@ cell, and a pattern binds that cell. For a messaging consumer:
   "endpointName": "Example Messenger",
   "consumer": "example-messenger",
   "parameters": {
-    "to": { "kind": "destinations", "min": 1, "max": 1 },
+    "to": {
+      "kind": "destinations",
+      "min": 1,
+      "max": 1,
+      "integrity": [
+        {
+          "type": "https://commonfabric.org/cfc/atom/TransformedBy",
+          "identity": { "kind": "builtin", "builtinId": "address-book" }
+        }
+      ]
+    },
     "body": { "kind": "text", "maxLength": 4000 }
   },
-  "destinationIntegrity": ["verified-address"],
   "windowMs": 600000,
   "maxAttempts": 1
 }
@@ -58,16 +74,20 @@ cell, and a pattern binds that cell. For a messaging consumer:
   names the way the intent is carried, and `consumer` names the application that
   acts on records.
 - `parameters` are the only keys a record carries. A `destinations` parameter
-  takes between `min` and `max` destination cells the pattern binds. A `text`
-  parameter is text the actor enters on the surface, at most `maxLength`
-  Unicode code points, counted as JSON Schema counts them.
-- `destinationIntegrity` is a list of atom patterns that every destination's
-  stored integrity must satisfy together, as one conjunction whose variables
-  are shared across the patterns. It must be nonempty when any parameter is of
-  kind `destinations`.
+  takes between `min` and `max` destination cells the pattern binds, and
+  `integrity` is a nonempty list of atom patterns each destination's integrity
+  must satisfy together, as one conjunction whose variables are shared across
+  the patterns. Each destinations parameter states its own, since a payee and
+  a funding source need different rules. A `text` parameter is text the actor
+  enters on the surface, at most `maxLength` Unicode code points, counted as
+  JSON Schema counts them.
 - `windowMs` is how long after the gesture a record stays good. A record takes
   the smaller of this and ten minutes.
 - `maxAttempts` bounds the delivery attempts a consumer makes on one record.
+
+The example requires that the address book's builtin wrote the destination and
+that nothing has written it since: the `TransformedBy` the runtime derives
+names the one identity that wrote a value, and another writer takes it away.
 
 Every member is required, and the descriptor, each parameter, and each kind are
 refused if they carry a member this build does not know. A member it does not
@@ -80,57 +100,81 @@ its own descriptor does not declare. `parseReviewedIntentDescriptor` reads a
 descriptor by these rules, for a host and for a consumer checking the one it
 publishes.
 
-A record carries the descriptor's data-model digest as `endpoint`
-(`reviewedIntentEndpoint`). The operation does not check who wrote the
-descriptor: a consumer acts only on records whose `endpoint` is the digest of
-the descriptor it publishes, so a descriptor a pattern wrote, with a weaker
-integrity requirement or a misleading `endpointName`, yields records no
-consumer acts on.
+A destination integrity pattern must name an atom type only trusted runtime
+code mints, the families a pattern-authored schema has stripped
+(`isRuntimeMintedIntegrityAtom`), as a literal `type` or a system string atom.
+A descriptor with a pattern any other atom satisfies, such as a plain string, a
+type the pattern leaves open, or a principal claim a pattern mints for its own
+actor, is refused when it is read. Of those families, the runtime derives
+`TransformedBy` and `PolicyCertified` onto the `derived` entries a destination's
+integrity is read from (see [The operation](#the-operation)); a pattern naming
+another family parses and is never satisfied.
+
+A record carries the descriptor's digest as `endpoint`
+(`reviewedIntentEndpoint`), and its parameters' digest as `payloadDigest`.
+Both are the data-model hash `hashStringOf`: the unpadded base64url SHA-256
+over the value's type-tagged bytes, without the `fid1:` prefix, which
+[the hash byte format](space-model-formal-spec/2-hash-byte-format.md)
+specifies, so a consumer outside the process can compute it. The operation
+does not check who wrote the descriptor: a consumer acts only on records whose
+`endpoint` is the digest of the descriptor it publishes, so a descriptor a
+pattern wrote, with a weaker integrity requirement or a misleading
+`endpointName`, yields records no consumer acts on.
 
 ## The operation
 
 `prepareReviewedIntent(bindings)` takes the cells a pattern binds: the
-`descriptor`, the `destinations` for each declared `destinations` parameter,
-and a `result` cell that receives the committed record's link. Under the
+`descriptor`, the cells for each declared parameter that takes cells
+(`parameters`, by key; a `destinations` parameter takes its destinations), and
+a `result` cell that receives the committed record's link. Under the
 authenticated acting principal it:
 
-- refuses an actor that is not an authenticated DID, and cells from different
-  runtimes;
+- refuses an actor that is not an authenticated DID, cells from different
+  runtimes, and a runtime that does not enforce CFC or does not persist flow
+  labels, which could write only records that never verify;
 - reads the descriptor and refuses one this build cannot show;
-- refuses a destination bound for a parameter the descriptor does not declare
-  as `destinations`, and a number of destinations outside `min` and `max`;
+- refuses cells bound for a parameter the descriptor does not declare as
+  taking cells, and a number of destinations outside `min` and `max`;
 - reads each destination where its cell resolves, as stored. What the surface
   shows of a destination is that stored value and nothing else, never a string
   the pattern supplies. A value holding a link is refused rather than followed,
   because the destination's integrity covers its own document and not one it
   links to; so is an absent or `null` value;
-- requires the integrity stored on the whole of each destination's value, from
-  label entries at or above its path other than entries a link carried, to
-  satisfy `destinationIntegrity`, and keeps the atoms the patterns name;
+- takes each destination's integrity from the `derived` label entries at or
+  above its path, and requires it to satisfy the parameter's patterns. Only
+  the runtime writes a `derived` entry, and its `TransformedBy` is taken away
+  when another writer writes at, above, or below it. A declared label says what
+  a location's values carry by schema, not who wrote the value there, so it
+  does not count, on the destination or on an ancestor. A destination keeps the
+  atoms that satisfied the patterns, one per pattern under the first binding of
+  their variables that satisfies them all, and the location its cell resolved
+  to;
 - checks the host's read ceiling, or else `User(actor)`, over everything it
   read. The surface shows what it shows outside the render policy, so this is
   the only gate on what it may show;
-- resolves where a write to `result` lands, and refuses a target inside a
-  reviewed intent;
+- resolves where a write to `result` lands, refuses a target inside a reviewed
+  intent, and prepares the record's link write there in a transaction it
+  discards, refusing a target whose writer claim would refuse it;
 - returns a frozen preview, with a one-use consent bound to the preview, the
   reads, and the actor.
 
 The preview carries the actor, the descriptor's `operation`, `endpointName`,
-`consumer` and digest, each `destinations` parameter as the record will carry
-it, each `text` parameter's `maxLength` for the field the surface draws, the
+`consumer` and digest, each declared parameter by key with its `kind` (a
+`destinations` parameter with its destinations as the record will carry them,
+a `text` parameter with the `maxLength` of the field the surface draws), the
 effective window, and `maxAttempts`. The consent is an opaque object verified
 against a private registry; a host holds it while the surface is open.
 
 `commitReviewedIntent(consent, event, input)` commits. It spends the consent
 first, so a consent is good for one attempt, successful or not. It accepts only
 a renderer-trusted DOM event whose `provenance.ui.pattern` is `ReviewedIntent`.
-`input.text` must hold the text for every declared `text` parameter and nothing
+`input` holds, by key, the text for every declared `text` parameter and nothing
 else, each within its `maxLength`. The commit then reads everything again and
-refuses a review whose actor, descriptor, destinations, destination addresses,
-or result target changed. The record's transaction compares each read the
-second inspection made against what it reads itself, through verifier reads
-that keep their conflict checks without carrying a label into the record, so
-the destinations reviewed are the destinations written.
+refuses a review whose actor, descriptor, destinations, or result target
+changed. The record's transaction compares each read the second inspection made
+against what it reads itself, through verifier reads that keep their conflict
+checks without carrying a label into the record, so the destinations reviewed
+are the destinations written.
 
 ## What a commit writes
 
@@ -138,18 +182,15 @@ A transaction writes one space, and the result cell may be in another space
 than the actor's home space, so the commit writes in three transactions:
 
 1. **A receipt in the actor's home space**, `{record, payloadDigest, at}`,
-   where `record` is the record's document id. It is written first, so no
-   record exists without one; a receipt whose record is absent records a
-   commit that failed. The user's trail survives a pattern unlinking the
-   record.
-2. **The record in the actor's home space**, at an address derived from a
-   random host event identity, marked create-only.
-3. **The record's link into the result cell's write target**, which must be
-   the target the actor reviewed. The link is an ordinary write under no
-   implementation identity, so a target whose writer claim names particular
-   writers refuses it, a record or a receipt among them, and a pattern leaves
-   its result cell open to that write. A record whose link is not written is
-   never acted on, and its window runs out.
+   where `record` is the record's document id. A receipt whose record is absent
+   records a commit that failed after it. The user's trail survives a pattern
+   unlinking the record.
+2. **The record in the actor's home space**, at an address derived from its
+   `idempotencyKey`.
+3. **The record's link into the result cell's write target**, which must be the
+   target the actor reviewed. The link is an ordinary write under no
+   implementation identity, so a pattern leaves its result cell open to that
+   write; prepare refuses one whose writer claim would refuse it.
 
 The record:
 
@@ -158,44 +199,72 @@ The record:
 | `operation`, `consumer`, `maxAttempts` | the descriptor's |
 | `endpoint` | the descriptor's digest |
 | `subject` | the actor's DID; the record lives in the subject's home space |
-| `parameters` | each `destinations` parameter as a list of `{address, integrity}`, each `text` parameter as the text entered |
-| `payloadDigest` | the data-model digest of `parameters` |
-| `idempotencyKey` | unique to the consent, which a consumer keys its attempts on |
+| `parameters` | each `destinations` parameter as a list of `{address, integrity, source}`, each `text` parameter as the text entered |
+| `payloadDigest` | the digest of `parameters` |
+| `idempotencyKey` | a random value unique to the consent |
 | `at` | when the commit wrote the record, in milliseconds since the epoch |
 | `exp` | `at` plus the smaller of `windowMs` and ten minutes |
-| `evidence` | `{component: "cf-reviewed-intent", event}`, where `event` is the host event identity |
+| `evidence` | informational; today `{component: "cf-reviewed-intent"}` |
 
-The stored record holds `parameters` as JSON text with sorted keys, a leaf, and
-the consumer's check returns it parsed. The runtime stores a plain object
-inside an array as a document of its own, so a list of destinations stored as
-objects would live in documents the record's root stamp does not cover. Every
-other member is a leaf or, for `evidence`, an object of leaves. The record
-carries no opaque application payload: an application's own routing data
-stays in its own cells, joined to the record by the link.
+A destination's `source` is `{space, id, scope, path}`, where its cell
+resolved, so a consumer can resolve it again. Scope is part of it because
+scoped documents share an id.
+
+The record's top-level members are a closed set that a reader must understand.
+A new constraint arrives through the descriptor, which the consumer wrote, and
+not as a new member a reader could ignore. `evidence` alone is open: a reader
+ignores members of it that it does not know, and nothing relies on what it
+holds.
+
+`idempotencyKey` is random because the host transport carries no durable event
+identity to derive one from. It is minted at prepare, so a commit's identity is
+fixed before the gesture, and the record's and the receipt's addresses derive
+from it, so no other code can address either before the commit writes them.
+
+The record carries no opaque application payload: an application's own routing
+data stays in its own cells, joined to the record by the link.
 
 The record and the receipt declare the confidentiality the preview's reads
 consumed, joined with `User(actor)`, so each is readable by the actor and by
 nobody the destinations' labels exclude. Both are `writeAuthorizedBy` the
-builtin identity `cfc-reviewed-intent`, and the record repeats that claim on
-every member and on every member of `evidence`: a writer claim governs the
-location it is declared at, not the locations below it.
+builtin identity `cfc-reviewed-intent`.
 
-### Attribution
+### Attribution, and documents written once
 
-`TransformedBy` is minted only over a nonempty flow join. The record's
-transaction reads the receipt it has just written, its one labeled read, and
-the receipt's label always holds `User(actor)`. That read is what stamps every
-location the record's transaction writes with
-`TransformedBy{builtin cfc-reviewed-intent}`, the root included, the way the
-custody seal's anchor stamps a box ([attribution](cfc-custody-seal.md#attribution)).
-The receipt is at an unpredictable address the builtin created a transaction
-earlier, so unlike an anchor at a derivable address no other code can occupy it
-first.
+The record leans on two properties of the runtime that no primitive states
+directly.
 
-A runtime that does not persist flow labels mints no stamp. The commit checks
-the record it wrote the way a consumer would before writing the link, so a
-record without the stamp is never linked, and every record a pattern receives
-verifies.
+**A builtin's stamp needs a labeled read.** A `TransformedBy` atom is minted
+only over a nonempty flow join, so a builtin's transaction that reads nothing
+labeled writes nothing stamped. The custody seal reads an anchor it wrote for
+this reason ([attribution](cfc-custody-seal.md#attribution)). The record's
+transaction reads the receipt, its one labeled read, whose label always holds
+`User(actor)`, and so stamps every location it writes with
+`TransformedBy{builtin cfc-reviewed-intent}`, the root included. That, rather
+than any wish to have a receipt for every record, is why the receipt is
+written first. The receipt is at an address the builtin created a transaction
+earlier, so no other code can occupy it first.
+
+**A document is written once only by convention.** Nothing makes a document
+immutable after its first write; what keeps a record as written is its address,
+which no other code can predict, and its writer claim, which refuses any other
+writer. A writer claim governs the location it is declared at and not the
+locations below it, so the record repeats its claim on every member and on
+every member of `evidence`, and stores `parameters` as JSON text with sorted
+keys: one leaf, which the claim covers whole and which a consumer compares byte
+for byte. The text also keeps the destinations in the record's one document. A
+write through a cell made inside a builder frame, which a host's cells are
+since every runtime pushes a default frame, stores a plain object inside an
+array as a document of its own, which the record's root stamp would not cover.
+The commit marks both documents create-only, which the storage commit enforces
+only under `experimental.commitPreconditions`. Neither a write-once nor a
+create-only primitive is part of the spec yet; the custody seal names the
+same open question for which instance a room shows.
+
+A runtime that does not persist flow labels mints no stamp, so prepare refuses
+one. The commit also checks the record it wrote the way a consumer would before
+writing the link, so a record without the stamp is never linked, and every
+record a pattern receives verifies.
 
 ## Verifying a record
 
@@ -206,17 +275,17 @@ pattern's result cell. The check, in full:
 1. the cell resolves to the root of a document, not a location inside one;
 2. that root has a label-map entry of origin `derived` whose integrity carries
    the bare atom `TransformedBy{builtin cfc-reviewed-intent}`;
-3. the record has exactly the members above, and its `parameters` text parses
-   to a record of text and destination lists whose digest is `payloadDigest`;
+3. the record has exactly the top-level members above, `evidence` is a record,
+   and the `parameters` text parses to a record of text and destination lists
+   whose digest is `payloadDigest`;
 4. the document is in the home space of the record's `subject`.
 
 Only the runtime mints a `derived` entry, and only a transaction under the
 builtin's identity mints that atom, so pattern code cannot write a record that
 passes. A stored `writeAuthorizedBy` naming the builtin is not evidence: a
 pattern's own initialization can declare one on a cell it creates. A copy a
-pattern writes carries the pattern's own `TransformedBy`, an atom a pattern
-declares in its schema is not persisted, and a write into a committed record is
-refused by its writer claim at every location. Reads happen in `tx` when one is
+pattern writes carries the pattern's own `TransformedBy`, and an atom a pattern
+declares in its schema is not persisted. Reads happen in `tx` when one is
 given, so a consumer's transaction conflicts with a change to the record.
 
 The check covers authorship and integrity only. At action time the consumer
@@ -226,17 +295,31 @@ also:
    current descriptor, and that `subject` is the principal it acts as;
 2. recomputes `payloadDigest` over exactly what it will send, and refuses any
    parameter key its descriptor does not declare;
-3. resolves each destination itself and refuses if it differs from
-   `parameters` (it never substitutes);
+3. resolves each destination's `source` itself and refuses if what it finds
+   differs from `parameters` (it never substitutes);
 4. checks the window by `exp`, and by its own first sight of the record;
-5. claims the §6.5.3 attempt cell before acting, which an at-most-once
-   actuator requires;
-6. after the actuator confirms, claims consumption (§6.5.2) and writes the
+5. keys its ledger on `idempotencyKey` or the record's id, not on the cell it
+   found the record through: any number of links, in any of the pattern's
+   cells, can reach one record;
+6. claims the §6.5.3 attempt cell before acting, which an at-most-once
+   actuator requires, and refuses an attempt or consumption cell it did not
+   write itself. Their addresses are derivable from the record, so other code
+   can create them first, as it can a custody box; the custody seal's check
+   that a box's root carries its own stamp (`rootWrittenByBuiltin`) is the
+   discipline to follow;
+7. after the actuator confirms, claims consumption (§6.5.2) and writes the
    §6 sent record ([egress records](cfc-persisted-declassification.md#6-egress-records--irrevocability-made-honest)),
    and only then clears its outbox entry;
-7. records a refused outcome for anything it cannot verify, never sending or
+8. records a refused outcome for anything it cannot verify, never sending or
    repairing it, and records an ambiguous outcome as unknown, never retrying
    it.
+
+The pattern decides whether a record reaches the consumer, when within its
+window, and in what order with others: it can leave the link unwritten, unlink
+it, or hold it back, and can show the actor that a message was sent while
+suppressing it. A receipt therefore means that the actor released the
+parameters, not that anything was sent; what was sent is what the consumer's
+sent records say.
 
 ## What this does not cover
 
@@ -246,11 +329,24 @@ also:
   a hand. This holds for snapshot copies and custody seals as well. The renderer
   and runtime are trusted, patterns are not, and other holders of the user's
   key are out of scope. A native attestation can sit beside `evidence` later.
+- **What was rendered at the gesture.** §3.8.1 binds an intent's parameters to
+  the rendered state (`renderRef`, `snapshotDigest`). The record binds them to
+  the preview the host received, not to what reached the screen.
+- **Which surface a click was on.** The operation trusts the host transport to
+  pair a click with its own surface's consent; see [What is built](#what-is-built).
+- **A runtime that enforces nothing.** A runtime that runs patterns over the
+  subject's home space with writer claims unenforced and flow labels not
+  persisted can rewrite a committed record, and the stamp survives the write,
+  since only a persisted flow label takes a carried stamp away. The guarantee
+  holds while every runtime that runs patterns over the subject's home space
+  enforces writer claims or persists flow labels. Snapshot copies and custody
+  seals rest on the same condition.
 - **Retry after a failure.** The consent is in memory and spent by its first
   commit, so a commit that fails, or a host that goes away, needs a new review.
-- **A record whose link failed.** The record and its receipt exist, the result
-  cell does not name it, and no consumer finds it; the trail understates and
-  never overstates.
+- **A record whose link failed.** The record and its receipt exist, and the
+  result cell does not name it, so no consumer finds it. A receipt can so name
+  a record that never landed, or one no consumer ever saw; it records a release,
+  not a delivery.
 - **Long intents.** An intent that outlives the window needs a visible,
   cancellable outbox (§6.4.4), which is not built.
 - **The surface's layout.** Whether the surface confirms in a top-layer modal
@@ -264,7 +360,7 @@ also:
    chooses the atom for, so that consent to the destination is display-only
    until address books carry robust integrity, or must §3.8.4 integrity be
    strict from the start? The operation enforces whatever the descriptor
-   declares, either way.
+   declares, among the atoms a pattern cannot author.
 2. Ten minutes exceeds §6.4.4's short-intent bound, and §6.4.4 requires a long
    intent to be shown and cancellable. Does the ruling waive both, and does
    removing a record from an outbox count as cancelling it?

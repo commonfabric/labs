@@ -1,6 +1,6 @@
 /**
  * Mints reviewed intents for the trusted host's reviewed-intent surface. A
- * reviewed intent is a create-only record, written under this module's builtin
+ * reviewed intent is a record, written once under this module's builtin
  * identity, stating that the authenticated actor released exactly these
  * parameters to exactly these destinations, recently, once. An application
  * that acts outside the fabric on the actor's behalf (the consumer) publishes
@@ -973,6 +973,8 @@ export async function commitReviewedIntent(
       payloadDigest: record.payloadDigest,
       at,
     });
+    // Enforced only under `experimental.commitPreconditions`; otherwise the
+    // unpredictable address and the writer claim are what protect it.
     receiptTx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
     const result = await receiptTx.commit();
     if (result.error) {
@@ -1100,6 +1102,13 @@ const parseStoredParameters = (
  * passes: a stored `writeAuthorizedBy` naming this module is not evidence,
  * since a pattern's own initialization can carry one. `evidence` is
  * informational, and only its being a record is checked.
+ *
+ * A write into a committed record is refused by its writer claim, and a
+ * persisted flow label takes the stamp away from a location something else
+ * writes. A runtime that runs patterns over the subject's home space with
+ * neither, writer claims unenforced and flow labels not persisted, can rewrite
+ * a record and leave the stamp in place; the check holds while every such
+ * runtime enforces writer claims or persists flow labels.
  *
  * This verifies authorship and integrity only. Whether the record is the
  * consumer's, unexpired, and not yet acted on is the consumer's to check.

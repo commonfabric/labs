@@ -264,8 +264,8 @@ seal through the input witness on `TransformedBy`.
 A third host operation records a release outside the fabric rather than
 copying a value inside it: `cfc/reviewed-intent.ts`, specified in
 [reviewed intents](cfc-reviewed-intent.md). After a trusted gesture on the
-host's surface, it writes a create-only record, under a builtin identity, of
-exactly the parameters and destinations the actor reviewed, which the
+host's surface, it writes a record, under a builtin identity, of exactly the
+parameters and destinations the actor reviewed, which the
 application acting on the actor's behalf verifies before it acts. It releases
 nothing itself; the application's send is the release, and the §6 egress
 record is what remembers it.
