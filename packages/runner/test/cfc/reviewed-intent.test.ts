@@ -1,0 +1,1276 @@
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+
+import type { JSONValue } from "@commonfabric/api";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { hashStringOf } from "@commonfabric/data-model";
+import { Identity } from "@commonfabric/identity";
+
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../cfc-seed-envelope.ts";
+import {
+  commitReviewedIntent,
+  parseReviewedIntentDescriptor,
+  prepareReviewedIntent,
+  REVIEWED_INTENT_WRITER,
+  type ReviewedIntentBindings,
+  type ReviewedIntentConsent,
+  reviewedIntentEndpoint,
+  verifyReviewedIntentRecord,
+} from "../../src/cfc/reviewed-intent.ts";
+import { prepareSnapshotShare } from "../../src/cfc/share-snapshot.ts";
+import type { ImplementationIdentity } from "../../src/cfc/types.ts";
+import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
+import type { Cell } from "../../src/cell.ts";
+import { Runtime } from "../../src/runtime.ts";
+import { isAllowedAuthoredImportSpecifier } from "../../src/sandbox/runtime-module-policy.ts";
+import { getRuntimeModuleExports } from "../../src/sandbox/runtime-modules.ts";
+import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../../src/storage/extended-storage-transaction.ts";
+
+const sender = await Identity.fromPassphrase("reviewed-intent-sender");
+const other = await Identity.fromPassphrase("reviewed-intent-other");
+
+/** The builtin that keeps the sender's address book and attests its entries. */
+const ADDRESS_BOOK = "address-book";
+
+/** The integrity an attested address book entry carries. */
+const VERIFIED_ADDRESS = "verified-address";
+
+/** A clause the address book keeps its entries under, beside the owner's. */
+const ADDRESS_BOOK_CLAUSE = "address-book-private";
+
+/** The builtin a messaging consumer publishes its descriptor with. */
+const CONSUMER_WRITER = "messaging-consumer";
+
+/** A pattern's verified handler, as a pattern run attributes its writes. */
+const PATTERN: ImplementationIdentity = {
+  kind: "verified",
+  moduleIdentity: "sha256:composer-module",
+  symbol: "composer",
+  bindingPath: ["composer"],
+};
+
+const DESCRIPTOR = {
+  operation: "send-message",
+  endpointName: "Example Messenger",
+  consumer: "example-messenger",
+  parameters: {
+    to: { kind: "destinations", min: 1, max: 1 },
+    body: { kind: "text", maxLength: 40 },
+  },
+  destinationIntegrity: [VERIFIED_ADDRESS],
+  windowMs: 60_000,
+  maxAttempts: 1,
+};
+
+const WRITTEN_BY_REVIEWED_INTENT = {
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: { kind: "builtin", builtinId: REVIEWED_INTENT_WRITER },
+};
+
+/** Creates the renderer-side mark attached only by the trusted host. */
+const trustedClick = (pattern = "ReviewedIntent") => {
+  const event = {
+    type: "click",
+    provenance: { origin: "dom", trusted: true, ui: { pattern } },
+  };
+  markRendererTrustedEvent(event);
+  return event;
+};
+
+const text = (body: string) => ({ text: { body } });
+
+/** Rewrites Alice's address book entry as the address book. */
+const changeAlice = async (
+  fixture: { runtime: Runtime; alice: Cell<unknown> },
+  address: string,
+) => {
+  const tx = fixture.runtime.edit();
+  setCfcImplementationIdentity(tx, {
+    kind: "builtin",
+    builtinId: ADDRESS_BOOK,
+  });
+  fixture.alice.withTx(tx).set(address as never);
+  expect((await tx.commit()).error).toBeUndefined();
+};
+
+/**
+ * The sender's runtime over one store, holding a consumer's descriptor, two
+ * attested address book entries, an unattested one, and a composer document
+ * whose fields a pattern binds.
+ */
+const setup = async (descriptor: unknown = DESCRIPTOR) => {
+  const storage = StorageManager.emulate({ as: sender });
+  const created: Runtime[] = [];
+  /** A runtime acting as `identity`, under `ceiling`, or none for `null`. */
+  const runtimeFor = (
+    identity: Identity,
+    ceiling: readonly unknown[] | null = [
+      cfcAtom.user(identity.did()),
+      ADDRESS_BOOK_CLAUSE,
+    ],
+  ) => {
+    const runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager: storage,
+      trustSnapshotProvider: () => ({
+        id: identity.did(),
+        actingPrincipal: identity.did(),
+      }),
+      ...(ceiling === null
+        ? {}
+        : { cfcReadMaxConfidentiality: ceiling as never }),
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+    });
+    created.push(runtime);
+    return runtime;
+  };
+  const runtime = runtimeFor(sender);
+  const home = sender.did();
+
+  const publish = runtime.edit();
+  setCfcImplementationIdentity(publish, {
+    kind: "builtin",
+    builtinId: CONSUMER_WRITER,
+  });
+  const descriptorCell = runtime.getCell(home, "messaging-descriptor", {
+    type: "object",
+    ifc: { writeAuthorizedBy: [CONSUMER_WRITER] },
+  }, publish);
+  descriptorCell.set(descriptor as never);
+  expect((await publish.commit()).error).toBeUndefined();
+
+  /** Writes an address book entry carrying `integrity`. */
+  const entry = async (
+    cause: string,
+    address: JSONValue,
+    {
+      integrity = [VERIFIED_ADDRESS] as unknown[],
+      confidentiality = [cfcAtom.user(home)] as unknown[],
+    } = {},
+  ): Promise<Cell<unknown>> => {
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: ADDRESS_BOOK,
+    });
+    const cell = runtime.getCell(home, cause, {
+      ifc: {
+        confidentiality,
+        ...(integrity.length > 0 ? { addIntegrity: integrity } : {}),
+        writeAuthorizedBy: [ADDRESS_BOOK],
+      },
+    } as never, tx);
+    cell.set(address as never);
+    expect((await tx.commit()).error).toBeUndefined();
+    return cell.withTx(undefined);
+  };
+  const alice = await entry("contact-alice", "tel:+15550100", {
+    confidentiality: [cfcAtom.user(home), ADDRESS_BOOK_CLAUSE],
+  });
+  const bob = await entry("contact-bob", "tel:+15550111");
+  const unattested = await entry("contact-unattested", "tel:+15550199", {
+    integrity: [],
+  });
+
+  // The pattern's own document: a field naming the chosen contact by link,
+  // and a field the committed record's link goes to.
+  const compose = runtime.edit();
+  const composer = runtime.getCell(home, "composer", {
+    type: "object",
+    properties: {
+      recipient: { asCell: ["readonly"] },
+      outbox: {},
+    },
+  } as never, compose);
+  composer.set({ recipient: alice, outbox: null } as never);
+  expect((await compose.commit()).error).toBeUndefined();
+  await storage.synced();
+
+  const fixture = {
+    storage,
+    runtime,
+    runtimeFor,
+    descriptor: descriptorCell.withTx(undefined),
+    alice,
+    bob,
+    unattested,
+    entry,
+    composer: composer.withTx(undefined),
+    recipient: composer.withTx(undefined).key("recipient") as Cell<unknown>,
+    result: composer.withTx(undefined).key("outbox") as Cell<unknown>,
+    bindings(
+      overrides: Partial<ReviewedIntentBindings> = {},
+    ): ReviewedIntentBindings {
+      return {
+        descriptor: fixture.descriptor,
+        destinations: { to: [fixture.recipient] },
+        result: fixture.result,
+        ...overrides,
+      };
+    },
+    /** Rewrites the descriptor as the consumer. */
+    async republish(value: unknown) {
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: CONSUMER_WRITER,
+      });
+      fixture.descriptor.withTx(tx).set(value as never);
+      expect((await tx.commit()).error).toBeUndefined();
+    },
+    async dispose() {
+      await storage.synced();
+      for (const runtime of created) await runtime.dispose();
+      await storage.close();
+    },
+  };
+  return fixture;
+};
+
+describe("reviewed-intent", () => {
+  describe("commitReviewedIntent()", () => {
+    it("writes a record whose fields equal the preview and the entered text", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        expect(prepared.actor).toBe(sender.did());
+        expect(prepared.operation).toBe("send-message");
+        expect(prepared.endpointName).toBe("Example Messenger");
+        expect(prepared.consumer).toBe("example-messenger");
+        expect(prepared.endpoint).toBe(hashStringOf(DESCRIPTOR as never));
+        expect(prepared.destinations).toEqual({
+          to: [{ address: "tel:+15550100", integrity: [VERIFIED_ADDRESS] }],
+        });
+        expect(prepared.text).toEqual({ body: { maxLength: 40 } });
+        expect(prepared.windowMs).toBe(60_000);
+        expect(prepared.maxAttempts).toBe(1);
+
+        const before = Date.now();
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("See you at noon"),
+        );
+        const record = verifyReviewedIntentRecord(committed.record);
+        const parameters = {
+          to: prepared.destinations.to,
+          body: "See you at noon",
+        };
+        expect(record).toEqual({
+          operation: prepared.operation,
+          endpoint: prepared.endpoint,
+          consumer: prepared.consumer,
+          subject: sender.did(),
+          parameters,
+          payloadDigest: hashStringOf(parameters as never),
+          idempotencyKey: record.idempotencyKey,
+          at: record.at,
+          exp: record.at + 60_000,
+          maxAttempts: 1,
+          evidence: {
+            component: "cf-reviewed-intent",
+            event: expect.any(String),
+          },
+        });
+        expect(record.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+        expect(record.at).toBeGreaterThanOrEqual(before);
+        expect(committed.record.getAsNormalizedFullLink().space).toBe(
+          sender.did(),
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("links the record from the pattern's result cell", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("On my way"),
+        );
+        const linked = fixture.result.resolveAsCell().getAsNormalizedFullLink();
+        const record = committed.record.getAsNormalizedFullLink();
+        expect([linked.space, linked.id, linked.path]).toEqual([
+          record.space,
+          record.id,
+          [],
+        ]);
+        expect(verifyReviewedIntentRecord(fixture.result).parameters.body)
+          .toBe("On my way");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("writes an actor-private receipt naming the record", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("On my way"),
+        );
+        const record = verifyReviewedIntentRecord(committed.record);
+        expect(committed.receipt.getAsNormalizedFullLink().space).toBe(
+          sender.did(),
+        );
+        expect(committed.receipt.get()).toEqual({
+          record: committed.record.getAsNormalizedFullLink().id,
+          payloadDigest: record.payloadDigest,
+          at: record.at,
+        });
+        await fixture.storage.synced();
+        const outsider = fixture.runtimeFor(other, [
+          cfcAtom.user(other.did()),
+          ADDRESS_BOOK_CLAUSE,
+        ]);
+        for (const written of [committed.receipt, committed.record]) {
+          expect(() =>
+            outsider.getCellFromLink(written.getAsNormalizedFullLink()).get()
+          ).toThrow(/read ceiling/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("joins the label of every destination into the record and the receipt", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("On my way"),
+        );
+        await fixture.storage.synced();
+        // The sender's own clause alone does not admit either: both carry the
+        // address book's clause the destination did.
+        const ownerOnly = fixture.runtimeFor(sender, [
+          cfcAtom.user(sender.did()),
+        ]);
+        for (const written of [committed.receipt, committed.record]) {
+          expect(
+            fixture.runtime.getCellFromLink(written.getAsNormalizedFullLink())
+              .get(),
+          ).toBeDefined();
+          expect(() =>
+            ownerOnly.getCellFromLink(written.getAsNormalizedFullLink()).get()
+          ).toThrow(/read ceiling/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("sets `exp` by the descriptor's `windowMs` when it is under ten minutes, and by ten minutes otherwise", async () => {
+      for (
+        const [windowMs, expected] of [
+          [60_000, 60_000],
+          [10 * 60_000, 10 * 60_000],
+          [60 * 60_000, 10 * 60_000],
+        ]
+      ) {
+        const fixture = await setup({ ...DESCRIPTOR, windowMs });
+        try {
+          const prepared = await prepareReviewedIntent(fixture.bindings());
+          expect(prepared.windowMs).toBe(expected);
+          const committed = await commitReviewedIntent(
+            prepared.consent,
+            trustedClick(),
+            text("Running late"),
+          );
+          const record = verifyReviewedIntentRecord(committed.record);
+          expect(record.exp - record.at).toBe(expected);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("gives each consent its own record and idempotency key", async () => {
+      const fixture = await setup();
+      try {
+        const records = [];
+        for (const body of ["One", "Two"]) {
+          const prepared = await prepareReviewedIntent(fixture.bindings());
+          const committed = await commitReviewedIntent(
+            prepared.consent,
+            trustedClick(),
+            text(body),
+          );
+          records.push({
+            id: committed.record.getAsNormalizedFullLink().id,
+            ...verifyReviewedIntentRecord(committed.record),
+          });
+        }
+        expect(records[0].id).not.toBe(records[1].id);
+        expect(records[0].idempotencyKey).not.toBe(records[1].idempotencyKey);
+        expect(records[0].evidence.event).not.toBe(records[1].evidence.event);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("keeps the record immutable to ordinary writes", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("On my way"),
+        );
+        const tx = fixture.runtime.edit();
+        setCfcImplementationIdentity(tx, PATTERN);
+        committed.record.withTx(tx).set({ operation: "send-message" } as never);
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        expect(verifyReviewedIntentRecord(committed.record).parameters.body)
+          .toBe("On my way");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses text for a parameter the descriptor does not declare, missing text, and text over its `maxLength`", async () => {
+      const fixture = await setup();
+      try {
+        for (
+          const [input, refusal] of [
+            [{ text: { body: "Hi", subject: "Hello" } }, /does not declare/],
+            [{ text: { to: "tel:+15550199" } }, /does not declare/],
+            [{ text: {} }, /requires text for/],
+            [{ text: { body: "x".repeat(41) } }, /over 40 characters/],
+            [undefined, /requires the entered text/],
+          ] as const
+        ) {
+          const prepared = await prepareReviewedIntent(fixture.bindings());
+          await expect(
+            commitReviewedIntent(
+              prepared.consent,
+              trustedClick(),
+              input as never,
+            ),
+          ).rejects.toThrow(refusal);
+        }
+        // A character outside the Basic Multilingual Plane counts once.
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("🙂".repeat(40)),
+        );
+        expect(verifyReviewedIntentRecord(committed.record).parameters.body)
+          .toBe("🙂".repeat(40));
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses forged, foreign, and spent consent", async () => {
+      const fixture = await setup();
+      try {
+        await expect(
+          commitReviewedIntent(
+            {} as ReviewedIntentConsent,
+            trustedClick(),
+            text("Hi"),
+          ),
+        ).rejects.toThrow(/unknown or already consumed/);
+        // Another host operation's consent is not this one's.
+        const share = prepareSnapshotShare(fixture.bob, {
+          space: fixture.composer,
+        });
+        await expect(
+          commitReviewedIntent(
+            share.consent as never,
+            trustedClick(),
+            text("Hi"),
+          ),
+        ).rejects.toThrow(/unknown or already consumed/);
+        // A consent is spent by a commit that succeeds and by one refused.
+        const committed = await prepareReviewedIntent(fixture.bindings());
+        await commitReviewedIntent(
+          committed.consent,
+          trustedClick(),
+          text("Hi"),
+        );
+        const refused = await prepareReviewedIntent(fixture.bindings());
+        await expect(
+          commitReviewedIntent(refused.consent, undefined, text("Hi")),
+        ).rejects.toThrow(/trusted host gesture/);
+        for (const spent of [committed, refused]) {
+          await expect(
+            commitReviewedIntent(spent.consent, trustedClick(), text("Hi")),
+          ).rejects.toThrow(/already consumed/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a gesture the renderer did not mark, another surface's gesture, and no gesture", async () => {
+      const fixture = await setup();
+      try {
+        for (
+          const event of [
+            {
+              type: "click",
+              provenance: {
+                origin: "dom",
+                trusted: true,
+                ui: { pattern: "ReviewedIntent" },
+              },
+            },
+            trustedClick("ShareSnapshot"),
+            undefined,
+          ]
+        ) {
+          const prepared = await prepareReviewedIntent(fixture.bindings());
+          await expect(
+            commitReviewedIntent(prepared.consent, event, text("Hi")),
+          ).rejects.toThrow(/trusted host gesture/);
+        }
+        expect(fixture.result.get()).toBeNull();
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination whose value changed after review", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        await changeAlice(fixture, "tel:+15550122");
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/review is stale/);
+        expect(fixture.result.get()).toBeNull();
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination the pattern rebound after review", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const tx = fixture.runtime.edit();
+        fixture.recipient.withTx(tx).set(fixture.bob as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/review is stale/);
+        expect(fixture.result.get()).toBeNull();
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a descriptor changed after review", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        await fixture.republish({ ...DESCRIPTOR, endpointName: "Elsewhere" });
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/review is stale/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a result cell the pattern pointed elsewhere after review", async () => {
+      const fixture = await setup();
+      try {
+        // The pattern's result field is an alias for another of its cells.
+        const tx = fixture.runtime.edit();
+        const first = fixture.runtime.getCell(sender.did(), "first-outbox", {
+          type: "object",
+        }, tx);
+        first.set({ slot: null });
+        const second = fixture.runtime.getCell(sender.did(), "second-outbox", {
+          type: "object",
+        }, tx);
+        second.set({ slot: null });
+        const alias = fixture.runtime.getCell(sender.did(), "outbox-alias", {
+          type: "object",
+        }, tx);
+        alias.set(
+          { slot: first.key("slot").getAsWriteRedirectLink() } as never,
+        );
+        expect((await tx.commit()).error).toBeUndefined();
+        const result = alias.withTx(undefined).key("slot") as Cell<unknown>;
+        const prepared = await prepareReviewedIntent(
+          fixture.bindings({ result }),
+        );
+        const retarget = fixture.runtime.edit();
+        alias.withTx(retarget).key("slot").setRaw(
+          second.key("slot").getAsWriteRedirectLink() as never,
+        );
+        expect((await retarget.commit()).error).toBeUndefined();
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/review is stale/);
+        expect(first.withTx(undefined).key("slot").get()).toBeNull();
+        expect(second.withTx(undefined).key("slot").get()).toBeNull();
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination changed between its re-read and the record's transaction", async () => {
+      const fixture = await setup();
+      const runtime = fixture.runtime;
+      const edit = runtime.edit.bind(runtime);
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        // The re-read's transactions are only read; the first that commits
+        // is the receipt's, and the destination changes as it does.
+        runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+          const tx = edit(...args);
+          const commit = tx.commit.bind(tx);
+          tx.commit = async () => {
+            runtime.edit = edit;
+            await changeAlice(fixture, "tel:+15550133");
+            return await commit();
+          };
+          return tx;
+        };
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/changed before commit/);
+        expect(fixture.result.get()).toBeNull();
+      } finally {
+        runtime.edit = edit;
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination changed after the record's transaction read it", async () => {
+      const fixture = await setup();
+      const runtime = fixture.runtime;
+      const edit = runtime.edit.bind(runtime);
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        // The second transaction that commits is the record's; the
+        // destination changes after its verifier reads, before it lands.
+        let commits = 0;
+        runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+          const tx = edit(...args);
+          const commit = tx.commit.bind(tx);
+          tx.commit = async () => {
+            if (++commits === 2) {
+              runtime.edit = edit;
+              await changeAlice(fixture, "tel:+15550133");
+            }
+            return await commit();
+          };
+          return tx;
+        };
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/Reviewed intent failed/);
+        expect(fixture.result.get()).toBeNull();
+      } finally {
+        runtime.edit = edit;
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses an actor changed after review", async () => {
+      const fixture = await setup();
+      let acting = sender;
+      const runtime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: fixture.storage,
+        trustSnapshotProvider: () => ({
+          id: acting.did(),
+          actingPrincipal: acting.did(),
+        }),
+        cfcReadMaxConfidentiality: [
+          cfcAtom.user(sender.did()),
+          ADDRESS_BOOK_CLAUSE,
+        ],
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const edit = runtime.edit.bind(runtime);
+      try {
+        const local = (cell: Cell<unknown>) =>
+          runtime.getCellFromLink(cell.getAsNormalizedFullLink());
+        const prepared = await prepareReviewedIntent({
+          descriptor: local(fixture.descriptor),
+          destinations: { to: [local(fixture.recipient)] },
+          result: local(fixture.result),
+        });
+        // The re-read is the sender's; the actor changes as the receipt is
+        // committed, so the record's transaction is another actor's.
+        runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+          const tx = edit(...args);
+          const commit = tx.commit.bind(tx);
+          tx.commit = () => {
+            runtime.edit = edit;
+            acting = other;
+            return commit();
+          };
+          return tx;
+        };
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/actor changed after review/);
+      } finally {
+        runtime.edit = edit;
+        await runtime.dispose();
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("prepareReviewedIntent()", () => {
+    it("shows a destination by its attested value, reached through the pattern's link to it", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(
+          fixture.bindings({ destinations: { to: [fixture.bob] } }),
+        );
+        expect(prepared.destinations.to).toEqual([{
+          address: "tel:+15550111",
+          integrity: [VERIFIED_ADDRESS],
+        }]);
+        const linked = await prepareReviewedIntent(fixture.bindings());
+        expect(linked.destinations.to[0].address).toBe("tel:+15550100");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("matches record-shaped integrity patterns as one conjunction with shared variables", async () => {
+      const registry = (issuer: string) => ({
+        type: "verified-address",
+        issuer,
+      });
+      const fixture = await setup({
+        ...DESCRIPTOR,
+        destinationIntegrity: [
+          { type: "verified-address", issuer: { var: "$issuer" } },
+          { type: "issuer-trusted", issuer: { var: "$issuer" } },
+        ],
+      });
+      try {
+        const attested = await fixture.entry("contact-carol", "tel:+15550155", {
+          integrity: [
+            registry("example-registry"),
+            { type: "issuer-trusted", issuer: "example-registry" },
+            VERIFIED_ADDRESS,
+          ],
+        });
+        const prepared = await prepareReviewedIntent(
+          fixture.bindings({ destinations: { to: [attested] } }),
+        );
+        expect(prepared.destinations.to).toEqual([{
+          address: "tel:+15550155",
+          integrity: [
+            registry("example-registry"),
+            { type: "issuer-trusted", issuer: "example-registry" },
+          ],
+        }]);
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Hi"),
+        );
+        expect(verifyReviewedIntentRecord(committed.record).parameters.to)
+          .toEqual(prepared.destinations.to);
+        // The trusted issuer is a different one than verified the address.
+        const mismatched = await fixture.entry(
+          "contact-dave",
+          "tel:+15550166",
+          {
+            integrity: [
+              registry("example-registry"),
+              { type: "issuer-trusted", issuer: "other-registry" },
+            ],
+          },
+        );
+        await expect(prepareReviewedIntent(
+          fixture.bindings({ destinations: { to: [mismatched] } }),
+        )).rejects.toThrow(/without the integrity its descriptor requires/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination without the integrity its descriptor requires", async () => {
+      const fixture = await setup();
+      try {
+        await expect(prepareReviewedIntent(
+          fixture.bindings({ destinations: { to: [fixture.unattested] } }),
+        )).rejects.toThrow(/without the integrity its descriptor requires/);
+        // A pattern's own document naming a contact is not the contact.
+        const tx = fixture.runtime.edit();
+        const lookalike = fixture.runtime.getCell(
+          sender.did(),
+          "pattern-contact",
+          {
+            type: "object",
+            ifc: { addIntegrity: ["some-other-endorsement"] },
+          } as never,
+          tx,
+        );
+        lookalike.set({ name: "Alice", address: "tel:+15550199" } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await expect(prepareReviewedIntent(
+          fixture.bindings({
+            destinations: { to: [lookalike.withTx(undefined)] },
+          }),
+        )).rejects.toThrow(/without the integrity its descriptor requires/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination that holds a cell reference rather than a value", async () => {
+      const fixture = await setup();
+      try {
+        await expect(prepareReviewedIntent(
+          fixture.bindings({ destinations: { to: [fixture.composer] } }),
+        )).rejects.toThrow(/without cell references/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination over the host's read ceiling, and over the actor's own without one", async () => {
+      const fixture = await setup();
+      try {
+        const author = fixture.runtimeFor(other);
+        const tx = author.edit();
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: ADDRESS_BOOK,
+        });
+        const foreign = author.getCell(sender.did(), "foreign-contact", {
+          ifc: {
+            confidentiality: [cfcAtom.user(other.did())],
+            addIntegrity: [VERIFIED_ADDRESS],
+            writeAuthorizedBy: [ADDRESS_BOOK],
+          },
+        } as never, tx);
+        foreign.set("tel:+15550144" as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await fixture.storage.synced();
+        const link = foreign.getAsNormalizedFullLink();
+        await expect(prepareReviewedIntent(
+          fixture.bindings({
+            destinations: { to: [fixture.runtime.getCellFromLink(link)] },
+          }),
+        )).rejects.toThrow(/read ceiling/);
+        const unbounded = fixture.runtimeFor(sender, null);
+        const bindings = fixture.bindings();
+        await expect(prepareReviewedIntent({
+          descriptor: unbounded.getCellFromLink(
+            bindings.descriptor.getAsNormalizedFullLink(),
+          ),
+          destinations: { to: [unbounded.getCellFromLink(link)] },
+          result: unbounded.getCellFromLink(
+            bindings.result.getAsNormalizedFullLink(),
+          ),
+        })).rejects.toThrow(/authenticated actor's read ceiling/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a destination for a parameter the descriptor does not declare", async () => {
+      const fixture = await setup();
+      try {
+        for (const key of ["cc", "body"]) {
+          await expect(prepareReviewedIntent(
+            fixture.bindings({
+              destinations: { to: [fixture.recipient], [key]: [fixture.bob] },
+            }),
+          )).rejects.toThrow(/does not declare/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a number of destinations the descriptor does not allow", async () => {
+      const fixture = await setup();
+      try {
+        for (const to of [[], [fixture.recipient, fixture.bob]]) {
+          await expect(prepareReviewedIntent(
+            fixture.bindings({ destinations: { to } }),
+          )).rejects.toThrow(/between 1 and 1 destinations/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a result cell inside a reviewed intent", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Hi"),
+        );
+        for (
+          const result of [
+            committed.record,
+            committed.record.key("parameters").key("body"),
+          ]
+        ) {
+          await expect(prepareReviewedIntent(
+            fixture.bindings({ result: result as Cell<unknown> }),
+          )).rejects.toThrow(/result cell inside a reviewed intent/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses an unauthenticated actor and handles from another runtime", async () => {
+      const fixture = await setup();
+      const anonymous = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: fixture.storage,
+        trustSnapshotProvider: () => ({
+          id: "anonymous",
+          actingPrincipal: "anonymous",
+        }),
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      try {
+        const bindings = fixture.bindings();
+        await expect(prepareReviewedIntent({
+          descriptor: anonymous.getCellFromLink(
+            bindings.descriptor.getAsNormalizedFullLink(),
+          ),
+          destinations: {
+            to: [
+              anonymous.getCellFromLink(fixture.bob.getAsNormalizedFullLink()),
+            ],
+          },
+          result: anonymous.getCellFromLink(
+            bindings.result.getAsNormalizedFullLink(),
+          ),
+        })).rejects.toThrow(/authenticated actor/);
+        await expect(prepareReviewedIntent(fixture.bindings({
+          result: anonymous.getCellFromLink(
+            bindings.result.getAsNormalizedFullLink(),
+          ),
+        }))).rejects.toThrow(/same runtime/);
+      } finally {
+        await anonymous.dispose();
+        await fixture.dispose();
+      }
+    });
+  });
+
+  describe("parseReviewedIntentDescriptor()", () => {
+    it("returns a descriptor whose digest is the record's `endpoint`", () => {
+      const parsed = parseReviewedIntentDescriptor(DESCRIPTOR);
+      expect(parsed).toEqual(DESCRIPTOR);
+      expect(reviewedIntentEndpoint(parsed)).toBe(
+        hashStringOf(DESCRIPTOR as never),
+      );
+    });
+
+    it("refuses a parameter kind, a parameter member, or a descriptor member it does not know", () => {
+      for (
+        const descriptor of [
+          {
+            ...DESCRIPTOR,
+            parameters: { ...DESCRIPTOR.parameters, photo: { kind: "image" } },
+          },
+          {
+            ...DESCRIPTOR,
+            parameters: {
+              ...DESCRIPTOR.parameters,
+              body: { kind: "text", maxLength: 40, pattern: "^[a-z]*$" },
+            },
+          },
+          { ...DESCRIPTOR, requireBiometric: true },
+        ]
+      ) {
+        expect(() => parseReviewedIntentDescriptor(descriptor)).toThrow(
+          /cannot show|must hold exactly/,
+        );
+      }
+    });
+
+    it("refuses destinations declared without destination integrity, and malformed limits", () => {
+      for (
+        const descriptor of [
+          { ...DESCRIPTOR, destinationIntegrity: [] },
+          {
+            ...DESCRIPTOR,
+            parameters: { to: { kind: "destinations", min: 2, max: 1 } },
+          },
+          { ...DESCRIPTOR, windowMs: 0 },
+          { ...DESCRIPTOR, maxAttempts: 1.5 },
+          { ...DESCRIPTOR, operation: "" },
+        ]
+      ) {
+        expect(() => parseReviewedIntentDescriptor(descriptor)).toThrow(
+          /Reviewed intent descriptor/,
+        );
+      }
+    });
+  });
+
+  describe("verifyReviewedIntentRecord()", () => {
+    /**
+     * A record a pattern makes up, stored as a commit stores one, so that only
+     * its stamp tells it apart.
+     */
+    const forged = (body: string) => {
+      const parameters = {
+        body,
+        to: [{ address: "tel:+15550199", integrity: [VERIFIED_ADDRESS] }],
+      };
+      return {
+        operation: "send-message",
+        endpoint: hashStringOf(DESCRIPTOR as never),
+        consumer: "example-messenger",
+        subject: sender.did(),
+        parameters: JSON.stringify(parameters),
+        payloadDigest: hashStringOf(parameters as never),
+        idempotencyKey: "a3c1d9e2-forged",
+        at: 1_700_000_000_000,
+        exp: 1_700_000_060_000,
+        maxAttempts: 1,
+        evidence: { component: "cf-reviewed-intent", event: "forged" },
+      };
+    };
+
+    it("refuses a lookalike a pattern's own initialization declares written by the builtin", async () => {
+      const fixture = await setup();
+      try {
+        const tx = fixture.runtime.edit();
+        setCfcImplementationIdentity(tx, PATTERN);
+        // A labeled read, so the pattern's writes carry its own stamp.
+        fixture.bob.withTx(tx).get();
+        const lookalike = fixture.runtime.getCell(
+          sender.did(),
+          "lookalike-record",
+          {
+            type: "object",
+            default: forged("Send the code"),
+            ifc: {
+              confidentiality: [cfcAtom.user(sender.did())],
+              writeAuthorizedBy: [REVIEWED_INTENT_WRITER],
+            },
+          } as never,
+          tx,
+        );
+        fixture.result.withTx(tx).set(lookalike as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        // The lookalike exists and stores the builtin as its only writer.
+        expect(lookalike.withTx(undefined).getRaw()).toEqual(
+          forged("Send the code") as never,
+        );
+        const overwrite = fixture.runtime.edit();
+        setCfcImplementationIdentity(overwrite, PATTERN);
+        lookalike.withTx(overwrite).set(forged("Other") as never);
+        expect((await overwrite.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        for (const cell of [fixture.result, lookalike.withTx(undefined)]) {
+          expect(() => verifyReviewedIntentRecord(cell)).toThrow(
+            /not written by the reviewed-intent builtin/,
+          );
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a copy a pattern makes of a genuine record", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(
+          fixture.bindings({ destinations: { to: [fixture.bob] } }),
+        );
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Genuine"),
+        );
+        const tx = fixture.runtime.edit();
+        setCfcImplementationIdentity(tx, PATTERN);
+        const genuine = JSON.parse(
+          JSON.stringify(committed.record.withTx(tx).get()),
+        );
+        const copy = fixture.runtime.getCell(sender.did(), "record-copy", {
+          type: "object",
+          ifc: { confidentiality: [cfcAtom.user(sender.did())] },
+        }, tx);
+        copy.set(genuine as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        expect(copy.withTx(undefined).get()).toEqual(genuine as never);
+        expect(() => verifyReviewedIntentRecord(copy.withTx(undefined)))
+          .toThrow(/not written by the reviewed-intent builtin/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a lookalike whose schema declares the builtin's stamp itself", async () => {
+      const fixture = await setup();
+      try {
+        const tx = fixture.runtime.edit();
+        setCfcImplementationIdentity(tx, PATTERN);
+        fixture.bob.withTx(tx).get();
+        const lookalike = fixture.runtime.getCell(
+          sender.did(),
+          "stamped-lookalike",
+          {
+            type: "object",
+            ifc: {
+              confidentiality: [cfcAtom.user(sender.did())],
+              addIntegrity: [WRITTEN_BY_REVIEWED_INTENT],
+            },
+          } as never,
+          tx,
+        );
+        lookalike.set(forged("Send the code") as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        expect(() => verifyReviewedIntentRecord(lookalike.withTx(undefined)))
+          .toThrow(/not written by the reviewed-intent builtin/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses the builtin's stamp on a stored entry the runtime did not derive", async () => {
+      const fixture = await setup();
+      try {
+        const tx = fixture.runtime.edit();
+        const lookalike = fixture.runtime.getCell(
+          sender.did(),
+          "declared-stamp",
+          undefined,
+          tx,
+        );
+        writeSeedEnvelopeDoc(tx, sender.did());
+        seedStoredEnvelope(tx, {
+          space: sender.did(),
+          scope: "space",
+          id: lookalike.getAsNormalizedFullLink().id,
+          path: [],
+        }, {
+          value: forged("Send the code"),
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: {
+                  confidentiality: [cfcAtom.user(sender.did())],
+                  integrity: [WRITTEN_BY_REVIEWED_INTENT],
+                },
+                origin: "declared",
+              }],
+            },
+          },
+        } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        expect(() => verifyReviewedIntentRecord(lookalike.withTx(undefined)))
+          .toThrow(/not written by the reviewed-intent builtin/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a location inside a genuine record", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Genuine"),
+        );
+        expect(() =>
+          verifyReviewedIntentRecord(
+            committed.record.key("parameters") as Cell<unknown>,
+          )
+        ).toThrow(/document root/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a write into a genuine record at every depth", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Genuine"),
+        );
+        const record = committed.record as Cell<Record<string, unknown>>;
+        for (
+          const [target, value] of [
+            [record.key("parameters"), '{"body":"Tampered"}'],
+            [record.key("evidence").key("event"), "forged"],
+            [record.key("evidence"), { component: "cf-reviewed-intent" }],
+          ] as const
+        ) {
+          const tx = fixture.runtime.edit();
+          setCfcImplementationIdentity(tx, PATTERN);
+          (target as Cell<unknown>).withTx(tx).set(value as never);
+          expect((await tx.commit()).error?.message).toContain(
+            "writeAuthorizedBy",
+          );
+        }
+        expect(verifyReviewedIntentRecord(committed.record).parameters.body)
+          .toBe("Genuine");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
+  it("is not importable from a pattern", () => {
+    expect(
+      isAllowedAuthoredImportSpecifier(
+        "@commonfabric/runner/cfc/reviewed-intent",
+      ),
+    ).toBe(false);
+    const { runtimeExports } = getRuntimeModuleExports();
+    expect(Object.keys(runtimeExports)).toContain("commonfabric/cfc");
+    for (const namespace of Object.values(runtimeExports)) {
+      for (const [name, value] of Object.entries(namespace as object)) {
+        expect(name).not.toMatch(/ReviewedIntent/);
+        expect([
+          prepareReviewedIntent,
+          commitReviewedIntent,
+          verifyReviewedIntentRecord,
+        ]).not.toContain(value);
+      }
+    }
+  });
+});
