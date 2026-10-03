@@ -52,14 +52,14 @@ transaction before the request goes out — which gives up reading the response 
 the same handler — or giving a request its own transaction, which is a different
 release than the one the boundary measures.
 
-**Before the send, as a host egress does.** `describeSinkReleaseRefusal` in
+**Before the send, as a host egress does.** `decideSinkRelease` in
 `packages/runner/src/cfc/prepare.ts` answers the same question synchronously for
 an egress the host performs rather than a pattern: it reads what is about to be
-released through a transaction and measures that transaction's consumed join
-against the destination's ceiling, with the membership predicate
-`verifySinkRequestCeilings` uses, so it cannot admit a flow the boundary would
-refuse. A handler `fetch` routed through `runtime.fetch` and refused by this
-check before any bytes leave is reachable today.
+released through a transaction and applies the committed sink gate's boundary,
+trust, policy-selection, mode, exhaustion, and fit semantics. The host decision
+is non-consuming, so a single-use grant cannot authorize it. A handler `fetch`
+routed through `runtime.fetch` and refused by this check before any bytes leave
+is reachable today.
 
 What it does not give, and what a design taking this route owes an answer for:
 

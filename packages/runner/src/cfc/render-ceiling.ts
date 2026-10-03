@@ -36,7 +36,7 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  * §8.10.3) against the host's `maxConfidentiality`.
  *
  * Resolution runs RUNNER-side (this module) exactly as B5's sink gate does
- * (`evaluateGatedConfidentiality` in prepare.ts), differing only in the
+ * (`evaluateGatedConfidentiality` in sink-decision.ts), differing only in the
  * boundary class: this mints `sinkClass:"display"` where the network sink
  * mints `sinkClass:"network"`. The reconciler consumes the resolved label; it
  * never runs the evaluator itself.
