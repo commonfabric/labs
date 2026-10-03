@@ -2662,17 +2662,20 @@ export class SchemaGenerator {
     reading: Map<ts.Type, Set<ts.TypeNode | undefined>>,
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
-    // A cell's labels are its value's, read at the value's own node.
+    // A cell's labels are its value's, read at the value's own node. The
+    // cell is recognized by its type, so one an alias makes from its own
+    // parameters (`type MaybeCell<T> = Cell<T | null>`) is read too, from its
+    // type alone where no authored node spells its value.
     const cell = resolveWrapperNode(typeNode, checker);
-    const wrapper = cell && cell.kind !== "Default" &&
+    const wrapper = cell?.kind !== "Default" &&
       getCellWrapperInfo(type, checker);
     const valueType = wrapper &&
       (wrapper.typeRef.typeArguments ??
         checker.getTypeArguments(wrapper.typeRef))[0];
-    if (cell && valueType) {
+    if (valueType) {
       return this.#labelsOf(
         valueType,
-        cell.node.typeArguments?.[0],
+        cell?.node.typeArguments?.[0],
         context,
         reading,
       );

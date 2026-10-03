@@ -4228,6 +4228,30 @@ interface HasImage {
       expect(narrowed).toEqual(A_ONLY);
     });
 
+    for (
+      const [name, declarations, whole] of [
+        ["a cell", "", 'value: Cell<Confidential<Secret, ["x"]> | null>'],
+        [
+          "an alias that passes a cell a nullable value",
+          "type MaybeCell<T> = Cell<T | null>;",
+          'value: MaybeCell<Confidential<Secret, ["x"]>>',
+        ],
+      ] as const
+    ) {
+      it(`gives a node narrowed from ${name} the labels of the cell's value`, async () => {
+        const { narrowed } = await narrowedSchema(
+          "{ narrowed: { a: string } }",
+          whole,
+          { declarations },
+        );
+
+        expect(narrowed).toEqual({
+          ...A_ONLY,
+          ifc: { confidentiality: ["x"] },
+        });
+      });
+    }
+
     it("puts the labels of a value that may be missing on the narrowed node's labeled value member", async () => {
       const { narrowed } = await narrowedSchema(
         '{ narrowed: Confidential<{ a: string }, ["y"]> | null }',
