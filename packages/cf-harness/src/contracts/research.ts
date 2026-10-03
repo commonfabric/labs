@@ -332,6 +332,15 @@ export interface HarnessResearchOrientation extends HarnessResearchFindings {
 
   /** Decision-specific follow-ups worth asking only if needed. */
   questions: readonly string[];
+
+  /**
+   * The user's request restated as what research verified can be built: each
+   * part bound to the granted handle or confirmed pattern that serves it, and
+   * the parts nothing serves left to {@link missing} with their reasons. The
+   * parent works, and writes a delegation's goal, from this rather than from
+   * the original ask. Absent on an orientation saved before it was asked for.
+   */
+  refinedTask?: string;
 }
 
 /** Cited response to a question within the user goal. */
