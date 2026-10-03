@@ -3720,7 +3720,7 @@ function statefulPiece(
     path: [],
     schema: pieceSchema,
   } as unknown as CellRef;
-  const cell = new CellHandle(rt, pieceRef, result);
+  const cell = new CellHandle(rt, pieceRef, { value: result });
   const pieceHandle = { cell: () => cell };
 
   /** Resolve the oldest still-pending deferred getPiece call. */

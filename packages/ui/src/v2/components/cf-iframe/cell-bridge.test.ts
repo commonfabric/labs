@@ -91,8 +91,10 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const bridge = createCellContextBridge(context);
@@ -178,7 +180,9 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, itemsRef, {
-      items: [{ title: "A" }],
+      value: {
+        items: [{ title: "A" }],
+      },
     });
     const items = createCellContextBridge(context).resources.items.cell!;
 
@@ -276,7 +280,7 @@ describe("cf-iframe cell bridge", () => {
     const context = new CellHandle<Record<string, unknown>>(
       runtime,
       lateRef,
-      {},
+      { value: {} },
     );
     const bridge = createCellContextBridge(context);
 
@@ -627,8 +631,10 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const count = createCellContextBridge(context).resources.count;
@@ -648,7 +654,9 @@ describe("cf-iframe cell bridge", () => {
         signal: { aborted: false },
       }),
     });
-    const context = new CellHandle(runtime, ref, { locked: "fixed" });
+    const context = new CellHandle(runtime, ref, {
+      value: { locked: "fixed" },
+    });
 
     const locked = createCellContextBridge(context).resources.locked;
 
@@ -672,8 +680,10 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
     const count = createCellContextBridge(context).resources.count;
     const changes: unknown[] = [];
@@ -717,7 +727,7 @@ describe("cf-iframe cell bridge", () => {
 
     it("tells a sink of a refusal as a failure, and hands it no value", () => {
       const { runtime, subscribed } = refusing();
-      const context = new CellHandle(runtime, ref, { count: 1 });
+      const context = new CellHandle(runtime, ref, { value: { count: 1 } });
       const count = createCellContextBridge(context).resources.count;
       const values: unknown[] = [];
       const failures: { code: string }[] = [];
@@ -739,7 +749,7 @@ describe("cf-iframe cell bridge", () => {
     for (const operation of ["pull", "initialize", "set", "push"] as const) {
       it(`rejects a guest's \`${operation}()\` with the refusal's own code`, async () => {
         const { runtime, requests } = refusing();
-        const context = new CellHandle(runtime, ref, { count: 1 });
+        const context = new CellHandle(runtime, ref, { value: { count: 1 } });
         const count = createCellContextBridge(context).resources.count.cell!;
         if (operation === "set" || operation === "push") {
           // A read refused first, as a guest learns it before it writes.
@@ -967,8 +977,10 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const events = createCellContextBridge(context).resources.events;
@@ -1005,8 +1017,10 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      count: 1,
-      database: { id: "db-1" },
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
     });
 
     const database = createCellContextBridge(context).resources.database;
@@ -1078,7 +1092,9 @@ describe("cf-iframe cell bridge", () => {
       }),
     });
     const context = new CellHandle(runtime, ref, {
-      database: { id: "db-1" },
+      value: {
+        database: { id: "db-1" },
+      },
     });
     const query = createCellContextBridge(context).resources.database.methods!
       .query;

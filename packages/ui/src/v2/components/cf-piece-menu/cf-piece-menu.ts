@@ -16,7 +16,6 @@ import {
 import { type JSONSchema, parseFabricRef } from "@commonfabric/runner/shared";
 import {
   $conn,
-  $onCellRefused,
   CellHandle,
   isCellHandle,
   RequestType,
@@ -1774,14 +1773,13 @@ export class CFPieceMenu extends BaseElement {
         const argumentCell = new CellHandle(
           rt,
           response.cell,
-          "refused" in response ? undefined : CellHandle.deserialize(
-            new CellHandle(rt, response.cell),
-            response.value,
-          ),
+          response.refused !== undefined ? { refused: response.refused } : {
+            value: CellHandle.deserialize(
+              new CellHandle(rt, response.cell),
+              response.value,
+            ),
+          },
         );
-        if (response.refused !== undefined) {
-          argumentCell[$onCellRefused](response.refused);
-        }
         this.#argumentCell = argumentCell;
         this.#argumentRead = new PanelRead(argumentCell, changed);
       } else if ("refused" in response) {

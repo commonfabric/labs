@@ -415,20 +415,18 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       if (!instances.has(cell)) {
         this.#recordSubscriptionDiagnostic(key, "localSubscribes");
         instances.add(cell);
-        // Copy the cached value (and label) from an existing subscriber to the
-        // new one so late subscribers get the initial value, or the refusal
-        // that stands in its place.
+        // Copy what an existing subscriber holds (and its label) to the new
+        // one so late subscribers get the initial value, or the refusal that
+        // stands in its place. One that has read nothing yet has nothing to
+        // copy; the new one hears the worker's answer with it.
         const existingInstance = instances.values().next().value;
-        const refusal = existingInstance?.refusal;
-        if (refusal !== undefined) {
-          cell[$onCellRefused](refusal);
-        } else if (existingInstance) {
-          const cachedValue = existingInstance.get();
-          if (cachedValue !== undefined) {
-            cell[$onCellUpdate](cachedValue, {
-              cfcLabel: existingInstance.cfcLabel,
-            });
-          }
+        const existing = existingInstance?.lastRead();
+        if (existing !== undefined && "refused" in existing) {
+          cell[$onCellRefused](existing.refused);
+        } else if (existing !== undefined && "value" in existing) {
+          cell[$onCellUpdate](existing.value, {
+            cfcLabel: existingInstance?.cfcLabel,
+          });
         }
       }
       return;

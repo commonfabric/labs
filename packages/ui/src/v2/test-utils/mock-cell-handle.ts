@@ -100,9 +100,10 @@ class MockCellNetwork {
     if (!root || cellRef.path.length === 0) return;
 
     // Reconstruct the root's full value with the nested path updated. A root
-    // whose read is refused holds nothing to reconstruct it from.
+    // whose read is refused, or that has read nothing, holds nothing to
+    // reconstruct it from.
     const rootRead = root.lastRead();
-    if ("refused" in rootRead) return;
+    if (!("value" in rootRead)) return;
     const rootValue = rootRead.value;
     if (!isObjectOrArray(rootValue)) return;
 
@@ -212,7 +213,12 @@ export function createMockCellHandle<T>(
   const conn = createMockConnection(network);
   const rt = createMockRuntimeClient(conn);
   const cellRef: CellRef = { ...DEFAULT_REF, ...ref };
-  const handle = new CellHandle<T>(rt, cellRef, value);
+  // One made with no value has read nothing yet.
+  const handle = new CellHandle<T>(
+    rt,
+    cellRef,
+    value === undefined ? { unread: true } : { value },
+  );
   network.register(handle as CellHandle<unknown>);
   networks.set(handle as CellHandle<unknown>, network);
   return handle;
