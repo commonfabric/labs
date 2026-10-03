@@ -4252,6 +4252,18 @@ interface HasImage {
       });
     }
 
+    it("gives a node narrowed from a union of cells the labels of every cell's value", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value: Cell<Confidential<Secret, ["x"]>> | Cell<Confidential<Secret, ["y"]>>',
+      );
+
+      expect(
+        (narrowed as { ifc?: { confidentiality?: unknown[] } }).ifc
+          ?.confidentiality,
+      ).toEqual(expect.arrayContaining(["x", "y"]));
+    });
+
     it("puts the labels of a value that may be missing on the narrowed node's labeled value member", async () => {
       const { narrowed } = await narrowedSchema(
         '{ narrowed: Confidential<{ a: string }, ["y"]> | null }',

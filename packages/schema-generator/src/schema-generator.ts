@@ -2665,9 +2665,10 @@ export class SchemaGenerator {
     // A cell's labels are its value's, read at the value's own node. The
     // cell is recognized by its type, so one an alias makes from its own
     // parameters (`type MaybeCell<T> = Cell<T | null>`) is read too, from its
-    // type alone where no authored node spells its value.
+    // type alone where no authored node spells its value. A union of cells
+    // is read member by member below, which joins every member's labels.
     const cell = resolveWrapperNode(typeNode, checker);
-    const wrapper = cell?.kind !== "Default" &&
+    const wrapper = !type.isUnion() && cell?.kind !== "Default" &&
       getCellWrapperInfo(type, checker);
     const valueType = wrapper &&
       (wrapper.typeRef.typeArguments ??
