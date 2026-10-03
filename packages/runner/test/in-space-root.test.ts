@@ -322,6 +322,18 @@ describe("in-space root", () => {
     );
   });
 
+  it("refuses `root` for a pattern whose result is not space-scoped, whichever of `asScope()` and `inSpace()` comes first", () => {
+    const runtime = openRuntime();
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+    expect(() => Child.asScope("user").inSpace("room", { root: true }))
+      .toThrow("this one is `user`-scoped");
+    expect(() => Child.inSpace("room", { root: true }).asScope("session"))
+      .toThrow("this one is `session`-scoped");
+    expect(() => Child.asScope("space").inSpace("room", { root: true })).not
+      .toThrow();
+  });
+
   it("reserves the root in the genesis of a space a serving runtime creates for its acting user", async () => {
     const serving = openRuntime({ as: serviceSigner, servingPosture: true });
     const space = await serving.resolveInSpaceName(home, "served-room", {

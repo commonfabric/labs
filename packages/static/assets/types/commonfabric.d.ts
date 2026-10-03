@@ -2590,7 +2590,9 @@ export interface InSpaceOptions {
    * root in the space's genesis commit, and the commit placing the result
    * links it as the space's root unless one is linked already. A DID or a
    * cell names a space that already exists, so `inSpace()` refuses `root`
-   * with either.
+   * with either. A space's root is shared by everyone the space admits, so
+   * `inSpace()` also refuses `root` for a pattern whose result is not
+   * space-scoped.
    */
   root?: boolean;
 }

@@ -653,6 +653,18 @@ function factoryFromPattern<T, R>(
     spaceGrants?: InSpaceGrants,
     spaceRoot?: true,
   ): PatternFactory<T, R> => {
+    if (spaceRoot) {
+      // The runner places a result at the reserved root address only in the
+      // space scope; any other scope would put it somewhere else.
+      const resultScope = schemaCellScope(pattern.resultSchema) ??
+        defaultScope;
+      if (resultScope !== undefined && resultScope !== "space") {
+        throw new Error(
+          "inSpace() makes a pattern the root of a space only when its " +
+            `result is space-scoped, and this one is \`${resultScope}\`-scoped`,
+        );
+      }
+    }
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
         const module: Module & toEncodableForm & toJSON = {

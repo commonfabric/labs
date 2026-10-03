@@ -4445,15 +4445,16 @@ export class Runtime {
    * this creates a space owned by `options.owner` with `options.grants`, whose
    * DID the next run making the same request records. With `options.root`,
    * the space's genesis commit reserves its root at
-   * {@link IN_SPACE_ROOT_CAUSE}, for the run that records it to place there. A record naming a DID
-   * that has no history is reported rather than replaced: the record is
-   * immutable, and replacing the space it names would move whatever the
-   * name's writers expect to find.
+   * {@link IN_SPACE_ROOT_CAUSE}, for the run that records it to place there.
+   * A record naming a DID that has no history is reported rather than
+   * replaced: the record is immutable, and replacing the space it names would
+   * move whatever the name's writers expect to find.
    *
    * The record is written after the space is created, and only one of the
    * runs racing to write it commits. The space another run created is then
-   * named by nothing, and holds nothing but its access-control document,
-   * which names its owner.
+   * named by nothing, and holds nothing but its genesis commit: its
+   * access-control document, which names its owner, and with
+   * `options.root` its root reservation, which nothing places a root for.
    *
    * @throws If the record names a DID that is not a space, if loading what
    *   decides that fails, or if creating a space fails.

@@ -5671,6 +5671,11 @@ export class SpaceServer implements TransactionSealDestination {
    * stays client-side until stage 2 moves it — the recorded stage-2
    * gate).
    *
+   * The exception is a space whose genesis reservation names no source:
+   * its creator places the root, so until a root is linked the ensure
+   * creates nothing and reports `awaiting-creator`, and the space serves
+   * with no root.
+   *
    * Identity, per the design's §4(b): the space's ACL OWNER, resolved
    * through the memory server's ruled service-identity ACL read
    * (`resolveSpaceOwner`) — self-owned = the space's own home. The

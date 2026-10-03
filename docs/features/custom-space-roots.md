@@ -72,4 +72,5 @@ conflict.
 
 Only a space named by a string, or an anonymous one, can be created with
 `root`: a DID or a cell names a space that already exists, and `inSpace()`
-refuses `root` with either.
+refuses `root` with either. It also refuses `root` for a pattern whose result
+is not space-scoped, since the reserved address is in the space scope.
