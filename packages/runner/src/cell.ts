@@ -35,7 +35,6 @@ import {
   deepFrozenCloneAndInternSchema,
   internSchema,
   isInternedSchema,
-  isNontrivialSchema,
 } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
@@ -401,18 +400,48 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
+/** Keywords that annotate a schema and constrain no value. */
+const SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
+  "title",
+  "description",
+  "$comment",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
+
+/**
+ * Whether `schema` gives a value no shape: it is absent, or admits every value
+ * once its annotations are set aside, so it holds nothing but what the runtime
+ * reads for itself (a label, a cell kind, a scope), a default and definitions
+ * besides them (`ContextualFlowControl.isTrueSchema`).
+ */
+const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
+  schema === undefined ||
+  ContextualFlowControl.isTrueSchema(
+    isObjectOrArray(schema)
+      ? Object.fromEntries(
+        Object.entries(schema).filter(([key]) =>
+          !SCHEMA_ANNOTATION_KEYWORDS.has(key)
+        ),
+      )
+      : schema,
+  );
+
 /**
  * Whether an item write under a missing parent, which the stored envelope
  * describes as `schema`, writes an item of an array. The storage write creates
  * an array for a missing container an index addresses, and that answers where
- * the envelope gives the parent no shape at all. Where the envelope declares
- * an array, it agrees. Any other declaration is taken as written, whether by
- * type, by the members of an object, by a combinator or by a reference: the
- * input is then spelled at the index, and the envelope's checks of the member
- * it declares there apply to the write.
+ * the envelope gives the parent no shape ({@link schemaGivesNoShape}): no
+ * envelope, no declaration there, or one holding only a label and annotations.
+ * Where the envelope declares an array, it agrees. Any other declaration is
+ * taken as written, whether by type, by the members of an object, by a
+ * combinator or by a reference: the input is then spelled at the index, and
+ * the envelope's checks of the member it declares there apply to the write.
  */
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
-  !isNontrivialSchema(schema) || schemaDeclaresArray(schema);
+  schemaGivesNoShape(schema) || schemaDeclaresArray(schema);
 
 /**
  * The schema write-policy input for a write landing at an item of an array:

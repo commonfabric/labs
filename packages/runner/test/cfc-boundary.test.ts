@@ -2790,6 +2790,67 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("lifts an item write to a missing container the stored envelope gives only annotations", async () => {
+    // `list` is declared by its label, a description and a default alone,
+    // which constrain no shape, so the storage write's array answers: the
+    // first item write's input lands at the array, and the next item write,
+    // at the array the document then holds, merges with it.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const seed = runtime.edit();
+      const doc = runtime.getCell(
+        signer.did(),
+        "cfc-missing-annotated-container",
+        {
+          type: "object",
+          properties: {
+            // A labeled sibling, so the document stores an envelope.
+            title: { type: "string", ifc: { confidentiality: ["title"] } },
+            list: {
+              description: "labeled, shapeless",
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+        },
+        seed,
+      );
+      doc.set({ title: "t" });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const item = {
+        type: "string",
+        ifc: { confidentiality: ["secret"] },
+      } as const satisfies JSONSchema;
+      for (const [index, value] of [["0", "a"], ["1", "b"]]) {
+        const tx = runtime.edit();
+        runtime.getCellFromLink(
+          { ...doc.getAsNormalizedFullLink(), path: ["list", index] },
+          item,
+          tx,
+        ).set(value);
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: { path: string[] }[] } };
+        } | undefined;
+      };
+      const persisted = replica.getDocument(parseLink(doc.getAsLink()).id!);
+      expect(persisted?.value).toEqual({ title: "t", list: ["a", "b"] });
+      expect(persisted?.cfc?.labelMap?.entries.map((entry) => entry.path))
+        .toContainEqual(["list", "*"]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("persists CFC metadata for stored link writes without link schema", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
