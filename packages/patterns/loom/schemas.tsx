@@ -9,7 +9,7 @@ import type {
   VNode,
   Writable,
 } from "commonfabric";
-import type { PanelAdderProfile } from "./admission.tsx";
+import type { PanelAdderDid, PanelAdderProfile } from "./admission.tsx";
 import type {
   ParticipantProfile,
   ParticipantRoster,
@@ -17,6 +17,7 @@ import type {
 } from "./participants.tsx";
 
 export type {
+  PanelAdderDid,
   PanelAdderProfile,
   ParticipantProfile,
   ParticipantRoster,
@@ -52,31 +53,35 @@ export interface PublishedDocument {
  * `addedByProfile` is the profile under which the person who added the
  * occurrence acted, and the label entry the panel declares at that field, as
  * opposed to the copies of the profile's own label, names the principal who
- * acted; only the root's `admitPanel` writes it. `addedBy` is the DID of the person who added
- * the occurrence as its writer claims it: the root's handlers check that it is
- * a DID, not that it names the person acting, and a direct write to a panel is
- * not checked. A panel with neither is attributed to the Loom's owner.
+ * acted. `addedBy` is the DID of the principal who added the occurrence, and
+ * the label entry the panel declares there names the same principal when the
+ * root wrote it. Of the root's handlers only `admitPanel` writes either, and
+ * once it has written a panel no other handler may; an occurrence it creates
+ * records one of the two. An occurrence a caller made may hold an
+ * `addedBy` the root never wrote: the value is its writer's claim, and a label
+ * entry there names the writer, not the principal the value names. A panel
+ * with neither names no adder.
  */
 export type Panel =
   | {
     kind: "piece";
     piece: Writable<unknown>;
     titleOverride?: string;
-    addedBy?: string;
+    addedBy?: PanelAdderDid;
     addedByProfile?: PanelAdderProfile;
   }
   | {
     kind: "document";
     content: Writable<PublishedDocument>;
     titleOverride?: string;
-    addedBy?: string;
+    addedBy?: PanelAdderDid;
     addedByProfile?: PanelAdderProfile;
   }
   | {
     kind: "url";
     url: string;
     titleOverride?: string;
-    addedBy?: string;
+    addedBy?: PanelAdderDid;
     addedByProfile?: PanelAdderProfile;
   };
 
@@ -103,18 +108,16 @@ export interface PanelPosition {
 }
 
 /**
- * Who adds a panel: `as` is the profile under which they act, or `addedBy`
- * names them by DID. An event carries at most one of the two, and `addPanel`
- * takes `addedBy` from the occurrence rather than the event.
+ * The profile under which the person adding a panel acts. Without one, the
+ * root records the principal the event acted for; an event never names it.
  */
 export interface PanelAdder {
   as?: ParticipantProfile;
-  addedBy?: string;
 }
 
 /**
  * The event of every stream that adds a panel. Each is a binding of the one
- * handler that writes `addedByProfile`, so all three take this shape:
+ * handler that writes a panel's adder, so all three take this shape:
  * `addPiece` requires `piece`, and `addPanel` and `duplicatePanel` require
  * `panel` and accept `before`. `addPanel` with `as` adds a copy of `panel`,
  * never recording the profile on the document passed.

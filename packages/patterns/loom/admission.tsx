@@ -3,15 +3,34 @@
  * with the panel checks it shares with the rest of the root.
  */
 import {
+  type AuthoredByCurrentUser,
   type Cfc,
   type CurrentPrincipal,
+  currentPrincipal,
   handler,
+  principalOf,
   type RepresentsCurrentUser,
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
 import type { ParticipantProfile } from "./participants.tsx";
 import type { Panel, PanelAdmission } from "./schemas.tsx";
+
+/**
+ * The DID of the principal who added a panel.
+ *
+ * When `admitPanel` writes it, the value is the principal its event acted for,
+ * as `currentPrincipal()` returns it, and the runtime stores a declared label
+ * entry at the field carrying `authored-by` for that same principal. Nothing
+ * in the event chooses either. Once the root has written it, a write to the
+ * field from any other handler is refused. A value an occurrence held before
+ * `admitPanel` linked it is its writer's claim: the entry there, when the run
+ * that wrote it minted one, names that writer rather than whomever the value
+ * names.
+ */
+export type PanelAdderDid = AuthoredByCurrentUser<
+  WriteAuthorizedBy<string, typeof admitPanel>
+>;
 
 /**
  * The profile under which the person who added a panel acted.
@@ -80,22 +99,6 @@ function isAdderDid(value: string): boolean {
   return value.length <= 195 && DID_SYNTAX.test(value);
 }
 
-/**
- * Refuse an event's adder that is malformed or that names the adder twice.
- * The handler cannot read the principal an acting profile names, so an event
- * carrying `as` may not also carry `addedBy`: the profile's label is then the
- * only record of who added the panel.
- */
-function validateAdder(event: PanelAdmission): void {
-  if (event.addedBy === undefined) return;
-  if (!isAdderDid(event.addedBy)) {
-    throw new Error("A panel's addedBy must be a DID");
-  }
-  if (event.as !== undefined) {
-    throw new Error("A panel added under a profile takes no addedBy");
-  }
-}
-
 /** Validate a panel before admitting its occurrence to the shared composition. */
 function validatePanel(panel: Panel): void {
   if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
@@ -134,7 +137,11 @@ function containsOccurrence(
   return list.some((existing) => existing.equals(panel));
 }
 
-/** The adder fields an event gives a new occurrence. */
+/**
+ * The adder fields a new occurrence takes: the profile the event acts under,
+ * or else the principal the event acted for. A run that acts for no one
+ * records neither.
+ */
 function adderFields(
   event: PanelAdmission,
 ): Pick<Panel, "addedBy" | "addedByProfile"> {
@@ -143,7 +150,16 @@ function adderFields(
   if (event.as !== undefined) {
     return { addedByProfile: event.as.resolveAsCell() };
   }
-  return event.addedBy === undefined ? {} : { addedBy: event.addedBy };
+  const principal = currentPrincipal();
+  return principal === undefined ? {} : { addedBy: principal };
+}
+
+/**
+ * The principal `panel`'s attested adder names, or `undefined` when its label
+ * names no single one.
+ */
+function attestedAdder(panel: Writable<Panel>): string | undefined {
+  return principalOf(panel, "authored-by");
 }
 
 /** A copy of `source` that keeps its target and title and takes a new adder. */
@@ -185,13 +201,14 @@ function admitCopy(
 /**
  * Admits one panel occurrence to the Loom and records who added it.
  *
- * It is the only handler that may write a panel's `addedByProfile`, so every
- * stream that adds a panel is a binding of it, and `mode` says which. An
- * event's `as` is the profile under which the person adding acts; it is
- * linked into an occurrence this handler creates, never into a document the
- * caller passed, and the runtime labels it with the principal who acted. An
- * event without `as` may still name the adder in `addedBy`,
- * which is a claim the handler checks only for DID syntax.
+ * It is the only handler that may write a panel's `addedByProfile` or
+ * `addedBy`, so every stream that adds a panel is a binding of it, and `mode`
+ * says which. An event's `as` is the profile under which the person adding
+ * acts; it is linked into an occurrence this handler creates, never into a
+ * document the caller passed, and the runtime labels it with the principal who
+ * acted. An occurrence this handler creates without `as` records that
+ * principal in `addedBy` instead, attested the same way. Nothing in the event
+ * names the adder.
  *
  * The body touches the occurrences in `panels` only through helpers. Its
  * state schema is inferred from the uses the body shows, and an occurrence
@@ -202,7 +219,6 @@ export const admitPanel = handler<
   PanelAdmission,
   { panels: Writable<Writable<Panel>[]>; mode: AdmissionMode }
 >((event, { panels, mode }) => {
-  validateAdder(event);
   const list = panels.get();
   if (mode === "piece") {
     const piece = event.piece;
@@ -220,15 +236,8 @@ export const admitPanel = handler<
     // A panel already present is not admitted again, so there is nothing to
     // validate or record.
     if (containsOccurrence(list, panel)) return;
-    // The occurrence carries its own `addedBy`, so the event may not name one.
-    if (event.addedBy !== undefined) {
-      throw new Error("addPanel takes its adder from the panel or from as");
-    }
     const value = panel.get();
     validatePanel(value);
-    if (event.as !== undefined && value.addedBy !== undefined) {
-      throw new Error("A panel added under a profile takes no addedBy");
-    }
     if (event.as !== undefined) {
       // A profile is recorded only on an occurrence this handler creates, so
       // `as` admits a copy of the one passed, as `duplicate` does. Writing it
@@ -244,6 +253,15 @@ export const admitPanel = handler<
     if (value.addedByProfile !== undefined) {
       throw new Error(
         "A panel that already records its adder's profile cannot be added again",
+      );
+    }
+    // Nor is one whose attested adder is another principal, for the same
+    // reason. The principal admitting it may link an occurrence attested to
+    // them, and one that names its adder only by claim.
+    const attested = attestedAdder(panel);
+    if (attested !== undefined && attested !== currentPrincipal()) {
+      throw new Error(
+        "A panel another principal added cannot be linked; add a copy of it with `as` instead",
       );
     }
     panels.set(withInserted(list, index, panel));

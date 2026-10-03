@@ -879,15 +879,28 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/loom-panel-added-by-break.md",
   },
   {
-    // Each `Panel` kind gains an optional `addedByProfile`, whose write
-    // contract and label are its type. The proof does not apply the
-    // open-object evolution allowance inside a union branch.
+    // Each `Panel` kind's `addedBy` gains the `admitPanel` write contract and
+    // the runtime's `authored-by` label as its type, which the proof reads as
+    // a narrowed union branch, and the narrowed `Panel` reaches the `before`
+    // of `addPanel`'s event. Under this baseline the pair already failed on
+    // `argument.panels[]` for `addedByProfile`, which this entry also covers.
     pattern: "loom/main.tsx",
     baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
-    paths: ["argument.panels[]"],
+    paths: ["argument.panels[]", "result.addPanel.before"],
     reason:
-      "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
-    record: "docs/history/loom-panel-adder-profile-break.md",
+      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, which reads as a narrowed union branch in the panels and in addPanel's event",
+    record: "docs/history/loom-panel-attested-adder-break.md",
+  },
+  {
+    // The same change over the baseline that carries `addedByProfile`. An
+    // admission event no longer names an adder, so `addedBy` leaves the
+    // event of the three streams that add a panel.
+    pattern: "loom/main.tsx",
+    baselines: ["20260924T085224Z-oEtBQ4AVdy1fMTAB"],
+    paths: ["argument.panels[]", "result.addPanel.addedBy"],
+    reason:
+      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, and an admission event no longer names one",
+    record: "docs/history/loom-panel-attested-adder-break.md",
   },
   {
     // The demo's release rule now pins two levels, `commit` and the `submit`
