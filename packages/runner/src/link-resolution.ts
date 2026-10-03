@@ -72,6 +72,15 @@ const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
 
 export const MAX_PATH_RESOLUTION_LENGTH = 100;
 
+/**
+ * A link walk that cannot end: it reaches a (document, path) pair it has
+ * already visited, a link whose target passes back through its own position,
+ * or {@link MAX_PATH_RESOLUTION_LENGTH} hops.
+ */
+export class LinkResolutionLoopError extends Error {
+  override name = "LinkResolutionLoopError";
+}
+
 type LinkHop = {
   /**
    * The stored link's schema BEFORE any path narrowing (the ancestor-probe
@@ -565,8 +574,9 @@ export function resolveLinkTracingDereferences(
  * they saw; the walk records no dereference trace, uses no memo and kicks no
  * sync. It returns `undefined` where the walk names no value a reader could
  * read: a link cycle, a path that grows without end, a narrower-scope link the
- * reader may not follow, a chain that ends in a document that has not
- * arrived, or a read that fails.
+ * reader may not follow, or a chain that ends in a document that has not
+ * arrived. Any other failure, such as a read that fails, is thrown, since it
+ * says nothing about where the value is.
  */
 export function resolveLinkForVerifier(
   tx: IExtendedStorageTransaction,
@@ -588,8 +598,9 @@ export function resolveLinkForVerifier(
           },
         }),
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof LinkResolutionLoopError) return undefined;
+    throw error;
   }
   return blocked || resolved.link.pendingHopDoc === true ? undefined : {
     link: resolved.link,
@@ -764,7 +775,9 @@ function walkLink(
     let deadEndDocMissing = false;
     if (iteration++ > MAX_PATH_RESOLUTION_LENGTH) {
       logger.error("link-res-error", `Link resolution iteration limit reached`);
-      throw new Error(`Link resolution iteration limit reached`);
+      throw new LinkResolutionLoopError(
+        `Link resolution iteration limit reached`,
+      );
     }
 
     // Detect cycles. `addressKey` always names the link this iteration starts
@@ -775,7 +788,7 @@ function walkLink(
         "link-res-error",
         debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
       );
-      throw new Error(
+      throw new LinkResolutionLoopError(
         debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
@@ -903,7 +916,9 @@ function walkLink(
         const detail = `link at [${hopSource.path.join("/")}] targets its ` +
           `own subpath [${hopTarget.path.join("/")}]`;
         logger.error("link-res-error", `Link cycle detected: ${detail}`);
-        throw new Error(`Link cycle detected at ${key}: ${detail}`);
+        throw new LinkResolutionLoopError(
+          `Link cycle detected at ${key}: ${detail}`,
+        );
       }
       carriedCap = hopCap;
       traces.push(

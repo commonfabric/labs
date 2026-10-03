@@ -11,7 +11,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { type JSONSchema } from "../src/builder/types.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
-import { resolveLink } from "../src/link-resolution.ts";
+import { resolveLink, resolveLinkForVerifier } from "../src/link-resolution.ts";
 import {
   areNormalizedLinksSame,
   isSigilLink,
@@ -23,7 +23,10 @@ import {
   type IExtendedStorageTransaction,
   type IMemorySpaceAddress,
 } from "../src/storage/interface.ts";
-import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import {
+  isLinkResolutionProbe,
+  stableInternalVerifierRead,
+} from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -1421,6 +1424,57 @@ describe("link-resolution", () => {
 
       expect(link1.id).not.toMatch(/^data:/);
       expect(link2.id).not.toMatch(/^data:/);
+    });
+  });
+
+  describe("resolveLinkForVerifier()", () => {
+    it("names no value for a walk that cannot end", () => {
+      const self = runtime.getCell<any>(space, "verifier-self", undefined, tx);
+      self.setRaw({ a: self.key("a").key("b").getAsLink() });
+      const a = runtime.getCell<any>(space, "verifier-a", undefined, tx);
+      const b = runtime.getCell<any>(space, "verifier-b", undefined, tx);
+      a.setRaw(b.getAsLink());
+      b.setRaw(a.key("foo").getAsLink());
+
+      for (const link of [self.key("a"), a]) {
+        expect(
+          resolveLinkForVerifier(
+            tx,
+            link.getAsNormalizedFullLink(),
+            stableInternalVerifierRead,
+          ),
+        ).toBeUndefined();
+      }
+    });
+
+    it("throws a failure that says nothing about where the value is", () => {
+      const source = runtime.getCell<any>(
+        space,
+        "verifier-failing",
+        undefined,
+        tx,
+      );
+      source.setRaw({ x: 1 });
+      // A transaction whose reads fail.
+      const failing = new Proxy(tx, {
+        get(target, key) {
+          if (key === "read") {
+            return () => {
+              throw new Error("storage failed");
+            };
+          }
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+
+      expect(() =>
+        resolveLinkForVerifier(
+          failing,
+          source.key("x").getAsNormalizedFullLink(),
+          stableInternalVerifierRead,
+        )
+      ).toThrow("storage failed");
     });
   });
 

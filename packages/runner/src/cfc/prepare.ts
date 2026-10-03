@@ -87,7 +87,7 @@ import {
   type NormalizedLink,
   parseLink,
 } from "../link-utils.ts";
-import { readMaybeLink, resolveLinkForVerifier } from "../link-resolution.ts";
+import { resolveLinkForVerifier } from "../link-resolution.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
 import { isReservedSibling } from "../reserved-sibling-seam.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
@@ -3465,15 +3465,16 @@ type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
 /**
  * What stands at `rel` below `value`: the first link met on the way down,
  * which the path then continues inside of and which is therefore what the
- * path resolves through, else the value at `rel`, else nothing.
+ * path resolves through, with the number of segments of `rel` above it, else
+ * the value at `rel`, else nothing.
  */
 const pointerAlongPath = (
   value: unknown,
   rel: readonly string[],
-): { link: unknown } | { value: unknown } | undefined => {
+): { link: unknown; depth: number } | { value: unknown } | undefined => {
   let current = value;
   for (let depth = 0;; depth++) {
-    if (isPrimitiveCellLink(current)) return { link: current };
+    if (isPrimitiveCellLink(current)) return { link: current, depth };
     if (depth === rel.length) return { value: current };
     if (!isObjectOrArray(current) || !Object.hasOwn(current, rel[depth])) {
       return undefined;
@@ -8556,8 +8557,7 @@ const createLinkLabelDeriver = (
     }) !== undefined;
 
   // Whether the first link a reader meets on the way down to `source` in its
-  // document was stored before this transaction. A read that fails says
-  // nothing about what the document holds, so it counts as one.
+  // document was stored before this transaction.
   const reachedThroughStoredLink = (
     source: LinkWritePolicyInput["source"],
   ): boolean => {
@@ -8567,19 +8567,14 @@ const createLinkLabelDeriver = (
       scope: normalizeCellScope(source.scope),
     };
     const path = canonicalizeLogicalPath(source.path);
-    try {
-      return tx.runWithAmbientReadMeta(INTERNAL_VERIFIER_META, () => {
-        for (let depth = 0; depth <= path.length; depth++) {
-          const position = { ...document, path: path.slice(0, depth) };
-          if (readMaybeLink(tx, position) !== undefined) {
-            return !writtenHere(position);
-          }
-        }
-        return false;
-      });
-    } catch {
-      return true;
-    }
+    const pointer = pointerAlongPath(
+      tx.readValueOrThrow({ ...document, path: [] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      path,
+    );
+    return pointer !== undefined && "link" in pointer &&
+      !writtenHere({ ...document, path: path.slice(0, pointer.depth) });
   };
 
   // The reader starts at the receiving slot, so the walk crosses the staged
@@ -8625,12 +8620,9 @@ const createLinkLabelDeriver = (
       scope: normalizeCellScope(resolved.link.scope),
       path: canonicalizeLogicalPath(resolved.link.path),
     };
-    let value: unknown;
-    try {
-      value = tx.readValueOrThrow(holder, { meta: INTERNAL_VERIFIER_META });
-    } catch {
-      return { kind: "unresolved" };
-    }
+    const value = tx.readValueOrThrow(holder, {
+      meta: INTERNAL_VERIFIER_META,
+    });
     if (value === undefined) return { kind: "absent" };
     if (resolved.traces.every(({ source }) => writtenHere(source))) {
       return { kind: "chain" };
@@ -10120,13 +10112,15 @@ const verifyWriteFloor = function* (
       relative: readonly string[],
       chain: IFCLabel,
     ): Generator<void, readonly CfcAtom[] | undefined> {
+      // The reader starts where the link lies, or at the floor's path below
+      // it, reading through the schema the document declares there.
       const held = yield* ctx.linkLabels.heldLabel(
         input,
         relative,
-        canonicalizeLogicalPath(input.target.path).length + relative.length ===
-            entry.path.length
-          ? entry.schema
-          : undefined,
+        ContextualFlowControl.getSchemaAtPath(schema, [
+          ...canonicalizeLogicalPath(input.target.path),
+          ...relative,
+        ]),
       );
       switch (held.kind) {
         case "absent":
