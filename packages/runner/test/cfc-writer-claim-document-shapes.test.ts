@@ -313,7 +313,9 @@ export default pattern((input: In) => ({ value: input.value }), ${reference});
       const tx = runtime.edit();
       await expect(
         runtime.patternManager.compilePattern(source, { space, tx }),
-      ).rejects.toThrow("could not be read");
+      ).rejects.toThrow(
+        "The writer binding of `WriteAuthorizedBy` could not be read",
+      );
       tx.abort();
     });
   }

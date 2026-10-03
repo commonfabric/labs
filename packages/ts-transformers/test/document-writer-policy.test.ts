@@ -38,6 +38,10 @@ const isUnreadWriter = (diagnostic: TransformationDiagnostic) =>
   diagnostic.type === "cfc-write-authorized-by:unread" &&
   diagnostic.severity === "error";
 
+/** Whether `diagnostic` reports a schema reference that could not be followed. */
+const isUnfollowedReference = (diagnostic: TransformationDiagnostic) =>
+  diagnostic.message.includes("could not be read back");
+
 const holdsClaim = (schema: unknown) =>
   JSON.stringify(schema ?? null).includes('"writeAuthorizedBy"');
 
@@ -286,10 +290,15 @@ export default pattern<{}>(() => {
       ] as const
     ) {
       it(`refuses a writer a pattern's input schema, passed through ${how}, reads where no syntax names it`, async () => {
+        // The generator reports the writer, from the `toSchema` call the
+        // reference was followed to; it is not reported as a reference that
+        // could not be followed.
         const result = await transform(`${declaration}
 export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
+        const unread = result.diagnostics.filter(isUnreadWriter);
 
-        expect(result.diagnostics.filter(isUnreadWriter)).not.toEqual([]);
+        expect(unread).not.toEqual([]);
+        expect(unread.filter(isUnfollowedReference)).toEqual([]);
       });
     }
 
@@ -301,9 +310,7 @@ const make = () => toSchema<${UNREAD}>();
 export default pattern((input: ${UNREAD}) => ({ input }), make());`);
 
       expect(
-        result.diagnostics.filter(isUnreadWriter).map((diagnostic) =>
-          diagnostic.message.includes("could not be read back")
-        ),
+        result.diagnostics.filter(isUnreadWriter).map(isUnfollowedReference),
       ).toEqual([true]);
     });
 
@@ -357,8 +364,10 @@ export default pattern<{}>(() => {
   const a = new Writable({ byId: {} }, schema).for("a");
   return { a };
 });`);
+      const unread = result.diagnostics.filter(isUnreadWriter);
 
-      expect(result.diagnostics.filter(isUnreadWriter)).not.toEqual([]);
+      expect(unread).not.toEqual([]);
+      expect(unread.filter(isUnfollowedReference)).toEqual([]);
     });
   });
 
