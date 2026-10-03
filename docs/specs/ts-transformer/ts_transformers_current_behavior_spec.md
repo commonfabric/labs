@@ -162,7 +162,8 @@ present; no stage handles a missing one.
      cannot read is an error. Like `patternResultAnchor`, a plain identity
      lookup with **no** `getOriginalNode` fallback. A result inferred from the
      callback is a view where it returns a reactive reference: the pattern's
-     argument, a cell, a reactive call's result, or a member of one. Any other
+     argument, a cell, a reactive call's result or another pattern's
+     instance, or a member of one. Any other
      data it returns under a writer policy is data its result document holds:
      a literal, an object or array literal (spreads and computed keys
      included, a member its type does not name read against the type's index

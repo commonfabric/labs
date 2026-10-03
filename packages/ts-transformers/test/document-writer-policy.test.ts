@@ -573,6 +573,31 @@ export default pattern<{ owned: Owned<string, typeof setName> }>(({ owned }) => 
       );
     });
 
+    it("reads an inferred result returning an imported pattern's instance from its type, as a view", async () => {
+      // The instance links to the other pattern's result document, so the
+      // result is not rebuilt as data it holds: `flag` widens as the result's
+      // type does.
+      const outputs = await transformFiles({
+        "/sub.tsx": `${PRELUDE}
+export interface SubOutput { value: Owned<string, typeof setName> }
+export default pattern<Record<string, never>, SubOutput>(() => ({ value: "" as never }));`,
+        "/main.tsx": `${PRELUDE}
+import Sub from "./sub.tsx";
+export default pattern<{}>(() => {
+  const sub = Sub({});
+  return { sub, inner: sub.value, flag: true };
+});`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const { output } = patternSchemas(parseModule(outputs["/main.tsx"]!));
+
+      expect(output).toMatchObject({
+        properties: { flag: { type: "boolean" } },
+      });
+      expect(
+        (output.properties as Record<string, Record<string, unknown>>).flag,
+      ).not.toHaveProperty("enum");
+    });
+
     it("reports nothing for an inferred result that returns a constant bound to its input's field", async () => {
       // The constant links to the input's document, which stores the policy.
       const result = await transform(`
