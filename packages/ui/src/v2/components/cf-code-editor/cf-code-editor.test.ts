@@ -19,6 +19,7 @@ import { NAME } from "@commonfabric/runner/shared";
 import { type CellHandle, type CellRef } from "@commonfabric/runtime-client";
 import {
   createMockCellHandle,
+  holdReads,
   pushRefusal,
   pushUpdate,
   writesSent,
@@ -140,7 +141,7 @@ describe("CFCodeEditor backlink disposal handling", () => {
       }),
       mentionable: own(null),
       references: own(null),
-      _cellController: own({ refusal: undefined }),
+      _cellController: own({ refusal: undefined, getCell: () => null }),
       _editorView: own(undefined),
       emit: own(() => {}),
     });
@@ -200,6 +201,7 @@ describe("CFCodeEditor reference-map housekeeping", () => {
         mentionable: own(null),
         references: own({
           get: () => map,
+          lastRead: () => ({ value: map }),
           key: (k: string) => ({
             set: (v: unknown) => {
               if (v === undefined) deleted.push(k);
@@ -207,7 +209,11 @@ describe("CFCodeEditor reference-map housekeeping", () => {
           }),
         }),
         _refKeysAtLoad: own(new Set<string>()),
-        _cellController: own({ flush: () => flushed++, refusal: undefined }),
+        _cellController: own({
+          flush: () => flushed++,
+          refusal: undefined,
+          getCell: () => null,
+        }),
         _refMap: own(() => map),
       },
     );
@@ -307,12 +313,12 @@ describe("CFCodeEditor pasted-mention decision", () => {
     // Own data properties also shadow those accessors for the rest of the test.
     return Object.create(CFCodeEditor.prototype, {
       // Its presence is what selects reference mode.
-      references: own({ get: () => ({}) }),
+      references: own({ get: () => ({}), lastRead: () => ({ value: {} }) }),
       pattern: own({ space: () => "did:key:mock" }),
       fabricHosts: own(["fabric.example"]),
       mentionable: own(null),
       mentioned: own(undefined),
-      _cellController: own({ refusal: undefined }),
+      _cellController: own({ refusal: undefined, getCell: () => null }),
       _editorView: own(undefined),
       _insertPastedMention: own(() => {}),
     });
@@ -404,12 +410,21 @@ describe("CFCodeEditor pasted-mention decision", () => {
 
   for (
     const [input, refused] of [
-      ["the content", { _cellController: { refusal: REFUSED } }],
-      ["the list of pieces", { mentionable: { refusal: REFUSED } }],
-      ["the reference map", {
-        references: { get: () => ({}), refusal: REFUSED },
+      ["the content", {
+        _cellController: { refusal: REFUSED, getCell: () => null },
       }],
-      ["the mentioned list", { mentioned: { refusal: REFUSED } }],
+      ["the list of pieces", {
+        mentionable: { lastRead: () => ({ refused: REFUSED }) },
+      }],
+      ["the reference map", {
+        references: {
+          get: () => ({}),
+          lastRead: () => ({ refused: REFUSED }),
+        },
+      }],
+      ["the mentioned list", {
+        mentioned: { lastRead: () => ({ refused: REFUSED }) },
+      }],
     ] as const
   ) {
     it(`leaves every paste alone while the worker refuses ${input}`, () => {
@@ -1679,6 +1694,33 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     expect(writesSent(mentioned)).toEqual([]);
     expect(mentioned.get()).toEqual([direct]);
     expect(writesSent(content)).toEqual([]);
+  });
+
+  it("derives no `$mentioned` from a `$mentionable` the worker has not answered for", async () => {
+    const element = editor();
+    const direct = { [NAME]: "Direct" };
+    const mentioned = createMockCellHandle<MentionableArray>([direct], {
+      id: "of:mentioned",
+    });
+    // A list of pieces whose read the worker has not answered: it holds
+    // nothing yet, which resolves none of the document's mentions.
+    const universe = createMockCellHandle<MentionableArray>(undefined, {
+      id: "of:universe",
+    });
+    holdReads(universe);
+    element.mentionable = universe;
+    element.mentioned = mentioned;
+    const view = viewOver(
+      "See [[Direct (direct)]].",
+      [],
+      element._refusalGate(),
+    );
+    element._editorView = view;
+
+    await Promise.all(bind(element, ["mentionable", "mentioned"]));
+
+    expect(writesSent(mentioned)).toEqual([]);
+    expect(view.state.readOnly).toBe(true);
   });
 
   it("leaves `$mentioned` as it is when the content of a document with references is refused", async () => {

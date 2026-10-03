@@ -317,7 +317,9 @@ export class CellController<T> implements ReactiveController {
    */
   private _askWorker(): Promise<void> {
     if (!isCellHandle(this._currentValue)) return Promise.resolve();
-    return (this._currentValue as CellHandle<T>).pull().then(
+    return (this._currentValue as CellHandle<T>).pull({
+      awaitDurability: false,
+    }).then(
       () => {},
       (error) => {
         if (!(error instanceof CellReadRefusedError)) {

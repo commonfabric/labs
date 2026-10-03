@@ -60,6 +60,7 @@ import { parseFabricUrl } from "@commonfabric/runner/fabric-url";
 import { stringSchema } from "@commonfabric/runner/schemas";
 import {
   type CellHandle,
+  CellReadRefusedError,
   cellRefToIdentityKey,
   isCellHandle,
   NAME,
@@ -231,6 +232,9 @@ const getLangExtFromMimeType = (mime: MimeType) => {
   return langRegistry.get(mime) ?? defaultLang;
 };
 
+/** What the editor needs of a handle it computes writes from. */
+type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
+
 /**
  * CFCodeEditor - Code editor component with syntax highlighting and debounced changes
  *
@@ -401,7 +405,7 @@ export class CFCodeEditor extends BaseElement {
   private _presenceComp = new Compartment();
   /**
    * Holds the editor read-only while a read it computes its writes from is
-   * refused ({@link _readsRefused}); empty otherwise.
+   * refused ({@link _readsWithheld}); empty otherwise.
    */
   private _refusedComp = new Compartment();
   /** Whether {@link _refusedComp} holds the editor read-only now. */
@@ -582,17 +586,20 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
-   * Whether the worker refuses a read the editor computes its writes from:
-   * the content (`value`), `$mentionable`, which resolves a wiki-link's id to
-   * its piece and says which pieces exist, `$references`, which resolves a
-   * reference's key and says which keys are taken, or `$mentioned`, which the
-   * editor compares what it would write against. A refused read holds
-   * nothing, and reads as empty: an editor emptied by a refused content cell
-   * would write `$mentioned` with none of the document's mentions, and one
-   * whose list of pieces is refused would create a piece for a query the list
-   * might have answered.
+   * Whether a read the editor computes its writes from holds no value: the
+   * worker refused it, or has not answered it yet. The reads are the content
+   * (`value`), `$mentionable`, which resolves a wiki-link's id to its piece
+   * and says which pieces exist, `$references`, which resolves a reference's
+   * key and says which keys are taken, and `$mentioned`, which the editor
+   * compares what it would write against. Such a read holds nothing, and
+   * reads as empty: an editor emptied by a refused content cell would write
+   * `$mentioned` with none of the document's mentions, one whose list of
+   * pieces has not loaded would drop every mention it resolves, and one whose
+   * list is refused would create a piece for a query the list might have
+   * answered. The editor asks the worker for each read it has not had
+   * answered ({@link _askUnread}).
    *
-   * So while any is refused the editor computes no write at all. One gate
+   * So while any is withheld the editor computes no write at all. One gate
    * stands at each kind of write: the document takes no change but the one
    * that mirrors the content cell (`changeFilter`, and the read-only
    * {@link _refusedComp} for the person at the keyboard); every cell write
@@ -602,22 +609,55 @@ export class CFCodeEditor extends BaseElement {
    * would make a later write wrong, and runs again once the read is
    * admitted.
    */
-  private get _readsRefused(): boolean {
+  private get _readsWithheld(): boolean {
     return this._cellController.refusal !== undefined ||
-      this.mentionable?.refusal !== undefined ||
-      this.references?.refusal !== undefined ||
-      this.mentioned?.refusal !== undefined;
+      this._inputs().some((handle) => !("value" in handle.lastRead()));
+  }
+
+  /** The handles the editor computes its writes from. */
+  private _inputs(): EditorInput[] {
+    const inputs: EditorInput[] = [];
+    const content = this._cellController.getCell();
+    if (content) inputs.push(content);
+    if (this.mentionable) inputs.push(this.mentionable);
+    if (this.references) inputs.push(this.references);
+    if (this.mentioned) inputs.push(this.mentioned);
+    return inputs;
+  }
+
+  /** Inputs whose read the editor has asked the worker for. */
+  private readonly _asked = new WeakSet<EditorInput>();
+
+  /**
+   * Asks the worker to read each input that has read nothing yet. A
+   * subscription delivers nothing for a cell that holds nothing, so without
+   * a read of its own the editor would wait on such a cell for good; a pull
+   * loads the document and answers either way, and the answer reaches the
+   * editor through its subscription, a refusal as much as a value.
+   */
+  private _askUnread(): void {
+    for (const handle of this._inputs()) {
+      if (this._asked.has(handle) || !("unread" in handle.lastRead())) {
+        continue;
+      }
+      this._asked.add(handle);
+      handle.pull({ awaitDurability: false }).catch((error) => {
+        if (!(error instanceof CellReadRefusedError)) {
+          console.error("[cf-code-editor] Reading an input failed:", error);
+        }
+      });
+    }
   }
 
   /**
    * Writes `value` to `cell`, unless a read the editor computes its writes
-   * from is refused ({@link _readsRefused}). Every cell write the editor
+   * from is refused ({@link _readsWithheld}). Every cell write the editor
    * makes goes through here, so a write a refusal arrived ahead of, such as
    * the entry for a piece whose create returned after it, writes nothing.
    * Returns whether it wrote.
    */
   private _write<V>(cell: CellHandle<V>, value: V): boolean {
-    if (this._readsRefused) return false;
+    if (this._readsWithheld) return false;
     void cell.set(value);
     return true;
   }
@@ -631,7 +671,7 @@ export class CFCodeEditor extends BaseElement {
   private async _createPiece(
     title: string,
   ): Promise<PieceHandle<unknown> | undefined> {
-    if (this._readsRefused) return undefined;
+    if (this._readsWithheld) return undefined;
     const program = this.pattern.get();
     if (!program) throw new Error("Could not read pattern.");
     const inputs: Record<string, unknown> = {
@@ -652,14 +692,14 @@ export class CFCodeEditor extends BaseElement {
    * While a read the editor computes its writes from is refused, the
    * document takes no change but the one that mirrors the content cell, or a
    * collaborator's, whatever dispatched it: a keystroke, a completion, a
-   * paste, or a rewrite. The filter asks {@link _readsRefused} for each
+   * paste, or a rewrite. The filter asks {@link _readsWithheld} for each
    * change, so it never lags a refusal; {@link _refusedComp} tells the
    * person at the keyboard.
    */
   private _refusalGate(): Extension {
     return [
       EditorState.changeFilter.of((transaction) =>
-        !this._readsRefused ||
+        !this._readsWithheld ||
         transaction.annotation(CFCodeEditor._cellSyncAnnotation) ===
           "mirror" ||
         transaction.annotation(Transaction.remote) === true
@@ -668,9 +708,9 @@ export class CFCodeEditor extends BaseElement {
     ];
   }
 
-  /** What {@link _refusedComp} holds while {@link _readsRefused}. */
+  /** What {@link _refusedComp} holds while {@link _readsWithheld}. */
   private _refusedExtension(): Extension {
-    return this._readsRefused
+    return this._readsWithheld
       ? Prec.highest([
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
@@ -682,10 +722,11 @@ export class CFCodeEditor extends BaseElement {
    * Holds the editor read-only while a read it computes its writes from is
    * refused, and editable again once it is admitted. Called wherever such a
    * read is heard; what keeps a change from landing is the change filter,
-   * which asks {@link _readsRefused} itself.
+   * which asks {@link _readsWithheld} itself.
    */
   private _syncRefusalGate(): void {
-    const refused = this._readsRefused;
+    this._askUnread();
+    const refused = this._readsWithheld;
     if (!this._editorView || refused === this._refusedShown) return;
     this._refusedShown = refused;
     this._editorView.dispatch({
@@ -1079,7 +1120,7 @@ export class CFCodeEditor extends BaseElement {
     // A universe the worker refuses says nothing of which pieces exist, so a
     // query it might have answered is no reason to create one: the query
     // stays as typed. Nor is anything else written while a read is refused.
-    if (this._readsRefused) return;
+    if (this._readsWithheld) return;
     const exactMatch = this._findExactMentionable(text);
     if (exactMatch) {
       const [matchCell, matchIndex] = exactMatch;
@@ -1308,7 +1349,7 @@ export class CFCodeEditor extends BaseElement {
       if (!piece) return;
       // A refusal that arrived during the create stands against telling the
       // host, which registers the piece by writing it into a list.
-      if (this._readsRefused) return;
+      if (this._readsWithheld) return;
 
       // The piece exists whether or not its token survived, so the host hears
       // about it either way and can register it.
@@ -1563,7 +1604,7 @@ export class CFCodeEditor extends BaseElement {
       // A refusal that arrived during the create stands against linking the
       // piece and telling the host, which registers it by writing it into a
       // list.
-      if (this._readsRefused) return;
+      if (this._readsWithheld) return;
       const pieceId = piece.id();
 
       // Insert the ID into the text if we have an editor
@@ -1800,10 +1841,10 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Writes the content, as every content write the editor makes does, unless
-   * a read it computes its writes from is refused ({@link _readsRefused}).
+   * a read it computes its writes from is refused ({@link _readsWithheld}).
    */
   private setValue(newValue: string): void {
-    if (this._readsRefused) return;
+    if (this._readsWithheld) return;
     this._cellController.setValue(newValue);
   }
 
@@ -2362,7 +2403,7 @@ export class CFCodeEditor extends BaseElement {
     // in willUpdate, so the runtime resolves @link indirection before
     // delivering values to subscribers.
     // A refused list offers nothing to complete or resolve, and nothing is
-    // written while it stands (`_readsRefused`).
+    // written while it stands (`_readsWithheld`).
     const resolve = () => {
       this._syncRefusalGate();
       // Clear stale resolved IDs and re-resolve asynchronously. The
@@ -2428,7 +2469,7 @@ export class CFCodeEditor extends BaseElement {
     // this.references is already wrapped with asSchema(MentionRefMapSchema)
     // in willUpdate.
     // A refused map resolves no key, and nothing is written while it stands
-    // (`_readsRefused`).
+    // (`_readsWithheld`).
     const sync = () => {
       this._syncRefusalGate();
       this._publishKnownRefKeys();
@@ -3100,7 +3141,7 @@ export class CFCodeEditor extends BaseElement {
       state,
       parent: editorElement,
     });
-    this._refusedShown = this._readsRefused;
+    this._refusedShown = this._readsWithheld;
   }
 
   override render() {
@@ -3138,7 +3179,7 @@ export class CFCodeEditor extends BaseElement {
    * minting a mention is a write.
    */
   private _handlePaste(event: ClipboardEvent, view: EditorView): boolean {
-    if (this.readonly || this.disabled || this._readsRefused) return false;
+    if (this.readonly || this.disabled || this._readsWithheld) return false;
     const files = Array.from(event.clipboardData?.files ?? [])
       .filter((file) => file.type.startsWith("image/"));
     if (files.length > 0) {
@@ -3306,10 +3347,10 @@ export class CFCodeEditor extends BaseElement {
       for (const file of files) {
         // A refusal that arrived during an upload stands against the rest,
         // and against the insert, which the editor no longer takes.
-        if (this._readsRefused) return;
+        if (this._readsWithheld) return;
         storedFiles.push(await uploadFile({ file, runtime, space }));
       }
-      if (this._readsRefused) return;
+      if (this._readsWithheld) return;
 
       const markdown = storedFiles
         .map((file) =>
@@ -3345,7 +3386,7 @@ export class CFCodeEditor extends BaseElement {
     if (!this.mentioned) return;
     // Left as it is while a read the editor computes from is refused, the
     // content among them. The read's admission runs this again.
-    if (this._readsRefused) return;
+    if (this._readsWithheld) return;
     content ??= this._editorView?.state.doc.toString() ?? this.getValue() ?? "";
     if (this._mentionResolutionPending) {
       this._deferredMentionedContent = content;
@@ -3549,7 +3590,7 @@ export class CFCodeEditor extends BaseElement {
     }
 
     // Nothing is rewritten while a read is refused.
-    if (this._readsRefused) return;
+    if (this._readsWithheld) return;
 
     // Get the piece's title (without emoji prefix)
     const title = pieceCell.key("title").get() as string;
@@ -3656,7 +3697,7 @@ export class CFCodeEditor extends BaseElement {
     // A refused map says nothing of which labels the user has claimed. No
     // label is edited while a read is refused, which holds the editor
     // read-only.
-    if (!map || this._readsRefused) return;
+    if (!map || this._readsWithheld) return;
 
     const entries = this._refMap();
     const current = new Map<string, string>();
@@ -3709,7 +3750,7 @@ export class CFCodeEditor extends BaseElement {
   private _collectUnreferencedRefEntries(): void {
     const map = this.references;
     if (
-      !map || this._readsRefused || this._refKeysAtLoad === null ||
+      !map || this._readsWithheld || this._refKeysAtLoad === null ||
       !this._editorView
     ) return;
 
@@ -3929,7 +3970,7 @@ export class CFCodeEditor extends BaseElement {
     }
     // Nothing is rewritten while a read is refused: a refused map says
     // nothing of whether the user claimed this label.
-    if (this._readsRefused || this._refMap()[key]?.modifiedTitle) return;
+    if (this._readsWithheld || this._refMap()[key]?.modifiedTitle) return;
 
     const ref = this._documentRefs().find((candidate) => candidate.key === key);
     if (!ref || ref.label === labelForToken(name)) return;
