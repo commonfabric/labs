@@ -138,6 +138,17 @@ Shared pieces that directly render viewer-specific profile data should use a
 user-scoped result schema for that rendered output, so each authenticated viewer
 sees their own profile.
 
+## Private Inbox
+
+The home default pattern holds the user's private inbox in
+`defaultPattern.privateInbox.piece`: a piece of
+`packages/patterns/system/private-inbox.tsx`, in a space of its own, where
+other people deliver offers to the user. Home's `ensurePrivateInbox` stream
+creates it and points each profile that points at no inbox at it, through the
+profile's `inbox` field, which is how a sender finds it. The host sends that
+stream when it brings up Home. [The private inbox](../../features/private-inbox.md)
+describes the whole arrangement.
+
 ## Spaces
 
 The home space maintains a managed list of spaces in
@@ -181,7 +192,7 @@ The piece holds two things:
   before the request is staged.
 
 Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
-and Self. Each row shows its task, state, age, and available token usage.
+Self, and Chats. Each row shows its task, state, age, and available token usage.
 Reported cost and estimated cost have separate labels; an unavailable estimate
 shows the harness's withheld reason when supplied. Missing counters and costs
 remain unavailable rather than displaying zero. Relative ages share a one-minute
@@ -216,9 +227,8 @@ requests produced for a client to deliver. It creates each room in
 a space of its own. Everything it holds is private to the user, as the home
 space is.
 
-Home holds it but renders it nowhere of its own: a page shows it at its path
-in home's result, `chatManager`, with the user's rooms, the room chosen among
-them, and the controls that start a direct or a group chat.
+Home's **Chats** tab renders it: the user's rooms, the room chosen among them,
+and the controls that start a direct or a group chat.
 
 ## Custom Home Pattern
 

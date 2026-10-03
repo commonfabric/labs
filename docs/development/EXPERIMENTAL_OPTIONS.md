@@ -392,6 +392,12 @@ server](#clients-that-are-not-built-alongside-their-server).
     F10 interim — is DELETED). Later stages add their surfaces under
     this same flag; both halves of any coupled behavior move together
     on it.
+  - **Seen by patterns.** A pattern cannot read the flag. It can ask for
+    access that a space it creates grants only in the OFF arm, with
+    `InSpaceOptions.grantsWithoutServerExecution`, which the private inbox
+    uses to admit its senders' writes
+    ([`private-inbox.md`](../features/private-inbox.md)). Deleting the OFF
+    path deletes that option with it.
 - **Current default and planned end state.** The summary table's cell
   states the current value of the ONE first-party default,
   `SERVER_EXECUTION_DEFAULT_ENABLED` in
@@ -1357,7 +1363,7 @@ the per-epic implementation notes).
   WebSocket frames, then delete the config trio and advertise the capability
   unconditionally.
 
-> Two neighbors in the same handshake are related but are not
+> These neighbors in the same handshake are related but are not
 > runtime-toggleable experimental flags:
 >
 > - **`sqliteCommitRowLabelEval`** is a build-inherent capability, hardwired to
@@ -1418,6 +1424,14 @@ the per-epic implementation notes).
 >   it, which parses as `false`, and a client then reports presence as
 >   unavailable rather than sending a message the server would refuse. It is
 >   permanent.
+> - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
+>   on both peers. It advertises the `session/admissible` push of the memory
+>   protocol chapter's section 4.2.2: a server tells a connection it refused a
+>   space once an access-list change admits the refused principal, and the
+>   runner's storage manager retries that space on being told. Either peer
+>   omitting it, which parses as `false`, leaves the connection without the
+>   notice, and a refused client then learns of a grant only by asking again.
+>   It is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 

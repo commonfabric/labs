@@ -31,6 +31,7 @@ import { AddToChats } from "./room.tsx";
 import {
   type ChatIndexEntry,
   type ChatManagerNotice,
+  type ChatOfferHandling,
   type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomLink,
@@ -101,6 +102,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const action_open_direct = action(() =>
     manager.openDirect.send({
@@ -135,6 +137,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const action_accept_naming_carol = action(() =>
     manager.accept.send({

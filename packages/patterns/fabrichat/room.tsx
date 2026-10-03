@@ -105,11 +105,18 @@ export const participantsOf = (
 export interface StartDirectEvent {
   /** The other person's principal. */
   counterpart: string;
+
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  /** The other person's profile, through which a new room is offered. */
+  profile: Cell<ChatProfile>;
 }
 
 /**
  * Asks the viewer's manager for a direct chat with the person `participant`
- * stands for, by the principal its `represents-principal` label attests. A
+ * stands for, by the principal its `represents-principal` label attests, and
+ * hands it the profile, through which a new room is offered to them. A
  * profile whose label names no single principal starts nothing.
  */
 const startDirectWith = handler<unknown, {
@@ -118,7 +125,7 @@ const startDirectWith = handler<unknown, {
 }>((_event, { participant, startDirect }) => {
   const counterpart = principalOf(participant, "represents-principal");
   if (counterpart === undefined) return;
-  startDirect?.send({ counterpart });
+  startDirect?.send({ counterpart, profile: participant });
 });
 
 /** What a participant's chip needs. */

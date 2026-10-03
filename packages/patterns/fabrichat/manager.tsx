@@ -9,6 +9,11 @@
  * else, except that a group made joinable by its link grants everyone WRITE
  * as well. After that, who is in the space is the space's business, changed
  * through the space's own tools and never through the manager or the room.
+ *
+ * A room is offered to each other member whose profile the request names,
+ * through the private inbox the profile points at, and the manager lists the
+ * rooms offered to its own user through theirs. A notice is queued for every
+ * other member all the same, since nothing tells the sender an offer arrived.
  */
 import {
   type Cell,
@@ -36,17 +41,22 @@ import {
 import FabriChatRoom from "./room.tsx";
 import {
   type AboutRecord,
+  CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
+  type ChatInbox,
+  type ChatInboxOffer,
   type ChatIndexEntry,
   type ChatManagerNotice,
-  type ChatProfile,
+  type ChatManagerOffer,
+  type ChatManagerProfile,
+  type ChatOfferHandling,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
   epochNsecFromMsec,
+  type ManagerProfileCell,
   nsecOf,
-  type ProfileCell,
 } from "./schemas.tsx";
 
 /** The manager's rooms, in the order it recorded them. */
@@ -65,13 +75,20 @@ export type RequestsCell = Writable<
 /** Notices waiting for a client to deliver them. */
 export type NoticesCell = Writable<ChatManagerNotice[] | Default<[]>>;
 
+/** What this user did with each offer they acted on, by the offer's key. */
+export type HandledOffersCell = Writable<
+  | Record<string, ChatOfferHandling>
+  | Default<Record<PropertyKey, never>>
+>;
+
 /** Every act `commitManager` performs, each bound to one of its streams. */
 export type ManagerAct =
   | "openDirect"
   | "createGroup"
   | "accept"
   | "forget"
-  | "delivered";
+  | "delivered"
+  | "dismissOffer";
 
 /** Whether `act` starts a chat. */
 const isStart = (act: ManagerAct): boolean =>
@@ -88,6 +105,15 @@ export interface ManagerStreamEvent {
 
   /** The DID of a direct room's other member. */
   counterpart?: string;
+
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  /**
+   * A direct room's other member's profile, through whose private inbox a new
+   * room is offered to them.
+   */
+  profile?: Cell<ChatManagerProfile>;
 
   /** The DIDs of a new group room's other members. */
   members?: string[];
@@ -106,6 +132,9 @@ export interface ManagerStreamEvent {
 
   /** The id of a notice delivered. */
   id?: string;
+
+  /** The key of the offer accepted or dismissed. */
+  offer?: string;
 
   /** A rendered control's text. */
   readonly target?: { readonly value?: string };
@@ -136,7 +165,7 @@ export interface ManagerActState {
   act: ManagerAct;
 
   /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
+  myProfile: ManagerProfileCell | undefined;
 
   /** The rooms this user belongs to. */
   rooms: RoomsCell;
@@ -149,6 +178,12 @@ export interface ManagerActState {
 
   /** Notices waiting for a client to deliver them. */
   outgoingNotices: NoticesCell;
+
+  /** What this user did with each offer they acted on. */
+  handledOffers: HandledOffersCell;
+
+  /** Offers a newly created room to the members a request named profiles of. */
+  offerRooms: Stream<OfferRoomEvent>;
 
   /** The session's group draft, which a rendered create reads. */
   draft: Writable<GroupDraft>;
@@ -167,6 +202,12 @@ export interface ManagerActState {
 
   /** A rendered control's notice id. */
   id?: string;
+
+  /** A rendered control's offer key. */
+  offer?: string;
+
+  /** Who sent a rendered control's offer. */
+  counterpart?: string;
 }
 
 /** A `did:key` whose key is base58btc multibase, as every principal's is. */
@@ -225,6 +266,54 @@ const lists = (rooms: RoomsCell, room: Cell<ChatRoomLink>): boolean =>
   );
 
 /**
+ * A profile's inbox pointer, as the cell of the inbox it names. A profile
+ * types the pointer as a link, and a link's target is reached as a cell.
+ */
+function inboxOf(pointer: unknown): Cell<ChatInbox>;
+function inboxOf(pointer: unknown): unknown {
+  return pointer;
+}
+
+/** What offering a new room asks: the room, and whom to offer it to. */
+export interface OfferRoomEvent {
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  /** The room offered. */
+  room: Cell<ChatRoomLink>;
+
+  /** The profiles of the members to offer it to. */
+  profiles: Cell<ChatManagerProfile>[];
+}
+
+/**
+ * Offers a room to each person in the event's `profiles`, through the private
+ * inbox each profile points at; a profile pointing at no inbox is offered
+ * nothing.
+ *
+ * It runs as an event of its own, queued by the one that creates the room: an
+ * offer links the room into a labeled inbox, and that link has to name the
+ * room's result document, which exists only once the room's creation has
+ * committed.
+ */
+const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
+  (event) => {
+    const room = event?.room?.resolveAsCell();
+    if (room === undefined) return;
+    for (const profile of event.profiles ?? []) {
+      // The pointer is read through its parent: a link-typed field read on
+      // its own is a cell whether or not anything is stored there.
+      const pointer = profile?.key("inbox").get()?.piece;
+      if (pointer === undefined) continue;
+      inboxOf(pointer.resolveAsCell()).key("receive").send({
+        kind: CHAT_ROOM_OFFER_KIND,
+        entry: room,
+      });
+    }
+  },
+);
+
+/**
  * A room's result, as the link an index entry holds. The room is created
  * where the link can't be typed as a cell, and stored as a link to it.
  */
@@ -256,20 +345,25 @@ interface RoomOptions {
    * address is then all that keeps it private.
    */
   joinableByLink?: boolean;
+
+  /** The profiles of the other members to offer the room to. */
+  offerTo?: readonly Cell<ChatManagerProfile>[];
 }
 
 /**
  * Creates a room in a space of its own, and its notices, and records its
  * entry, all in one transaction: the space's grants are part of creating it,
  * so nothing has to commit apart. A notice for each other member is queued for
- * a client to deliver.
+ * a client to deliver, and offering the room to each profile in `offerTo` is
+ * queued to follow.
  */
 const createRoom = (
   state: ManagerActState,
   requestId: string,
   kind: ChatRoomKind,
   members: readonly DID[],
-  { title, counterpart, joinableByLink = false }: RoomOptions = {},
+  { title, counterpart, joinableByLink = false, offerTo = [] }: RoomOptions =
+    {},
 ): ChatIndexEntry => {
   const createdAt = epochNsecFromMsec(Date.now());
   // The room's space grants this user OWNER, each other member WRITE, and,
@@ -294,6 +388,9 @@ const createRoom = (
       recipient,
     });
   });
+  if (offerTo.length > 0) {
+    state.offerRooms.send({ room, profiles: [...offerTo] });
+  }
   const entry: ChatIndexEntry = {
     room,
     kind,
@@ -306,13 +403,14 @@ const createRoom = (
 
 /**
  * Performs one manager act: finding or creating a direct room, creating a
- * group room, accepting a room, forgetting one, or reporting a notice
- * delivered. Each act's outcome is recorded under its `requestId`, and a
- * request already decided changes nothing.
+ * group room, accepting a room, forgetting one, reporting a notice delivered,
+ * or dismissing an offer. Each act's outcome is recorded under its
+ * `requestId`, and a request already decided changes nothing.
  */
 export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
   (event, state) => {
-    const { act, rooms, direct, requests, outgoingNotices } = state;
+    const { act, rooms, direct, requests, outgoingNotices, handledOffers } =
+      state;
     const requestId = event?.requestId ?? eventKey();
     const earlier = requests.key(requestId).get();
     if (earlier !== undefined && earlier.status !== "pending") return;
@@ -333,12 +431,37 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
     if (act === "delivered") {
       const id = event?.id ?? state.id;
-      if (typeof id !== "string") return;
+      // An event's type doesn't refuse an event that lacks a field it
+      // requires, so each act refuses the request itself, where a rendered
+      // control's binding doesn't supply the field.
+      if (typeof id !== "string") {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "The request names no notice.",
+        });
+        return;
+      }
       outgoingNotices.set(
         ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
           notice,
         ) => notice.id !== id),
       );
+      return;
+    }
+
+    // The offer an `accept` comes from, if any, and the one `dismissOffer`
+    // names.
+    const offer = event?.offer ?? state.offer;
+    if (act === "dismissOffer") {
+      if (typeof offer !== "string") {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "The request names no offer.",
+        });
+        return;
+      }
+      handledOffers.key(offer).set("dismissed");
+      recordOutcome(state, requestId, { status: "done" });
       return;
     }
 
@@ -377,6 +500,19 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         });
         return;
       }
+      // The room is offered through the profile's inbox, so the profile has
+      // to be the counterpart's own.
+      const profile = event?.profile;
+      if (
+        profile !== undefined &&
+        principalOf(profile, "represents-principal") !== counterpart
+      ) {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "The profile is not the counterpart's.",
+        });
+        return;
+      }
       const known = direct.key(counterpart).get();
       if (known !== undefined) {
         if (!lists(rooms, known.room)) {
@@ -387,6 +523,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       }
       const entry = createRoom(state, requestId, "direct", [counterpart], {
         counterpart,
+        offerTo: profile === undefined ? [] : [profile],
       });
       direct.key(counterpart).set(entry);
       recordOutcome(state, requestId, { status: "done", entry });
@@ -400,6 +537,13 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
         recordOutcome(state, requestId, {
           status: "refused",
           reason: "A group room needs a title.",
+        });
+        return;
+      }
+      if (draft === undefined && !Array.isArray(event?.members)) {
+        recordOutcome(state, requestId, {
+          status: "refused",
+          reason: "A group's members must be listed.",
         });
         return;
       }
@@ -430,7 +574,13 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     }
 
     const room = event?.room ?? state.room;
-    if (room === undefined) return;
+    if (room === undefined) {
+      recordOutcome(state, requestId, {
+        status: "refused",
+        reason: "The request names no room.",
+      });
+      return;
+    }
 
     if (act === "forget") {
       rooms.set(
@@ -459,18 +609,24 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     }
     // A direct room's counterpart is its creator, as its `about` is labeled,
     // whatever the event claims. A room this user created is found again with
-    // `openDirect`, and its label names no one else.
-    const creator = kind === "direct"
+    // `openDirect`, and its label names no one else. An offered room of
+    // either kind is the offer's sender's own: an offer's `entry` is whatever
+    // its sender put there, which only the room's label vouches for.
+    const offered = typeof offer === "string";
+    const claimed = event?.counterpart ?? state.counterpart;
+    const creator = kind === "direct" || offered
       ? principalOf(record, "authored-by")
       : undefined;
-    const refusal = kind !== "direct"
+    const refusal = kind !== "direct" && !offered
       ? undefined
       : creator === undefined
       ? "The room's creator can't be verified."
-      : creator === currentPrincipal()
+      : kind === "direct" && creator === currentPrincipal()
       ? "The room was created by this user."
-      : event?.counterpart !== undefined && event.counterpart !== creator
-      ? "The counterpart is not the room's creator."
+      : claimed !== undefined && claimed !== creator
+      ? offered
+        ? "The offer's sender is not the room's creator."
+        : "The counterpart is not the room's creator."
       : undefined;
     if (refusal !== undefined) {
       recordOutcome(state, requestId, {
@@ -495,6 +651,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     ) {
       direct.key(counterpart).set(entry);
     }
+    if (typeof offer === "string") handledOffers.key(offer).set("accepted");
     recordOutcome(state, requestId, { status: "done", entry });
   },
 );
@@ -512,6 +669,9 @@ export interface FabriChatManagerInput {
 
   /** Notices waiting for a client to deliver them. */
   outgoingNotices?: NoticesCell;
+
+  /** What this user did with each offer they acted on. */
+  handledOffers?: HandledOffersCell;
 }
 
 /** What a manager offers: `ChatManagerOutput`. */
@@ -534,6 +694,9 @@ export interface FabriChatManagerOutput {
   /** Notices this user's requests have produced that no one has delivered. */
   outgoingNotices: ChatManagerNotice[];
 
+  /** The rooms offered to this user that they haven't acted on, oldest first. */
+  offers: ChatManagerOffer[];
+
   /** Finds or creates the direct room with a person. */
   openDirect: Stream<ManagerStreamEvent>;
 
@@ -548,6 +711,9 @@ export interface FabriChatManagerOutput {
 
   /** Reports a notice delivered. */
   delivered: Stream<ManagerStreamEvent>;
+
+  /** Sets an offer aside without accepting it. */
+  dismissOffer: Stream<ManagerStreamEvent>;
 
   /** The manager's data face, as one group. */
   [VIEWS]: { chats: FabriChatManagerView };
@@ -583,7 +749,7 @@ interface ShownEntry {
 export interface FabriChatManagerCoreInput
   extends Required<FabriChatManagerInput> {
   /** The user's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
+  myProfile: ManagerProfileCell | undefined;
 }
 
 /**
@@ -594,7 +760,7 @@ export const FabriChatManagerCore = pattern<
   FabriChatManagerCoreInput,
   FabriChatManagerOutput
 >(
-  ({ myProfile, rooms, direct, requests, outgoingNotices }) => {
+  ({ myProfile, rooms, direct, requests, outgoingNotices, handledOffers }) => {
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
     const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
@@ -606,6 +772,8 @@ export const FabriChatManagerCore = pattern<
       direct,
       requests,
       outgoingNotices,
+      handledOffers,
+      offerRooms: offerRooms({}),
       draft,
       startRefusal,
     };
@@ -642,6 +810,32 @@ export const FabriChatManagerCore = pattern<
     const noticeList = computed(
       () => [...((outgoingNotices.get() ?? []) as ChatManagerNotice[])],
     );
+    // The rooms offered through the inbox this user's profile points at, less
+    // those they have acted on or already list, and those whose label doesn't
+    // name the offer's sender as their creator: an offer's `entry` is
+    // whatever its sender put there, and only the room's label vouches for
+    // it. Each offer is read on its own, so one this can't read costs only
+    // itself.
+    const offers = computed((): ChatManagerOffer[] => {
+      const received = (myProfile?.key("inbox").key("piece").key("offers")
+        .get() ?? []) as ChatInboxOffer[];
+      const handled = handledOffers.get() ?? {};
+      return received.flatMap((offer): ChatManagerOffer[] => {
+        if (
+          offer?.kind !== CHAT_ROOM_OFFER_KIND || offer.entry === undefined ||
+          typeof offer.id !== "string" || typeof offer.from !== "string"
+        ) {
+          return [];
+        }
+        // An offer is named by the id its inbox chose, which no sender can.
+        const key = offer.id;
+        return handled[key] !== undefined || lists(rooms, offer.entry) ||
+            principalOf(aboutRecordOf(offer.entry), "authored-by") !==
+              offer.from
+          ? []
+          : [{ key, room: offer.entry, from: offer.from }];
+      });
+    });
     const cannotStart = computed(() => myProfile?.get() === undefined);
     // The principal this user's profile attests, which someone starting a
     // chat with them needs; empty when the profile attests none.
@@ -657,12 +851,14 @@ export const FabriChatManagerCore = pattern<
       accept: commitManager({ act: "accept", ...records }),
       forget: commitManager({ act: "forget", ...records }),
       delivered: commitManager({ act: "delivered", ...records }),
+      dismissOffer: commitManager({ act: "dismissOffer", ...records }),
     };
     const view = {
       rooms: newestFirst,
       direct,
       requests,
       outgoingNotices: noticeList,
+      offers,
       ...streams,
     };
 
@@ -671,6 +867,39 @@ export const FabriChatManagerCore = pattern<
       [UI]: (
         <cf-vstack gap="3" style={{ padding: "1rem" }}>
           <cf-heading level={3}>Chats</cf-heading>
+          <cf-vstack id="fabrichat-offers" gap="1">
+            {offers.map((offer) => (
+              <cf-hstack gap="2" align="center">
+                <cf-text variant="caption">
+                  {offer.from} offered you a chat:
+                </cf-text>
+                <cf-cell-link $cell={offer.room} label="Open" />
+                <cf-button
+                  size="sm"
+                  onClick={commitManager({
+                    act: "accept",
+                    ...records,
+                    room: offer.room,
+                    offer: offer.key,
+                    counterpart: offer.from,
+                  })}
+                >
+                  Add to my chats
+                </cf-button>
+                <cf-button
+                  size="sm"
+                  variant="ghost"
+                  onClick={commitManager({
+                    act: "dismissOffer",
+                    ...records,
+                    offer: offer.key,
+                  })}
+                >
+                  Dismiss
+                </cf-button>
+              </cf-hstack>
+            ))}
+          </cf-vstack>
           <cf-vstack id="fabrichat-rooms" gap="1">
             {shown.map((entry) => (
               <cf-hstack gap="2" align="center">
@@ -794,7 +1023,7 @@ const FabriChatManager = pattern<
   FabriChatManagerInput,
   FabriChatManagerOutput
 >((input) => {
-  const profileWish = wish<ChatProfile>({ query: "#profile" });
+  const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
   const core = FabriChatManagerCore(
     {
       myProfile: profileWish.result,
@@ -802,6 +1031,7 @@ const FabriChatManager = pattern<
       direct: input.direct,
       requests: input.requests,
       outgoingNotices: input.outgoingNotices,
+      handledOffers: input.handledOffers,
     },
   );
   return {
@@ -812,11 +1042,13 @@ const FabriChatManager = pattern<
     direct: core.direct,
     requests: core.requests,
     outgoingNotices: core.outgoingNotices,
+    offers: core.offers,
     openDirect: core.openDirect,
     createGroup: core.createGroup,
     accept: core.accept,
     forget: core.forget,
     delivered: core.delivered,
+    dismissOffer: core.dismissOffer,
   };
 });
 

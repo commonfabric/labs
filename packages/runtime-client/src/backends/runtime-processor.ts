@@ -150,6 +150,7 @@ import {
   postContextualRuntimeError,
   runtimeErrorPost,
 } from "./runtime-error.ts";
+import { SpaceAccessRetries } from "./space-access-retries.ts";
 import {
   assertFabricLoggerFlags,
   createCellRef,
@@ -752,9 +753,15 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
-/** Connects render boundaries to authoritative access verdict changes. */
+/**
+ * Connects render boundaries to authoritative access verdict changes. Given
+ * `retries`, the provider retries a refused space through it, and reports
+ * where its retries stand: a subscriber hears each retry of a refused space
+ * start and settle.
+ */
 export function renderSpaceAccessProviderFor(
   runtime: Pick<Runtime, "storageManager">,
+  retries?: SpaceAccessRetries,
 ): SpaceAccessProvider {
   const storage = runtime.storageManager;
   return {
@@ -763,9 +770,32 @@ export function renderSpaceAccessProviderFor(
       const changed = (changedSpace: MemorySpace) => {
         if (changedSpace === space) onChange();
       };
-      return storage.subscribeSpaceAccessChange?.(changed) ??
+      const cancelAccess = storage.subscribeSpaceAccessChange?.(changed) ??
         storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
+      // A retry changes what a refused space's placeholder shows, and
+      // nothing a space that stands renders.
+      const cancelRetries = retries?.subscribe((retried) => {
+        if (storage.spaceAccessError?.(retried) !== undefined) {
+          changed(retried);
+        }
+      });
+      return () => {
+        cancelAccess();
+        cancelRetries?.();
+      };
     },
+    ...(retries !== undefined && {
+      retries: {
+        retry: (space: string) => {
+          // A render boundary has nowhere to report a failure, and the person
+          // can ask again.
+          retries.retry(space as MemorySpace).catch((error) => {
+            console.warn(`Retrying access to space ${space} failed:`, error);
+          });
+        },
+        state: (space: string) => retries.state(space as MemorySpace),
+      },
+    }),
   };
 }
 
@@ -917,6 +947,7 @@ export class RuntimeProcessor {
   #awaitedHealth = false;
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
+  #privateInboxEnsured: Promise<void> | undefined;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -1014,6 +1045,14 @@ export class RuntimeProcessor {
    */
   #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
+
+  /**
+   * The retries of refused spaces in flight, which the render boundaries'
+   * retry controls and `handleRetrySpaceAccess()` share.
+   */
+  readonly #spaceAccessRetries = new SpaceAccessRetries((space) =>
+    this.#runtime.retrySpaceAccess(space)
+  );
 
   private constructor(
     runtime: Runtime,
@@ -1296,6 +1335,7 @@ export class RuntimeProcessor {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
         this.#profilePreloadCancel = undefined;
@@ -2525,7 +2565,8 @@ export class RuntimeProcessor {
   /**
    * Ensures the user's Home pattern is running and returns its result cell.
    * The first time in this worker, it also adopts the Home space list's
-   * name-only entries (see `PiecesController.adoptLegacySpaces`).
+   * name-only entries (see `PiecesController.adoptLegacySpaces`), and has Home
+   * ensure the user's private inbox (see `PiecesController.ensurePrivateInbox`).
    */
   async #ensureHomePattern(): Promise<Cell<unknown>> {
     const homeCC = this.#homeController();
@@ -2539,6 +2580,13 @@ export class RuntimeProcessor {
       console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
     });
     await this.#legacySpacesAdopted;
+    this.#privateInboxEnsured ??= homeCC.ensurePrivateInbox().catch(
+      (error) => {
+        this.#privateInboxEnsured = undefined;
+        console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
+      },
+    );
+    await this.#privateInboxEnsured;
     return home;
   }
 
@@ -3174,11 +3222,13 @@ export class RuntimeProcessor {
     };
   }
 
-  /** Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. */
-  async handleRetrySpaceAccess(
-    request: RetrySpaceAccessRequest,
-  ): Promise<void> {
-    await this.#runtime.retrySpaceAccess(request.space);
+  /**
+   * Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. A
+   * request for a space whose retry is still in flight shares that retry
+   * rather than asking again.
+   */
+  handleRetrySpaceAccess(request: RetrySpaceAccessRequest): Promise<void> {
+    return this.#spaceAccessRetries.retry(request.space);
   }
 
   async handleCreateSpace(
@@ -3726,7 +3776,10 @@ export class RuntimeProcessor {
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
-      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
+      spaceAccess: renderSpaceAccessProviderFor(
+        this.#runtime,
+        this.#spaceAccessRetries,
+      ),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's

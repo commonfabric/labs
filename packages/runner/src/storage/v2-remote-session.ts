@@ -79,6 +79,15 @@ export interface SessionFactory {
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
 
   /**
+   * Calls `observer` with each `session/admissible` a connection the factory
+   * opened is sent: a space that refused `principal` on that connection and
+   * would now admit it. Returns the function that ends the subscription.
+   */
+  subscribeAdmissible?(
+    observer: (space: MemorySpace, principal: string) => void,
+  ): () => void;
+
+  /**
    * Chooses, for the sessions created from here on, between one connection
    * per host and one per space.
    */
@@ -691,6 +700,11 @@ export class RemoteSessionFactory implements SessionFactory {
   /** The shared connection per storage address, while sharing is on. */
   #shared = new Map<string, SharedConnection>();
 
+  /** Observers of `session/admissible`, as `subscribeAdmissible()` added. */
+  #admissibleObservers = new Set<
+    (space: MemorySpace, principal: string) => void
+  >();
+
   readonly #resolveAddress: (space: MemorySpace) => URL;
   readonly #defaultSigner: Signer;
   readonly #createSocket: MemorySocketFactory;
@@ -716,6 +730,16 @@ export class RemoteSessionFactory implements SessionFactory {
   }
 
   /** @inheritDoc */
+  subscribeAdmissible(
+    observer: (space: MemorySpace, principal: string) => void,
+  ): () => void {
+    this.#admissibleObservers.add(observer);
+    return () => {
+      this.#admissibleObservers.delete(observer);
+    };
+  }
+
+  /** @inheritDoc */
   setSharedConnections(enabled: boolean): void {
     this.#sharedConnections = enabled;
   }
@@ -732,6 +756,22 @@ export class RemoteSessionFactory implements SessionFactory {
       const connected = await client.catch(() => undefined);
       await connected?.close().catch(() => {});
     }));
+  }
+
+  /**
+   * Helper for the connection paths, which relays the `session/admissible`
+   * notices `client` is sent to this factory's observers.
+   */
+  #relayAdmissible(client: MemoryClient.Client): void {
+    client.subscribeAdmissible((space, principal) => {
+      for (const observer of [...this.#admissibleObservers]) {
+        try {
+          observer(space as MemorySpace, principal);
+        } catch (cause) {
+          console.error("session-admissible subscriber threw:", cause);
+        }
+      }
+    });
   }
 
   #createSessionOpenAuth(
@@ -833,7 +873,10 @@ export class RemoteSessionFactory implements SessionFactory {
     this.#transports.add(transport);
     const dialed: SharedConnection = {
       transport,
-      client: MemoryClient.connect({ transport }),
+      client: MemoryClient.connect({ transport }).then((client) => {
+        this.#relayAdmissible(client);
+        return client;
+      }),
     };
     this.#shared.set(key, dialed);
     // A failed dial takes its entry with it, whoever is waiting on it.
@@ -874,6 +917,7 @@ export class RemoteSessionFactory implements SessionFactory {
       // only window this method has to check for itself is the one after the
       // mount resolves, below.
       client = await MemoryClient.connect({ transport, signal });
+      this.#relayAdmissible(client);
       const closeForAbort = (): void => {
         void client?.close().catch(() => {});
       };

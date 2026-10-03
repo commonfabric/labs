@@ -43,6 +43,7 @@ import {
   CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
+  type ChatOfferHandling,
   type ChatProfile,
   type ChatRequestOutcome,
 } from "./schemas.tsx";
@@ -196,6 +197,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const chipFor = {
     myProfile: profile,

@@ -32,6 +32,11 @@ import {
 } from "./profile-create.tsx";
 import ProfilePicker from "./profile-picker.tsx";
 import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
+import {
+  ensurePrivateInbox,
+  pointProfilesAtPrivateInbox,
+  type PrivateInboxHolder,
+} from "./private-inbox.tsx";
 
 // Types from favorites-manager.tsx
 type Favorite = {
@@ -98,7 +103,13 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
+  // The user's private inbox, where others deliver offers to them, and which
+  // each of their profiles points at. Absent until `ensurePrivateInbox` runs.
+  privateInbox: Writable<PrivateInboxHolder>;
   createProfile: Stream<CreateProfileEvent>;
+  // Creates the private inbox if there is none, and points every profile that
+  // points at no inbox at it. The host sends it once per sign-in.
+  ensurePrivateInbox: Stream<void>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
     tags?: string[];
@@ -301,6 +312,16 @@ const Home = pattern(
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
     const chatManager = FabriChatManager({});
+    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "privateInbox",
+    );
+    const ensurePrivateInboxStream = ensurePrivateInbox({
+      privateInbox,
+      pointProfiles: pointProfilesAtPrivateInbox({
+        privateInbox,
+        profiles: profiles as any,
+      }),
+    });
     // Private self-model — the "real you" tier (values, neurotype, meaning Q&A),
     // home-local and never shared. Distinct from the outward profile/personas in
     // the Profile tab. Owns its own durable cell (seeded via Default<>).
@@ -322,7 +343,11 @@ const Home = pattern(
               <cf-tab value="profile">Profile</cf-tab>
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
+              <cf-tab value="chats">Chats</cf-tab>
             </cf-tab-list>
+            <cf-tab-panel value="chats" id="home-chats">
+              {chatManager}
+            </cf-tab-panel>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
             </cf-tab-panel>
@@ -436,6 +461,7 @@ const Home = pattern(
       mru: mru as any,
       agentQueue,
       chatManager,
+      privateInbox,
 
       // Exported handlers
       addFavorite: addFavorite({ favorites }),
@@ -446,6 +472,7 @@ const Home = pattern(
       adoptSpace: adoptSpaceHandler({ spaces }),
       renameSpace: renameSpaceHandler({ spaces }),
       createProfile: createProfileStream,
+      ensurePrivateInbox: ensurePrivateInboxStream,
     };
   },
   homeArgumentSchema,

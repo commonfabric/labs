@@ -1,0 +1,238 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Offer": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/OfferEntry",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The piece offered, if the sender named one."
+          },
+          "from": {
+            "description": "The DID of the principal who sent the offer: the actor of the event that\ndelivered it, which nothing in the event's payload can choose. Where\nserver execution is on, the serving loop stamps it; where it is not, the\nsender's own runtime does.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The origin of the host serving the offered thing's space, if the sender\nnamed one.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The offer's id: the event key of the event that delivered it, which\ndiffers for every other delivery and which nothing in the event's payload\ncan choose. Every run of one delivery stamps the same id.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered, as lowercase words joined by hyphens, such as\n`fabrichat-room`. A reader acts only on the kinds it knows.",
+            "type": "string"
+          },
+          "receivedAt": {
+            "description": "When the inbox received the offer, in milliseconds since the epoch. A\nhandler's clock reads to the second, so two offers can share it; `id`\ntells them apart.",
+            "type": "number"
+          },
+          "space": {
+            "description": "The DID of the space the offered thing lives in, if the sender named it.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What the sender calls the offered thing, if anything.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "from",
+          "id",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "OfferEntry": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Offers": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Offer",
+          "ifc": {
+            "confidentiality": [
+              {
+                "subject": {
+                  "__ctCurrentPrincipal": true
+                },
+                "type": "https://commonfabric.org/cfc/atom/User"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      }
+    },
+    "description": "Arguments for .",
+    "properties": {
+      "offers": {
+        "$ref": "#/$defs/Offers",
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The offers received so far."
+      }
+    },
+    "required": [
+      "offers"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/private-inbox.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Offer": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/OfferEntry",
+            "description": "The piece offered, if the sender named one."
+          },
+          "from": {
+            "description": "The DID of the principal who sent the offer: the actor of the event that\ndelivered it, which nothing in the event's payload can choose. Where\nserver execution is on, the serving loop stamps it; where it is not, the\nsender's own runtime does.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The origin of the host serving the offered thing's space, if the sender\nnamed one.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The offer's id: the event key of the event that delivered it, which\ndiffers for every other delivery and which nothing in the event's payload\ncan choose. Every run of one delivery stamps the same id.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered, as lowercase words joined by hyphens, such as\n`fabrichat-room`. A reader acts only on the kinds it knows.",
+            "type": "string"
+          },
+          "receivedAt": {
+            "description": "When the inbox received the offer, in milliseconds since the epoch. A\nhandler's clock reads to the second, so two offers can share it; `id`\ntells them apart.",
+            "type": "number"
+          },
+          "space": {
+            "description": "The DID of the space the offered thing lives in, if the sender named it.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What the sender calls the offered thing, if anything.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "from",
+          "id",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "OfferEntry": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "OfferEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/OfferEntry",
+            "description": "The piece offered. A value sent here that is not a link arrives as a link\nto the event's own copy of that value, so what it reaches is the sender's\nclaim, to be checked like any other."
+          },
+          "host": {
+            "description": "The origin of the host serving the offered thing's space, such as\n`https://example.com`; absent for the host the inbox is read from.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered, as lowercase words joined by hyphens, such as\n`fabrichat-room`. A reader acts only on the kinds it knows.",
+            "type": "string"
+          },
+          "space": {
+            "description": "The DID of the space the offered thing lives in. It may be left out when\n`entry` is given, since a link names the space it reaches into.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What the sender calls the offered thing, cut to the longest kept.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "Offers": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Offer",
+          "ifc": {
+            "confidentiality": [
+              {
+                "subject": {
+                  "__ctCurrentPrincipal": true
+                },
+                "type": "https://commonfabric.org/cfc/atom/User"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      }
+    },
+    "description": "The result of .",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "offers": {
+        "$ref": "#/$defs/Offers",
+        "description": "The offers received, readable by the inbox's owner alone."
+      },
+      "receive": {
+        "$ref": "#/$defs/OfferEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Appends an offer, whoever sends it, unless it is malformed."
+      }
+    },
+    "required": [
+      "offers",
+      "receive",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

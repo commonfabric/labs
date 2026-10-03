@@ -31,6 +31,7 @@ import { FabriChatManagerCore } from "./manager.tsx";
 import type {
   ChatIndexEntry,
   ChatManagerNotice,
+  ChatOfferHandling,
   ChatProfile,
   ChatRequestOutcome,
   ChatRoomLink,
@@ -109,6 +110,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: directNotices,
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const directHeld = Writable.of<HeldRoom>({});
   const action_hold_direct = action(() =>
@@ -132,6 +134,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: groupRequests,
     outgoingNotices: groupNotices,
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const action_create_group = action(() =>
     group.createGroup.send({
@@ -165,6 +168,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const acceptHeld = Writable.of<HeldRoom>({});
   const action_hold_accepted = action(() =>
@@ -216,6 +220,7 @@ export default pattern(() => {
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: deliveredNotices,
+    handledOffers: Writable.of<Record<string, ChatOfferHandling>>({}),
   } as ManagerArg);
   const action_report_delivered = action(() =>
     delivering.delivered.send({
@@ -379,6 +384,26 @@ export default pattern(() => {
             "A group's members must be principals." &&
           shownRefusal(group[UI]) ===
             'block:A group\'s members must be principals. Received: ["junk"]' &&
+          groupRooms.get().length === 1
+        ),
+      },
+      // A request missing what its stream needs is refused, with why, rather
+      // than dropped: an event's type doesn't refuse it.
+      { action: group.forget, event: { requestId: "f-none" } },
+      { action: group.accept, event: { requestId: "a-none" } },
+      { action: group.delivered, event: { requestId: "n-none" } },
+      {
+        action: group.createGroup,
+        event: { requestId: "g-none", title: "No members" },
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(groupRequests, "f-none") === "The request names no room." &&
+          reasonOf(groupRequests, "a-none") === "The request names no room." &&
+          reasonOf(groupRequests, "n-none") ===
+            "The request names no notice." &&
+          reasonOf(groupRequests, "g-none") ===
+            "A group's members must be listed." &&
           groupRooms.get().length === 1
         ),
       },
