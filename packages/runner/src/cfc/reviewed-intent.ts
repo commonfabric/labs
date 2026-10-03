@@ -378,33 +378,41 @@ const isCount = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
 
 /**
- * Whether `pattern` matches only the `TransformedBy` of one builtin it names
- * outright: a literal `identity` of kind `builtin` with a literal
- * `builtinId`, and nothing else beside it but an `inputWitness`. Such an atom
- * is minted only on what a transaction under that builtin's identity wrote.
- * It says nothing about whose data the builtin wrote, or what decided it:
- * {@link refuseSteeredWriters} refuses the builtins whose writes this runtime
- * knows a pattern decides, and a destination's space is checked apart.
+ * The builtin `pattern` names, when it matches only the `TransformedBy` of one
+ * builtin named outright: a literal `identity` of kind `builtin` with a
+ * literal `builtinId`, and nothing else beside it but an `inputWitness`. Such
+ * an atom is minted only on what a transaction under that builtin's identity
+ * wrote. It says nothing about whose data the builtin wrote, or what decided
+ * it: {@link refuseSteeredWriters} refuses the builtins whose writes this
+ * runtime knows a pattern decides, and a destination's space is checked apart.
  */
-const namesOneBuiltin = (pattern: AtomPattern): boolean =>
-  isObjectNotArray(pattern) &&
-  Object.keys(pattern).every((key) =>
-    key === "type" || key === "identity" || key === "inputWitness"
-  ) &&
-  pattern.type === CFC_ATOM_TYPE.TransformedBy &&
-  isObjectNotArray(pattern.identity) &&
-  !containsAtomPatternVariable(pattern.identity) &&
-  pattern.identity.kind === "builtin" &&
-  isNonEmptyString(pattern.identity.builtinId);
+const stampingBuiltinOf = (pattern: AtomPattern): string | undefined => {
+  if (
+    !isObjectNotArray(pattern) ||
+    !Object.keys(pattern).every((key) =>
+      key === "type" || key === "identity" || key === "inputWitness"
+    ) ||
+    pattern.type !== CFC_ATOM_TYPE.TransformedBy ||
+    !isObjectNotArray(pattern.identity) ||
+    containsAtomPatternVariable(pattern.identity) ||
+    pattern.identity.kind !== "builtin"
+  ) return undefined;
+  const { builtinId } = pattern.identity;
+  return isNonEmptyString(builtinId) ? builtinId : undefined;
+};
 
 /**
  * The builtins outside this runtime's module registry whose writes hold a
- * value a pattern chose: the host operations that copy a reviewed value.
+ * value a pattern chose: the host operations that copy a reviewed value, and
+ * the compile cache, which writes what `compileAndRun` compiled from source a
+ * pattern can supply (its identity is set in
+ * `compilation-cache/cell-cache.ts`).
  */
 const HOST_COPYING_WRITERS: ReadonlySet<string> = new Set([
   SNAPSHOT_SHARE_WRITER,
   CUSTODY_SEAL_WRITER,
   REVIEWED_INTENT_WRITER,
+  "compile-cache",
 ]);
 
 /**
@@ -422,8 +430,12 @@ const refuseSteeredWriters = (
   for (const declared of Object.values(descriptor.parameters)) {
     if (declared.kind !== "destinations") continue;
     for (const pattern of declared.integrity) {
-      const builtinId = (pattern as { identity: { builtinId: string } })
-        .identity.builtinId;
+      const builtinId = stampingBuiltinOf(pattern);
+      if (builtinId === undefined) {
+        throw new Error(
+          "Reviewed intent descriptor requires each destination integrity pattern to name one builtin's `TransformedBy`",
+        );
+      }
       if (runtime.moduleRegistry.has(builtinId)) {
         throw new Error(
           debugStr`Reviewed intent descriptor requires destination integrity from $quote${builtinId}, a builtin pattern code invokes`,
@@ -447,7 +459,7 @@ const parseParameter = (
     const { min, max, integrity, space } = value;
     if (
       Array.isArray(integrity) && integrity.every(isAtomPattern) &&
-      !integrity.every(namesOneBuiltin)
+      !integrity.every((pattern) => stampingBuiltinOf(pattern) !== undefined)
     ) {
       throw new Error(
         debugStr`Reviewed intent descriptor requires each destination integrity pattern for $quote${key} to name one builtin's \`TransformedBy\``,
@@ -1188,7 +1200,8 @@ const parseStoredParameters = (
  * runtime enforces writer claims or persists flow labels.
  *
  * The record must also be one `descriptor`, the consumer's own, would have
- * produced: the descriptor names no builtin whose writes a pattern decides;
+ * produced. The descriptor is read as {@link parseReviewedIntentDescriptor}
+ * reads it, and must name no builtin whose writes a pattern decides;
  * the record's `endpoint` is the descriptor's digest, its `operation`,
  * `consumer` and `maxAttempts` are the descriptor's, its window is within the
  * descriptor's, and its parameters are exactly the declared keys, each of its
@@ -1204,13 +1217,14 @@ const parseStoredParameters = (
  * with a change to the record; otherwise in a transaction of its own. The
  * caller syncs `record` first.
  *
- * @throws If any part of the check fails.
+ * @throws If `descriptor` is not a descriptor, or any part of the check fails.
  */
 export function verifyReviewedIntentRecord(
   record: Cell<unknown>,
-  descriptor: ReviewedIntentDescriptor,
+  descriptor: unknown,
   tx?: IExtendedStorageTransaction,
 ): ReviewedIntentRecord {
+  const consumerDescriptor = parseReviewedIntentDescriptor(descriptor);
   const reader = tx ?? cellRuntime(record).edit();
   try {
     const link = record.withTx(reader).resolveAsCell()
@@ -1256,8 +1270,8 @@ export function verifyReviewedIntentRecord(
       ...value,
       parameters,
     }) as unknown as ReviewedIntentRecord;
-    refuseSteeredWriters(cellRuntime(record), descriptor);
-    checkAgainstDescriptor(verified, descriptor);
+    refuseSteeredWriters(cellRuntime(record), consumerDescriptor);
+    checkAgainstDescriptor(verified, consumerDescriptor);
     return verified;
   } finally {
     if (tx === undefined) reader.abort();

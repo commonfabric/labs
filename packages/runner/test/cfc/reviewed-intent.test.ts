@@ -1239,12 +1239,13 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("refuses a descriptor naming a host operation that copies a value a pattern chose", async () => {
+    it("refuses a descriptor naming a host operation that copies a value a pattern chose, or the compile cache", async () => {
       for (
         const builtinId of [
           "cfc-share-snapshot",
           "cfc-custody-seal",
           REVIEWED_INTENT_WRITER,
+          "compile-cache",
         ]
       ) {
         const fixture = await setup({
@@ -2062,6 +2063,36 @@ describe("reviewed-intent", () => {
         expect(() => verified(record, steered)).toThrow(
           /a builtin pattern code invokes/,
         );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a missing or malformed descriptor before reading the record", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Genuine"),
+        );
+        for (
+          const descriptor of [
+            undefined,
+            "send-message",
+            { ...DESCRIPTOR, windowMs: undefined },
+            {
+              ...DESCRIPTOR,
+              parameters: {
+                to: { ...DESCRIPTOR.parameters.to, integrity: ["anything"] },
+              },
+            },
+          ]
+        ) {
+          expect(() => verifyReviewedIntentRecord(committed.record, descriptor))
+            .toThrow(/^Reviewed intent descriptor/);
+        }
       } finally {
         await fixture.dispose();
       }
