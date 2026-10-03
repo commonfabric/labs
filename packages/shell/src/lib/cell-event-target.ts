@@ -7,9 +7,10 @@ import {
 } from "@commonfabric/runtime-client";
 
 /**
- * What the wrapped handle holds of its cell after a change: the value, or the
- * refusal that stands in its place when the worker refused the read, so that
- * a listener never takes a refused read for a cell that holds nothing.
+ * What the wrapped handle holds of its cell after a change, as its
+ * `lastRead()` says: the value, the refusal that stands in its place when the
+ * worker refused the read, or nothing yet, so that a listener never takes a
+ * refused read, or one not answered, for a cell that holds nothing.
  */
 export class CellUpdateEvent<T> extends CustomEvent<CellHandleRead<T>> {
   constructor(read: CellHandleRead<T>) {
@@ -39,13 +40,14 @@ export class CellEventTarget<T> extends EventTarget {
 
   #enable() {
     assert(!this.#isEnabled());
-    this.#cancel = this.#cell.subscribe((value) => {
-      this.dispatchEvent(new CellUpdateEvent<T>({ value }));
-    }, {
-      onRefused: (refused) => {
-        this.dispatchEvent(new CellUpdateEvent<T>({ refused }));
-      },
-    });
+    // Each event carries what the handle holds, so the echo of a handle that
+    // has read nothing yet arrives as unread, not as a cell holding nothing.
+    const update = () => {
+      this.dispatchEvent(
+        new CellUpdateEvent<Readonly<T>>(this.#cell.lastRead()),
+      );
+    };
+    this.#cancel = this.#cell.subscribe(update, { onRefused: update });
   }
 
   #disable() {

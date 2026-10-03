@@ -759,6 +759,14 @@ export class XHeaderView extends BaseView {
   /** Names fetched on first open, cached until the runtime or space changes. */
   #piecesCache: PieceItem[] | undefined;
 
+  /**
+   * The pieces the lists show: the cached list, or, where the last list held
+   * a withheld name and so was not cached, that list.
+   */
+  get #shownPieces(): PieceItem[] {
+    return this.#piecesCache ?? this.#pieces.value ?? [];
+  }
+
   get #piecesVisible(): boolean {
     return this.headerPieceDropdownOpen ||
       (this.menuOpen && this.pieceListExpanded);
@@ -1121,7 +1129,7 @@ export class XHeaderView extends BaseView {
                     ? html`
                       <div class="header-piece-dropdown">
                         <x-piece-list
-                          .pieces="${this.#piecesCache ?? []}"
+                          .pieces="${this.#shownPieces}"
                           .loading="${!this.#piecesCache &&
                             this.#pieces.status === TaskStatus.PENDING}"
                           .activePieceId="${this.pieceId}"
@@ -1181,7 +1189,7 @@ export class XHeaderView extends BaseView {
               ${this.pieceListExpanded
                 ? html`
                   <x-piece-list
-                    .pieces="${this.#piecesCache ?? []}"
+                    .pieces="${this.#shownPieces}"
                     .loading="${!this.#piecesCache &&
                       this.#pieces.status === TaskStatus.PENDING}"
                     .activePieceId="${this.pieceId}"
