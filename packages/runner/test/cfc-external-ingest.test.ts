@@ -13,6 +13,8 @@ import {
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-external-ingest");
 const space = signer.did();
@@ -209,6 +211,92 @@ describe("CFC external-ingest provenance mint (split-mint)", () => {
     } finally {
       await runtime.dispose();
       await storageManager.close();
+    }
+  });
+
+  it("mints the mark when `push()` creates the ingest target's list", async () => {
+    const { storageManager, runtime } = makeRuntime();
+    try {
+      const id = runtime.getCell(space, "ingest-push-creates")
+        .getAsNormalizedFullLink().id;
+      const { error } = await runtime.editWithRetry((tx) => {
+        stampExternalIngest(tx, meta(id, "sha256:first-record"));
+        runtime.getCell<{ at: string }[]>(
+          space,
+          "ingest-push-creates",
+          undefined,
+          tx,
+        ).push({ at: "first" });
+      });
+      expect(error).toBeUndefined();
+
+      expect(storedDocument(storageManager, id)?.value).toHaveLength(1);
+      const entries = ingestEntries(storageManager, id);
+      expect(entries.length).toBe(1);
+      expect(entries[0].label.integrity).toContainEqual(
+        externalIngestAtom("sha256:first-record"),
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("keeps the labels the store holds when the appending session has not loaded the list", async () => {
+    // The appending session's first attempt sees no list, so it computes the
+    // envelope from that absence. The store refuses it, and the retry appends
+    // to the loaded list, whose envelope the mark then joins.
+    const labeledListSchema = {
+      type: "array",
+      items: { type: "string" },
+      ifc: { confidentiality: ["secret"] },
+    } as const satisfies JSONSchema;
+    const server = newSharedServer();
+    const seedingStorage = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const appendingStorage = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const seeding = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager: seedingStorage,
+    });
+    const appending = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager: appendingStorage,
+    });
+    try {
+      const cause = "ingest-unloaded-labeled-list";
+      const id = seeding.getCell(space, cause).getAsNormalizedFullLink().id;
+      const seeded = await seeding.editWithRetry((tx) => {
+        seeding.getCell(space, cause, labeledListSchema, tx).set(["a"]);
+      });
+      expect(seeded.error).toBeUndefined();
+      await seeding.storageManager.synced();
+
+      const appended = await appending.editWithRetry((tx) => {
+        stampExternalIngest(tx, meta(id, "sha256:second-record"));
+        appending.getCell<string[]>(space, cause, undefined, tx).push("b");
+      });
+      expect(appended.error).toBeUndefined();
+      await appending.storageManager.synced();
+
+      const stored = (appendingStorage.open(space).replica as unknown as {
+        getDocument(id: string): StoredDocument;
+      }).getDocument(id);
+      expect(stored?.value).toEqual(["a", "b"]);
+      const entries = stored?.cfc?.labelMap?.entries ?? [];
+      expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
+        .toEqual(["secret"]);
+      expect(entries.flatMap((entry) => entry.label.integrity ?? []))
+        .toContainEqual(externalIngestAtom("sha256:second-record"));
+    } finally {
+      await seeding.dispose();
+      await appending.dispose();
+      await seedingStorage.close();
+      await appendingStorage.close();
+      await server.close();
     }
   });
 

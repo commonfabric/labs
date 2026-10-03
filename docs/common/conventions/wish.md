@@ -287,8 +287,9 @@ This ensures the wish is established once. Conditional logic belongs in how you
 
 These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
-`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, and the
-`#profile*` targets, which require a signed-in user and resolve from that user's home space.
+`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
+`#chatManager`, and the `#profile*` targets, which require a signed-in user and
+resolve from that user's home space.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |
@@ -309,6 +310,7 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#learned`          | User's learned data (home space)                        |
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
+| `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
 | `#profile`          | Profile default pattern object                          |
 | `#profileName`      | User's profile display name                             |
 | `#profileAvatar`    | User's profile avatar                                   |

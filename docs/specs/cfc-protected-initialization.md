@@ -11,8 +11,19 @@ existing unprotected value.
 When the runtime serializes a constructed cell with a default, it materializes
 the seed and records the cell's complete schema for CFC preparation. The value,
 schema document, and CFC envelope commit together. Failure aborts the operation.
-The reference that exposes the cell requires its own protection: changing that
-reference must not provide an alternative way to replace the protected value.
+The default a pattern's setup writes into an internal cell it materializes for
+the pattern is recorded as the same initialization, whether the pattern exports
+the cell, passes it to a sub-pattern, or keeps it to itself. The reference that
+exposes the cell requires its own protection: changing that reference must not
+provide an alternative way to replace the protected value.
+
+A setup that creates a new piece's argument document records, the same way, the
+default it writes into each concrete protected field the caller leaves to that
+default. The document is new, so every field in it is new; "New fields during a
+source update" below covers an argument document that exists already, where
+only a field the prior schema did not declare is. A value the caller supplies in
+place of the default, explicit `undefined` included, is not initialization, and
+a path containing `*` receives no permission here either.
 
 When a generated initializer returns the same protected cell again, its changed
 default does not replace an existing backing value. The runtime may record a
@@ -33,13 +44,14 @@ writer identity.
 
 ## New fields during a source update
 
-Verified pattern setup may initialize a concrete, newly declared protected
-argument field from its schema default. It uses the candidate schema's ordinary
-default extraction and argument validation. The prior argument schema must be
-known and must not already declare the field. The argument document must be
-readable. Paths containing `*` (including a literal property with that name)
-and ambiguous previous declarations do not receive this permission. CFC's
-schema-entry paths do not distinguish literal `*` properties from wildcards.
+Verified pattern setup may initialize a concrete, newly declared protected field
+of an argument document that exists already from its schema default. It uses the
+candidate schema's ordinary default extraction and argument validation. The
+prior argument schema must be known and must not already declare the field. The
+argument document must be readable. Paths containing `*` (including a literal
+property with that name) and ambiguous previous declarations do not receive this
+permission. CFC's schema-entry paths do not distinguish literal `*` properties
+from wildcards.
 
 The setup records the permission alongside the candidate argument schema and
 source transition. Preparation requires the field to be absent and the final
@@ -142,6 +154,30 @@ branch-local expansion rules. Ordinary chains need no shared-result cache.
 The persisted view still contains every distinct labeled path; sharing work
 does not reduce the size of a flat label map for a branching graph.
 
+## Bindings a setup stages
+
+A pattern that passes a binding to a sub-pattern it composes, as in
+`Child({ items })`, has setup stage a write redirect to the bound cell into the
+sub-pattern's argument. A pattern's result can name a cell the pattern did not
+create the same way: its argument, passed through to a result field, or a cell
+the code setting the pattern up closed over, as when a handler defines a
+pattern that returns one of the handler's own bindings and sets it up. Setup
+records each such redirect as a binding projection of the slot holding it.
+Preparation accepts the slot while it holds a redirect to the cell the
+projection names, compared by that cell's address rather than by the
+redirect's bytes. Outside an attributed transaction the slot is persisted
+without a claim about the current principal, as described under "Attribution
+of an initialized value", so a runtime acting for a principal other than the
+bound cell's owner can stage it.
+
+A binding projection covers the slot alone. The cell its redirect names
+belongs to whoever handed the piece the binding, and setup writes none of it,
+so a write to that cell, through the slot or directly, needs the cell's own
+writer and owner binding in the setting-up transaction as in any other. Only a
+result field naming one of the piece's own internal cells covers that cell as
+well, since setup creates and initializes it. Those cells are minted from the
+piece's result cell, so no other code names them.
+
 ## Setup replay over a stored argument
 
 A runtime that starts a piece it did not create replays the setup of the
@@ -186,8 +222,9 @@ carrying such a claim is.
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source
 update installing a new field's default — the seed, the reference that
-exposes it, the new field's default and the cells a setup projects result
-fields to are all persisted without a claim about the current principal.
+exposes it, the new field's default, the internal cells a setup projects
+result fields to and the slots it stages bindings into are all persisted
+without a claim about the current principal.
 Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
 `ownerPrincipal` binding is established by the first write an acting
 principal makes through the field's writer, and that write mints the claim

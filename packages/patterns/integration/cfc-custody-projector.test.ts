@@ -586,15 +586,17 @@ const sealAndRelease = async (
           break;
         case "copy": {
           // The member's own instance of the room's pattern, its `terms`
-          // bound beneath the room's, and then the room's own `propose`.
+          // bound beneath the room's, and then the room's own `propose`. Each
+          // binding is a write redirect, the one link a setup may stage into
+          // an argument field carrying a writer claim.
           const { schema: _schema, ...link } = argument
             .getAsNormalizedFullLink();
           const copy = await startRoom(`${file}-copy`, {
             terms: host.getCellFromLink({
               ...link,
               path: [...link.path, "terms", "seats"],
-            }),
-            policy: room.key("policy"),
+            }).getAsWriteRedirectLink(),
+            policy: room.key("policy").getAsWriteRedirectLink(),
           });
           copy.key("propose").send({
             seats: [host.getCellFromLink(seats[1])],

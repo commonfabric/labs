@@ -204,6 +204,7 @@ import {
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
+  CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -299,6 +300,24 @@ const nativeLengthParent = (
   }).ok?.value;
   return Array.isArray(parent) ? parentPath : undefined;
 };
+
+/**
+ * Returns the logical path of the parent a trigger read of a `length` names,
+ * or `undefined` when its path does not end in `length`. A trigger read
+ * (§8.9.2) holds the logical path of the read whose change scheduled the run.
+ * A read of an array's `length` observes the array's membership, so the
+ * parent is charged as a shape read whatever it holds when the rerun
+ * prepares: the change that scheduled the rerun, or the rerun's own write,
+ * may have replaced the array with something that is not one, and the count
+ * the run read still came from it. An object field named `length` is charged
+ * the same way, which over-charges, the safe direction.
+ */
+const triggerReadLengthParent = (
+  path: readonly string[],
+): ValuePath | undefined =>
+  path.at(-1) === "length"
+    ? canonicalizeLogicalPath(path.slice(0, -1))
+    : undefined;
 
 const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
@@ -1457,11 +1476,18 @@ const setupProjectionSourceMatchesValue = (
   },
   path: readonly string[],
 ): boolean => {
+  // A field projecting the piece's own cell and a slot holding a binding
+  // alike: either marker names the redirect a setup put at the path.
   const projection = structuralProvenanceForPath(
     tx,
     target,
     path,
     CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+  ) ?? structuralProvenanceForPath(
+    tx,
+    target,
+    path,
+    CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION,
   );
   if (projection === undefined) {
     return false;
@@ -1475,14 +1501,16 @@ const setupProjectionSourceMatchesValue = (
   if (!isWriteRedirectLink(targetValue)) {
     return false;
   }
-  const projected = parseLink(targetValue);
+  // A link whose address omits its document names the document holding it,
+  // so it is resolved against the target before it is compared.
+  const projected = parseLink(targetValue, { ...target, path: [] });
   if (projected === undefined) {
     return false;
   }
   const projectedPath = projected.path.map((entry) => String(entry));
   return projection.sources.some((source) =>
-    (projected.space === undefined || projected.space === source.space) &&
-    (projected.id === undefined || projected.id === source.id) &&
+    projected.space === source.space && projected.id === source.id &&
+    normalizeCellScope(projected.scope) === normalizeCellScope(source.scope) &&
     arraysEqual(projectedPath, source.path)
   );
 };
@@ -1494,14 +1522,20 @@ const setupProjectionSourceMatchesValue = (
 // applies to *subsequent* modifications).
 //
 // When the runtime instantiates a pattern whose result declares owner-protected
-// fields, it records a setup-projection marker on the result cell whose
-// `sources` point at the pattern's own projected (internal) cells — the cells
-// that hold the field's value and carry its `writeAuthorizedBy` schema. The
-// pattern initializing those fields (e.g. `avatar = ""`, `elements = []`) is its
-// own trusted creation step, authored by the runtime's result projection, not by
-// the per-field edit handler. Recognize a target as that trusted-creation site
-// when it is the redirect *source* of a setup-projection marker recorded in this
-// transaction, covering the field path.
+// fields, it records a setup-projection marker on the result cell for each
+// field it projects to one of the piece's own internal cells — the cells the
+// setup creates, minted from the result cell's cause, that hold the field's
+// value and carry its `writeAuthorizedBy` schema. The pattern initializing
+// those fields (e.g. `avatar = ""`, `elements = []`) is its own trusted creation
+// step, authored by the runtime's result projection, not by the per-field edit
+// handler. Recognize a target as that trusted-creation site when it is the
+// redirect *source* of a setup-projection marker recorded in this transaction,
+// covering the field path. A redirect to any other cell — a binding staged into
+// an argument, or a result field naming the piece's argument or a cell the code
+// setting the piece up closed over — records a marker of its own
+// (`CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION`), which does not count here:
+// the cell it names belongs to whoever handed the piece the binding, and the
+// setup initializes none of it.
 //
 // This is safe because the marker counts only with the runtime's authorization
 // (`isRuntimeWritePolicyInput`), which the runtime's result projection records
@@ -1768,12 +1802,17 @@ const pathHoldsUnattributedInitialization = (
     !tx.getCfcState().attributedInitialization &&
     inputs.some((input) => {
       if (input.kind === "structural-provenance") {
+        if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
         // internal cell holding the field's value; both are the pattern's own
-        // initialization (`writeIsPatternSetupInitialization`).
-        return tx.isRuntimeWritePolicyInput(input) &&
-          input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
-          [input.target, ...input.sources].some(covers);
+        // initialization (`writeIsPatternSetupInitialization`). A binding
+        // projection names the slot this setup stages and the cell the piece
+        // was handed, and only the slot is the setup's.
+        if (input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION) {
+          return [input.target, ...input.sources].some(covers);
+        }
+        return input.claim === CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION &&
+          covers(input.target);
       }
       return input.kind === "initialization" &&
         (input.mode === "seed" || input.mode === "projection" ||
@@ -4046,16 +4085,40 @@ const forEachFlowObservation = (
     if (trigger.id.startsWith("cid:")) {
       continue;
     }
+    const id = trigger.id as URI;
+    const scope = normalizeCellScope(trigger.scope);
     if (
       consume(
         trigger.space,
-        trigger.id as URI,
-        normalizeCellScope(trigger.scope),
+        id,
+        scope,
         "application/json",
         trigger.path,
         {
           shape: "value",
           nonRecursive: false,
+          coveredByTrace: false,
+          machinery: false,
+          writeDestination: false,
+          followedSlot: false,
+        },
+      )
+    ) {
+      return true;
+    }
+    // A trigger read of a `length` observes its parent's membership.
+    const lengthOf = triggerReadLengthParent(trigger.path);
+    if (
+      lengthOf !== undefined &&
+      consume(
+        trigger.space,
+        id,
+        scope,
+        "application/json",
+        lengthOf,
+        {
+          shape: "shape",
+          nonRecursive: true,
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
@@ -9278,9 +9341,10 @@ const collectConsumedLabelImpl = (
   }
   // §8.9.2 / SC-3 (H5): a handler scheduled by a confidential write must not
   // egress past a sink ceiling just because its branch never re-read that
-  // write. Empty when the trigger-read gate is off. A trigger names the value a
-  // write changed, which is never an array's native `length`, so it has no
-  // length parent.
+  // write. Empty when the trigger-read gate is off. A trigger names the read
+  // whose change scheduled the run; a trigger read of a `length` also charges
+  // its parent as a shape read (`triggerReadLengthParent`), as the journal's
+  // read of that `length` does.
   for (const read of triggerReadSources(tx)) {
     const labels = labelsOf(read);
     if (labels === undefined) continue;
@@ -9290,6 +9354,10 @@ const collectConsumedLabelImpl = (
       canonicalizeLogicalPath(read.path),
       read.nonRecursive,
     );
+    const lengthOf = triggerReadLengthParent(read.path);
+    if (lengthOf !== undefined) {
+      collectAt(read, labels, lengthOf, true);
+    }
   }
   // Label-metadata observations (inv-12 Stage 2): the introspection
   // surface's records enter the egress consumed set with their §4.6.4.2
