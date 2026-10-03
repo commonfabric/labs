@@ -1620,6 +1620,73 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
     );
 
     await t.step(
+      "takes a `cf-render`'s access placeholder away when a write binds it to a piece in reach, and puts it back when a write binds it out of reach again",
+      async () => {
+        // The view is written again with its `cf-render` bound to another
+        // piece, and the element is updated where it stands, so the binding
+        // replaced is the one whose placeholder the element holds.
+
+        const farSpace =
+          (await Identity.fromPassphrase("swapped placeholder space")).did();
+        const access: SpaceAccessProvider = {
+          error: (named) =>
+            named === farSpace ? new Error("Access revoked") : undefined,
+          subscribe: () => () => {},
+        };
+        const slotOf = async (id: string, inSpace: typeof space) => {
+          const piece = await write(
+            `${id}-piece`,
+            {
+              [NAME]: "Shelf",
+              [UI]: vnode("div", ["Swapped shelf heading"]),
+            },
+            [],
+            inSpace,
+          );
+          const pins = await write(
+            `${id}-pins`,
+            { element: { cell: link(piece) } },
+            [],
+            inSpace,
+          );
+          return pins.key("element").key("cell").asSchema(true);
+        };
+        const far = await slotOf("swapped-far", farSpace);
+        const near = await slotOf("swapped-near", space);
+        const page = await mount(
+          createCellRef(await tileView("swapped-view", far)),
+          visitor,
+          access,
+        );
+        try {
+          const seen: { placeholders: number; bound: number }[] = [];
+          const look = () =>
+            seen.push({
+              placeholders: page.accessPlaceholders("cf-render"),
+              bound: page.bindings().length,
+            });
+          look();
+          await tileView("swapped-view", near);
+          await t.settle();
+          look();
+          await tileView("swapped-view", far);
+          await t.settle();
+          look();
+          expect(seen).toEqual([
+            { placeholders: 1, bound: 0 },
+            { placeholders: 0, bound: 1 },
+            { placeholders: 1, bound: 1 },
+          ]);
+          // The element was updated where it stands, never made again.
+          expect(page.shown().filter((tag) => tag === "<cf-render>"))
+            .toHaveLength(1);
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
       "decides `cf-picker`'s items inside a boundary that lowers the ceiling on everything they reach, whatever schema the list's links store",
       async () => {
         // As for `cf-render`, the nested render of each item starts from the
