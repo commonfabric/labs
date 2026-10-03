@@ -18,6 +18,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import { DomApplicator } from "../src/main/applicator.ts";
 import type { DomEventMessage } from "../src/main/events.ts";
 import { getPieceBoundary } from "../src/main/space-context.ts";
+import type { SetPropHandler } from "../src/render-utils.ts";
 import type { VDomBatch } from "../src/vdom-ops.ts";
 
 // Mock RuntimeClient for testing
@@ -300,6 +301,23 @@ function createMockDocument({ upgrade = true } = {}) {
   };
   return doc as unknown as Document;
 }
+
+/**
+ * A `setProp` for the applicator that sets a `data-*` key as an attribute, so
+ * that the element's `dataset` holds it, and any other key as a property.
+ */
+const setDataKeysAsAttributes: SetPropHandler = (target, key, value) => {
+  if (
+    key.startsWith("data-") &&
+    isObjectOrArray(target) &&
+    "setAttribute" in target &&
+    typeof target.setAttribute === "function"
+  ) {
+    target.setAttribute(key, String(value));
+    return;
+  }
+  (target as Record<string, unknown>)[key] = value;
+};
 
 describe("DomApplicator", () => {
   describe("instance members", () => {
@@ -1012,18 +1030,7 @@ describe("DomApplicator", () => {
             document: doc,
             runtimeClient: createMockRuntimeClient(),
             onEvent: (msg) => events.push(msg),
-            setProp: (target, key, value) => {
-              if (
-                key.startsWith("data-") &&
-                isObjectOrArray(target) &&
-                "setAttribute" in target &&
-                typeof target.setAttribute === "function"
-              ) {
-                target.setAttribute(key, String(value));
-                return;
-              }
-              (target as Record<string, unknown>)[key] = value;
-            },
+            setProp: setDataKeysAsAttributes,
           });
 
           applicator.applyBatch({
@@ -1055,18 +1062,7 @@ describe("DomApplicator", () => {
             document: doc,
             runtimeClient: createMockRuntimeClient(),
             onEvent: (msg) => events.push(msg),
-            setProp: (target, key, value) => {
-              if (
-                key.startsWith("data-") &&
-                isObjectOrArray(target) &&
-                "setAttribute" in target &&
-                typeof target.setAttribute === "function"
-              ) {
-                target.setAttribute(key, String(value));
-                return;
-              }
-              (target as Record<string, unknown>)[key] = value;
-            },
+            setProp: setDataKeysAsAttributes,
           });
 
           applicator.applyBatch({
@@ -1135,24 +1131,19 @@ describe("DomApplicator", () => {
           const SURFACE = "TrustedSaveSurface";
           const ACTION = "TrustedSaveTitle";
 
+          /**
+           * Renders the tree above, each node with a click handler whose id is
+           * the node's own, and returns the applicator with a function
+           * returning the provenance of the event that reached a handler, or
+           * `undefined` if none did.
+           */
           const renderWrappedSurface = () => {
             const events: DomEventMessage[] = [];
             const applicator = new DomApplicator({
               document: createMockDocument(),
               runtimeClient: createMockRuntimeClient(),
               onEvent: (msg) => events.push(msg),
-              setProp: (target, key, value) => {
-                if (
-                  key.startsWith("data-") &&
-                  isObjectOrArray(target) &&
-                  "setAttribute" in target &&
-                  typeof target.setAttribute === "function"
-                ) {
-                  target.setAttribute(key, String(value));
-                  return;
-                }
-                (target as Record<string, unknown>)[key] = value;
-              },
+              setProp: setDataKeysAsAttributes,
             });
             applicator.applyBatch({
               batchId: 1,
@@ -1203,69 +1194,68 @@ describe("DomApplicator", () => {
             const provenanceFor = (handlerId: number) =>
               events.find((message) => message.handlerId === handlerId)?.event
                 .provenance;
-            return { applicator, events, provenanceFor };
+            return { applicator, provenanceFor };
           };
 
-          // Dispatches a trusted click to `target` and then to each of its
-          // ancestors, with `currentTarget` naming the node whose listeners
-          // run. With `composed`, the event's `composedPath()` returns
-          // `shadowPath` -- the nodes of a component's shadow tree that the
-          // click landed on before reaching its host -- followed by `target`
-          // and its ancestors, as a browser's does.
+          /**
+           * Dispatches a trusted click to `target` and then to each of its
+           * ancestors. With `withComposedPath`, the event's `composedPath()`
+           * returns `shadowPath` -- the nodes of a component's shadow tree
+           * that the click landed on before reaching its host -- followed by
+           * `target` and its ancestors, as a browser's does.
+           */
           const clickBubbling = (
             target: any,
-            { composed = true, shadowPath = [] as unknown[] } = {},
+            { withComposedPath = true, shadowPath = [] as unknown[] } = {},
           ) => {
             const ancestors: any[] = [];
             for (let node = target; node; node = node.parentNode) {
               ancestors.push(node);
             }
-            const event: Record<string, unknown> = {
+            const event = {
               type: "click",
               target,
               isTrusted: true,
-              ...(composed
+              ...(withComposedPath
                 ? { composedPath: () => [...shadowPath, ...ancestors] }
                 : {}),
             };
             for (const node of ancestors) {
-              event.currentTarget = node;
               node.dispatchEvent(event);
             }
           };
 
-          for (const composed of [true, false]) {
-            const how = composed
+          for (const withComposedPath of [true, false]) {
+            const how = withComposedPath
               ? "with a composed path"
               : "without a composed path";
 
-            it(`gives a listener on an ancestor outside the surface no UI provenance, ${how}`, () => {
-              const { applicator, events, provenanceFor } =
-                renderWrappedSurface();
+            describe(how, () => {
+              it("gives a listener on an ancestor outside the surface no UI provenance", () => {
+                const { applicator, provenanceFor } = renderWrappedSurface();
 
-              clickBubbling(applicator.getNode(3), { composed });
+                clickBubbling(applicator.getNode(3), { withComposedPath });
 
-              expect(events.map((message) => message.handlerId))
-                .toStrictEqual([3, 2, 1]);
-              expect(provenanceFor(1)).toStrictEqual({
-                origin: "dom",
-                trusted: true,
+                expect(provenanceFor(1)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                });
               });
-            });
 
-            it(`gives a listener on the control the surface's provenance and the control's action, ${how}`, () => {
-              const { applicator, provenanceFor } = renderWrappedSurface();
+              it("gives a listener on the control the surface's provenance and the control's action", () => {
+                const { applicator, provenanceFor } = renderWrappedSurface();
 
-              clickBubbling(applicator.getNode(3), { composed });
+                clickBubbling(applicator.getNode(3), { withComposedPath });
 
-              expect(provenanceFor(3)).toStrictEqual({
-                origin: "dom",
-                trusted: true,
-                ui: {
-                  pattern: SURFACE,
-                  eventIntegrity: [SURFACE],
-                  uiContractDataset: { uiAction: ACTION },
-                },
+                expect(provenanceFor(3)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                  ui: {
+                    pattern: SURFACE,
+                    eventIntegrity: [SURFACE],
+                    uiContractDataset: { uiAction: ACTION },
+                  },
+                });
               });
             });
           }

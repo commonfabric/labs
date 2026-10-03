@@ -3,6 +3,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -261,10 +262,19 @@ Deno.test("events - serializeEvent", async (t) => {
   });
 
   await t.step("captures data-ui markers from composed event paths", () => {
-    const control = { dataset: { uiAction: "TrustedSaveTitle" } };
+    // A click on the button in a component's shadow tree, as the listener on
+    // the component's host receives it: retargeted to the host, with the
+    // shadow tree's nodes first on the composed path.
+
+    const control = {
+      dataset: {
+        uiAction: "TrustedSaveTitle",
+        ordinaryHandlerData: "preserved",
+      },
+    };
     const event = new MockEvent("click", {
       isTrusted: true,
-      target: { dataset: { ordinaryHandlerData: "preserved" } },
+      target: control,
     }) as MockEvent & { composedPath: () => unknown[] };
     event.composedPath = () => [
       { dataset: { cfButton: "" } },
@@ -275,7 +285,6 @@ Deno.test("events - serializeEvent", async (t) => {
           uiEventIntegrity: "TrustedSaveSurface",
         },
       },
-      event.target,
     ];
 
     const serialized = serializeEvent(
@@ -284,6 +293,7 @@ Deno.test("events - serializeEvent", async (t) => {
     );
 
     assertEquals(serialized.target?.dataset, {
+      uiAction: "TrustedSaveTitle",
       ordinaryHandlerData: "preserved",
     });
     assertEquals(serialized.provenance, {
@@ -326,12 +336,15 @@ Deno.test("events - serializeEvent", async (t) => {
         wrapper as unknown as EventTarget,
       );
 
-      assertEquals(serialized.provenance, { origin: "dom", trusted: true });
+      expect(serialized.provenance).toStrictEqual({
+        origin: "dom",
+        trusted: true,
+      });
     },
   );
 
   await t.step(
-    "captures no data-ui markers for an event serialized without a current target",
+    "captures no data-ui markers for an event serialized without a bound node",
     () => {
       const event = new MockEvent("click", {
         isTrusted: true,
@@ -347,7 +360,10 @@ Deno.test("events - serializeEvent", async (t) => {
 
       const serialized = serializeEvent(event as unknown as Event);
 
-      assertEquals(serialized.provenance, { origin: "dom", trusted: true });
+      expect(serialized.provenance).toStrictEqual({
+        origin: "dom",
+        trusted: true,
+      });
     },
   );
 
