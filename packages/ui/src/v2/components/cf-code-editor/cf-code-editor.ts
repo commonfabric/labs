@@ -1848,7 +1848,14 @@ export class CFCodeEditor extends BaseElement {
         insert: newValue,
       },
       selection: { anchor: anchorPos, head: headPos },
-      annotations: CFCodeEditor._cellSyncAnnotation.of("mirror"),
+      // What the content cell holds is no edit of the user's, so it is kept
+      // out of the undo history, as a collaborator's change is: an undo
+      // after a refusal and its admission would otherwise bring back the
+      // empty document the refusal mirrored, and write it.
+      annotations: [
+        CFCodeEditor._cellSyncAnnotation.of("mirror"),
+        Transaction.addToHistory.of(false),
+      ],
     });
 
     // Content that arrived from outside replaces what "already there" means,

@@ -7,9 +7,11 @@ import {
   type CompletionResult,
   completionStatus,
 } from "@codemirror/autocomplete";
+import { history, undo } from "@codemirror/commands";
 import {
   EditorState,
   type Extension,
+  Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
@@ -18,6 +20,7 @@ import { type CellHandle, type CellRef } from "@commonfabric/runtime-client";
 import {
   createMockCellHandle,
   pushRefusal,
+  pushUpdate,
   writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
 import type { MentionRefMap } from "../../core/mention-refs.ts";
@@ -1506,7 +1509,19 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
   // is refused the editor takes no change and writes nothing.
 
   /** A view as the editor drives it: a state it dispatches transactions to. */
-  type ViewStub = { state: EditorState; dispatch(spec: TransactionSpec): void };
+  type ViewStub = {
+    state: EditorState;
+    dispatch(spec: TransactionSpec | Transaction): void;
+  };
+
+  /** What the editor's update listener is handed for each change. */
+  type UpdateStub = {
+    transactions: readonly Transaction[];
+    docChanged: boolean;
+    selectionSet: boolean;
+    state: EditorState;
+    startState: EditorState;
+  };
 
   /**
    * The editor's own members these tests drive. A Lit element mounts only in
@@ -1515,6 +1530,7 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
    */
   type RefusalInternals = {
     value: CellHandle<string> | string;
+    timingStrategy: "immediate" | "debounce" | "throttle" | "blur";
     mentionable: CellHandle<MentionableArray> | null;
     mentioned?: CellHandle<MentionableArray>;
     pattern: unknown;
@@ -1523,6 +1539,7 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     _completeBacklinkQuery(view: ViewStub, text: string): void;
     _writeRefEntry(destination: CellHandle<unknown>): string | null;
     _refusalGate(): Extension;
+    _handleEditorUpdate(update: UpdateStub): void;
     handleBacklinkActivation(view: ViewStub): boolean;
     willUpdate(changedProperties: Map<string, unknown>): void;
     updated(changedProperties: Map<string, unknown>): void;
@@ -1558,11 +1575,45 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
         selection: { anchor },
         extensions: [backlinkField, mentionRefField, refShortNameField, gate],
       }),
-      dispatch(spec: TransactionSpec) {
-        this.state = this.state.update(spec).state;
+      dispatch(spec: TransactionSpec | Transaction) {
+        this.state =
+          (spec instanceof Transaction ? spec : this.state.update(spec)).state;
       },
     };
     view.dispatch({ effects: setKnownRefKeys.of(refKeys) });
+    return view;
+  }
+
+  /**
+   * A view whose every change the editor hears, as the mounted view's update
+   * listener hands it, with undo history and the editor's refusal gate.
+   */
+  function liveView(element: RefusalInternals): ViewStub {
+    const view = {
+      state: EditorState.create({
+        extensions: [
+          backlinkField,
+          mentionRefField,
+          refShortNameField,
+          history(),
+          element._refusalGate(),
+        ],
+      }),
+      dispatch(spec: TransactionSpec | Transaction) {
+        const transaction = spec instanceof Transaction
+          ? spec
+          : this.state.update(spec);
+        const startState = this.state;
+        this.state = transaction.state;
+        element._handleEditorUpdate({
+          transactions: [transaction],
+          docChanged: transaction.docChanged,
+          selectionSet: transaction.selection !== undefined,
+          state: transaction.state,
+          startState,
+        });
+      },
+    };
     return view;
   }
 
@@ -1673,6 +1724,28 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     expect(view.state.doc.toString()).toBe("");
     expect(writesSent(mentioned)).toHaveLength(1);
     expect(mentioned.get()).toHaveLength(1);
+  });
+
+  it("writes nothing when an undo follows a refusal of the content and its admission", () => {
+    const element = editor();
+    const content = createMockCellHandle("Hello world", { id: "of:content" });
+    element.timingStrategy = "immediate";
+    const view = liveView(element);
+    element._editorView = view;
+    element.value = content;
+    element.updated(new Map([["value", ""], ["timingStrategy", ""]]));
+    expect(view.state.doc.toString()).toBe("Hello world");
+
+    pushRefusal(content);
+    expect(view.state.doc.toString()).toBe("");
+    pushUpdate(content, "Hello world");
+    expect(view.state.doc.toString()).toBe("Hello world");
+
+    // What the content cell holds is no edit to undo.
+    undo({ state: view.state, dispatch: (tr) => view.dispatch(tr) });
+
+    expect(writesSent(content)).toEqual([]);
+    expect(view.state.doc.toString()).toBe("Hello world");
   });
 
   for (
