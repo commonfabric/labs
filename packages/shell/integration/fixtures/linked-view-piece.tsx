@@ -4,6 +4,9 @@ import { type Default, NAME, pattern, UI, type VNode } from "commonfabric";
 interface ShownPiece {
   /** The shown piece's name. */
   [NAME]?: string;
+
+  /** The shown piece's view. */
+  [UI]: VNode;
 }
 
 interface LinkedViewInput {
@@ -18,14 +21,18 @@ interface LinkedViewOutput {
 
 /**
  * A view showing a marker of its own and, beneath it, the piece its input
- * links to, which a test places in a space the viewer may not be granted.
+ * links to, which a test places in a space the viewer may not be granted. The
+ * piece is a child of the view rather than the cell of a `cf-render`, so that
+ * while its space refuses the viewer the renderer shows the access placeholder
+ * in its place: a `cf-render` whose cell cannot be read is not bound, and
+ * shows nothing.
  */
 export default pattern<LinkedViewInput, LinkedViewOutput>(({ shown }) => ({
   [NAME]: "Linked View Piece",
   [UI]: (
     <cf-screen>
       <div id="linked-view-marker">linked view</div>
-      <cf-render $cell={shown} />
+      <div>{shown}</div>
     </cf-screen>
   ),
 }));
