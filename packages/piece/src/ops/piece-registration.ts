@@ -1,6 +1,6 @@
 /**
  * Defines the registration event shared by client and hosted piece creation.
- * Its link-only payload can cross a serving-wave boundary unchanged.
+ * Its piece link and adder claim cross a serving-wave boundary unchanged.
  */
 
 import type { Cell } from "@commonfabric/runner";

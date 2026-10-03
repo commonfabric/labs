@@ -400,7 +400,7 @@ export async function servedInstantiatePiece(
   return outcome.ok!;
 }
 
-/** The address-only delivery plan retained after a registration preparation wave. */
+/** The delivery target and attributed event retained across a preparation wave. */
 export interface ServedRegistrationPreparation {
   receipt: ServedInstantiateReceipt;
   delivery?: {
