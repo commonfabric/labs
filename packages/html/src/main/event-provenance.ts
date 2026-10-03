@@ -21,16 +21,27 @@ const UI_CONTRACT_DATASET_KEYS = [
   "uiDisclosureKind",
 ] as const;
 
+/**
+ * The provenance of `event` as a listener on `currentTarget` receives it, or
+ * `undefined` when the browser did not mark the event trusted.
+ *
+ * The UI provenance is read from `currentTarget` and the nodes above it, and
+ * never from the nodes between `currentTarget` and the event's target. So a
+ * trusted surface's markers vouch for a click only to the handlers bound on the
+ * surface or inside it: a listener on an ancestor outside the surface, which
+ * the same click reaches as it bubbles, finds none of them on its own path.
+ * Without a `currentTarget`, the event carries no UI provenance.
+ */
 export const getEventProvenance = (
   event: EventLike,
-  target?: EventTarget | null,
+  currentTarget?: EventTarget,
 ): EventProvenance | undefined => {
   if (event.isTrusted) {
     const provenance: EventProvenance = {
       origin: "dom",
       trusted: true,
     };
-    const ui = getEventUiProvenance(event, target);
+    const ui = currentTarget && getEventUiProvenance(event, currentTarget);
     if (ui) {
       provenance.ui = ui;
     }
@@ -41,9 +52,9 @@ export const getEventProvenance = (
 
 export const getEventUiContractDataset = (
   event: { composedPath?: () => readonly unknown[] },
-  target?: EventTarget | null,
+  currentTarget: EventTarget,
 ): Record<string, string> | undefined => {
-  for (const node of getEventPath(event, target)) {
+  for (const node of getCurrentTargetPath(event, currentTarget)) {
     const dataset = readDataset(node);
     const uiContractDataset = dataset && pickUiContractDataset(dataset);
     if (uiContractDataset) {
@@ -59,12 +70,12 @@ export const getEventTargetDataset = (
 
 const getEventUiProvenance = (
   event: { composedPath?: () => readonly unknown[] },
-  target: EventTarget | null | undefined,
+  currentTarget: EventTarget,
 ): EventUiProvenance | undefined => {
   let pattern: string | undefined;
   const eventIntegrity = new Set<string>();
-  const uiContractDataset = getEventUiContractDataset(event, target);
-  for (const current of getEventPath(event, target)) {
+  const uiContractDataset = getEventUiContractDataset(event, currentTarget);
+  for (const current of getCurrentTargetPath(event, currentTarget)) {
     const dataset = readDataset(current);
     if (dataset) {
       if (
@@ -95,19 +106,25 @@ const getEventUiProvenance = (
     : undefined;
 };
 
-const getEventPath = (
+/**
+ * `currentTarget` and the nodes above it: the part of the event's composed path
+ * that starts at `currentTarget`, which crosses shadow boundaries as the event
+ * does, or else the chain of parent nodes from `currentTarget`.
+ */
+const getCurrentTargetPath = (
   event: { composedPath?: () => readonly unknown[] },
-  target: EventTarget | null | undefined,
+  currentTarget: EventTarget,
 ): readonly unknown[] => {
   if (typeof event.composedPath === "function") {
     const path = event.composedPath();
-    if (Array.isArray(path) && path.length > 0) {
-      return path;
+    const start = Array.isArray(path) ? path.indexOf(currentTarget) : -1;
+    if (start >= 0) {
+      return path.slice(start);
     }
   }
 
   const path: unknown[] = [];
-  let current: unknown = target;
+  let current: unknown = currentTarget;
   while (current && typeof current === "object") {
     path.push(current);
     current = "parentNode" in current ? current.parentNode : undefined;

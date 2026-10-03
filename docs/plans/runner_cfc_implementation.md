@@ -1024,9 +1024,14 @@ Implementation notes for spec update:
       untrusted embedders cannot hide or obscure embedded trusted UIs; future
       spec work should define opaque trusted UI islands and a non-forgeable
       pattern identity token beyond DOM data attributes
-- [x] Event-integrity labels are collected from the event target ancestry, so a
-      trusted pattern can later bind rendered integrity-bearing data into the
-      event attestation without introducing a parallel helper-specific policy
+- [x] Event-integrity labels are collected from the UI ancestry, so a trusted
+      pattern can later bind rendered integrity-bearing data into the event
+      attestation without introducing a parallel helper-specific policy
+- [x] That ancestry, for all of a trusted event's UI provenance, starts at the
+      element the handler is bound to, never at the event target below it: a
+      click on a trusted surface vouches only for the handlers bound on or
+      inside that surface, and not for a listener on an ancestor outside it
+      that the same click bubbles to
 - [x] Render-time label disclosure now has a generic `cf-cfc-label` UI
       primitive: it takes a bound `$value` and optional `atom`/`kind` filters,
       asks the trusted runtime IPC layer for that cell's CFC label view, and

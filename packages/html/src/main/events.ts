@@ -202,12 +202,20 @@ const TARGET_PROPERTY_SCALARS = {
 /**
  * Serialize a DOM event for IPC transmission.
  * This creates a plain object with only safe, serializable properties.
+ *
+ * `currentTarget` is the node whose listener is serializing the event. A
+ * trusted event's UI provenance is read from it and the nodes above it, as
+ * {@link getEventProvenance} describes, and an event serialized without one
+ * carries none.
  */
-export function serializeEvent(event: Event): SerializedEvent {
+export function serializeEvent(
+  event: Event,
+  currentTarget?: EventTarget,
+): SerializedEvent {
   const serialized: SerializedEvent = {
     type: event.type,
   };
-  const provenance = getEventProvenance(event, event.target);
+  const provenance = getEventProvenance(event, currentTarget);
   if (provenance) {
     serialized.provenance = provenance;
   }

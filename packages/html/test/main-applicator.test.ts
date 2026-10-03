@@ -1270,6 +1270,22 @@ describe("DomApplicator", () => {
             });
           }
 
+          it("gives a listener on the surface element the surface's pattern and labels, and not the action of the control clicked inside it", () => {
+            // `data-ui-action` names the control a handler is bound to. A
+            // listener higher up, delegating for the controls below it, does
+            // not take theirs.
+
+            const { applicator, provenanceFor } = renderWrappedSurface();
+
+            clickBubbling(applicator.getNode(3));
+
+            expect(provenanceFor(2)).toStrictEqual({
+              origin: "dom",
+              trusted: true,
+              ui: { pattern: SURFACE, eventIntegrity: [SURFACE] },
+            });
+          });
+
           it("gives a listener on a shadow host inside the surface the surface's provenance, and one outside the surface none", () => {
             // A click on `cf-submit-input`'s submit button lands in its
             // shadow tree, and reaches the pattern's listener on the host
