@@ -2746,8 +2746,11 @@ export class Server {
     }
     if (this.#aclMode() === "off") return null;
 
-    const state = this.#aclState(engine, space);
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
+    // Ordinary writes to established spaces need no genesis shape check.
+    // Their current ACL and ownership are enforced by message authorization.
+    if (!aclTouched && Engine.serverSeq(engine) !== 0) return null;
+    const state = this.#aclState(engine, space);
 
     if (!aclTouched) {
       if (state.kind === "missing" && Engine.serverSeq(engine) === 0) {
