@@ -23,7 +23,11 @@ import {
   verifyReviewedIntentRecord,
 } from "../../src/cfc/reviewed-intent.ts";
 import { prepareSnapshotShare } from "../../src/cfc/share-snapshot.ts";
-import type { ImplementationIdentity } from "../../src/cfc/types.ts";
+import type {
+  CfcEnforcementMode,
+  CfcFlowLabelsMode,
+  ImplementationIdentity,
+} from "../../src/cfc/types.ts";
 import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -514,36 +518,73 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("leaves the result cell alone when its runtime writes the record without the stamp", async () => {
+    it("refuses to prepare on a runtime that would write the record without the stamp", async () => {
       const fixture = await setup();
-      const unstamped = new Runtime({
-        apiUrl: new URL("http://toolshed.test"),
-        storageManager: fixture.storage,
-        trustSnapshotProvider: () => ({
-          id: sender.did(),
-          actingPrincipal: sender.did(),
-        }),
-        cfcReadMaxConfidentiality: [
-          cfcAtom.user(sender.did()),
-          ADDRESS_BOOK_CLAUSE,
-        ],
-        cfcEnforcementMode: "enforce-strict",
-        cfcFlowLabels: "off",
-      });
+      const modes: {
+        cfcEnforcementMode: CfcEnforcementMode;
+        cfcFlowLabels: CfcFlowLabelsMode;
+      }[] = [
+        { cfcEnforcementMode: "enforce-strict", cfcFlowLabels: "off" },
+        { cfcEnforcementMode: "enforce-strict", cfcFlowLabels: "observe" },
+        { cfcEnforcementMode: "disabled", cfcFlowLabels: "persist" },
+      ];
+      const unstamped = modes.map((dials) =>
+        new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager: fixture.storage,
+          trustSnapshotProvider: () => ({
+            id: sender.did(),
+            actingPrincipal: sender.did(),
+          }),
+          cfcReadMaxConfidentiality: [
+            cfcAtom.user(sender.did()),
+            ADDRESS_BOOK_CLAUSE,
+          ],
+          ...dials,
+        })
+      );
       try {
-        const local = (cell: Cell<unknown>) =>
-          unstamped.getCellFromLink(cell.getAsNormalizedFullLink());
-        const prepared = await prepareReviewedIntent({
-          descriptor: local(fixture.descriptor),
-          parameters: { to: [local(fixture.recipient)] },
-          result: local(fixture.result),
-        });
+        for (const runtime of unstamped) {
+          const local = (cell: Cell<unknown>) =>
+            runtime.getCellFromLink(cell.getAsNormalizedFullLink());
+          await expect(prepareReviewedIntent({
+            descriptor: local(fixture.descriptor),
+            parameters: { to: [local(fixture.recipient)] },
+            result: local(fixture.result),
+          })).rejects.toThrow(/persists flow labels/);
+        }
+      } finally {
+        for (const runtime of unstamped) await runtime.dispose();
+        await fixture.dispose();
+      }
+    });
+
+    it("leaves the result cell alone when the record's transaction writes it without the stamp", async () => {
+      const fixture = await setup();
+      const runtime = fixture.runtime;
+      const edit = runtime.edit.bind(runtime);
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        // The runtime stops persisting flow labels once the receipt commits,
+        // so the record's transaction persists none.
+        runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+          const tx = edit(...args);
+          const commit = tx.commit.bind(tx);
+          tx.commit = async () => {
+            const landed = await commit();
+            runtime.edit = edit;
+            Object.defineProperty(runtime, "cfcFlowLabels", { value: "off" });
+            return landed;
+          };
+          return tx;
+        };
         await expect(
           commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
         ).rejects.toThrow(/not written by the reviewed-intent builtin/);
-        expect(local(fixture.result).get()).toBeNull();
+        runtime.edit = edit;
+        expect(fixture.result.get()).toBeNull();
       } finally {
-        await unstamped.dispose();
+        runtime.edit = edit;
         await fixture.dispose();
       }
     });
@@ -1025,6 +1066,96 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("counts only the integrity the runtime derived from who wrote the value, which another writer takes away", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtime;
+        // The address book declares its own stamp on a whole book it writes
+        // without reading anything, so the stamp is declared, not derived: a
+        // statement in its schema, not a record of who wrote the value.
+        const declare = runtime.edit();
+        setCfcImplementationIdentity(declare, ADDRESS_BOOK_WRITER);
+        const declared = runtime.getCell(sender.did(), "declared-book", {
+          type: "object",
+          ifc: {
+            confidentiality: [cfcAtom.user(sender.did())],
+            addIntegrity: [WRITTEN_BY_ADDRESS_BOOK],
+          },
+        } as never, declare);
+        declared.set({ alice: "tel:+15550100" } as never);
+        expect((await declare.commit()).error).toBeUndefined();
+        // The address book writes another whole book after a labeled read, so
+        // the book's root carries the stamp the runtime derives, which covers
+        // each entry.
+        const stamped = await fixture.entry("stamped-book", {
+          alice: "tel:+15550100",
+        }, { claimed: false });
+        const entryIn = (book: Cell<unknown>, key: string) => ({
+          parameters: { to: [book.key(key) as Cell<unknown>] },
+        });
+        const books = [declared.withTx(undefined), stamped];
+        await expect(
+          prepareReviewedIntent(fixture.bindings(entryIn(books[0], "alice"))),
+        ).rejects.toThrow(/without the integrity its descriptor requires/);
+        expect(
+          shown(
+            await prepareReviewedIntent(
+              fixture.bindings(entryIn(books[1], "alice")),
+            ),
+          )[0].address,
+        ).toBe("tel:+15550100");
+
+        // A pattern adds an entry of its own to each book, through a cell
+        // with no schema of its own; the stamped book's root stamp no longer
+        // names one writer, so it covers neither entry.
+        for (const book of books) {
+          const added = runtime.edit();
+          setCfcImplementationIdentity(added, PATTERN);
+          fixture.bob.withTx(added).get();
+          schemaless(runtime, book).withTx(added).key("mallory" as never).set(
+            "tel:+15550666" as never,
+          );
+          expect((await added.commit()).error).toBeUndefined();
+        }
+        for (
+          const [book, key] of [
+            [books[0], "mallory"],
+            [books[1], "mallory"],
+            [books[1], "alice"],
+          ] as const
+        ) {
+          await expect(
+            prepareReviewedIntent(fixture.bindings(entryIn(book, key))),
+          ).rejects.toThrow(/without the integrity its descriptor requires/);
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a descriptor whose destination integrity a pattern could author, so a pattern's own document carrying it never passes", async () => {
+      const authored = {
+        ...DESCRIPTOR,
+        parameters: {
+          ...DESCRIPTOR.parameters,
+          to: { ...DESCRIPTOR.parameters.to, integrity: ["verified-address"] },
+        },
+      };
+      const fixture = await setup(authored);
+      try {
+        const lookalike = await fixture.entry(
+          "pattern-verified",
+          "tel:+15550199",
+          { writer: PATTERN, addIntegrity: ["verified-address"] },
+        );
+        await expect(prepareReviewedIntent(
+          fixture.bindings({ parameters: { to: [lookalike] } }),
+        )).rejects.toThrow(/a pattern could author/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a destination that holds a cell reference rather than a value", async () => {
       const fixture = await setup();
       try {
@@ -1140,6 +1271,29 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("refuses a result cell whose writer claim would refuse the record's link", async () => {
+      const fixture = await setup();
+      try {
+        const tx = fixture.runtime.edit();
+        setCfcImplementationIdentity(tx, PATTERN);
+        const outbox = fixture.runtime.getCell(sender.did(), "claimed-outbox", {
+          type: "object",
+          properties: {
+            slot: { ifc: { writeAuthorizedBy: ["composer-handler"] } },
+          },
+        } as never, tx);
+        outbox.set({} as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await expect(prepareReviewedIntent(
+          fixture.bindings({
+            result: outbox.withTx(undefined).key("slot") as Cell<unknown>,
+          }),
+        )).rejects.toThrow(/result cell that refuses the record's link/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
     it("refuses an unauthenticated actor and handles from another runtime", async () => {
       const fixture = await setup();
       const anonymous = new Runtime({
@@ -1209,6 +1363,30 @@ describe("reviewed-intent", () => {
         expect(() => parseReviewedIntentDescriptor(descriptor)).toThrow(
           /cannot show|must hold exactly/,
         );
+      }
+    });
+
+    it("refuses a destination integrity pattern whose atom type a pattern could author", () => {
+      for (
+        const pattern of [
+          "verified-address",
+          { type: "verified-address" },
+          { type: { var: "$type" } },
+          { kind: "represents-principal", subject: { var: "$who" } },
+          {},
+        ]
+      ) {
+        expect(() =>
+          parseReviewedIntentDescriptor({
+            ...DESCRIPTOR,
+            parameters: {
+              to: {
+                ...DESCRIPTOR.parameters.to,
+                integrity: [WRITTEN_BY_ADDRESS_BOOK, pattern],
+              },
+            },
+          })
+        ).toThrow(/a pattern could author/);
       }
     });
 
