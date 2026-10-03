@@ -807,8 +807,11 @@ describe("parked-runtime", () => {
       const standIn = parkStandIn();
       const fence = standIn.destination()!;
 
-      const first = await fence.seal(unread);
-      await fence.seal(unread);
+      const firstSeal = fence.seal(unread);
+      const first =
+        await ("settled" in firstSeal ? firstSeal.settled : firstSeal);
+      const secondSeal = fence.seal(unread);
+      await ("settled" in secondSeal ? secondSeal.settled : secondSeal);
 
       expect(first.error).toMatchObject({
         name: "StorageTransactionAborted",

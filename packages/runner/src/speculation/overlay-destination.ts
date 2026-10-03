@@ -94,11 +94,13 @@ import type {
   NativeStorageCommit,
   Result,
   SealedCommitVerdict,
+  TransactionCommitReceipt,
   TransactionSealDestination,
   Unit,
   URI,
 } from "../storage/interface.ts";
 import type { PostCommitSideEffect } from "../cfc/types.ts";
+import { createTransactionCommitReceipt } from "../storage/commit-receipt.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
 
 const logger = getLogger("speculation-overlay", {
@@ -559,16 +561,16 @@ export class SpeculationOverlayDestination
     return this.#intentCheckMaxVisits;
   }
 
-  seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>> {
+  seal(tx: IExtendedStorageTransaction): TransactionCommitReceipt {
     const kind = speculationRunContextOf(tx)?.kind;
     if (kind !== "derivation" && kind !== "event-handler") {
       // Bookkeeping runs and unstamped transactions commit exactly as
       // today. Scheduler-stamped runs — derivations since Phase 2,
       // event handlers since Phase 3 (events.md §7: the F10 interim's
       // handler-write commit path is DELETED) — divert below.
-      return tx.tx.commit().settled;
+      return tx.tx.commit();
     }
-    return this.#sealSpeculative(tx);
+    return createTransactionCommitReceipt(this.#sealSpeculative(tx));
   }
 
   async #sealSpeculative(

@@ -940,7 +940,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
       (await destination.seal(echoOf("evt:client-key:0:of:join", {
         parentEventId: "evt-click",
         writes: ["of:users", "of:alice-client-entity"],
-      }))).ok,
+      })).settled).ok,
     ).toBeDefined();
     expect(destination.entryCount(SPACE)).toBe(1);
     expect(destination.pendingIntentCount).toBe(1);
@@ -975,16 +975,16 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     await destination.seal(echoOf("evt:c:0:p-child", {
       parentEventId: "evt-p",
       writes: ["of:p-list", "of:p-entity"],
-    }));
-    await destination.seal(echoOf("evt-q", { writes: ["of:q-own"] }));
+    })).settled;
+    await destination.seal(echoOf("evt-q", { writes: ["of:q-own"] })).settled;
     await destination.seal(echoOf("evt:c:0:q-child", {
       parentEventId: "evt-q",
       writes: ["of:q-list", "of:q-entity"],
-    }));
+    })).settled;
     await destination.seal(echoOf("evt:c:0:orphan-child", {
       parentEventId: "evt:c:9:nobody",
       writes: ["of:o-list"],
-    }));
+    })).settled;
     expect(destination.entryCount(SPACE)).toBe(4);
     markConsequenced(0, { "of:p-list": 42 });
     await flushMicrotasks();
@@ -1012,19 +1012,19 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
       (await destination.seal(echoOf("evt:c:0:silent", {
         parentEventId: "evt-p",
         writes: [],
-      }))).ok,
+      })).settled).ok,
     ).toBeDefined();
     expect(destination.entryCount(SPACE)).toBe(0);
     // Its grandchild writes (the join), threaded to the silent child.
     await destination.seal(echoOf("evt:c:0:grandchild", {
       parentEventId: "evt:c:0:silent",
       writes: ["of:g-list", "of:g-entity"],
-    }));
+    })).settled;
     // And a direct child of P that wrote.
     await destination.seal(echoOf("evt:c:1:child", {
       parentEventId: "evt-p",
       writes: ["of:c-list"],
-    }));
+    })).settled;
     expect(destination.entryCount(SPACE)).toBe(2);
     markConsequenced(0, { "of:g-list": 42, "of:c-list": 42 });
     await flushMicrotasks();
@@ -1039,11 +1039,11 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     await destination.seal(echoOf("evt:c:2:late-child", {
       parentEventId: "evt-p",
       writes: ["of:late-list"],
-    }));
+    })).settled;
     await destination.seal(echoOf("evt:c:0:late-grandchild", {
       parentEventId: "evt:c:1:child",
       writes: ["of:late-g-list"],
-    }));
+    })).settled;
     expect(destination.lateEchoDropCount).toBe(dropsBefore + 2);
     expect(destination.entryCount(SPACE)).toBe(0);
     // F1 (combined review 2026-08-19, MAJOR): a LATE grandchild of the
@@ -1057,7 +1057,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     await destination.seal(echoOf("evt:c:0:late-silent-grandchild", {
       parentEventId: "evt:c:0:silent",
       writes: ["of:lsg-list", "of:lsg-entity"],
-    }));
+    })).settled;
     expect(destination.lateEchoDropCount).toBe(dropsBefore + 3);
     expect(destination.entryCount(SPACE)).toBe(0);
     // And a fresh intent's cascade still registers (nothing over-broad).
@@ -1066,7 +1066,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     await destination.seal(echoOf("evt:c:0:r-child", {
       parentEventId: "evt-r",
       writes: ["of:r-list"],
-    }));
+    })).settled;
     expect(destination.entryCount(SPACE)).toBe(1);
     destination.close();
   });
@@ -1092,7 +1092,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
         parentEventId: `evt-p${n}`,
         writes: [`of:list-${n}`, `of:entity-${n}`],
         floor: 40,
-      }));
+      })).settled;
     }
     expect(destination.entryCount(SPACE)).toBe(4);
     // P1's mark lands at 45 while list-1 is STILL at 40: the server's
@@ -1141,7 +1141,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     await destination.seal(echoOf("evt:c:0:silent", {
       parentEventId: "evt-p",
       writes: [],
-    }));
+    })).settled;
     expect(destination.entryCount(SPACE)).toBe(0);
     // The grandchild's seal STARTS — the thread records grandchild →
     // silent and the PRE-seal check passes (P is not yet terminal) —
@@ -1151,7 +1151,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
       parentEventId: "evt:c:0:silent",
       writes: ["of:msg-list", "of:msg-entity"],
       holdSeal: gate.promise,
-    }));
+    })).settled;
     // P's mark arrives while the grandchild is in flight: retireIntent
     // runs (nothing to retire — the grandchild has no entry yet, the
     // silent child never had one), P joins the terminal set.
@@ -1182,13 +1182,13 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
       await destination.seal(echoOf(`evt:c:0:hop-${i}`, {
         parentEventId: parent,
         writes: [],
-      }));
+      })).settled;
       parent = `evt:c:0:hop-${i}`;
     }
     await destination.seal(echoOf("evt:c:0:deep", {
       parentEventId: parent,
       writes: ["of:deep-list"],
-    }));
+    })).settled;
     expect(destination.entryCount(SPACE)).toBe(1);
     // The deep seals' own jobless-ancestry walks already hit the cap
     // (their chains exceed 64) — the counter moves at seal time.
@@ -1212,7 +1212,7 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
       await destination.seal(echoOf(`evt:c:1:filler-${i}`, {
         parentEventId: `evt:c:9:filler-parent-${i}`,
         writes: [],
-      }));
+      })).settled;
     }
     expect(destination.cascadeThreadEvictionCount).toBeGreaterThanOrEqual(1);
     destination.close();

@@ -9,8 +9,11 @@ A transaction stages writes until the caller starts its commit. Calling
 | `verdict` | The commit's fate: accepted, rejected, or refused locally |
 | `settled` | Completion after subscription coverage or rejection repair, commit callbacks, and inline post-commit effects |
 
-The receipt is not a promise. A caller selects the stage its next operation
-requires. Both stages return a `Result`: expected refusal is carried in
+The receipt requires explicit stage selection. Awaiting it rejects with a
+stage-selection error, including in untyped code. Promise collections assimilate
+it as a rejection and apply their own rejection rules. This misuse does not
+cancel the commit attempt; its stages remain observable. Both stages return a
+`Result`: expected refusal is carried in
 `.error`; internal exceptions can reject the promises.
 Internal exceptions are reported even when neither stage is observed. Backends
 without a separate verdict signal resolve `verdict` with settlement.
@@ -25,7 +28,10 @@ Multi-space transactions start each space in sequence and can partially
 succeed. Returning the receipt does not establish that every space has applied
 locally. With server execution, a seal destination can accept a contribution
 into a wave or speculation overlay. Its verdict follows that destination's
-contract; the wave's later durable disposition is separate.
+contract; the wave's later durable disposition is separate. A seal destination
+that forwards an ordinary store commit preserves the store receipt's early
+verdict and later coverage or repair. A one-stage contribution seal supplies
+acceptance on both receipt stages.
 
 ## Choosing a completion stage
 

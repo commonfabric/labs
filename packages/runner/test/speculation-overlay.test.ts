@@ -841,7 +841,7 @@ describe("Phase 2 speculation overlay", () => {
       actionId: "llm-dialog/update-argument",
       kind: "event-handler",
     });
-    const refused = await destination.seal(noEventTx);
+    const refused = await destination.seal(noEventTx).settled;
     expect(refused.error).toBeDefined();
     expect(refused.error?.message).toContain("no eventId");
     expect(refused.error?.message).toContain("silently lost");
@@ -855,7 +855,7 @@ describe("Phase 2 speculation overlay", () => {
       kind: "event-handler",
       eventId: "evt-has-id",
     });
-    const sealed = await destination.seal(withEventTx);
+    const sealed = await destination.seal(withEventTx).settled;
     expect(sealed.error).toBeDefined();
     expect(sealed.error?.message).toContain("does not support sealing");
 
@@ -870,7 +870,7 @@ describe("Phase 2 speculation overlay", () => {
       actionId: "spec-derivation-patch-only",
       kind: "derivation",
     });
-    const patchOnly = await destination.seal(patchOnlyTx);
+    const patchOnly = await destination.seal(patchOnlyTx).settled;
     expect(patchOnly.error).toBeDefined();
     expect(patchOnly.error?.message).toContain(
       "does not support whole-document writes",
@@ -3116,7 +3116,7 @@ describe("Phase 2 speculation overlay", () => {
           actionId: "capability-arrival",
           kind: "derivation",
         });
-        expect((await destination.seal(tx)).ok).toBeDefined();
+        expect((await destination.seal(tx).settled).ok).toBeDefined();
         expect(destination.entryCount(space)).toBe(1);
         expect(watermark).toBeDefined();
 
@@ -3210,7 +3210,7 @@ describe("Phase 2 speculation overlay", () => {
       actionId: "verdict-race",
       kind: "derivation",
     });
-    expect((await destination.seal(sealTx)).ok).toBeDefined();
+    expect((await destination.seal(sealTx).settled).ok).toBeDefined();
     expect(destination.entryCount(space)).toBe(1);
     // The seal installed both hooks.
     expect(watermarkCallback).toBeDefined();
@@ -3295,7 +3295,7 @@ describe("Phase 2 speculation overlay", () => {
       actionId: "close-race",
       kind: "derivation",
     });
-    const sealResult = destination.seal(sealTx);
+    const sealResult = destination.seal(sealTx).settled;
     // close() lands while sealInto is parked on the gate.
     destination.close();
     gate.resolve();
@@ -3354,7 +3354,7 @@ describe("Phase 2 speculation overlay", () => {
       actionId: "seal-reject",
       kind: "derivation",
     });
-    const rejected = await rejecting.seal(rejectTx);
+    const rejected = await rejecting.seal(rejectTx).settled;
     expect(rejected.error).toBeDefined();
     expect(rejected.error!.message).toContain("transport fell over");
     expect(rejecting.entryCount(space)).toBe(0);

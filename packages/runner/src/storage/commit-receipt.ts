@@ -32,7 +32,15 @@ export function createTransactionCommitReceipt<T>(
   // so either failure is reported, while callers still receive the rejection.
   void settled.catch(report);
   if (verdict !== settled) void verdict.catch(report);
-  const receipt = Object.freeze({ verdict, settled });
+  const receipt = Object.freeze({
+    verdict,
+    settled,
+    then(_selectVerdictOrSettled: never): never {
+      throw new TypeError(
+        "Select receipt.verdict or receipt.settled before awaiting a commit.",
+      );
+    },
+  });
   failureReporters.set(receipt, report);
   return receipt;
 }

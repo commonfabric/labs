@@ -5,6 +5,7 @@ import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 
 import { Runtime } from "../src/runtime.ts";
+import { stampSpeculationRunContext } from "../src/speculation/overlay-destination.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -30,6 +31,32 @@ export async function commitStageTypeChecks(
 const signer = await Identity.fromPassphrase("start-commit");
 
 describe("start-commit", () => {
+  it("rejects promise assimilation without cancelling the commit attempt", async () => {
+    const completion = Promise.withResolvers<{ ok: object }>();
+    const receipt = createTransactionCommitReceipt(completion.promise);
+    const untyped: unknown = receipt;
+    const attempts = [
+      async () => await untyped,
+      // An async return also assimilates receipts without an explicit await.
+      // deno-lint-ignore require-await
+      async () => untyped,
+      () => Promise.resolve(untyped),
+      () => Promise.all([receipt]),
+      () => Promise.race([receipt]),
+      () => Promise.resolve().then(() => untyped),
+    ];
+    for (const attempt of attempts) {
+      await expect(attempt()).rejects.toThrow(
+        "Select receipt.verdict or receipt.settled",
+      );
+    }
+    const outcome = { ok: {} };
+    completion.resolve(outcome);
+    expect(await receipt.verdict).toBe(outcome);
+    expect(await receipt.settled).toBe(outcome);
+    expect(Object.isFrozen(receipt)).toBe(true);
+  });
+
   for (const wrapped of [false, true, "raw"] as const) {
     it(`applies a single-space write before remote confirmation with wrapped=${wrapped}`, async () => {
       const server = newSharedServer();
@@ -59,7 +86,7 @@ describe("start-commit", () => {
           : tx;
         const receipt = committing.commit();
         settlement = receipt.settled;
-        expect(receipt).not.toHaveProperty("then");
+        expect(typeof receipt.then).toBe("function");
         expect(cell.withTx().get()).toBe(7);
         expect(storage.hasPendingCommits()).toBe(true);
         await entered.promise;
@@ -125,13 +152,14 @@ describe("start-commit", () => {
     });
   }
 
-  for (const wrapped of [false, true]) {
+  for (const wrapped of [false, true, "unstamped", "bookkeeping"] as const) {
     it(`reports the verdict before coverage and inline effects with wrapped=${wrapped}`, async () => {
       const server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
       const storage = EmulatedStorageManager.connectTo(server, { as: signer });
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: storage,
+        experimental: { serverExecution: typeof wrapped === "string" },
       });
       const releaseEffect = Promise.withResolvers<void>();
       const effectEntered = Promise.withResolvers<void>();
@@ -147,6 +175,19 @@ describe("start-commit", () => {
         await cell.sync();
         const tx = runtime.edit();
         cell.withTx(tx).set(2);
+        if (wrapped === "bookkeeping") {
+          stampSpeculationRunContext(tx, {
+            actionId: "stage-bookkeeping",
+            kind: "bookkeeping",
+          });
+        }
+        if (typeof wrapped === "string") {
+          expect(runtime.speculationOverlay).toBeDefined();
+        }
+        let verdictCallbackFired = false;
+        tx.addVerdictCallback(() => {
+          verdictCallbackFired = true;
+        });
         tx.enqueuePostCommitEffect({
           id: "held-effect",
           kind: "test",
@@ -159,7 +200,7 @@ describe("start-commit", () => {
         tx.addCommitCallback(() => {
           callbackFired = true;
         });
-        const committing = wrapped
+        const committing = wrapped === true
           ? new TransactionWrapper(new TransactionWrapper(tx))
           : tx;
         const receipt = committing.commit();
@@ -170,6 +211,7 @@ describe("start-commit", () => {
         });
         expect((await receipt.verdict).error).toBeUndefined();
         await effectEntered.promise;
+        expect(verdictCallbackFired).toBe(true);
         expect(callbackFired).toBe(false);
         expect(settled).toBe(false);
         expect(storage.hasPendingCommits()).toBe(true);
@@ -190,6 +232,82 @@ describe("start-commit", () => {
       }
     });
   }
+
+  it("reports a store-forwarding seal rejection before repair", async () => {
+    const server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+    const storageA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const storageB = EmulatedStorageManager.connectTo(server, { as: signer });
+    const peer = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storageA,
+    });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storageB,
+      experimental: { serverExecution: true },
+    });
+    let settlement: Promise<unknown> | undefined;
+    try {
+      const source = peer.getCell<number>(signer.did(), "sealed-rejection");
+      const seed = peer.edit();
+      source.withTx(seed).set(1);
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      ).toBeUndefined();
+      const target = runtime.getCell<number>(signer.did(), "sealed-rejection");
+      await target.sync();
+      await target.pull();
+      const tx = runtime.edit();
+      expect(target.withTx(tx).get()).toBe(1);
+      target.withTx(tx).set(2);
+      const update = peer.edit();
+      source.withTx(update).set(3);
+      expect(
+        (await update.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      ).toBeUndefined();
+      expect(target.get()).toBe(1);
+      let verdictFired = false;
+      let commitFired = false;
+      let effectFired = false;
+      tx.addVerdictCallback(() => {
+        verdictFired = true;
+      });
+      tx.addCommitCallback(() => {
+        commitFired = true;
+      });
+      tx.enqueuePostCommitEffect({
+        id: "refused-seal-effect",
+        kind: "test",
+        flush: () => {
+          effectFired = true;
+        },
+      });
+      const receipt = tx.commit();
+      let settled = false;
+      settlement = receipt.settled.then(() => {
+        settled = true;
+      });
+      expect((await receipt.verdict).error?.name).toBe("ConflictError");
+      await clock.settle();
+      expect(verdictFired).toBe(true);
+      expect(commitFired).toBe(false);
+      expect(effectFired).toBe(false);
+      expect(settled).toBe(false);
+      await server.flushSessions();
+      expect((await receipt.settled).error?.name).toBe("ConflictError");
+      expect(commitFired).toBe(true);
+      expect(effectFired).toBe(false);
+      expect(target.get()).toBe(3);
+    } finally {
+      await server.flushSessions();
+      await settlement;
+      await runtime.dispose();
+      await peer.dispose();
+      await storageB.close();
+      await storageA.close();
+      await server.close();
+    }
+  });
 
   it("waits for earlier spaces' coverage after a later space throws", async () => {
     const server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
@@ -332,31 +450,39 @@ describe("start-commit", () => {
     });
   }
 
-  it("preserves internal rejection when only settlement is observed", async () => {
-    const storage = StorageManager.emulate({ as: signer });
-    const runtime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: storage,
-    });
-    try {
-      const tx = runtime.edit();
-      const failure = new Error("internal commit failure");
-      using reported = stub(console, "error", () => {});
-      using _commit = stub(
-        tx.tx,
-        "commit",
-        () => createTransactionCommitReceipt(Promise.reject(failure)),
-      );
-      const receipt = new TransactionWrapper(tx).commit();
-      await expect(receipt.settled).rejects.toBe(failure);
-      await clock.settle();
-      expect(reported.calls).toHaveLength(1);
-      tx.abort("done");
-    } finally {
-      await runtime.dispose();
-      await storage.close();
-    }
-  });
+  for (const serverExecution of [false, true]) {
+    it(
+      serverExecution
+        ? "preserves internal rejection with one report through a store-forwarding seal"
+        : "preserves internal rejection when only settlement is observed",
+      async () => {
+        const storage = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: storage,
+          experimental: { serverExecution },
+        });
+        try {
+          const tx = runtime.edit();
+          const failure = new Error("internal commit failure");
+          using reported = stub(console, "error", () => {});
+          using _commit = stub(
+            tx.tx,
+            "commit",
+            () => createTransactionCommitReceipt(Promise.reject(failure)),
+          );
+          const receipt = new TransactionWrapper(tx).commit();
+          await expect(receipt.settled).rejects.toBe(failure);
+          await clock.settle();
+          expect(reported.calls).toHaveLength(1);
+          tx.abort("done");
+        } finally {
+          await runtime.dispose();
+          await storage.close();
+        }
+      },
+    );
+  }
 
   it("reports a settlement exception after a successful verdict", async () => {
     const storage = StorageManager.emulate({ as: signer });

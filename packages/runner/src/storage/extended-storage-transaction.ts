@@ -819,10 +819,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
-   * One-shot configuration of the seal destination, called by the Runtime
-   * in edit() for every transaction it creates — with `undefined` on every
-   * client and in the OFF arm, and with the wave accumulator's destination
-   * on a serving runtime under EXPERIMENTAL_SERVER_EXECUTION.
+   * Pins the destination once at transaction creation: a serving-wave
+   * accumulator, a client speculation overlay, or direct storage when absent.
    */
   configureSealDestination(
     destination: TransactionSealDestination | undefined,
@@ -3839,20 +3837,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }
     }
 
-    // The destination switch (serving-loop.md §3d): with a seal destination
-    // installed — a serving runtime under EXPERIMENTAL_SERVER_EXECUTION —
-    // this action tx SEALS into the wave accumulator instead of committing
-    // to the store. Everything above (the per-action-run CFC gates, §3c)
-    // and below (commit callbacks, post-commit side effects) fires for both
-    // destinations: sealing fires everything commit fires today. Sealed
-    // means accepted into the wave, not durable: a later withdrawal
-    // (superseded, requeued, lease lost) surfaces on the wave's verdict
-    // channel, AFTER the callbacks and side effects here observed "ok" —
-    // the serving loop (stage F) and the effect channel (stage G) must
-    // consume dispositions from the wave outcome, never from this result.
-    const receipt = this.#sealDestination !== undefined
-      ? createTransactionCommitReceipt(this.#sealDestination.seal(this))
-      : this.tx.commit(options);
+    // Direct store forwarding preserves its early verdict and later coverage.
+    // A genuine wave or speculative seal supplies acceptance of the
+    // contribution; its later durable disposition belongs to the wave.
+    let receipt: TransactionCommitReceipt;
+    if (this.#sealDestination !== undefined) {
+      const sealed = this.#sealDestination.seal(this);
+      receipt = "settled" in sealed
+        ? sealed
+        : createTransactionCommitReceipt(sealed);
+    } else {
+      receipt = this.tx.commit(options);
+    }
     this.#storageReceipt = receipt;
     const promise = receipt.settled;
 

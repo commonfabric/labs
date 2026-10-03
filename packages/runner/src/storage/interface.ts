@@ -1224,7 +1224,7 @@ export interface NativeCommitOptions {
 
 /** The independently observable completion stages of one commit attempt. */
 export interface TransactionCommitReceipt {
-  /** Type-only guard: await a completion stage rather than the receipt itself. */
+  /** Rejects promise assimilation; select a completion stage explicitly. */
   readonly then?: (selectVerdictOrSettled: never) => never;
 
   /**
@@ -1800,15 +1800,20 @@ export interface ITransactionSealSink {
 }
 
 /**
- * The seal destination an action transaction closes into when one is
- * installed (server-execution v2, serving-loop.md §3d): server-side, under
- * EXPERIMENTAL_SERVER_EXECUTION, an action tx SEALS into the wave
- * accumulator instead of committing to the store. One abstraction, two
- * destinations — with no destination installed (every client, and the OFF
- * arm always), commit() takes today's store path unchanged.
+ * The destination that accepts an action transaction's contribution. Serving
+ * runtimes seal into a wave accumulator; client speculation overlays stage
+ * speculative work and forward ordinary commits to the store. Without a
+ * destination, the transaction commits directly to the store.
  */
 export interface TransactionSealDestination {
-  seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>>;
+  /**
+   * Accepts the contribution, or forwards a store commit's receipt when the
+   * destination commits directly. A one-stage seal promise supplies both
+   * stages; a receipt preserves its distinct verdict and settlement.
+   */
+  seal(
+    tx: IExtendedStorageTransaction,
+  ): Promise<Result<Unit, CommitError>> | TransactionCommitReceipt;
 
   /**
    * The HOME space of the wave this destination seals into (the space
