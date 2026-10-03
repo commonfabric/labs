@@ -882,89 +882,193 @@ function isToSchemaCall(node: ts.Expression): node is ts.CallExpression {
 /**
  * Marks `schema`, a schema argument the author wrote where SchemaInjection
  * would otherwise inject one that defines a document, as defining it
- * (`CrossStageState.markDocumentSchemaCall`). What is marked is the
- * `toSchema` call that generates it (`generatingToSchemaCall()`). A schema
+ * (`CrossStageState.markDocumentSchemaCall`). What is marked is every
+ * `toSchema` call that generates part of it (`readSchemaSources()`); a part
  * written out as a literal is read as written. A `toSchema` call in another
- * module is generated there, unmarked, as one that views a document; where
- * its type holds a writer policy, the schema could lose that writer with
- * nothing reported, so the reference is reported instead.
+ * module is generated there, unmarked, as one that views a document; where its
+ * type holds a writer policy, the schema could lose that writer with nothing
+ * reported, so the reference is reported instead. So is a schema that cannot
+ * be read back to its sources, since the same could hold for it.
  */
 function markAuthoredDocumentSchema(
   schema: ts.Expression,
   context: TransformationContext,
 ): void {
-  const call = generatingToSchemaCall(schema, context.checker);
-  if (!call) return;
-  if (call.getSourceFile().fileName === context.sourceFile.fileName) {
-    context.state.markDocumentSchemaCall(call);
-    return;
-  }
-  const typeArgument = call.typeArguments?.[0];
-  if (
-    typeArgument &&
-    holdsWriterPolicy(
-      context.checker.getTypeFromTypeNode(typeArgument),
-      context.checker,
-    )
-  ) {
+  const { checker } = context;
+  const calls: ts.CallExpression[] = [];
+  if (!readSchemaSources(schema, checker, calls)) {
     context.reportDiagnosticOnce({
       severity: "error",
       type: "cfc-write-authorized-by:unread",
-      message: "This schema defines a document, and the `toSchema` call that " +
-        "generates it is in another module, which generates it as a schema " +
-        "that views a document: a writer policy it holds that names no " +
-        "writer there would be lost with nothing reported, and the document " +
-        "would admit any writer. Call `toSchema` in this module.",
+      message: "This schema defines a document, and it could not be read " +
+        "back to the `toSchema` calls and schema literals that make it, so a " +
+        "writer policy it holds could be lost with nothing reported, and the " +
+        "document would admit any writer. Pass a `toSchema` call or a schema " +
+        "literal, in place or through `const` bindings.",
       node: schema,
     });
+    return;
+  }
+  for (const call of calls) {
+    if (call.getSourceFile().fileName === context.sourceFile.fileName) {
+      context.state.markDocumentSchemaCall(call);
+      continue;
+    }
+    const typeArgument = call.typeArguments?.[0];
+    if (
+      typeArgument &&
+      holdsWriterPolicy(checker.getTypeFromTypeNode(typeArgument), checker)
+    ) {
+      context.reportDiagnosticOnce({
+        severity: "error",
+        type: "cfc-write-authorized-by:unread",
+        message:
+          "This schema defines a document, and the `toSchema` call that " +
+          "generates it is in another module, which generates it as a " +
+          "schema that views a document: a writer policy it holds that " +
+          "names no writer there would be lost with nothing reported, and " +
+          "the document would admit any writer. Call `toSchema` in this " +
+          "module.",
+        node: schema,
+      });
+    }
   }
 }
 
 /**
- * The `toSchema` call that `expression` evaluates to: one written in place,
- * or one a `const` binding or a property of a `const` object literal holds,
- * through imports, `as`, `satisfies`, `!` and parentheses. `undefined` for
- * any other expression, such as a schema written out as a literal.
+ * Collects into `calls` every `toSchema` call that generates part of
+ * `expression`, a schema value, and returns whether every part of it was read
+ * back to its source: a `toSchema` call, or a literal written out, read
+ * member by member. A `const` binding, an import of one, and a member of an
+ * object literal reached through them are read through, at any depth, as are
+ * `as`, `satisfies`, `!` and parentheses. Anything else, such as a parameter
+ * or a call's result, cannot be read back.
  */
-function generatingToSchemaCall(
+function readSchemaSources(
   expression: ts.Expression,
   checker: ts.TypeChecker,
+  calls: ts.CallExpression[],
   depth = 0,
-): ts.CallExpression | undefined {
-  if (depth >= 8) return undefined;
+): boolean {
+  if (depth >= 32) return false;
   const value = unwrapExpression(expression);
-  if (isToSchemaCall(value)) return value;
   const next = (inner: ts.Expression | undefined) =>
-    inner && generatingToSchemaCall(inner, checker, depth + 1);
-  if (ts.isIdentifier(value)) return next(constInitializer(value, checker));
+    !!inner && readSchemaSources(inner, checker, calls, depth + 1);
+  if (isToSchemaCall(value)) {
+    calls.push(value);
+    return true;
+  }
+  if (ts.isObjectLiteralExpression(value)) {
+    return value.properties.every((property) =>
+      ts.isPropertyAssignment(property)
+        ? next(property.initializer)
+        : ts.isShorthandPropertyAssignment(property)
+        ? next(property.name)
+        : ts.isSpreadAssignment(property) && next(property.expression)
+    );
+  }
+  if (ts.isArrayLiteralExpression(value)) {
+    return value.elements.every((element) =>
+      next(ts.isSpreadElement(element) ? element.expression : element)
+    );
+  }
+  if (isLiteralValue(value)) return true;
+  if (ts.isIdentifier(value)) {
+    return value.text === "undefined" ||
+      next(constInitializer(value, checker));
+  }
   if (
-    !ts.isPropertyAccessExpression(value) &&
-    !ts.isElementAccessExpression(value)
+    ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)
   ) {
-    return undefined;
+    return next(staticMemberOf(value, checker, depth));
   }
-  const key = ts.isPropertyAccessExpression(value)
-    ? value.name.text
-    : ts.isStringLiteralLike(value.argumentExpression) ||
-        ts.isNumericLiteral(value.argumentExpression)
-    ? value.argumentExpression.text
+  return false;
+}
+
+/**
+ * The expression a member access reads, where the object it reads is an
+ * object literal that `const` bindings, imports and other such accesses lead
+ * to, and its key is static: the member's initializer, or the last spread
+ * that could hold it. `undefined` where any of that cannot be read.
+ */
+function staticMemberOf(
+  access: ts.PropertyAccessExpression | ts.ElementAccessExpression,
+  checker: ts.TypeChecker,
+  depth: number,
+): ts.Expression | undefined {
+  const key = ts.isPropertyAccessExpression(access)
+    ? access.name.text
+    : ts.isStringLiteralLike(access.argumentExpression) ||
+        ts.isNumericLiteral(access.argumentExpression)
+    ? access.argumentExpression.text
     : undefined;
-  let holder: ts.Expression | undefined = unwrapExpression(value.expression);
-  if (ts.isIdentifier(holder)) {
-    holder = constInitializer(holder, checker);
-    holder = holder && unwrapExpression(holder);
-  }
-  if (key === undefined || !holder || !ts.isObjectLiteralExpression(holder)) {
-    return undefined;
-  }
-  for (const property of holder.properties) {
-    if (staticPropertyName(property.name) !== key) continue;
-    if (ts.isPropertyAssignment(property)) return next(property.initializer);
-    if (ts.isShorthandPropertyAssignment(property)) {
-      return next(property.name);
+  const holder = objectLiteralOf(access.expression, checker, depth + 1);
+  return key === undefined || !holder
+    ? undefined
+    : memberOfObjectLiteral(holder, key, checker, depth + 1);
+}
+
+/**
+ * The object literal `expression` evaluates to, through `const` bindings,
+ * imports, and static member accesses.
+ */
+function objectLiteralOf(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  depth: number,
+): ts.ObjectLiteralExpression | undefined {
+  if (depth >= 32) return undefined;
+  const value = unwrapExpression(expression);
+  if (ts.isObjectLiteralExpression(value)) return value;
+  const inner = ts.isIdentifier(value)
+    ? constInitializer(value, checker)
+    : ts.isPropertyAccessExpression(value) ||
+        ts.isElementAccessExpression(value)
+    ? staticMemberOf(value, checker, depth)
+    : undefined;
+  return inner && objectLiteralOf(inner, checker, depth + 1);
+}
+
+/**
+ * The expression `literal`'s member `key` holds: its own property, which
+ * comes last wins, or a spread after it whose object literal holds the key.
+ * `undefined` where a spread that could hold it cannot be read.
+ */
+function memberOfObjectLiteral(
+  literal: ts.ObjectLiteralExpression,
+  key: string,
+  checker: ts.TypeChecker,
+  depth: number,
+): ts.Expression | undefined {
+  for (let i = literal.properties.length - 1; i >= 0; i--) {
+    const property = literal.properties[i]!;
+    if (ts.isSpreadAssignment(property)) {
+      const spread = objectLiteralOf(property.expression, checker, depth);
+      if (!spread) return undefined;
+      const member = memberOfObjectLiteral(spread, key, checker, depth + 1);
+      if (member) return member;
+      continue;
     }
+    if (staticPropertyName(property.name) !== key) continue;
+    if (ts.isPropertyAssignment(property)) return property.initializer;
+    if (ts.isShorthandPropertyAssignment(property)) return property.name;
+    return undefined;
   }
   return undefined;
+}
+
+/**
+ * Whether `expression` is a literal value: a string, number, `true`, `false`
+ * or `null`, a negated number, or a template with no substitutions.
+ */
+function isLiteralValue(expression: ts.Expression): boolean {
+  return ts.isStringLiteralLike(expression) ||
+    ts.isNumericLiteral(expression) ||
+    expression.kind === ts.SyntaxKind.TrueKeyword ||
+    expression.kind === ts.SyntaxKind.FalseKeyword ||
+    expression.kind === ts.SyntaxKind.NullKeyword ||
+    (ts.isPrefixUnaryExpression(expression) &&
+      ts.isNumericLiteral(expression.operand));
 }
 
 /**
@@ -2232,8 +2336,10 @@ function buildObjectLiteralReturnTypeNode(
  * already: the pattern's argument, a cell, the result of a reactive call, or
  * a member of one. An object or array literal holds its own data, carrying
  * `type`'s own policy, and is read member by member against `type`'s members,
- * a spread among them; a member whose name cannot be read statically is read
- * against its own type. A `const` binding is read through its initializer.
+ * a spread among them; a member the type does not name, such as one whose
+ * name cannot be read statically, is read against the type's index
+ * signature, and with none, against its own type. A `const` binding is read
+ * through its initializer.
  * Anything else that is not a reactive reference, such as a literal or a
  * plain call's result, is data the result document holds, so the policy
  * `type` holds counts as its own. Past a nesting bound the same holds.
@@ -2260,21 +2366,19 @@ function holdsFreshWriterPolicy(
         const member = name === undefined
           ? undefined
           : checker.getPropertyOfType(object, name);
+        // A member the type does not name is read against its index
+        // signature, and with none, against its value's own type.
+        const memberType = (initializer: ts.Expression) =>
+          member
+            ? checker.getTypeOfSymbol(member)
+            : checker.getIndexTypeOfType(object, ts.IndexKind.String) ??
+              checker.getIndexTypeOfType(object, ts.IndexKind.Number) ??
+              checker.getTypeAtLocation(initializer);
         if (ts.isPropertyAssignment(property)) {
-          return within(
-            property.initializer,
-            member
-              ? checker.getTypeOfSymbol(member)
-              : checker.getTypeAtLocation(property.initializer),
-          );
+          return within(property.initializer, memberType(property.initializer));
         }
         if (ts.isShorthandPropertyAssignment(property)) {
-          return within(
-            property.name,
-            member
-              ? checker.getTypeOfSymbol(member)
-              : checker.getTypeAtLocation(property.name),
-          );
+          return within(property.name, memberType(property.name));
         }
         // A method holds no data; an accessor's value is read from its type.
         return holdsWriterPolicy(checker.getTypeAtLocation(property), checker);

@@ -245,6 +245,18 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
           "",
           '{ list: [...["seed" as Owned<string, typeof writerA>]] }',
         ],
+        [
+          "twenty nested objects",
+          "",
+          `{ box: ${
+            "{ nested: ".repeat(20)
+          }"seed" as Owned<string, typeof writerA>${" }".repeat(20)} }`,
+        ],
+        [
+          "a constant whose declared type is an index signature",
+          'const fresh: { [key: string]: Owned<string, typeof writerA> } = { value: "seed" };',
+          "{ box: fresh }",
+        ],
       ] as const
     ) {
       it(`refuses it through ${shape}`, async () => {
@@ -264,31 +276,47 @@ export default pattern<Box<Owned<string, typeof writerA>>>((input) => {`,
     }
   });
 
-  it("refuses a writer an input schema passed through a constant cannot read", async () => {
-    // The constant's `toSchema` call defines the argument document, as it
-    // would written in place.
-    const source: RuntimeProgram = {
-      main: "/main.tsx",
-      files: [{
-        name: "/main.tsx",
-        contents: `/// <cts-enable />
+  for (
+    const [how, declaration, reference] of [
+      ["a constant", "const schema = toSchema<In>();", "schema"],
+      [
+        "a property of a constant bound to an object literal",
+        "const generated = { input: toSchema<In>() };\nconst schemas = generated;",
+        "schemas.input",
+      ],
+      [
+        "a nested property",
+        "const schemas = { outer: { input: toSchema<In>() } };",
+        "schemas.outer.input",
+      ],
+    ] as const
+  ) {
+    it(`refuses a writer an input schema passed through ${how} cannot read`, async () => {
+      // The `toSchema` call the reference leads to defines the argument
+      // document, as it would written in place.
+      const source: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
 import { handler, pattern, toSchema, Writable, type WriteAuthorizedBy } from "commonfabric";
 export const writerA = handler<{ v: string }, { value: Writable<string> }>(
   ({ v }, { value }) => { value.set(v); },
 );
 type Box<W> = { value: [W][0] };
 type In = Box<WriteAuthorizedBy<string, typeof writerA>>;
-const schema = toSchema<In>();
-export default pattern((input: In) => ({ value: input.value }), schema);
+${declaration}
+export default pattern((input: In) => ({ value: input.value }), ${reference});
 `,
-      }],
-    };
-    const tx = runtime.edit();
-    await expect(
-      runtime.patternManager.compilePattern(source, { space, tx }),
-    ).rejects.toThrow("could not be read");
-    tx.abort();
-  });
+        }],
+      };
+      const tx = runtime.edit();
+      await expect(
+        runtime.patternManager.compilePattern(source, { space, tx }),
+      ).rejects.toThrow("could not be read");
+      tx.abort();
+    });
+  }
 
   describe("fresh data a callback's return annotation types", () => {
     // No document the result links to stores the policy: the result document
