@@ -64,7 +64,7 @@ describe("v2-transaction", () => {
     cell.set({ title: "after" });
     expect(tx.committedSeq?.(space)).toBeUndefined();
 
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
     expect(committed.error).toBeUndefined();
     const seq = tx.committedSeq?.(space);
     if (seq === undefined) {
@@ -94,7 +94,7 @@ describe("v2-transaction", () => {
     runtime.getCell(space, "refused seq", undefined, tx).set({
       title: "never",
     });
-    const committed = await tx.commit();
+    const committed = await tx.commit().settled;
 
     expect(committed.error).toBeDefined();
     expect(tx.committedSeq?.(space)).toBeUndefined();

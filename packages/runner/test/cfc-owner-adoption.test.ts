@@ -58,7 +58,7 @@ describe("explicit owner policy adoption", () => {
     });
     runtime.getCell(owner.did(), "legacy", undefined, tx).set("Saved name");
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
   });
   afterEach(async () => {
     await runtime.dispose();
@@ -74,12 +74,12 @@ describe("explicit owner policy adoption", () => {
     expect(loadStoredCfcEnvelope(tx, target).status).toBe("none");
     stageOwnerPolicyAdoption(tx, source, target, "Saved name");
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     const attack = runtime.edit();
     expect(loadStoredCfcEnvelope(attack, target).status).toBe("loaded");
     runtime.getCellFromLink(target, undefined, attack).set("Other name");
     runtime.prepareTxForCommit(attack);
-    expect((await attack.commit()).error?.message).toContain(
+    expect((await attack.commit().settled).error?.message).toContain(
       "writeAuthorizedBy",
     );
     expect(runtime.getCell(owner.did(), "legacy").get()).toBe("Saved name");
@@ -98,7 +98,7 @@ describe("explicit owner policy adoption", () => {
       actingPrincipal: other.did(),
     });
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error?.message).toContain("writeAuthorizedBy");
     const read = runtime.edit();
     expect(loadStoredCfcEnvelope(read, target).status).toBe("none");
@@ -124,7 +124,7 @@ describe("explicit owner policy adoption", () => {
     });
     expect(loadStoredCfcEnvelope(tx, target).status).toBe("loaded");
     runtime.prepareTxForCommit(tx);
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     expect(result.error?.message).toContain("writeAuthorizedBy");
     const read = runtime.edit();
     expect(loadStoredCfcEnvelope(read, target).status).toBe("none");
@@ -148,7 +148,9 @@ describe("explicit owner policy adoption", () => {
     });
     cell.set("Saved name");
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("requires the source field's owner", () => {
@@ -178,7 +180,9 @@ describe("explicit owner policy adoption", () => {
     );
     cell.set("Other name");
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+    expect((await tx.commit().settled).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
   it("rejects additional authorship claims instead of endorsing the old bytes", async () => {
     const seed = runtime.edit();
@@ -211,7 +215,7 @@ describe("explicit owner policy adoption", () => {
     );
     source.set({ name: "Saved name" });
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     const target = runtime.getCell(owner.did(), "legacy", undefined, tx)
       .getAsNormalizedFullLink();
@@ -241,7 +245,7 @@ describe("explicit owner policy adoption", () => {
     }, seed);
     source.set({ name: "Saved name" });
     runtime.prepareTxForCommit(seed);
-    expect((await seed.commit()).error).toBeUndefined();
+    expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     const target = runtime.getCell(owner.did(), "legacy", undefined, tx)
       .getAsNormalizedFullLink();
@@ -267,9 +271,9 @@ describe("explicit owner policy adoption", () => {
     const concurrent = runtime.edit();
     concurrent.writeValueOrThrow(target, "Concurrent name");
     runtime.prepareTxForCommit(concurrent);
-    expect((await concurrent.commit()).error).toBeUndefined();
+    expect((await concurrent.commit().settled).error).toBeUndefined();
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeDefined();
+    expect((await tx.commit().settled).error).toBeDefined();
     const read = runtime.edit();
     expect(loadStoredCfcEnvelope(read, target).status).toBe("none");
     expect(read.readValueOrThrow(target)).toBe("Concurrent name");

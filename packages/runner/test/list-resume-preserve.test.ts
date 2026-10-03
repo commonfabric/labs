@@ -246,7 +246,7 @@ async function runResumePreservation<T>(
     tx0,
   );
   rt1.run(tx0, compiled, { items }, rc1);
-  await tx0.commit();
+  await tx0.commit().settled;
   // pull() reads to quiescence and settled() waits for the scheduler, storage
   // sync and any async builtin work; both converge internally, so no pump loop.
   await rc1.pull();
@@ -273,7 +273,7 @@ async function runResumePreservation<T>(
       compiled.resultSchema,
       tx,
     );
-    await tx.commit();
+    await tx.commit().settled;
 
     const cancel = rc2.key(resultKey).sink((v) => {
       trajectory.push(shapeOf(v));

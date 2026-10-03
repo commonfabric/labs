@@ -39,6 +39,7 @@ import {
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
+import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import {
   isDocumentLocalCommit,
   rememberCommitSettlement,
@@ -64,6 +65,7 @@ import type {
   IWriteOptions,
   MediaType,
   MemorySpace,
+  NativeCommitOptions,
   NativeStorageCommit,
   NativeStorageCommitOperation,
   PendingCommitDocument,
@@ -73,6 +75,7 @@ import type {
   StorageTransactionRejected,
   StorageTransactionStatus,
   TransactionCommitOptions,
+  TransactionCommitReceipt,
   TransactionReactivityLog,
   TransactionReadDetail,
   TransactionWriteDetail,
@@ -994,11 +997,9 @@ export class V2StorageTransaction implements IStorageTransaction {
   #state: TxState = { status: "ready" };
 
   /**
-   * The commit's fate — server verdict or local rejection — which `commit()`
-   * itself may resolve later than: `commit()` additionally waits for the
-   * subscribed view to reflect the committed write. Post-commit effects gated
-   * on durability alone hook this via `commitVerdict()`. Resolved with the same
-   * result `commit()` returns.
+   * The attempt's fate — server verdict or local rejection — ahead of the
+   * subscription coverage or read repair its settlement waits for. Durability
+   * callbacks observe this signal through the receipt's `verdict` stage.
    */
   readonly #verdict = Promise.withResolvers<Result<Unit, CommitError>>();
 
@@ -2536,7 +2537,8 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   commit(
     options?: TransactionCommitOptions,
-  ): Promise<Result<Unit, CommitError>> {
+  ): TransactionCommitReceipt {
+    const ready = this.status().status === "ready";
     // A rejection seals the commit's fate before the promise resolves — the
     // promise additionally waits out the read-repair gate so a retry runs
     // against the repaired base. The verdict must not: finalizeRejection
@@ -2576,7 +2578,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       [...this.#commitPreconditions.values()].some((conditions) =>
         conditions.some((condition) => condition.kind === "origin-committed")
       );
-    const promise = this.#commitImpl(options);
+    const promise = this.#commitImpl(
+      options?.holdSyncedUntilCovered === false
+        ? { resolveAt: "verdict" }
+        : undefined,
+    );
     rememberCommitSettlement(this, promise);
     // Backstop for the verdict signal: paths that never reach a push (zero
     // writes, pre-storage rejections) determine their fate exactly when the
@@ -2585,10 +2591,12 @@ export class V2StorageTransaction implements IStorageTransaction {
     // internally REJECTED commit promise resolves the verdict with the
     // error: the verdict never rejects, and a waiter must not hang on a
     // commit whose fate is known.
-    promise.then(
-      (result) => this.#verdict.resolve(result),
-      (reason) => this.#verdict.resolve({ error: toStoreError(reason) }),
-    );
+    if (ready) {
+      promise.then(
+        (result) => this.#verdict.resolve(result),
+        (reason) => this.#verdict.resolve({ error: toStoreError(reason) }),
+      );
+    }
     // Synchronous registration with the manager's durability barrier: by the
     // time commit() returns, the in-flight commit is visible to
     // hasPendingCommits(), so a quiescence check started in the same turn
@@ -2606,11 +2614,10 @@ export class V2StorageTransaction implements IStorageTransaction {
           ? { kind: "documents", documents }
           : { kind: "global" },
     );
-    return promise;
-  }
-
-  commitVerdict(): Promise<Result<Unit, CommitError>> {
-    return this.#verdict.promise;
+    return createTransactionCommitReceipt(
+      promise,
+      ready ? this.#verdict.promise : undefined,
+    );
   }
 
   #pendingCommitContext(
@@ -2631,7 +2638,7 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   async #commitImpl(
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, CommitError>> {
     this.#assertWritable("commit()");
     const unavailable = validateLocalReadBasis(this);
@@ -2727,7 +2734,7 @@ export class V2StorageTransaction implements IStorageTransaction {
    * is logged and surfaced as the overall result.
    */
   async #commitMultiSpace(
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, CommitError>> {
     const commits: { space: MemorySpace; native: NativeStorageCommit }[] = [];
     for (const space of this.#orderedCommitSpaces()) {
@@ -2785,6 +2792,9 @@ export class V2StorageTransaction implements IStorageTransaction {
         error: toStoreError(error),
       };
       this.#finish(result);
+      this.#verdict.resolve(result);
+      const waits = takeCoverageWaits(this);
+      if (waits.length > 0) await Promise.all(waits);
       return result;
     }
   }
@@ -2816,7 +2826,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   async #runSplitCommits(
     commits: { space: MemorySpace; native: NativeStorageCommit }[],
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     for (let i = 0; i < commits.length; i++) {
       const { space, native } = commits[i];

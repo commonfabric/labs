@@ -173,7 +173,7 @@ describe("deriveFlowJoin()", () => {
           labelMap: { version: 1, entries },
         },
       });
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const valueFields = runtime.edit();
       try {
         const literalPaths = [[], ["value"], ["value", "value"]];

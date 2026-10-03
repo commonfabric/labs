@@ -12,6 +12,7 @@ import {
 import { Runtime } from "../src/runtime.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { observePendingDeferredStarts } from "./support/telemetry-observers.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 // The four guarantees a child run carries beyond "whoever created it stops it".
 // Each drives the public API only: a parent pattern, a child reached through
@@ -91,7 +92,7 @@ describe("child run ownership", () => {
       tx,
     );
     const result = runtime.run(tx, Parent, { value: 3 }, parent);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     expect(await result.pull()).toEqual({ child: { doubled: 6 } });
     const child = result.key("child").resolveAsCell() as Cell<
@@ -154,7 +155,7 @@ describe("child run ownership", () => {
     }
     try {
       runtime.run(tx, Parent, { values: [1] }, parent);
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
       await parent.pull();
     } finally {
@@ -189,7 +190,7 @@ describe("child run ownership", () => {
     runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
 
     runtime.runner.stop(result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     expect(runtime.runner.cancels.has(key(result))).toBe(false);
@@ -217,7 +218,7 @@ describe("child run ownership", () => {
     expect(runtime.runner.cancels.has(key(result))).toBe(false);
 
     runtime.runner.releaseChild(result, undefined);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     expect(runtime.runner.cancels.has(key(result))).toBe(false);
@@ -241,7 +242,7 @@ describe("child run ownership", () => {
     runtime.run(tx, Piece, { value: 3 }, result.withTx(tx));
 
     runtime.runner.stopAll();
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     expect(runtime.runner.cancels.has(key(result))).toBe(false);
@@ -271,11 +272,13 @@ describe("child run ownership", () => {
 
     // A conflict is resolved by re-running against fresher state, and that
     // re-run reuses what is already registered.
-    (tx.tx as unknown as { commit: () => Promise<unknown> }).commit = () =>
-      Promise.resolve({
+    (tx.tx as unknown as {
+      commit: () => ReturnType<typeof createTransactionCommitReceipt>;
+    }).commit = () =>
+      createTransactionCommitReceipt(Promise.resolve({
         error: { name: "ConflictError", message: "stale basis" },
-      });
-    await tx.commit();
+      }));
+    await tx.commit().settled;
     await runtime.idle();
 
     expect(created.filter((k) => runtime.runner.cancels.has(k)))
@@ -296,7 +299,7 @@ describe("child run ownership", () => {
       tx,
     );
     runtime.run(tx, Piece, { value: 3 }, result);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     expect(runtime.runner.cancels.has(key(result))).toBe(true);
 
@@ -324,7 +327,7 @@ describe("child run ownership", () => {
       tx,
     );
     const result = runtime.run(tx, Parent, { value: 3 }, parent);
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
     const child = result.key("child").resolveAsCell() as Cell<
       { doubled: number }
@@ -338,7 +341,7 @@ describe("child run ownership", () => {
     expect(runtime.runner.cancels.has(key(child))).toBe(true);
     const update = runtime.edit();
     child.getArgumentCell()!.withTx(update).key("value").set(5);
-    expect((await update.commit()).error).toBeUndefined();
+    expect((await update.commit().settled).error).toBeUndefined();
     expect(await child.pull()).toEqual({ doubled: 10 });
     runtime.runner.stop(child);
   });
@@ -363,7 +366,7 @@ describe("child run ownership", () => {
 
     expect(pending.keys()).toBe(1);
 
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await runtime.idle();
 
     // The installed registration owns itself from here, so nothing is left

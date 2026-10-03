@@ -63,7 +63,7 @@ async function withFixture(
     }, tx);
     source.set({ title: "Solaris" });
     destination.set({});
-    expect((await tx.commit()).error).toBeUndefined();
+    expect((await tx.commit().settled).error).toBeUndefined();
     await source.sync();
     await destination.sync();
     await body({
@@ -189,7 +189,7 @@ describe("snapshot-share", () => {
         }, first);
         const tx = runtime.edit();
         source.withTx(tx).set({ title: "Roadside Picnic" });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await expect(processor.handleSnapshotShareCommit({
           type: RequestType.SnapshotShareCommit,
           id: preview.id,

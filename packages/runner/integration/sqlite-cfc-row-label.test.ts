@@ -124,7 +124,7 @@ async function runTest(base: URL) {
           dtx,
           dtx.getCfcState().dereferenceTraces,
         );
-        await dtx.commit();
+        await dtx.commit().settled;
         const conf: unknown[] = [];
         const integ: unknown[] = [];
         for (const entry of view?.entries ?? []) {

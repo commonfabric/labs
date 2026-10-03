@@ -33,7 +33,7 @@ describe("commit-readiness", () => {
       await target.sync();
       const seed = runtime.edit();
       target.withTx(seed).set(6);
-      expect((await seed.commit()).error).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
       const user = runtime.getCell<number>(
         signer.did(),
         "scope-readiness",
@@ -50,7 +50,7 @@ describe("commit-readiness", () => {
         await release.promise;
         return transact(...args);
       });
-      committing = tx.commit();
+      committing = tx.commit().settled;
       await entered.promise;
       pulling = pullForInitialization(target);
       await expect(pulling).resolves.toBe(6);
@@ -109,11 +109,11 @@ describe("commit-readiness", () => {
       });
       const selected = runtime.edit();
       target.withTx(selected).set(1);
-      commits.push(selected.commit());
+      commits.push(selected.commit().settled);
       await entered[0].promise;
       const origin = runtime.edit();
       unrelated.withTx(origin).set(7);
-      commits.push(origin.commit());
+      commits.push(origin.commit().settled);
       await entered[1].promise;
       await runtime.scheduler.idle();
       const documents = [target.getAsNormalizedFullLink()];
@@ -219,7 +219,9 @@ describe("commit-readiness", () => {
       const peerSource = peer.getCell<number>(signer.did(), "repair-input");
       const seed = peer.edit();
       peerSource.withTx(seed).set(1);
-      expect((await seed.commit({ resolveAt: "verdict" })).error)
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      )
         .toBeUndefined();
       await Promise.all([source.sync(), target.sync(), declared.sync()]);
       const stale = runtime.edit();
@@ -227,9 +229,11 @@ describe("commit-readiness", () => {
       source.withTx(stale).set(2);
       const update = peer.edit();
       peerSource.withTx(update).set(3);
-      expect((await update.commit({ resolveAt: "verdict" })).error)
+      expect(
+        (await update.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      )
         .toBeUndefined();
-      const receipt = stale.startCommit();
+      const receipt = stale.commit();
       committing = receipt.settled;
       expect((await receipt.verdict).error?.name).toBe("ConflictError");
       const action = (tx: IExtendedStorageTransaction) => {
@@ -324,9 +328,9 @@ describe("commit-readiness", () => {
             },
           );
           const handle = wrapped ? new TransactionWrapper(tx) : tx;
-          committing = handle.commit();
+          committing = handle.commit().settled;
           await entered.promise;
-          expect((await handle.commit()).error).toBeDefined();
+          expect((await handle.commit().settled).error).toBeDefined();
           const dropped: QueuedEvent[] = [];
           let stops = 0;
           const lineage = new SpeculationLineage({
@@ -388,7 +392,7 @@ describe("commit-readiness", () => {
           return transact(...args);
         });
         const handle = wrapped ? new TransactionWrapper(tx) : tx;
-        committing = handle.commit();
+        committing = handle.commit().settled;
         await entered.promise;
         const register = [
           () => handle.addCommitCallback(() => {}),

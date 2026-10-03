@@ -62,7 +62,7 @@ describe("cf wish read options", () => {
       ],
     });
     profileSpaceCell.key("defaultPattern").set(profileCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
 
     tx = runtime.edit();
@@ -78,7 +78,7 @@ describe("cf wish read options", () => {
     ]);
     // deno-lint-ignore no-explicit-any
     (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
-    await tx.commit();
+    await tx.commit().settled;
     await runtime.idle();
   }
 

@@ -45,7 +45,7 @@ describe("render-read-link-schema", () => {
   });
 
   afterEach(async () => {
-    await tx.commit();
+    await tx.commit().settled;
     await storageManager.synced();
     await runtime?.dispose();
     await storageManager?.close();
@@ -104,7 +104,7 @@ describe("render-read-link-schema", () => {
 
     it("delivers `[UI]` to a renderer's sink", async () => {
       const holder = holderOverBuiltLink();
-      await tx.commit();
+      await tx.commit().settled;
       tx = runtime.edit();
       const delivered: unknown[] = [];
 

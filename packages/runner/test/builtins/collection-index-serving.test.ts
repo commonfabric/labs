@@ -102,7 +102,7 @@ describe("collection index serving", () => {
                 undefined,
                 tx,
               ).set({ list: [selected], elements: [element], mode });
-              expect((await tx.commit()).error).toBeUndefined();
+              expect((await tx.commit().settled).error).toBeUndefined();
               await actorStorage.synced();
               for (const cell of [inputs, element, selected]) {
                 await storage.syncInstance(
@@ -235,7 +235,7 @@ describe("collection index serving", () => {
                 .scope,
             ).toBe(scope);
             runtime.prepareTxForCommit(tx);
-            expect((await tx.commit()).error).toBeUndefined();
+            expect((await tx.commit().settled).error).toBeUndefined();
           }
           expect(indexNames).toHaveLength(2);
           expect(indexNames[0]).toBe(indexNames[1]);

@@ -66,7 +66,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
         },
       });
 
-      const observeResult = await observeTx.commit();
+      const observeResult = await observeTx.commit().settled;
       expect(observeResult.ok).toBeDefined();
       expect(observeTx.getCfcState().diagnostics).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /value",
@@ -88,7 +88,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
       });
       enforceTx.prepareCfc();
 
-      const enforceResult = await enforceTx.commit();
+      const enforceResult = await enforceTx.commit().settled;
       expect(enforceResult.error?.message).toContain(
         "writeAuthorizedBy requires a trusted verified binding identity at /value",
       );

@@ -257,7 +257,7 @@ describe("trigger reads survive failed runs", () => {
     } as unknown as IExtendedStorageTransaction;
     const commitPromise = Promise.resolve(
       { error: args.error } as Awaited<
-        ReturnType<IExtendedStorageTransaction["commit"]>
+        ReturnType<IExtendedStorageTransaction["commit"]>["settled"]
       >,
     );
     return watchReactiveActionCommit({

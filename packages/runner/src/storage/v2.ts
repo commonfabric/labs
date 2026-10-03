@@ -146,6 +146,7 @@ import {
   IStorageSubscription,
   IStorageTransaction,
   IStorageTransactionInconsistent,
+  NativeCommitOptions,
   NativeStorageCommit,
   PendingCommitDocument,
   PendingCommitImpact,
@@ -160,7 +161,6 @@ import {
   StorageTransactionRejected,
   StoreReadThrough,
   toReplicaLoadFailureError,
-  TransactionCommitOptions,
   UnexaminedAbsence,
   Unit,
   type ViewInterestLease,
@@ -5762,7 +5762,7 @@ export class SpaceReplica
   async commitNative(
     transaction: NativeStorageCommit,
     source?: IStorageTransaction,
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const preconditions = activeCommitPreconditions(transaction.preconditions);
     const operations = withCommitTiming(
@@ -6532,7 +6532,7 @@ export class SpaceReplica
     source?: IStorageTransaction,
     preconditions: readonly CommitPrecondition[] = [],
     sqliteOps: readonly SqliteOperation[] = [],
-    commitOptions?: TransactionCommitOptions,
+    commitOptions?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     if (
@@ -6788,7 +6788,7 @@ export class SpaceReplica
     options: {
       routeSources?: readonly IStorageTransaction[];
       prepareIssue?: (commit: ClientCommit) => boolean;
-      commitOptions?: TransactionCommitOptions;
+      commitOptions?: NativeCommitOptions;
     } = {},
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const routeSources = options.routeSources ??
@@ -8888,10 +8888,9 @@ export class SpaceReplica
     // contract is "storage fully settled", which under parking includes the
     // fan-out of this replica's own accepted writes (CT-1950). The push
     // promise resolves at the verdict, so the barrier needs its own hold.
-    // A verdict-resolving commit opts out of the hold — its premise is
-    // "accepted but not fanned out", which a synced() that forces the
-    // fan-out through would destroy — while its SETTLEMENT timeline still
-    // drains coverage; only the caller's returned promise resolves early.
+    // Native verdict mode disables this hold for controlled-staleness
+    // callers. Transaction receipts still drain coverage in settlement;
+    // observing their verdict selects the earlier outcome independently.
     if (!resolveAtVerdict) {
       const hold: Promise<Result<Unit, StorageTransactionRejected>> = settled
         .promise.then(() => ({ ok: {} }));

@@ -18,10 +18,10 @@ persistence.
 
 ## Transaction commits
 
-`runtime.edit()` returns a transaction whose `startCommit()` returns a
-synchronous receipt with explicit `verdict` and `settled` promises. Local
-readiness, remote outcomes, rejection repair, effects, and the multi-space and
-server-execution contracts are described in
+`runtime.edit()` returns a transaction whose `commit()` returns a synchronous
+receipt with explicit `verdict` and `settled` promises. Local readiness, remote
+outcomes, rejection repair, effects, and the multi-space and server-execution
+contracts are described in
 [Transaction commit stages](../../docs/features/transaction-commit.md).
 `Cell.pull()` demands reactive state; `pull({ awaitDurability: true })` also
 keeps that demand through the runtime-wide commit-aware barrier.
@@ -354,7 +354,7 @@ settingsCell.withTx(tx).set({ theme: "light", fontSize: 16 });
 // Work with nested properties
 const themeProperty = settingsCell.key("theme");
 themeProperty.withTx(tx).set("system");
-tx.startCommit();
+tx.commit();
 await runtime.scheduler.idle();
 
 // Clean up subscription when done
@@ -447,7 +447,7 @@ userCell.withTx(seed).set({
   tags: [],
   settings: { theme: "light", notifications: true },
 });
-seed.startCommit();
+seed.commit();
 
 // Access the typed data
 const user = userCell.get();
@@ -461,7 +461,7 @@ console.log(settings.theme); // "light"
 // Update nested cells (mutations require a transaction)
 const tx = runtime.edit();
 settingsCell.withTx(tx).set({ theme: "dark", notifications: false });
-tx.startCommit();
+tx.commit();
 
 // Re-read through the parent for the updated view — a nested-cell handle
 // obtained from an earlier get() keeps observing its earlier snapshot
@@ -537,7 +537,7 @@ const result = runtime.run(
   resultCell,
 );
 runtime.prepareTxForCommit(tx);
-tx.startCommit();
+tx.commit();
 
 // Demand the result through setup commit callbacks and computations.
 await result.pull({ awaitDurability: true });
@@ -546,7 +546,7 @@ console.log(result.get()); // { result: 10 }
 // Update the input and watch the result change automatically
 const update = runtime.edit();
 input.withTx(update).set(10);
-update.startCommit();
+update.commit();
 await result.pull();
 console.log(result.get()); // { result: 20 }
 
@@ -669,7 +669,7 @@ sourceCell.withTx(seed).set({
   metadata: { createdAt: "2023-01-01", type: "user" },
   tags: ["tag1", "tag2"],
 });
-seed.startCommit();
+seed.commit();
 
 // Create a mapping cell that reorganizes the data by writing sigil LINKS
 // into it (setRaw writes the links themselves rather than link targets).
@@ -700,7 +700,7 @@ mappingCell.withTx(tx).setRaw({
   // Reference to first array element
   firstTag: sourceCell.key("tags").key(0).getAsLink(),
 });
-tx.startCommit();
+tx.commit();
 
 // Reads resolve through the links to the source values
 await mappingCell.pull();
@@ -764,7 +764,7 @@ rootCell.withTx(seed).set({
   value: "root",
   current: { label: "nested" },
 });
-seed.startCommit();
+seed.commit();
 
 // Subscribe to changes in the whole cell
 // This callback is called immediately with the current value,
@@ -795,7 +795,7 @@ rootCell.key("current").key("label").sink((value) => {
 // Changing values requires a transaction and triggers the callbacks
 const tx = runtime.edit();
 rootCell.key("current").key("label").withTx(tx).set("updated");
-tx.startCommit();
+tx.commit();
 await runtime.scheduler.idle();
 // This will log (after the commit propagates):
 // "Nested value: { label: 'updated' }"

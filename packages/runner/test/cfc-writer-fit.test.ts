@@ -170,7 +170,7 @@ const seedSecretSource = async (
       },
     },
   });
-  expect((await seed.commit()).ok).toBeDefined();
+  expect((await seed.commit().settled).ok).toBeDefined();
 };
 
 // Read the seeded source in a fresh transaction at `mode`, derive a value
@@ -196,7 +196,7 @@ const deriveIntoTarget = async (
   target.set({ copied: `${raw.secret}!` });
   const targetId = target.getAsNormalizedFullLink().id;
   tx.prepareCfc();
-  return { tx, targetId, result: await tx.commit() };
+  return { tx, targetId, result: await tx.commit().settled };
 };
 
 // The writer-fit reasons this transaction recorded, whether they rejected the
@@ -283,7 +283,7 @@ const writeSecretInto = async (
   );
   target.set({ copied: `${raw.secret}/${suffix}` });
   tx.prepareCfc();
-  return await tx.commit();
+  return await tx.commit().settled;
 };
 
 describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
@@ -325,7 +325,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       derived.set({ copied: `${raw.secret}!` });
       const derivedId = derived.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       // SC-18c error contract: stable reason naming the rule id and path.
       expect(result.error?.message).toContain(
@@ -366,7 +366,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       derived.set({ copied: `${raw.secret}!` });
       const derivedId = derived.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // Persist-and-flag, half one: the derived component records the
       // value's actual taint (unchanged shipped behavior — readers stay
@@ -425,7 +425,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       covered.set({ copied: `${raw.secret}!` });
       const coveredId = covered.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, coveredId);
       expect(entries.some((e) =>
@@ -479,7 +479,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       );
       pointerOnly.set({ copied: `${raw.secret}!` });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error?.message).toContain(
         "writer-fit confidentiality misfit",
       );
@@ -516,7 +516,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       );
       partial.set({ copied: `${raw.secret}!` });
       tx.prepareCfc();
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(result.error?.message).toContain(
         "writer-fit confidentiality misfit",
@@ -911,7 +911,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, `${raw.secret}!`);
         tx.prepareCfc();
 
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
 
         // The value landed, and it landed carrying what it derived from.
         expect(
@@ -960,7 +960,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, `${raw.secret}!`);
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1009,7 +1009,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const computedId = computedIdFor(runtime, "wf-computed-foreign-target");
         const tx = runtime.edit();
@@ -1028,7 +1028,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, `${raw.secret}!`);
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1066,7 +1066,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           path: ["value", "copied"],
         }, `${raw.secret}!`);
         first.prepareCfc();
-        expect((await first.commit()).error).toBeUndefined();
+        expect((await first.commit().settled).error).toBeUndefined();
 
         const second = runtime.edit();
         const derived = runtime.getCellFromLink(
@@ -1086,7 +1086,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, carried as string);
         second.prepareCfc();
 
-        const result = await second.commit();
+        const result = await second.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1261,7 +1261,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, true);
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1309,7 +1309,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const entriesId = entriesDocFor(runtime, "wf-entries-foreign-stream");
         const tx = runtime.edit();
@@ -1328,7 +1328,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, [{ eventId: "evt:foreign", payload: { note: `${raw.secret}!` } }]);
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1407,7 +1407,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       target.set({ delegatedModuleIdentities: [`predecessor/${raw.secret}`] });
       const targetId = target.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      return { targetId, result: await tx.commit() };
+      return { targetId, result: await tx.commit().settled };
     };
 
     it("records no writer-fit reason for a write to a marked document", async () => {
@@ -1557,7 +1557,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         const bystanderId = bystander.getAsNormalizedFullLink().id;
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1598,7 +1598,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         const parentId = parent.getAsNormalizedFullLink().id;
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
         expect(writerFitDiagnostics(tx)).toEqual([]);
         // The parent's own write is all links after the anchor, so the
@@ -1658,7 +1658,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const source = runtime.getCellFromLink(
@@ -1683,7 +1683,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         const targetId = target.getAsNormalizedFullLink().id;
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -1726,7 +1726,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         id,
         path: [],
       }, { value: payload });
-      expect((await seed.commit()).ok).toBeDefined();
+      expect((await seed.commit().settled).ok).toBeDefined();
       return id;
     };
 
@@ -1767,7 +1767,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(result.error).toBeUndefined();
         expect(result.ok).toBeDefined();
         // Not merely "did not reject": no measurement named a meta path at
@@ -1821,7 +1821,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         target.setMetaRaw("slug", `${raw.secret}!`, rawMetaWriteAuthorization);
         tx.prepareCfc();
 
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect(writerFitDiagnostics(tx)).toEqual([]);
       } finally {
         await runtime.dispose();
@@ -1859,7 +1859,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, `${raw.secret}!`);
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isCfcEnforcementRejection(result.error)).toBe(true);
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
@@ -1909,7 +1909,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             },
           },
         });
-        expect((await seed.commit()).ok).toBeDefined();
+        expect((await seed.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const source = runtime.getCell(
@@ -1929,7 +1929,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         target.setMetaRaw("slug", `${raw.secret}!`, rawMetaWriteAuthorization);
         tx.prepareCfc();
 
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
         expect(writerFitDiagnostics(tx)).toEqual([]);
       } finally {
         await runtime.dispose();
@@ -1984,7 +1984,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, `${raw.secret}!`);
         tx.prepareCfc();
 
-        const result = await tx.commit();
+        const result = await tx.commit().settled;
         expect(isCfcEnforcementRejection(result.error)).toBe(true);
         expect(result.error?.message).toContain(
           "writer-fit confidentiality misfit",
@@ -2037,7 +2037,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         grantedAt: 1000,
       });
       expect(tx.prepareCfc()).not.toBe("");
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
 
       // The grant persisted, carrying no derived label of its own: a
       // consultation reading it inherits nothing from the releasing
@@ -2071,7 +2071,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       plain.set({ note: "public" });
       const plainId = plain.getAsNormalizedFullLink().id;
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       // The stored value pins the document the label map is read from, so the
       // empty map below is that document's own.
       expect(storedDocument(storageManager, plainId)?.value).toEqual({
@@ -2153,7 +2153,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         substrate.set({ copied: `${raw.secret}!` });
         const substrateId = substrate.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const entries = replicaEntries(storageManager, substrateId);
         expect(entries.some((entry) =>
@@ -2218,7 +2218,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         bystander.set({ copied: `${raw.secret}!` });
         const bystanderId = bystander.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -2253,7 +2253,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         untainted.set({ copied: "public" });
         const substrateId = untainted.getAsNormalizedFullLink().id;
-        expect((await born.commit()).ok).toBeDefined();
+        expect((await born.commit().settled).ok).toBeDefined();
         expect(replicaEntries(storageManager, substrateId)).toEqual([]);
 
         const declaredClauses = async (sources: readonly string[]) => {
@@ -2278,7 +2278,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           recordRuntimeOwnedStore(runtime, tx, result, substrate);
           substrate.set({ copied });
           tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           const declared = replicaEntries(storageManager, substrateId)
             .filter((entry) => entry.origin === "declared");
           // One entry per path per component: a second declaration at the
@@ -2336,7 +2336,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, born, result, store);
         store.set({ flag: false, copied: "public" });
         const storeId = store.getAsNormalizedFullLink().id;
-        expect((await born.commit()).ok).toBeDefined();
+        expect((await born.commit().settled).ok).toBeDefined();
 
         const storeIn = (tx: ReturnType<Runtime["edit"]>) =>
           runtime.getCell<{ flag?: boolean; copied?: string }>(
@@ -2361,14 +2361,14 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         ).getRaw() as { secret?: string };
         storeIn(labeled).set({ flag: true, copied: `${raw.secret}!` });
         labeled.prepareCfc();
-        expect((await labeled.commit()).ok).toBeDefined();
+        expect((await labeled.commit().settled).ok).toBeDefined();
         expect(declaredAtFlag()).toEqual([["secret"]]);
 
         const unlabeled = runtime.edit();
         unlabeled.setCfcEnforcementMode("enforce-strict");
         storeIn(unlabeled).key("flag").set(false);
         unlabeled.prepareCfc();
-        expect((await unlabeled.commit()).ok).toBeDefined();
+        expect((await unlabeled.commit().settled).ok).toBeDefined();
         expect(declaredAtFlag()).toEqual([["secret"]]);
 
         const readBack = runtime.edit();
@@ -2382,7 +2382,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         sink.set({ copied: String(seen) });
         readBack.prepareCfc();
-        const refused = await readBack.commit();
+        const refused = await readBack.commit().settled;
         expect(refused.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -2423,7 +2423,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         list.set(["first"]);
         const listId = list.getAsNormalizedFullLink().id;
         setup.prepareCfc();
-        expect((await setup.commit()).ok).toBeDefined();
+        expect((await setup.commit().settled).ok).toBeDefined();
         expect(replicaEntries(storageManager, listId)).toEqual([]);
 
         const update = runtime.edit();
@@ -2443,7 +2443,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         listInUpdate.set(["first", `${raw.secret}!`]);
         update.prepareCfc();
-        expect((await update.commit()).ok).toBeDefined();
+        expect((await update.commit().settled).ok).toBeDefined();
 
         const declared = replicaEntries(storageManager, listId)
           .filter((entry) => entry.origin === "declared");
@@ -2508,7 +2508,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         store.set({});
         const storeId = store.getAsNormalizedFullLink().id;
         mint.prepareCfc();
-        expect((await mint.commit()).ok).toBeDefined();
+        expect((await mint.commit().settled).ok).toBeDefined();
 
         const turn = runtime.edit();
         turn.setCfcEnforcementMode("enforce-strict");
@@ -2527,7 +2527,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         storeInTurn.set({ copied: `${raw.secret}!` });
         turn.prepareCfc();
-        expect((await turn.commit()).ok).toBeDefined();
+        expect((await turn.commit().settled).ok).toBeDefined();
 
         expect(
           replicaEntries(storageManager, storeId).some((entry) =>
@@ -2580,7 +2580,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, born, result, store);
         store.set({ copied: "public" });
         const storeId = store.getAsNormalizedFullLink().id;
-        expect((await born.commit()).ok).toBeDefined();
+        expect((await born.commit().settled).ok).toBeDefined();
 
         // One upgrade per clause, each on its own transaction, none of which
         // names a store: the enrollment above is all they have.
@@ -2604,7 +2604,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           // and would leave the declaration where the round before put it.
           storeInTx.set({ copied: `${raw.secret}/${clause}` });
           tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
         }
 
         const declared = replicaEntries(storageManager, storeId)
@@ -2636,7 +2636,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         sink.set({ copied: `${seen.copied}?` });
         readBack.prepareCfc();
-        const refused = await readBack.commit();
+        const refused = await readBack.commit().settled;
         expect(refused.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -2674,7 +2674,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         recordRuntimeOwnedStore(runtime, setup, result, store);
         store.set({ copied: "public" });
-        expect((await setup.commit()).ok).toBeDefined();
+        expect((await setup.commit().settled).ok).toBeDefined();
 
         const later = runtime.edit();
         later.setCfcEnforcementMode("enforce-strict");
@@ -2694,7 +2694,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         bystander.set({ copied: `${raw.secret}!` });
         const bystanderId = bystander.getAsNormalizedFullLink().id;
         later.prepareCfc();
-        const committed = await later.commit();
+        const committed = await later.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -2731,7 +2731,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, forge, result, store, false);
         store.set({ copied: "public" });
         const storeId = store.getAsNormalizedFullLink().id;
-        expect((await forge.commit()).ok).toBeDefined();
+        expect((await forge.commit().settled).ok).toBeDefined();
 
         const later = runtime.edit();
         later.setCfcEnforcementMode("enforce-strict");
@@ -2750,7 +2750,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         storeLater.set({ copied: `${raw.secret}!` });
         later.prepareCfc();
-        const committed = await later.commit();
+        const committed = await later.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -2817,7 +2817,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, enrol, result, store);
         store.set({ copied: "public" });
         const storeId = store.getAsNormalizedFullLink().id;
-        expect((await enrol.commit()).ok).toBeDefined();
+        expect((await enrol.commit().settled).ok).toBeDefined();
 
         expect(
           (await writeSecretInto(
@@ -2911,7 +2911,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }, runtimeWritePolicyAuthorization);
         store.set({ copied: `${raw.secret}!` });
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -2958,7 +2958,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, enrol, result, store);
         store.set({ copied: "public" });
         const storeId = store.getAsNormalizedFullLink().id;
-        expect((await enrol.commit()).ok).toBeDefined();
+        expect((await enrol.commit().settled).ok).toBeDefined();
 
         // A write in a later transaction takes the route while the piece
         // holds the enrollment.
@@ -3057,7 +3057,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           );
         }
         store.withTx(tx).set({ copied: "public" });
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         // The first owner goes; the second still holds the store.
         runtime.releaseRuntimeOwnedStores(
@@ -3123,7 +3123,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         for (const _ of [0, 1]) {
           const tx = runtime.edit();
           recordRuntimeOwnedStore(runtime, tx, result, store);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
         }
 
         const declared = await writeSecretInto(
@@ -3194,7 +3194,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         store.set([{ note: `${raw.secret}!` }]);
         const storeId = store.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         // The parent's own write is all links, so it takes shape-only stamps
         // and is never measured; the content — and the declaration — lands on
@@ -3241,7 +3241,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         store.set([{ note: `${raw.secret}!` }]);
         const storeId = store.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3274,7 +3274,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           undefined,
           create,
         ).set({ copied: "public" });
-        expect((await create.commit()).ok).toBeDefined();
+        expect((await create.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         tx.setCfcEnforcementMode("enforce-strict");
@@ -3308,7 +3308,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, tx, result, substrate);
         substrate.key("copied").set(`${raw.secret}!`);
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3355,7 +3355,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         recordRuntimeOwnedStore(runtime, tx, result, substrate.key("copied"));
         substrate.set({ copied: `${raw.secret}!` });
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3404,7 +3404,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         substrate.set({ copied: `${raw.secret}!` });
         const substrateId = substrate.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3454,7 +3454,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         substrate.set({ copied: `${raw.secret}!` });
         const substrateId = substrate.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3507,7 +3507,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         substrate.set({ copied: `${raw.secret}!` });
         const substrateId = substrate.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         expect(
           replicaEntries(storageManager, substrateId)
@@ -3557,7 +3557,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         bystander.set({ note: `${raw.secret}!` });
         const bystanderId = bystander.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3612,7 +3612,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         });
         substrate.set({ copied: `${raw.secret}!` });
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3660,7 +3660,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         substrate.set({ copied: `${raw.secret}!` });
         const substrateId = substrate.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3717,7 +3717,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           }
           const substrateId = substrate.getAsNormalizedFullLink().id;
           tx.prepareCfc();
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit().settled).ok).toBeDefined();
           return replicaEntries(storageManager, substrateId);
         };
 
@@ -3784,7 +3784,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         substrate.set({ copied: `${raw.secret}!` });
         const substrateId = substrate.getAsNormalizedFullLink().id;
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         expect(
           writerFitDiagnostics(tx).some((flag) =>
@@ -3847,7 +3847,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           seamPattern.derivedInternalCells[0],
         ).id;
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         for (const id of [argumentId, internalId]) {
           expect(
@@ -3895,7 +3895,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           bystander.getAsWriteRedirectLink({ base: resultCell }),
           rawMetaWriteAuthorization,
         );
-        expect((await aim.commit()).ok).toBeDefined();
+        expect((await aim.commit().settled).ok).toBeDefined();
 
         const tx = runtime.edit();
         const source = runtime.getCell(
@@ -3918,7 +3918,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           reused,
         );
         tx.prepareCfc();
-        const committed = await tx.commit();
+        const committed = await tx.commit().settled;
         expect(committed.error?.message).toContain(
           "writer-fit confidentiality misfit",
         );
@@ -3968,7 +3968,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           resultCell,
         )!.id!;
         tx.prepareCfc();
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit().settled).ok).toBeDefined();
 
         const labeled = runtime.edit();
         const source = runtime.getCell(
@@ -3991,7 +3991,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           reused,
         );
         labeled.prepareCfc();
-        expect((await labeled.commit()).ok).toBeDefined();
+        expect((await labeled.commit().settled).ok).toBeDefined();
 
         const entries = replicaEntries(storageManager, argumentId);
         expect(entries.some((entry) =>

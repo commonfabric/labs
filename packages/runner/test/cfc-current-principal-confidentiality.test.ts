@@ -420,7 +420,7 @@ describe("cfc-current-principal-confidentiality", () => {
         properties: { books: { asCell: ["readonly"] } },
       }, tx);
       linked.set({ books: source });
-      expect((await tx.commit()).error).toBeUndefined();
+      expect((await tx.commit().settled).error).toBeUndefined();
       await linked.sync();
       expect(linked.withTx(undefined).get()).toBeDefined();
       const later = visitor.edit();
@@ -442,7 +442,7 @@ describe("cfc-current-principal-confidentiality", () => {
           },
         ),
       });
-      expect((await later.commit()).error).toBeUndefined();
+      expect((await later.commit().settled).error).toBeUndefined();
       await another.sync();
       expect(owner.getCellFromLink(another.getAsNormalizedFullLink()).get())
         .toBeDefined();
@@ -489,14 +489,14 @@ describe("cfc-current-principal-confidentiality", () => {
         create,
       );
       source.set(["Solaris"]);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await source.sync();
       const link = source.getAsNormalizedFullLink();
       expect(owner.getCellFromLink(link).get()).toEqual(["Solaris"]);
       expect(() => visitor.getCellFromLink(link).get()).toThrow(/read ceiling/);
       const submit = visitor.edit();
       visitor.getCellFromLink<string[]>(link, schema, submit).push("Piranesi");
-      expect((await submit.commit()).error).toBeUndefined();
+      expect((await submit.commit().settled).error).toBeUndefined();
       expect(owner.getCellFromLink(link).get()).toEqual([
         "Solaris",
         "Piranesi",
@@ -522,7 +522,7 @@ describe("cfc-current-principal-confidentiality", () => {
       runtime.getCell<string[]>(ownerIdentity.did(), "unbound", schema, tx).set(
         [],
       );
-      const result = await tx.commit();
+      const result = await tx.commit().settled;
       expect(result.error).toBeDefined();
       expect(JSON.stringify(result.error)).toContain(
         "requires an authenticated creator",
@@ -553,7 +553,7 @@ describe("cfc-current-principal-confidentiality", () => {
         create,
       );
       inbox.set(["Solaris"]);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
       actor = visitorIdentity.did();
       const change = runtime.edit();
@@ -561,7 +561,7 @@ describe("cfc-current-principal-confidentiality", () => {
         ...schema,
         ifc: { confidentiality: [cfcAtom.user(actor)] },
       }, change).push("Piranesi");
-      const result = await change.commit();
+      const result = await change.commit().settled;
       expect(result.error).toBeDefined();
       expect(JSON.stringify(result.error)).toContain(
         "confidentiality cannot be weakened",
@@ -603,12 +603,12 @@ describe("cfc-current-principal-confidentiality", () => {
         create,
       );
       inbox.set(["Solaris"]);
-      expect((await create.commit()).error).toBeUndefined();
+      expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
       const link = inbox.getAsNormalizedFullLink();
       const append = runtime.edit();
       runtime.getCellFromLink<string[]>(link, schema, append).push("Piranesi");
-      expect((await append.commit()).error).toBeUndefined();
+      expect((await append.commit().settled).error).toBeUndefined();
       expect(() => runtime.getCellFromLink(link).get()).toThrow(/read ceiling/);
     } finally {
       await storageManager.synced();
@@ -656,7 +656,7 @@ describe("cfc-current-principal-confidentiality", () => {
           tx,
         );
         books.set({ books: ["Solaris"] });
-        expect((await tx.commit()).error).toBeUndefined();
+        expect((await tx.commit().settled).error).toBeUndefined();
         await books.sync();
         expect(books.withTx(undefined).get()).toEqual({ books: ["Solaris"] });
         const visitor = new Runtime({
@@ -679,7 +679,7 @@ describe("cfc-current-principal-confidentiality", () => {
           expect(() => visitorView.get()).toThrow(/read ceiling/);
           const append = visitor.edit();
           visitorView.withTx(append).key("books").push("Piranesi");
-          expect((await append.commit()).error).toBeUndefined();
+          expect((await append.commit().settled).error).toBeUndefined();
           expect(books.withTx(undefined).get()).toEqual({
             books: ["Solaris", "Piranesi"],
           });
@@ -700,7 +700,7 @@ describe("cfc-current-principal-confidentiality", () => {
             takeover,
           )
             .key("books").push("Unauthorized replacement");
-          expect((await takeover.commit()).error?.message)
+          expect((await takeover.commit().settled).error?.message)
             .toContain("confidentiality cannot be weakened");
         } finally {
           await visitor.dispose();

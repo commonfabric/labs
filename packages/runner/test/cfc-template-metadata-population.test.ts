@@ -152,7 +152,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         labelMap: { version: 1, entries },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     return id;
   };
 
@@ -206,7 +206,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     const out = rt.getCell(space, outCause, undefined, tx);
     out.set(value as never);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return out.getAsNormalizedFullLink().id;
   };
 
@@ -266,7 +266,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     const cell = rt.getCell(space, "mp-declared", guarded.schema, tx);
     cell.set({ n: 1 } as never);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const id = cell.getAsNormalizedFullLink().id;
 
     const stored = entriesOf(id);
@@ -343,7 +343,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     );
     recordSchemaInput(txB, outId);
     txB.prepareCfc();
-    expect((await txB.commit()).ok).toBeDefined();
+    expect((await txB.commit().settled).ok).toBeDefined();
     const afterB = entriesOf(outId).filter(
       (e) => e.origin === "label-metadata",
     );
@@ -370,7 +370,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     );
     recordSchemaInput(txC, outId);
     txC.prepareCfc();
-    expect((await txC.commit()).ok).toBeDefined();
+    expect((await txC.commit().settled).ok).toBeDefined();
     const afterC = entriesOf(outId).filter(
       (e) => e.origin === "label-metadata",
     );
@@ -419,7 +419,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       (w) => w.address.id === outId && w.address.path[0] === "cfc",
     );
     expect(wroteCfc).toBe(false);
-    expect((await again.commit()).ok).toBeDefined();
+    expect((await again.commit().settled).ok).toBeDefined();
     expect(JSON.stringify(entriesOf(outId))).toEqual(before);
   });
 
@@ -450,7 +450,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       path: [],
     });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     const templates = entriesOf(listId).filter(
       (e) => e.origin === "label-metadata",
@@ -491,7 +491,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         residentClause(caveatAtom()),
       );
     }
-    await inspect.commit();
+    await inspect.commit().settled;
   });
 
   it("commitment-form templates: digest-matched source queries consume the committed template", async () => {
@@ -539,7 +539,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         },
       },
     });
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
 
     const tx = rt.edit();
     tx.readOrThrow({
@@ -552,7 +552,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     const out = rt.getCell(space, "mp-xs-out", undefined, tx);
     out.set({ observed: true });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     const outId = out.getAsNormalizedFullLink().id;
 
     const templates = entriesOf(outId).filter(
@@ -587,7 +587,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     expect(
       JSON.stringify(observations.map((o) => [...o.confidentiality])),
     ).not.toContain("did:key:remote-a");
-    await inspect.commit();
+    await inspect.commit().settled;
   });
 
   it("payload reads never consume metadata templates; raw cfc reads stay excluded", async () => {
@@ -629,7 +629,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     );
     outValue.set({ observed: true });
     txValue.prepareCfc();
-    expect((await txValue.commit()).ok).toBeDefined();
+    expect((await txValue.commit().settled).ok).toBeDefined();
     const joinValue = derivedConfidentiality(
       outValue.getAsNormalizedFullLink().id,
     );
@@ -647,7 +647,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     );
     outShape.set({ observed: true });
     txShape.prepareCfc();
-    expect((await txShape.commit()).ok).toBeDefined();
+    expect((await txShape.commit().settled).ok).toBeDefined();
     expect(
       derivedConfidentiality(outShape.getAsNormalizedFullLink().id),
     ).not.toContainEqual("tmpl-only-atom");
@@ -665,7 +665,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     const outRaw = rt.getCell(space, "mp-guard-out-raw", undefined, txRaw);
     outRaw.set({ observed: true });
     txRaw.prepareCfc();
-    expect((await txRaw.commit()).ok).toBeDefined();
+    expect((await txRaw.commit().settled).ok).toBeDefined();
     const rawId = outRaw.getAsNormalizedFullLink().id;
     expect(derivedConfidentiality(rawId)).toEqual([]);
 
@@ -677,7 +677,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       [],
       { source: SOURCE_A },
     );
-    await inspect.commit();
+    await inspect.commit().settled;
     expect(evaluation.consumedConfidentiality).toContainEqual(
       "tmpl-only-atom",
     );
@@ -728,7 +728,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         },
       },
     );
-    expect((await seed.commit()).ok).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
     expect(entriesOf(seededId).length).toBe(2);
 
     // A clean (unlabeled) value write: no payload entries survive the
@@ -738,7 +738,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     const cell = rt.getCell(space, "mp-heal", undefined, tx);
     cell.set({ fresh: true } as never);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
 
     expect(entriesOf(seededId)).toEqual([]);
   });
@@ -777,7 +777,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       "cfc/labels/value/confidentiality/clauses/1/alternatives/1",
       "cfc/labels/value/confidentiality/clauses/1/alternatives/1/source",
     ]);
-    await inspect.commit();
+    await inspect.commit().settled;
   });
 });
 
@@ -926,7 +926,7 @@ describe("CFC template metadata population (Stage B): evaluator resolution", () 
       );
       expect(outcome).toEqual({ status: "notAvailable" });
       expect(tx.getCfcState().labelMetadataObservations).toHaveLength(0);
-      await tx.commit();
+      await tx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();

@@ -392,7 +392,7 @@ export async function commitSnapshotShare(
       sourceId: state.sourceLink.id,
     });
     tx.markCreateOnly?.(receipt.getAsNormalizedFullLink());
-    const result = await tx.commit();
+    const result = await tx.commit().settled;
     if (result.error) {
       throw new Error(`Snapshot share failed: ${result.error.message}`);
     }

@@ -1219,32 +1219,39 @@ export type StorageTransactionStatus =
   };
 
 /**
- * Options for {@link IStorageTransaction.commit}.
+ * Controls the storage view's coverage barrier independently of commit stages.
  */
 export interface TransactionCommitOptions {
   /**
-   * When the returned promise resolves.
+   * Keeps replica and storage `synced()` pending until accepted writes reach
+   * the subscribed view. Defaults to true. Controlled-staleness callers can
+   * disable this hold while observing the verdict; settlement still waits for
+   * coverage and rejection repair, as does the runtime's pending-commit barrier.
+   */
+  holdSyncedUntilCovered?: boolean;
+}
+
+/** Options for a replica's native commit, below the transaction receipt API. */
+export interface NativeCommitOptions {
+  /**
+   * On accept, `"coverage"` (default) keeps `synced()` pending until the
+   * subscribed view covers the committed write and its watch-set consequences
+   * (marker coverage, spec §4.11.2). `"verdict"` disables that hold. A direct
+   * native commit also skips its inline coverage wait in verdict mode.
    *
-   * - `"coverage"` (default): on accept, once the caller's subscribed view
-   *   reflects the committed write, its watch-set consequences, and the
-   *   foreign novelty it was applied on top of (marker coverage, spec
-   *   §4.11.2); on rejection, after the read-repair gate, so a retry runs
-   *   against the repaired base.
-   * - `"verdict"`: as soon as the commit's fate is sealed — the accept
-   *   verdict or the rejection receipt — without the coverage wait, the
-   *   read-repair wait, the synced() hold, or the post-commit effect run
-   *   (still tracked via postCommitEffectsSettled()). For callers whose
-   *   premise is "durably decided but not yet fanned out":
-   *   controlled-staleness test fixtures foremost. Only the RETURNED
-   *   promise changes: state application still parks, and commit
-   *   callbacks and the pending-commit barrier remain on the full
-   *   settlement timeline (coverage on accept, read repair on rejection).
+   * Transaction-sourced native commits record the coverage wait for the
+   * transaction's settlement stage in either mode. Rejections always wait for
+   * read repair; the transaction's separate verdict signal reports rejection
+   * before that wait. Native commits do not run extended transaction effects.
    */
   resolveAt?: "coverage" | "verdict";
 }
 
 /** The independently observable completion stages of one commit attempt. */
 export interface TransactionCommitReceipt {
+  /** Rejects promise assimilation; select a completion stage explicitly. */
+  readonly then?: (selectVerdictOrSettled: never) => never;
+
   /**
    * The commit's fate. A separate backend verdict signal can report it before
    * subscription coverage or rejection repair; otherwise it resolves with
@@ -1254,7 +1261,7 @@ export interface TransactionCommitReceipt {
   readonly verdict: Promise<Result<Unit, CommitError>>;
 
   /**
-   * The default `commit()` completion: coverage or rejection repair, commit
+   * Completion after coverage or rejection repair, commit
    * callbacks, and inline post-commit effects.
    */
   readonly settled: Promise<Result<Unit, CommitError>>;
@@ -1758,34 +1765,15 @@ export interface IStorageTransaction {
    * failed) returns the prior error or a {@link IStorageTransactionComplete}
    * error. Commit is NOT idempotent — it does not replay the original result.
    *
-   * When this method returns, the changes will have been committed locally,
-   * but may not be visible to another runtime. The commit is fully durable
-   * and available to other processes at the VERDICT; the returned promise
-   * (by default) resolves later, at coverage — once the server's first
-   * subscription update after the write has been integrated, so the
-   * caller's view reflects the write, any docs it made newly reachable,
-   * and the foreign novelty it was applied on top of. On rejection the
-   * promise resolves after the read-repair gate, so a retry runs against
-   * the repaired base. {@link TransactionCommitOptions.resolveAt}
-   * `"verdict"` resolves at fate-sealing instead; effects gated on
-   * durability alone hook {@link IExtendedStorageTransaction.addVerdictCallback}
-   * or {@link commitVerdict} rather than this promise.
+   * Returns a receipt synchronously. Valid ordinary single-space writes apply
+   * locally before this returns; multi-space writes start each space in
+   * sequence. Local readiness does not require awaiting the receipt. Observe
+   * `.verdict` for the attempt's fate or `.settled` for subscription coverage,
+   * rejection repair, commit callbacks, and inline post-commit effects.
    */
   commit(
     options?: TransactionCommitOptions,
-  ): Promise<Result<Unit, CommitError>>;
-
-  /**
-   * Resolves with the same result as {@link commit}, but no later than the
-   * moment the commit's fate is known — the server verdict or a local
-   * rejection. The commit promise itself may resolve later: it additionally
-   * waits for the subscribed view to reflect the committed write (or the
-   * read-repair gate on rejection). Effects gated on durability alone
-   * (verdict callbacks, the outbox flush) hook this instead of the commit
-   * promise. Optional: backends without the split fall back to the commit
-   * promise.
-   */
-  commitVerdict?(): Promise<Result<Unit, CommitError>>;
+  ): TransactionCommitReceipt;
 
   /**
    * Optional native commit draft hook for storage backends that can consume a
@@ -1837,15 +1825,20 @@ export interface ITransactionSealSink {
 }
 
 /**
- * The seal destination an action transaction closes into when one is
- * installed (server-execution v2, serving-loop.md §3d): server-side, under
- * EXPERIMENTAL_SERVER_EXECUTION, an action tx SEALS into the wave
- * accumulator instead of committing to the store. One abstraction, two
- * destinations — with no destination installed (every client, and the OFF
- * arm always), commit() takes today's store path unchanged.
+ * The destination that accepts an action transaction's contribution. Serving
+ * runtimes seal into a wave accumulator; client speculation overlays stage
+ * speculative work and forward ordinary commits to the store. Without a
+ * destination, the transaction commits directly to the store.
  */
 export interface TransactionSealDestination {
-  seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>>;
+  /**
+   * Accepts the contribution, or forwards a store commit's receipt when the
+   * destination commits directly. A one-stage seal promise supplies both
+   * stages; a receipt preserves its distinct verdict and settlement.
+   */
+  seal(
+    tx: IExtendedStorageTransaction,
+  ): Promise<Result<Unit, CommitError>> | TransactionCommitReceipt;
 
   /**
    * The HOME space of the wave this destination seals into (the space
@@ -1896,15 +1889,6 @@ export interface TransactionSealDestination {
 }
 
 export interface IExtendedStorageTransaction extends IStorageTransaction {
-  /**
-   * Starts committing and returns a receipt synchronously. Valid ordinary
-   * single-space writes apply locally before this returns; multi-space
-   * writes start each space in sequence. Readiness does not require awaiting
-   * the receipt. Observe `.verdict` for the commit's fate or `.settled` for
-   * coverage, rejection repair, and inline post-commit effects.
-   */
-  startCommit(): TransactionCommitReceipt;
-
   /**
    * Stages `cid:<rootHash>` and its referenced closure into this
    * transaction from the realm registry, with per-transaction dedupe and
@@ -3207,7 +3191,7 @@ export interface ISpaceReplica extends ISpace {
   commitNative?(
     transaction: NativeStorageCommit,
     source?: IStorageTransaction,
-    options?: TransactionCommitOptions,
+    options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>>;
 
   /**

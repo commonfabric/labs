@@ -121,7 +121,7 @@ describe("cfc-reference-identity-reads", () => {
       return link;
     };
     const commit = async () => {
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
     };
     return { write, commit };
   };
@@ -183,7 +183,7 @@ describe("cfc-reference-identity-reads", () => {
     const out = rt.getCell(space, outCause, undefined, tx);
     out.set({ copied: true });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit().settled).ok).toBeDefined();
     return tagsOf(derivedConfidentiality(out.getAsNormalizedFullLink().id));
   };
 
@@ -237,7 +237,7 @@ describe("cfc-reference-identity-reads", () => {
         },
       },
     });
-    expect((await targetSeed.commit()).ok).toBeDefined();
+    expect((await targetSeed.commit().settled).ok).toBeDefined();
     const directJoin = await flowJoinOf(rt, "foreign-direct-out", (tx) => {
       const cell = rt.getCellFromLink<
         { ref: Cell<unknown>; refs: Cell<unknown>[] }
@@ -451,7 +451,7 @@ describe("cfc-reference-identity-reads", () => {
         base,
       );
       expect(found.map((link) => link.id)).toEqual([middle.id, last.id]);
-      await tx.commit();
+      await tx.commit().settled;
     });
   });
 
@@ -495,7 +495,7 @@ describe("cfc-reference-identity-reads", () => {
       const out = rt.getCell(space, outCause, undefined, tx);
       out.set({ slot: createSigilLinkFromParsedLink(reference) });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit().settled).ok).toBeDefined();
       const id = out.getAsNormalizedFullLink().id;
       return {
         slot: pointerTagsAt(id, ["slot"]),

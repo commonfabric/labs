@@ -145,7 +145,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "load-park-events",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     // Wish-like computation: reads the cold doc, settles clean on a
@@ -246,7 +246,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "load-park-failure-event",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     let handlerRuns = 0;
@@ -332,7 +332,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "load-park-served-event",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     let handlerRuns = 0;
@@ -458,7 +458,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "barrier-exclusions-other-space",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     // A FRESH function per handler: addEventHandler stamps
@@ -595,7 +595,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "load-park-generation-event",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     let handlerRuns = 0;
@@ -666,7 +666,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "no-load-events",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     let handlerRuns = 0;
@@ -699,7 +699,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "served-finalization-event",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     runtime.scheduler.addEventHandler(
@@ -797,7 +797,7 @@ describe("event dispatch parks on in-flight closure loads", () => {
       "loads-settled-dupe",
       undefined,
     );
-    await tx.commit();
+    await tx.commit().settled;
     env.tx = runtime.edit();
 
     const storage = runtime.storageManager as unknown as {

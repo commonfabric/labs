@@ -169,7 +169,7 @@ export function startReactiveActionCommit(state: {
   readonly tx: IExtendedStorageTransaction;
 }, options: {
   readonly beforeCommit?: () => void;
-} = {}): ReturnType<IExtendedStorageTransaction["commit"]> {
+} = {}): ReturnType<IExtendedStorageTransaction["commit"]>["settled"] {
   logger.timeStart("scheduler", "run", "commit");
   try {
     state.runtime.prepareTxForCommit(state.tx);
@@ -189,7 +189,7 @@ export function startReactiveActionCommit(state: {
     }
   }
   options.beforeCommit?.();
-  const commitPromise = state.tx.startCommit().settled;
+  const commitPromise = state.tx.commit().settled;
   logger.timeEnd("scheduler", "run", "commit");
   return commitPromise;
 }
@@ -207,7 +207,9 @@ export function watchReactiveActionCommit(state: {
   readonly retries: WeakMap<Action, number>;
   readonly offBudgetRetries: WeakMap<Action, number>;
   readonly pending: Set<Action>;
-  readonly commitPromise: ReturnType<IExtendedStorageTransaction["commit"]>;
+  readonly commitPromise: ReturnType<
+    IExtendedStorageTransaction["commit"]
+  >["settled"];
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (
     action: Action,

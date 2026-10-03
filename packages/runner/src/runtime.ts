@@ -2338,9 +2338,9 @@ export class Runtime {
    * Clean up resources and cancel all operations.
    *
    * NOTE: This does not wait for in-flight transactions to settle.
-   * Any unawaited tx.commit() calls will be canceled when
+   * Commits whose receipt.settled remains pending will be canceled when
    * storageManager.close() tears down storage sessions. Callers
-   * should await all pending commits before calling dispose().
+   * should await pending receipts' .settled before calling dispose().
    *
    * `closeStorage: false` leaves the storage manager OPEN for a caller that
    * OWNS it and is still using it — a second runtime sharing the same store, or
@@ -3201,12 +3201,12 @@ export class Runtime {
         throw error;
       }
       const commit = preparation === undefined
-        ? tx.commit()
+        ? tx.commit().settled
         : preparation.then(() => {
           if (signal.aborted && tx.status().status === "ready") {
             tx.abort(signal.reason);
           }
-          return tx.commit();
+          return tx.commit().settled;
         });
       return commit.then(async ({ error }) => {
         if (error) {

@@ -196,7 +196,7 @@ describe("CellSet / CellUpdate echo race over IPC", () => {
       const seed = runtime.edit();
       cell.withTx(seed).set({ color: "red" });
       runtime.prepareTxForCommit(seed);
-      await seed.commit();
+      await seed.commit().settled;
       await runtime.idle();
 
       // A real `RuntimeProcessor` over that runtime.
@@ -233,7 +233,7 @@ describe("CellSet / CellUpdate echo race over IPC", () => {
       const blueTx = runtime.edit();
       cell.withTx(blueTx).set({ color: "blue" });
       runtime.prepareTxForCommit(blueTx);
-      await blueTx.commit();
+      await blueTx.commit().settled;
       await runtime.idle();
       await flush();
       expect(transport.outbox.length).toBeGreaterThan(0);

@@ -94,11 +94,13 @@ import type {
   NativeStorageCommit,
   Result,
   SealedCommitVerdict,
+  TransactionCommitReceipt,
   TransactionSealDestination,
   Unit,
   URI,
 } from "../storage/interface.ts";
 import type { PostCommitSideEffect } from "../cfc/types.ts";
+import { createTransactionCommitReceipt } from "../storage/commit-receipt.ts";
 import { declareDocumentLocalCommit } from "../storage/commit-readiness.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
 
@@ -560,7 +562,7 @@ export class SpeculationOverlayDestination
     return this.#intentCheckMaxVisits;
   }
 
-  seal(tx: IExtendedStorageTransaction): Promise<Result<Unit, CommitError>> {
+  seal(tx: IExtendedStorageTransaction): TransactionCommitReceipt {
     const kind = speculationRunContextOf(tx)?.kind;
     if (kind !== "derivation" && kind !== "event-handler") {
       // Bookkeeping runs and unstamped transactions commit exactly as
@@ -570,7 +572,7 @@ export class SpeculationOverlayDestination
       declareDocumentLocalCommit(tx.tx);
       return tx.tx.commit();
     }
-    return this.#sealSpeculative(tx);
+    return createTransactionCommitReceipt(this.#sealSpeculative(tx));
   }
 
   async #sealSpeculative(

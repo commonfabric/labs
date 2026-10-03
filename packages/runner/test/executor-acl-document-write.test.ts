@@ -166,12 +166,12 @@ describe("executor-acl-document-write", () => {
         {
           const tx = client.edit();
           argument.withTx(tx).set({ value: 0, rooms: [] });
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         {
           const tx = client.edit();
           client.run(tx, compiled, argument, result);
-          expect((await tx.commit()).error).toBeUndefined();
+          expect((await tx.commit().settled).error).toBeUndefined();
         }
         const cancelDemand = result.sink(() => {});
         cleanups.push(() => Promise.resolve(cancelDemand()));
