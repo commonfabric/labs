@@ -1239,6 +1239,36 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("refuses a descriptor naming a host operation that copies a value a pattern chose", async () => {
+      for (
+        const builtinId of [
+          "cfc-share-snapshot",
+          "cfc-custody-seal",
+          REVIEWED_INTENT_WRITER,
+        ]
+      ) {
+        const fixture = await setup({
+          ...DESCRIPTOR,
+          parameters: {
+            ...DESCRIPTOR.parameters,
+            to: {
+              ...DESCRIPTOR.parameters.to,
+              integrity: [{
+                type: CFC_ATOM_TYPE.TransformedBy,
+                identity: { kind: "builtin", builtinId },
+              }],
+            },
+          },
+        });
+        try {
+          await expect(prepareReviewedIntent(fixture.bindings())).rejects
+            .toThrow(/writes values a pattern chose/);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("takes destinations from the space a parameter declares, and refuses the subject's own there", async () => {
       const fixture = await setup({
         ...DESCRIPTOR,
@@ -1636,8 +1666,32 @@ describe("reviewed-intent", () => {
             type: CFC_ATOM_TYPE.TransformedBy,
             identity: { kind: { var: "$kind" }, builtinId: ADDRESS_BOOK },
           },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "builtin" },
+          },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "builtin", builtinId: "" },
+          },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: { kind: "verified", builtinId: ADDRESS_BOOK },
+          },
+          {
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "builtin",
+              builtinId: ADDRESS_BOOK,
+              instance: { var: "$instance" },
+            },
+          },
           { ...WRITTEN_BY_ADDRESS_BOOK, extra: "member" },
           { type: CFC_ATOM_TYPE.PolicyCertified },
+          {
+            type: CFC_ATOM_TYPE.PolicyCertified,
+            identity: WRITTEN_BY_ADDRESS_BOOK.identity,
+          },
         ]
       ) {
         expect(() =>
@@ -1976,6 +2030,37 @@ describe("reviewed-intent", () => {
         );
         expect(() => verified(record)).toThrow(
           /outside the space its parameter names/,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a record checked against a descriptor naming a builtin pattern code invokes", async () => {
+      const fixture = await setup();
+      try {
+        const steered = {
+          ...DESCRIPTOR,
+          parameters: {
+            ...DESCRIPTOR.parameters,
+            to: {
+              ...DESCRIPTOR.parameters.to,
+              integrity: [{
+                type: CFC_ATOM_TYPE.TransformedBy,
+                identity: { kind: "builtin", builtinId: "ifElse" },
+              }],
+            },
+          },
+        };
+        const record = await seeded(
+          fixture,
+          sender.did(),
+          "stamped-steered",
+          forged("Send the code"),
+          { label: stampedLabel, origin: "derived", observes: "value" },
+        );
+        expect(() => verified(record, steered)).toThrow(
+          /a builtin pattern code invokes/,
         );
       } finally {
         await fixture.dispose();
