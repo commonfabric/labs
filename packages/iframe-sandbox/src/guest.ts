@@ -649,7 +649,9 @@ export class FabricClient {
         ...(descriptor.identity !== undefined && {
           identity: descriptor.identity,
         }),
-        value: descriptor.value as T,
+        // A cell that has read nothing yet is loading, so the first read of
+        // it, an `update()` among them, pulls.
+        ...(descriptor.hasValue !== false && { value: descriptor.value as T }),
       },
     );
   }

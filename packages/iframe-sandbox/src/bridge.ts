@@ -75,6 +75,13 @@ export type BridgeCell = {
   key?(key: string | number): BridgeCell;
   resolve?(): BridgeCell | Promise<BridgeCell>;
   identity?: BridgeCellIdentity;
+  /**
+   * Whether the cell holds what a read of it found (or what was written
+   * through it), so that `get()` is its value. False for one that has read
+   * nothing yet, whose `get()` is no value, and whose sink delivers nothing
+   * until a read answers. Left out, the cell always holds its value.
+   */
+  hasValue?(): boolean;
 };
 
 type BridgeResourceMetadata = {
@@ -211,6 +218,17 @@ function cellOperation<K extends BridgeCellOperation>(
   return property && "value" in property && typeof property.value === "function"
     ? property.value as BridgeCell[K]
     : undefined;
+}
+
+/** Whether `cell` holds its value ({@link BridgeCell.hasValue}). */
+function cellHasValue(cell: BridgeCell): boolean {
+  const property = Object.getOwnPropertyDescriptor(cell, "hasValue");
+  if (
+    !property || !("value" in property) || typeof property.value !== "function"
+  ) {
+    return true;
+  }
+  return property.value.call(cell) === true;
 }
 
 function cellOperationNames(cell: BridgeCell): BridgeCellOperation[] {
@@ -621,17 +639,19 @@ export class FabricBridgeHost {
         const identity = Object.getOwnPropertyDescriptor(cell, "identity");
         // What the resolved cell holds already, which is not a read: it can
         // hold a refusal, and holds nothing when it has read nothing yet, so
-        // it refuses a path and admits none.
+        // it refuses a path and admits none. One that has read nothing hands
+        // the guest no value, so the guest pulls before it reads.
+        const hasValue = cellHasValue(cell);
         let value: FabricValue | undefined;
         try {
-          value = cell.get();
+          value = hasValue ? cell.get() : undefined;
         } catch (error) {
           if (isReadRefusal(error)) this.#refuse(target.path);
           throw error;
         }
         return {
           handle,
-          hasValue: true,
+          hasValue,
           operations,
           ...(identity && "value" in identity && identity.value !== undefined &&
             {

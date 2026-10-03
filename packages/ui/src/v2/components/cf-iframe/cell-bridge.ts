@@ -195,8 +195,15 @@ function bridgeCell(
           (cell as CellHandle<FabricValue[]>).pushAllStrict(values)
         ),
     }),
+    // A handle that has read nothing yet holds no value, so the guest is
+    // handed none until the worker answers: a guest that took the nothing
+    // for a value would compute from it.
+    hasValue: () => !("unread" in cell.lastRead()),
     sink: (listener, failed) =>
-      cell.subscribe((value) => listener(bridgeValue(value)), {
+      cell.subscribe((value) => {
+        if ("unread" in cell.lastRead()) return;
+        listener(bridgeValue(value));
+      }, {
         onRefused: (refusal) =>
           failed(
             new BridgeReadRefusedError(

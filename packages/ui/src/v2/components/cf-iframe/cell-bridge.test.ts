@@ -862,6 +862,72 @@ describe("cf-iframe cell bridge", () => {
       }
     };
 
+    for (const reached of ["by name", "resolved"] as const) {
+      for (const answer of ["admitted", "refused"] as const) {
+        it(`computes no write from a field of a refused context, reached ${reached}, until the worker answers its read, which it ${answer}`, async () => {
+          // The field's handle has read nothing: its context's refusal says
+          // nothing of the field. Before, the guest was handed that nothing
+          // as a value, and an increment of it wrote 1.
+          const writes: unknown[] = [];
+          const asked = Promise.withResolvers<RequestType>();
+          const pulled = Promise.withResolvers<unknown>();
+          const runtime = runtimeStub({
+            [$conn]: () => ({
+              request: (request: {
+                type: RequestType;
+                cell: CellRef;
+                value?: unknown;
+              }) => {
+                if (request.type === RequestType.CellResolveAsCell) {
+                  return Promise.resolve({ cell: request.cell });
+                }
+                asked.resolve(request.type);
+                if (request.type === RequestType.CellSet) {
+                  writes.push(request.value);
+                  return Promise.resolve({});
+                }
+                return pulled.promise;
+              },
+              subscribe: () => Promise.resolve(),
+              unsubscribe: () => Promise.resolve(),
+              signal: { aborted: false },
+            }),
+          });
+          const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+          context[$onCellRefused](refusal);
+
+          await asGuest(createCellContextBridge(context), async (client) => {
+            const named = client.cell<number | undefined>("count");
+            const count = reached === "by name" ? named : await named.resolve();
+            const stop = count.sink(() => {});
+            // Behind the sink's opening, so anything it delivers has arrived.
+            await client.describe();
+
+            const updated = count.update((current) => (current ?? 0) + 1);
+
+            // The worker is asked for the field's value before anything is
+            // written, and nothing is written while it has not answered.
+            expect(await asked.promise).toBe(RequestType.CellPull);
+            expect(writes).toEqual([]);
+
+            pulled.resolve(
+              answer === "admitted" ? { value: 4 } : { refused: refusal },
+            );
+            if (answer === "admitted") {
+              await updated;
+              expect(writes).toEqual([5]);
+            } else {
+              await expect(updated).rejects.toMatchObject({
+                code: BRIDGE_READ_REFUSED,
+              });
+              expect(writes).toEqual([]);
+            }
+            stop();
+          });
+        });
+      }
+    }
+
     for (const built of ["named", "resolved"] as const) {
       it(`refuses a guest's write through a path whose read was refused, in a ${built} context`, async () => {
         const requests: { type: RequestType }[] = [];

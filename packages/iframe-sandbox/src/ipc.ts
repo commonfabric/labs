@@ -238,7 +238,14 @@ export type BridgeCellIdentity = {
 /** Guest-visible descriptor for a host-minted stable cell capability. */
 export type BridgeResolvedCell = {
   handle: string;
-  hasValue: true;
+
+  /**
+   * Whether `value` is what the cell holds. False for a cell that has read
+   * nothing yet, which a guest reads with a pull rather than take as holding
+   * nothing. A host that predates it sends `true`, as a guest that predates
+   * it reads any answer.
+   */
+  hasValue: boolean;
 
   /** Operations the host authorizes on this resolved capability. */
   operations?: string[];
