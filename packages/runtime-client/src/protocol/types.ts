@@ -3849,9 +3849,10 @@ export type ConsoleMessage = ConsoleNotification;
 /**
  * A pattern asking the client to navigate to a cell. A request in name only:
  * it carries no `msgId` and nothing is sent back, so the client is free to
- * ignore it.
+ * ignore it. Where to go is what the pattern chose from what it had read, so
+ * the request is decided as a `console` call is.
  */
-export type NavigateRequestNotification = {
+export type NavigateRequestNotification = HostReadDecided & {
   type: NotificationType.NavigateRequest;
 
   /**

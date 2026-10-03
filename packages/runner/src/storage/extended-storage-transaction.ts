@@ -30,6 +30,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
+import type { SinkConsumedLabel } from "../cell.ts";
 import {
   type AttemptedWrite,
   canonicalizeDocumentPath,
@@ -89,7 +90,10 @@ import {
   type TrustSnapshot,
   type WritePolicyInput,
 } from "../cfc/mod.ts";
-import { prepareBoundaryCommitSteps } from "../cfc/prepare.ts";
+import {
+  collectConsumedLabel,
+  prepareBoundaryCommitSteps,
+} from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
 import {
   runtimeOwnedStoreKey,
@@ -305,12 +309,15 @@ export type CfcInstrumentationHooks = {
    * boundary); `refusals` are the structured descriptions their producers
    * recorded, paired to those texts; `terminal` is what the commit boundary
    * will decide the refusal is worth — a verdict on the data, or a refusal a
-   * fresh attempt may resolve.
+   * fresh attempt may resolve. `consumed` is the labels of everything the
+   * transaction read, which the reasons, prose that can quote a failure's
+   * own message, are decided on; callable while the hook runs.
    */
   onPrepareReject?(refusal: {
     reasons: readonly string[];
     refusals: readonly CfcRefusalDetail[];
     terminal: boolean;
+    consumed: () => SinkConsumedLabel;
   }): void;
 
   onDigestInvalidation?(reason: string): void;
@@ -3038,6 +3045,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         reasons: plainReasons,
         refusals,
         terminal: isTerminalRefusal(reasons),
+        consumed: () => collectConsumedLabel(this),
       });
       // A prepare that records reasons has decided: an enforcing transaction
       // can no longer commit whether or not it goes on to try. Below the

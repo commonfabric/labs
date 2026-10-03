@@ -2,7 +2,8 @@ import {
   effectIntentNonce,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
 } from "@commonfabric/memory/v2";
-import { type Cell, createCell } from "../cell.ts";
+import { type Cell, createCell, type SinkConsumedLabel } from "../cell.ts";
+import { collectConsumedLabel } from "../cfc/prepare.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
 import { type RawBuiltinResult } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
@@ -18,6 +19,25 @@ import { navigateEventContextOf } from "./navigate-context.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 
 const logger = getLogger("navigate-to", { enabled: true, level: "warn" });
+
+/**
+ * The labels `tx` has consumed, read now, while it is open, for a decision
+ * made after it has closed, as a navigation is released after its commit.
+ * Labels that cannot be read are not: asking for them raises the failure.
+ */
+function consumedSoFar(
+  tx: IExtendedStorageTransaction,
+): () => SinkConsumedLabel {
+  let read: SinkConsumedLabel;
+  try {
+    read = collectConsumedLabel(tx);
+  } catch (error) {
+    return () => {
+      throw error;
+    };
+  }
+  return () => read;
+}
 
 export function navigateTo(
   inputsCell: Cell<any>,
@@ -384,6 +404,7 @@ export function navigateTo(
     const navigateCallback = runtime.navigateCallback;
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
+    const consumed = consumedSoFar(tx);
 
     const previousNavigated = navigated;
     const thisAttempt = ++navigationAttempt;
@@ -417,7 +438,7 @@ export function navigateTo(
       flush: async () => {
         if (navigationAttempt !== thisAttempt) return;
         const work = Promise.resolve().then(() =>
-          navigateCallback(resolvedTarget)
+          navigateCallback(resolvedTarget, consumed)
         );
         runtime.trackAsyncWork(work, parentCell);
         // Failure PROPAGATES (owner review P1-1, unlike the OFF arm's
@@ -448,6 +469,7 @@ export function navigateTo(
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
     const navigateCallback = runtime.navigateCallback;
+    const consumed = consumedSoFar(tx);
 
     const previousNavigated = navigated;
     const thisAttempt = ++navigationAttempt;
@@ -478,7 +500,7 @@ export function navigateTo(
       flush: async () => {
         if (navigationAttempt !== thisAttempt) return;
         const work = Promise.resolve().then(() =>
-          navigateCallback(resolvedTarget)
+          navigateCallback(resolvedTarget, consumed)
         );
         runtime.trackAsyncWork(work, parentCell);
         try {

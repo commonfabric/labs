@@ -22,6 +22,7 @@ import {
   makeAddressKey,
   readProjected,
   Runtime,
+  RuntimeTelemetryEvent,
   type RuntimeTelemetryMarkerResult,
 } from "@commonfabric/runner";
 import { stringSchema } from "@commonfabric/runner/schemas";
@@ -117,13 +118,6 @@ async function shelf() {
   await runtime.idle();
 
   const contactsId = contacts.getAsNormalizedFullLink().id;
-  const documentAt: DocumentAt = (documentSpace, id, scope) =>
-    runtime.getCellFromLink({
-      space: documentSpace as typeof space,
-      id: id as typeof contactsId,
-      path: [],
-      ...(scope === undefined ? {} : { scope }),
-    });
 
   return {
     runtime,
@@ -131,12 +125,23 @@ async function shelf() {
     contacts,
     contactsId,
     caveated,
-    documentAt,
+    documentAt: documentAtIn(runtime),
     async [Symbol.asyncDispose]() {
       await runtime.dispose();
       await storageManager.close();
     },
   };
+}
+
+/** The document a diagnostic names, at its root, as the worker finds it. */
+function documentAtIn(runtime: Runtime): DocumentAt {
+  return (documentSpace, id, scope) =>
+    runtime.getCellFromLink({
+      space: documentSpace as typeof space,
+      id: id as `${string}:${string}`,
+      path: [],
+      ...(scope === undefined ? {} : { scope }),
+    });
 }
 
 /** The gate a worker builds for `viewer`, under the shell's default ceiling. */
@@ -518,6 +523,82 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(toOwner.marker).toEqual(marker);
     });
 
+    it("decides the text a telemetry marker carries on what its transaction read", async () => {
+      await using docs = await shelf();
+      const consumed = () =>
+        readProjected(docs.contacts.asSchema(true), hostValueOf).consumed;
+      const reason = `schema merge failed on ${SECRET_VALUE}`;
+      const rejected: RuntimeTelemetryMarkerResult = {
+        type: "cfc.prepare-reject",
+        reasons: [reason],
+        refusals: [{
+          gate: "sink-ceiling",
+          sink: "fetchText",
+          offendingAtoms: [],
+          inputs: [],
+          attribution: "none",
+          reason,
+        }],
+        terminal: true,
+        timeStamp: 1,
+      };
+      const committed: RuntimeTelemetryMarkerResult = {
+        type: "scheduler.event.commit",
+        handlerId: "handler",
+        readCount: 1,
+        writeCount: 1,
+        changedWriteCount: 1,
+        writes: [],
+        error: `commit refused over ${SECRET_VALUE}`,
+        timeStamp: 2,
+      };
+      const pushed: RuntimeTelemetryMarkerResult = {
+        type: "storage.push.error",
+        id: "push",
+        error: "ConflictError",
+        message: `stale read of ${SECRET_VALUE}`,
+        reads: [],
+        writes: [],
+        timeStamp: 3,
+      };
+      const settled: RuntimeTelemetryMarkerResult = {
+        type: "scheduler.settle",
+        durationMs: 1,
+        iterations: 1,
+        settledEarly: false,
+        seedCount: 0,
+        workSetSize: 0,
+        timeStamp: 4,
+      };
+      const toVisitor = gateFor(docs.runtime, visitor);
+      const toOwner = gateFor(docs.runtime, owner);
+
+      expect(
+        holds(toVisitor.telemetry(rejected, docs.documentAt, consumed), reason),
+      ).toBe(false);
+      expect(toOwner.telemetry(rejected, docs.documentAt, consumed).marker)
+        .toEqual(rejected);
+      // A commit's failure is reported once its transaction has closed, with
+      // no labels to decide its text on, so under a policy it is withheld
+      // from its owner too, as the error report of the same failure is.
+      expect(toOwner.telemetry(committed, docs.documentAt).marker).toEqual({
+        ...committed,
+        error: PLACEHOLDER,
+      });
+      expect(toOwner.telemetry(pushed, docs.documentAt).marker).toEqual({
+        ...pushed,
+        message: PLACEHOLDER,
+      });
+      expect(toVisitor.telemetry(settled, docs.documentAt).marker).toEqual(
+        settled,
+      );
+      // With no ceiling, nothing is decided.
+      expect(
+        new HostReadGate(undefined, {}).telemetry(committed, docs.documentAt)
+          .marker,
+      ).toEqual(committed);
+    });
+
     it("names a refused document alone in the trigger trace", async () => {
       await using docs = await shelf();
       const entry = {
@@ -884,6 +965,231 @@ describe("HostReadGate, for what crosses beside a value", () => {
         await runtime.dispose();
         await storageManager.close();
       }
+    });
+
+    it("withholds what a telemetry marker says of a failed run from a reader the run's reads refuse", async () => {
+      const storageManager = StorageManager.emulate({ as: owner });
+      const toVisitor: unknown[] = [];
+      const toOwner: unknown[] = [];
+      let errors = 0;
+      let reportedBoth: () => void = () => {};
+      const both = new Promise<void>((resolve) => (reportedBoth = resolve));
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager,
+        errorHandlers: [() => {
+          if (++errors === 2) reportedBoth();
+        }],
+      });
+      try {
+        const visitorGate = gateFor(runtime, visitor);
+        const ownerGate = gateFor(runtime, owner);
+        const documentAt = documentAtIn(runtime);
+        runtime.telemetry.addEventListener("telemetry", (event) => {
+          if (!(event instanceof RuntimeTelemetryEvent)) return;
+          const { marker, consumed } = event;
+          toVisitor.push(
+            visitorGate.telemetry(marker, documentAt, consumed).marker,
+          );
+          toOwner.push(
+            ownerGate.telemetry(marker, documentAt, consumed).marker,
+          );
+        });
+        const tx = runtime.edit();
+        const input = runtime.getCell(space, "failing-input", undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: input.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { n: SECRET_VALUE },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        const compiled = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { computed, handler, pattern, Stream } from 'commonfabric';",
+              "const boom = handler<unknown, { n: string }>(",
+              "  (_event, { n }) => {",
+              "    throw new Error('handler ' + n);",
+              "  },",
+              ");",
+              "export default pattern<",
+              "  { n: string },",
+              "  { out: string; go: Stream<unknown> }",
+              ">(({ n }) => {",
+              "  const out = computed(() => {",
+              "    throw new Error('lift ' + n);",
+              "  });",
+              "  return { out, go: boom({ n }) };",
+              "});",
+            ].join("\n"),
+          }],
+        }, { space });
+        const result = runtime.getCell(
+          space,
+          "failing-result",
+          compiled.resultSchema,
+        );
+        const run = runtime.edit();
+        runtime.run(
+          run,
+          compiled,
+          runtime.getCell(space, "failing-input"),
+          result,
+        );
+        await run.commit();
+        const cancel = result.sink(() => {});
+        await runtime.idle();
+        result.key("go").send({} as never);
+        await both;
+        cancel();
+
+        expect(holds(toVisitor, SECRET_VALUE)).toBe(false);
+        expect(holds(toVisitor, PLACEHOLDER)).toBe(true);
+        // Decided on what the run read, not withheld from everyone: its
+        // owner is told why it failed.
+        expect(holds(toOwner, `lift ${SECRET_VALUE}`)).toBe(true);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("withholds a navigation an action chose from what it read, from a reader its reads refuse", async () => {
+      const storageManager = StorageManager.emulate({ as: owner });
+      let gates: { visitor: HostReadGate; owner: HostReadGate } | undefined;
+      const decisions: { ref: unknown; visitor: unknown; owner: unknown }[] =
+        [];
+      let navigated: () => void = () => {};
+      const navigation = new Promise<void>((resolve) => (navigated = resolve));
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager,
+        // Enforced, the navigation's own commit is refused for writing what it
+        // read into its result, which no label there admits. Observed, the
+        // commit lands, and the gate alone decides where a host is sent, as
+        // it must under every mode.
+        cfcEnforcementMode: "observe",
+        navigateCallback: (target, consumed) => {
+          if (gates === undefined) return;
+          const ref = createCellRef(target);
+          decisions.push({
+            ref,
+            visitor: gates.visitor.navigate(ref, consumed),
+            owner: gates.owner.navigate(ref, consumed),
+          });
+          navigated();
+        },
+      });
+      try {
+        gates = {
+          visitor: gateFor(runtime, visitor),
+          owner: gateFor(runtime, owner),
+        };
+        const tx = runtime.edit();
+        const destination = runtime.getCell(
+          space,
+          "navigation-destination",
+          undefined,
+          tx,
+        );
+        destination.set({ title: "anyone may see this" });
+        // Where to go is held in a document only its owner may see.
+        const input = runtime.getCell(space, "navigation-input", undefined, tx);
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: input.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { target: destination.getAsLink() },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        const compiled = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { navigateTo, pattern } from 'commonfabric';",
+              "export default pattern<",
+              "  { target: unknown },",
+              "  { nav: boolean }",
+              ">(({ target }) => ({ nav: navigateTo(target) }));",
+            ].join("\n"),
+          }],
+        }, { space });
+        const result = runtime.getCell(
+          space,
+          "navigation-result",
+          compiled.resultSchema,
+        );
+        const run = runtime.edit();
+        runtime.run(
+          run,
+          compiled,
+          runtime.getCell(space, "navigation-input"),
+          result,
+        );
+        await run.commit();
+        const cancel = result.sink(() => {});
+        await navigation;
+        cancel();
+
+        expect(decisions.length).toBe(1);
+        expect(decisions[0].visitor).toBeUndefined();
+        expect(decisions[0].owner).toEqual({
+          type: NotificationType.NavigateRequest,
+          targetCellRef: decisions[0].ref,
+        });
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("decides a navigation as it decides what an action logged", async () => {
+      await using docs = await shelf();
+      const consumed = () =>
+        readProjected(docs.contacts.asSchema(true), hostValueOf).consumed;
+      const target = createCellRef(docs.caveated);
+
+      expect(gateFor(docs.runtime, visitor).navigate(target, consumed))
+        .toBeUndefined();
+      expect(gateFor(docs.runtime, owner).navigate(target, consumed))
+        .toEqual({
+          type: NotificationType.NavigateRequest,
+          targetCellRef: target,
+        });
+      // A request made outside an action carries no labels to decide it on.
+      expect(gateFor(docs.runtime, owner).navigate(target, undefined))
+        .toBeUndefined();
+      expect(new HostReadGate(undefined, {}).navigate(target, undefined))
+        .toEqual({
+          type: NotificationType.NavigateRequest,
+          targetCellRef: target,
+        });
     });
 
     it("withholds a failed action's message and stack from a reader its reads refuse", async () => {

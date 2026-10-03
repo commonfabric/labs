@@ -286,7 +286,17 @@ export type ErrorWithContext = Error & {
 };
 
 export type ErrorHandler = (error: ErrorWithContext) => void;
-export type NavigateCallback = (target: Cell<any>) => void | Promise<void>;
+/**
+ * Asks the host to navigate to `target`. `consumed` is the labels of
+ * everything the action that asked had read, which is what it can have chosen
+ * `target` from, and so what the request is to be decided on. They were read
+ * while its transaction was open; calling it raises the failure where they
+ * could not be read.
+ */
+export type NavigateCallback = (
+  target: Cell<any>,
+  consumed?: () => SinkConsumedLabel,
+) => void | Promise<void>;
 export type PieceCreatedCallback = (piece: Cell<any>) => void;
 
 /**
@@ -2672,7 +2682,7 @@ export class Runtime {
           reasons: [...refusal.reasons],
           refusals: [...refusal.refusals],
           terminal: refusal.terminal,
-        });
+        }, refusal.consumed);
       },
       onDigestInvalidation: () => {
         this.#cfcStats.cfcDigestInvalidations += 1;

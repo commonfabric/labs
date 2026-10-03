@@ -78,6 +78,7 @@ import {
   type ErrorReport,
   type HostReadDecided,
   type IPCRemotePost,
+  type NavigateRequestNotification,
   NotificationType,
   type OperationUpdateNotification,
   type PieceRef,
@@ -596,38 +597,121 @@ export class HostReadGate {
   }
 
   /**
-   * A telemetry marker as a host may see it. A cell update's marker carries
-   * the values the update changed between and the path it changed, which are
-   * the changed document's contents: where the policy refuses that document,
-   * the marker names the document alone, with the placeholder in place of
-   * each value. Every other marker carries no cell's contents.
+   * A telemetry marker as a host may see it, each kind decided on what it
+   * carries:
+   *
+   * - A cell update's values and the path it changed are the changed
+   *   document's contents: where the policy refuses that document, the
+   *   marker names the document alone, with the placeholder in place of each
+   *   value.
+   * - An error's or a rejection's message, and a refused commit's reasons,
+   *   are text the runtime cannot vouch for, which can quote what the run or
+   *   commit handled. Each is decided as {@link error} decides an error, on
+   *   what the transaction the marker reports on had read (`consumed`), and
+   *   withheld under a policy where the marker carries no labels: a commit's
+   *   failure is reported after its transaction has closed.
+   * - Everything else a marker carries is an address, field paths included,
+   *   a label's atoms, a count or a time, or the name of a source, an action
+   *   or a failure's kind, and is not decided here (the dispositions name
+   *   the addresses as a follow-up).
+   *
+   * The cases are exhaustive, so a marker added to the runtime fails to
+   * type-check here until it is decided.
    */
   telemetry(
     marker: RuntimeTelemetryMarkerResult,
     documentAt: DocumentAt,
+    consumed?: () => SinkConsumedLabel,
   ): TelemetryNotification {
-    if (
-      marker.type === "cell.update" &&
-      this.#documentRefused(
-        documentAt,
-        marker.space,
-        marker.change.address.id,
-        marker.change.address.scope,
-      )
-    ) {
-      return decided({
-        type: NotificationType.Telemetry as const,
-        marker: {
+    return decided({
+      type: NotificationType.Telemetry as const,
+      marker: this.#markerShown(marker, documentAt, consumed),
+    });
+  }
+
+  #markerShown(
+    marker: RuntimeTelemetryMarkerResult,
+    documentAt: DocumentAt,
+    consumed: (() => SinkConsumedLabel) | undefined,
+  ): RuntimeTelemetryMarkerResult {
+    // Decided once, on the first text the marker carries.
+    let withheld: boolean | undefined;
+    const said = (text: string): string => {
+      withheld ??= this.#withheld(consumed);
+      return withheld ? WITHHELD : text;
+    };
+    switch (marker.type) {
+      case "cell.update": {
+        const error = marker.error === undefined
+          ? {}
+          : { error: said(marker.error) };
+        return this.#documentRefused(
+            documentAt,
+            marker.space,
+            marker.change.address.id,
+            marker.change.address.scope,
+          )
+          ? {
+            ...marker,
+            ...error,
+            change: {
+              address: { ...marker.change.address, path: [] },
+              before: WITHHELD,
+              after: WITHHELD,
+            },
+          }
+          : { ...marker, ...error };
+      }
+      case "scheduler.run":
+      case "scheduler.run.complete":
+      case "scheduler.invocation":
+      case "scheduler.event.commit":
+      case "scheduler.event.preflight":
+      case "storage.push.start":
+      case "storage.push.complete":
+      case "storage.pull.start":
+      case "storage.pull.complete":
+        return marker.error === undefined
+          ? marker
+          : { ...marker, error: said(marker.error) };
+      case "storage.pull.error":
+        return { ...marker, error: said(marker.error) };
+      case "storage.push.error":
+        // `error` names the rejection's kind; `message` is its text.
+        return { ...marker, message: said(marker.message) };
+      case "cfc.prepare-reject":
+        // Each detail pairs with its reason by the reason's text, which it
+        // repeats.
+        return {
           ...marker,
-          change: {
-            address: { ...marker.change.address, path: [] },
-            before: WITHHELD,
-            after: WITHHELD,
-          },
-        },
-      });
+          reasons: marker.reasons.map(said),
+          refusals: marker.refusals.map((refusal) => ({
+            ...refusal,
+            reason: said(refusal.reason),
+          })),
+        };
+      case "scheduler.read-attempt":
+      case "runner.piece.install":
+      case "runner.deferred-start.pending":
+      case "runner.deferred-start.settled":
+      case "runner.result-pattern.memoize":
+      case "runner.result-pattern.evict":
+      case "harness.implementation.register":
+      case "pattern.cache-write-back.start":
+      case "pattern.cache-write-back.complete":
+      case "scheduler.materializer.register":
+      case "scheduler.diagnosis.start":
+      case "scheduler.settle":
+      case "scheduler.graph.snapshot":
+      case "scheduler.subscribe":
+      case "scheduler.dependencies.update":
+      case "scheduler.non-settling":
+        return marker;
+      default: {
+        const undecided: never = marker;
+        return undecided;
+      }
     }
-    return decided({ type: NotificationType.Telemetry as const, marker });
   }
 
   /**
@@ -730,12 +814,28 @@ export class HostReadGate {
     args: FabricValue[],
     consumed: (() => SinkConsumedLabel) | undefined,
   ): ConsoleNotification {
-    const withheld = this.#policy !== undefined &&
-      (consumed === undefined || this.#consumedRefused(consumed));
     return decided({
       type: NotificationType.ConsoleMessage as const,
       ...message,
-      args: withheld ? [WITHHELD] : args,
+      args: this.#withheld(consumed) ? [WITHHELD] : args,
+    });
+  }
+
+  /**
+   * A pattern's request that the host navigate to `target`, or `undefined`
+   * where none is made. Where to go is what the action that asked chose,
+   * from what it had read (`consumed`), so the request is decided as
+   * {@link console} decides what an action logged, and one the policy
+   * withholds is not made.
+   */
+  navigate(
+    target: CellRef,
+    consumed: (() => SinkConsumedLabel) | undefined,
+  ): NavigateRequestNotification | undefined {
+    if (this.#withheld(consumed)) return undefined;
+    return decided({
+      type: NotificationType.NavigateRequest as const,
+      targetCellRef: target,
     });
   }
 
@@ -771,9 +871,7 @@ export class HostReadGate {
     report: Omit<ErrorReport, "type">,
     consumed?: () => SinkConsumedLabel,
   ): ErrorNotification {
-    const withheld = this.#policy !== undefined &&
-      (consumed === undefined || this.#consumedRefused(consumed));
-    if (!withheld) {
+    if (!this.#withheld(consumed)) {
       return decided({
         type: NotificationType.ErrorReport as const,
         ...report,
@@ -854,6 +952,20 @@ export class HostReadGate {
   ): boolean {
     return this.#policy !== undefined &&
       this.#cellRefusal(documentAt(space, id, scope)) !== undefined;
+  }
+
+  /**
+   * Whether what an action said is withheld, such as what it logged, the
+   * message of an error it raised, or where it asked the host to go: under a
+   * policy, where the policy refuses what the action had read (`consumed`),
+   * which is what it can have been made from, and where it carries no labels
+   * to decide it on, since code that runs outside an action's transaction
+   * may be a continuation of one, holding anything it read. The one rule for
+   * everything an action says to a host.
+   */
+  #withheld(consumed: (() => SinkConsumedLabel) | undefined): boolean {
+    return this.#policy !== undefined &&
+      (consumed === undefined || this.#consumedRefused(consumed));
   }
 
   /**

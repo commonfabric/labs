@@ -4,6 +4,7 @@ import { startReadStats } from "../read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { collectConsumedLabel } from "../cfc/prepare.ts";
 import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
 import type { Runtime } from "../runtime.ts";
@@ -985,6 +986,9 @@ function finalizeSchedulerAction(
     args.actionEndTime,
     args.reads,
   );
+  // An error's message can quote anything the run read, so the marker carries
+  // the run's labels. Its transaction is still open here, before the commit or
+  // abort below.
   state.runtime.telemetry.submit({
     type: "scheduler.run.complete",
     actionId: args.actionId,
@@ -1001,7 +1005,7 @@ function finalizeSchedulerAction(
     ...(args.error !== undefined
       ? { error: args.error instanceof Error ? args.error.message : "error" }
       : {}),
-  });
+  }, () => collectConsumedLabel(args.tx));
   state.maybeAutoDebounce(args.action);
   state.markActionHasRun(args.action);
   state.markNodeHasRun(args.action);

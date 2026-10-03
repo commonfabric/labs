@@ -3412,8 +3412,10 @@ export class RuntimeProcessor {
 
   #onTelemetry = (event: Event) => {
     if (!this.#telemetryEnabled) return;
-    const marker = (event as RuntimeTelemetryEvent).marker;
-    postToClient(this.#hostReadGate.telemetry(marker, this.#documentAt));
+    const { marker, consumed } = event as RuntimeTelemetryEvent;
+    postToClient(
+      this.#hostReadGate.telemetry(marker, this.#documentAt, consumed),
+    );
   };
 
   /** The root of the document a diagnostic names, which it is decided on. */
@@ -4374,12 +4376,12 @@ export class RuntimeProcessor {
         return args;
       },
 
-      navigateCallback: (target) => {
+      navigateCallback: (target, consumed) => {
         const link = parseLink(target.getAsLink()) as NormalizedFullLink;
-        postToClient({
-          type: NotificationType.NavigateRequest,
-          targetCellRef: link,
-        });
+        // Where to go is what the action that asked chose, from what it had
+        // read, so the gate decides the request on that.
+        const request = gate().navigate(link, consumed);
+        if (request !== undefined) postToClient(request);
       },
 
       pieceCreatedCallback: (piece) => {

@@ -221,7 +221,7 @@ export const REQUEST_DISPOSITIONS = {
 export const NOTIFICATION_DISPOSITIONS = {
   [NotificationType.CellUpdate]: DECIDED,
   [NotificationType.ConsoleMessage]: DECIDED,
-  [NotificationType.NavigateRequest]: reference,
+  [NotificationType.NavigateRequest]: DECIDED,
   [NotificationType.ErrorReport]: DECIDED,
   [NotificationType.SpaceAccessLost]: lifecycle,
   [NotificationType.Telemetry]: DECIDED,
