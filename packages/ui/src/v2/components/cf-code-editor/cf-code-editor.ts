@@ -758,10 +758,15 @@ export class CFCodeEditor extends BaseElement {
       void this._handleExternalRefTitleChange(key, name);
     }
     for (const pieceId of this._pieceNameSubscriptions.keys()) {
+      // A title the worker refuses leaves the link text as written.
+      if (this._refusedTitles.has(pieceId)) continue;
       const pieceCell = this.findPieceById(pieceId);
       if (pieceCell) void this._handleExternalTitleChange(pieceId, pieceCell);
     }
   }
+
+  /** Pieces whose title subscription the worker last refused, by id. */
+  private readonly _refusedTitles = new Set<string>();
 
   /** The reference map's current contents, for display. */
   private _refMap(): MentionRefMap {
@@ -3582,10 +3587,14 @@ export class CFCodeEditor extends BaseElement {
 
       // Subscribe with changeGroup so our own edits are filtered out
       const unsub = titleCell.subscribe(() => {
+        this._refusedTitles.delete(pieceId);
         void this._handleExternalTitleChange(pieceId, pieceCell);
       }, {
-        // A title the worker will not show leaves the link text as written.
-        onRefused: () => {},
+        // A title the worker will not show leaves the link text as written,
+        // now and when the editor catches up.
+        onRefused: () => {
+          this._refusedTitles.add(pieceId);
+        },
       });
 
       this._pieceNameSubscriptions.set(pieceId, unsub);
@@ -3596,6 +3605,7 @@ export class CFCodeEditor extends BaseElement {
       if (!activeIds.has(id)) {
         unsub();
         this._pieceNameSubscriptions.delete(id);
+        this._refusedTitles.delete(id);
       }
     }
   }
@@ -3631,9 +3641,11 @@ export class CFCodeEditor extends BaseElement {
     // Nothing is rewritten while a read is refused.
     if (this._readsWithheld) return;
 
-    // Get the piece's title (without emoji prefix)
-    const title = pieceCell.key("title").get() as string;
-    if (!title) return;
+    // Get the piece's title (without emoji prefix). A title the worker
+    // refuses, or has not answered, rewrites nothing.
+    const titleRead = pieceCell.key("title").lastRead();
+    const title = "value" in titleRead ? titleRead.value : undefined;
+    if (typeof title !== "string" || !title) return;
 
     // Find backlink in document
     const backlinks = this._editorView.state.field(backlinkField);
@@ -3647,8 +3659,9 @@ export class CFCodeEditor extends BaseElement {
     if (docNameStripped === title) return;
 
     // Get the full NAME (with emoji) to insert into document
-    const currentName = pieceCell.key(NAME).get() as string;
-    if (!currentName) return;
+    const nameRead = pieceCell.key(NAME).lastRead();
+    const currentName = "value" in nameRead ? nameRead.value : undefined;
+    if (typeof currentName !== "string" || !currentName) return;
 
     // Update tracking map BEFORE dispatch so _detectAndSyncNameChanges doesn't
     // try to sync this change back to the piece (it runs synchronously during dispatch)
@@ -3697,6 +3710,7 @@ export class CFCodeEditor extends BaseElement {
       unsub();
     }
     this._pieceNameSubscriptions.clear();
+    this._refusedTitles.clear();
   }
 
   /**

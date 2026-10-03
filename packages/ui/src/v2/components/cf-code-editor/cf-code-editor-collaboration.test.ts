@@ -845,7 +845,7 @@ describe("CFCodeEditor collaboration", () => {
     };
     const piece = {
       key: () => ({
-        get: () => reads++ === 0 ? "New" : "📝 New",
+        lastRead: () => ({ value: reads++ === 0 ? "New" : "📝 New" }),
       }),
     };
 
@@ -946,7 +946,7 @@ describe("CFCodeEditor collaboration", () => {
     };
     const piece = {
       key: (key: string) => ({
-        get: () => key === "title" ? "New" : "📝 New",
+        lastRead: () => ({ value: key === "title" ? "New" : "📝 New" }),
       }),
     };
 
@@ -1225,7 +1225,7 @@ describe("CFCodeEditor collaboration", () => {
     (element as any)._cellController = { flush: () => {}, getCell: () => null };
     const piece = {
       key: (key: string) => ({
-        get: () => key === "title" ? "New" : "📝 New",
+        lastRead: () => ({ value: key === "title" ? "New" : "📝 New" }),
       }),
     };
 
