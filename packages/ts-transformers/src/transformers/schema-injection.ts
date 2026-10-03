@@ -2964,6 +2964,9 @@ function collectUnknownResultTypePaths(
       paths.push(path || "(result)");
       return;
     }
+    // An alias names its type whatever shape it has, an array or a union as
+    // much as an object, so the walk stops at one before reading its shape.
+    if (current.aliasSymbol) return;
     if (enclosing.has(current)) return;
     enclosing.add(current);
     if (current.isUnion()) {

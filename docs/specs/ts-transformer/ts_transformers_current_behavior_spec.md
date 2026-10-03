@@ -842,15 +842,18 @@ it as a field. It stops at a type it is already inside, since a type with no
 name can hold itself through `typeof`, and walks a type reached again by
 another path under that path.
 
-Neither walk descends a named type: an alias, an interface, a class, or an
-instance of a named class. A named type is a declaration, and `unknown` in a
-declaration is the form for a reference to another piece
+Neither walk descends a named type: an alias, whether it names an object, an
+array, a tuple, or a union; an interface; a class; or an instance of a named
+class. A named type is a declaration, and `unknown` in a declaration is the form
+for a reference to another piece
 ([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)). So an
 `unknown` reached only through a name is the declaration's, and the check
 leaves it alone. A pattern that returns another pattern's instance, whose
 declared result holds such references, passes them on without a report. The
 schema carries `{ type: "unknown" }` at those fields as it does at any
-reference.
+reference. An alias of `unknown` itself is the exception: the checker keeps no
+name on `unknown`, so a field declared through `type Ref = unknown` is `unknown`
+to both walks, and is reported.
 
 ### 6.7 Lowerable Expression-Site Categories
 

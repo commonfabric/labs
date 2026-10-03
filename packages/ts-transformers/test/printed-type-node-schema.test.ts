@@ -767,6 +767,10 @@ export default pattern<{ u: unknown }>(({ u }) => (${result}));`,
       const [kind, declaration] of [
         ["an alias", "type Ref = { piece: unknown };"],
         ["an interface", "interface Ref { piece: unknown }"],
+        ["an alias of an array", "type Ref = unknown[];"],
+        ["an alias of a readonly array", "type Ref = readonly unknown[];"],
+        ["an alias of a tuple", "type Ref = [unknown, number];"],
+        ["an alias of a union", "type Ref = { piece: unknown } | number;"],
       ] as const
     ) {
       for (
