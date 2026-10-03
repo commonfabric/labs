@@ -18,6 +18,7 @@ import {
   areLinksSame,
   type Cancel,
   type Cell,
+  CFC_ATOM_TYPE,
   ContextualFlowControl,
   type JSONSchema,
   type SinkConsumedLabel,
@@ -48,10 +49,6 @@ import {
   type RenderPolicy,
   type WorkerReconcilerOptions,
 } from "./types.ts";
-
-// Mirrors CFC_ATOM_TYPE.Caveat in @commonfabric/api/cfc (not a dependency of
-// this package).
-export const CFC_CAVEAT_ATOM_TYPE = "https://commonfabric.org/cfc/atom/Caveat";
 
 const logger = getLogger("display-fit", { enabled: false, level: "debug" });
 
@@ -387,7 +384,7 @@ export function canRenderConfidentialityAtom(
   }
   const kinds = policy.caveatKindAllow;
   return kinds !== undefined && kinds.length > 0 &&
-    isObjectOrArray(atom) && atom.type === CFC_CAVEAT_ATOM_TYPE &&
+    isObjectOrArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat &&
     typeof atom.kind === "string" && kinds.includes(atom.kind);
 }
 
@@ -428,8 +425,9 @@ export function integrityLabels(labelView: CfcLabelView): readonly CfcAtom[] {
 }
 
 /**
- * The information-flow atoms `cell`'s schema declares, or a marker no policy
- * admits when the schema cannot be read for them.
+ * The information-flow atoms `cell`'s schema declares, or, when the schema
+ * cannot be read for them, the read-failure marker, which no policy admits,
+ * not even one with no ceiling that only declassifies.
  */
 export function confidentialityLabelsFromCellSchema(
   cell: Cell<unknown>,
@@ -442,7 +440,7 @@ export function confidentialityLabelsFromCellSchema(
   try {
     ContextualFlowControl.joinSchema(joined, schema);
   } catch {
-    return ["__unknown_cfc_schema_label__"];
+    return [CFC_LABEL_READ_FAILED_ATOM];
   }
   return ContextualFlowControl.uniqueAtoms(joined);
 }

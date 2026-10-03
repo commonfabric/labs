@@ -3503,12 +3503,22 @@ export type CellValueAnswer = {
    * holding nothing returns.
    */
   value: FabricValue;
+
+  /** A value is never also a refusal. */
+  refused?: never;
 };
 
-/** A host's read of a cell that was refused, carrying nothing of the cell. */
+/**
+ * A host's read of a cell that was refused, carrying nothing of the cell: no
+ * value and no label view. Narrow an answer by `refused !== undefined`; the
+ * value arm declares `refused` too, as never present, so that one answer
+ * cannot be both.
+ */
 export type CellRefusedAnswer = {
   /** What refused the read. */
   refused: CellReadRefusal;
+  value?: never;
+  cfcLabel?: never;
 };
 
 /** A host-read gate's answer to a read of a cell's value. */

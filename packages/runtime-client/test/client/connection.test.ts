@@ -301,7 +301,7 @@ describe("connection", () => {
       await connection.dispose();
     });
 
-    it("hands a later subscriber the refusal rather than nothing", async () => {
+    it("hands a later subscriber the refusal, once, rather than nothing", async () => {
       const transport = new FakeTransport();
       const connection = await initializedConnection(transport);
       const runtime = { [$conn]: () => connection } as unknown as RuntimeClient;
@@ -310,9 +310,16 @@ describe("connection", () => {
       transport.emit("message", posted({ refused: refusal }));
 
       const later = new CellHandle<string>(runtime, ref);
-      later.subscribe(() => {}, { onRefused: () => {} });
+      const heard: unknown[] = [];
+      const values: unknown[] = [];
+      later.subscribe((value) => {
+        values.push(value);
+      }, { onRefused: (r) => heard.push(r) });
 
       expect(later.refusal).toEqual(refusal);
+      // One refusal stands, so the subscriber hears it once.
+      expect(heard).toEqual([refusal]);
+      expect(values).toEqual([]);
       await connection.dispose();
     });
   });

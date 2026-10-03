@@ -348,7 +348,16 @@ export class HostReadGate {
         );
         deliver(
           refusal === undefined
-            ? update(this.#hostValue(event), undefined)
+            ? update(
+              this.#hostValue(event),
+              // An event carries the label of the stream's document, which
+              // the decision above was made on.
+              includeCfcLabel
+                ? cfcLabelViewForResolvedCell(cell, {
+                  kickCrossSpaceTargets: false,
+                })
+                : undefined,
+            )
             : refusedUpdate(refusal),
         );
       });
@@ -431,7 +440,7 @@ export class HostReadGate {
    */
   slug(root: Cell<unknown>): SlugResponse {
     const refusal = this.metadataRefusal(root);
-    if (refusal !== undefined && "refused" in refusal) return refusal;
+    if (refusal?.refused !== undefined) return refusal;
     const slug = root.getMetaRaw("slug");
     return decided({ slug: typeof slug === "string" ? slug : undefined });
   }
@@ -448,7 +457,7 @@ export class HostReadGate {
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
     await this.#hold(root);
     const refusal = this.metadataRefusal(root);
-    if (refusal !== undefined && "refused" in refusal) {
+    if (refusal?.refused !== undefined) {
       return decided({ refused: refusal.refused });
     }
     return decided(await build());
