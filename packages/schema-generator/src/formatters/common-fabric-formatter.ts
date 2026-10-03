@@ -530,6 +530,19 @@ const carrierStamps = (
 };
 
 /**
+ * The payload `stamp`'s policy was written around, where `payload` holds the
+ * members its carrier is intersected with: the payload the stamp records, or,
+ * for a carrier that records none, the one member where there is only one,
+ * which can then be nothing but the payload. Beside more than one, nothing
+ * says which the policy was written around.
+ */
+const payloadOfStamp = (
+  stamp: CarrierStamp,
+  payload: readonly ts.Type[],
+): ts.Type | undefined =>
+  stamp.of ?? (payload.length === 1 ? payload[0] : undefined);
+
+/**
  * The declarations of each member `type` holds as data, by name: none for a
  * primitive, and never a CFC carrier or a symbol-keyed brand. A union's are
  * those of every alternative, each name holding the declarations of each
@@ -651,14 +664,16 @@ const payloadReach = (
   of: ts.Type | undefined,
   checker: ts.TypeChecker,
 ): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
-  const payloadMembers = of && dataMemberDeclarations(of, checker);
-  const indexed = !!of &&
-    (of.isUnion() ? of.types : [of]).some((alternative) =>
-      checker.getIndexInfosOfType(alternative).length > 0
-    );
-  // No payload recorded, or one with no members of its own, as a primitive
-  // has none: the value is the payload.
-  if (!payloadMembers || (payloadMembers.size === 0 && !indexed)) {
+  // No payload recorded (`payloadOfStamp()`): the payload's data may be
+  // anywhere in the value, and nothing says where it must be.
+  if (!of) return { may: "all", must: [] };
+  const payloadMembers = dataMemberDeclarations(of, checker);
+  const indexed = (of.isUnion() ? of.types : [of]).some((alternative) =>
+    checker.getIndexInfosOfType(alternative).length > 0
+  );
+  // A payload with no members of its own, as a primitive has none: the value
+  // is the payload.
+  if (payloadMembers.size === 0 && !indexed) {
     return { may: "all", must: "all" };
   }
   const valueMembers = [...dataMemberDeclarations(type, checker)];
@@ -1291,7 +1306,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       const metadata = carried.metadata.map((stamp) => ({
         type: stamp.meta,
         bound: context.boundTypeParameters,
-        of: stamp.of,
+        of: payloadOfStamp(stamp, carried.payload),
       }));
       return this.#withPlacedLabels(payload, type, metadata, context);
     }
@@ -2474,7 +2489,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         ...carried.metadata.map((stamp) => ({
           type: stamp.meta,
           bound,
-          of: stamp.of,
+          of: payloadOfStamp(stamp, carried.payload),
         })),
       ],
       primitive: payload.payload.length === 1 &&
@@ -2525,7 +2540,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         metadata.push({
           type: stamp.meta,
           bound: argument.bound,
-          of: stamp.of,
+          of: payloadOfStamp(stamp, carried?.payload ?? []),
         });
       }
     }
