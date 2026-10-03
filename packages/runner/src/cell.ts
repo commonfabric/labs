@@ -109,7 +109,7 @@ import {
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import {
-  cfcLabelViewForCell,
+  cfcLabelViewForCellFailClosed,
   cfcLabelViewForResolvedCell,
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
@@ -1906,9 +1906,10 @@ export class CellImpl<T extends FabricValue>
     // CFC write-ceiling (Phase 2): a value bound to a labeled column must fit the
     // column's `ifc.maxConfidentiality`. The label rides the bound value (a Cell
     // or any carried-label value); fail closed when a labeled value's target
-    // column can't be determined. No-op until a column declares `ifc`.
+    // column can't be determined, or when a stored label it reads cannot be
+    // read. No-op until a column declares `ifc`.
     const confidentialityOf = (value: unknown): readonly unknown[] => {
-      const view = cfcLabelViewForCell(value);
+      const view = cfcLabelViewForCellFailClosed(value);
       return view
         ? cfcConfidentialityForObservationNode({ labelView: view })
         : [];
