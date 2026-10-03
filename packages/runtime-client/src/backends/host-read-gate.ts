@@ -51,6 +51,7 @@ import {
 } from "@commonfabric/runner";
 import type {
   SchedulerDiagnosisResult,
+  SchedulerGraphSnapshot,
   TriggerTraceEntry,
 } from "@commonfabric/runner/shared";
 import {
@@ -76,11 +77,14 @@ import {
   type DetectNonIdempotentResponse,
   type ErrorNotification,
   type ErrorReport,
+  type GraphSnapshotResponse,
   type HostReadDecided,
   type IPCRemotePost,
   type NavigateRequestNotification,
   NotificationType,
   type OperationUpdateNotification,
+  type PatternSourceInfo,
+  type PatternSourcesResponse,
   type PieceRef,
   type RuntimeErrorCode,
   type SlugReferenceResponse,
@@ -117,6 +121,13 @@ const FIELDS_SCHEMA = {
   type: "object",
   additionalProperties: { asCell: ["cell"] },
 } as const;
+
+/** The label a decision is refused on where nothing measured what it is made of. */
+const UNMEASURED: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: [],
+  integrity: [],
+});
 
 /** The label a decision is refused on while its documents are not yet held. */
 const UNHELD: RenderLabelSummary = Object.freeze({
@@ -758,6 +769,8 @@ export class HostReadGate {
             reason: said(refusal.reason),
           })),
         };
+      case "scheduler.graph.snapshot":
+        return { ...marker, graph: this.#graphShown(marker.graph) };
       case "scheduler.read-attempt":
       case "runner.piece.install":
       case "runner.deferred-start.pending":
@@ -770,7 +783,6 @@ export class HostReadGate {
       case "scheduler.materializer.register":
       case "scheduler.diagnosis.start":
       case "scheduler.settle":
-      case "scheduler.graph.snapshot":
       case "scheduler.subscribe":
       case "scheduler.dependencies.update":
       case "scheduler.non-settling":
@@ -780,6 +792,37 @@ export class HostReadGate {
         return undecided;
       }
     }
+  }
+
+  /**
+   * The source of the patterns the runtime runs, as `list` builds it, or the
+   * refusal that stands in its place. A live pattern's program can be made
+   * from a cell's contents, as `compileAndRun` compiles what it read, and
+   * nothing records what a program was made from, so under a policy no
+   * program text is built here. A piece's own source, decided on its
+   * document's labels, is read through `PieceGetSource`.
+   */
+  patternSources(list: () => PatternSourceInfo[]): PatternSourcesResponse {
+    if (this.#policy !== undefined) return this.#refuse(UNMEASURED);
+    return decided({ patterns: list() });
+  }
+
+  /**
+   * The scheduler's graph as a host may see it: under a policy, with no
+   * node's `preview`, the first characters of its function's body, which is
+   * program text {@link patternSources} withholds. The addresses its nodes
+   * read and write are not decided here (see the dispositions).
+   */
+  graphSnapshot(snapshot: SchedulerGraphSnapshot): GraphSnapshotResponse {
+    return decided({ snapshot: this.#graphShown(snapshot) });
+  }
+
+  #graphShown(snapshot: SchedulerGraphSnapshot): SchedulerGraphSnapshot {
+    if (this.#policy === undefined) return snapshot;
+    return {
+      ...snapshot,
+      nodes: snapshot.nodes.map(({ preview: _withheld, ...node }) => node),
+    };
   }
 
   /**

@@ -2256,13 +2256,22 @@ export type PatternSourceInfo = {
   dataFiles?: readonly string[];
 };
 
-/** One entry per distinct pattern in the graph, not per graph node. */
-export type PatternSourcesResponse = {
-  /**
-   * One entry per distinct pattern.
-   */
-  patterns: readonly PatternSourceInfo[];
-};
+/**
+ * One entry per distinct pattern in the graph, not per graph node, or the
+ * refusal that stands in place of the list: under a display ceiling, since
+ * nothing measured what a live pattern's program was made from.
+ */
+export type PatternSourcesResponse =
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * One entry per distinct pattern.
+       */
+      patterns: readonly PatternSourceInfo[];
+    }
+    | CellRefusedAnswer
+  );
 
 /**
  * The {@link RequestType.SetBreakpoints} request. The ids replace the current
@@ -3733,9 +3742,10 @@ export type SpaceResponse = {
 };
 
 /** A snapshot of the scheduler's reactive graph, as of the read. */
-export type GraphSnapshotResponse = {
+export type GraphSnapshotResponse = HostReadDecided & {
   /**
-   * The graph as of the read.
+   * The graph as of the read. Under a display ceiling its nodes carry no
+   * `preview` of their function's body.
    */
   snapshot: SchedulerGraphSnapshot;
 };

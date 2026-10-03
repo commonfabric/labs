@@ -881,6 +881,96 @@ describe("HostReadGate, for what crosses beside a value", () => {
   });
 
   describe("diagnostics", () => {
+    it("builds no program text under a ceiling: pattern sources and graph previews", async () => {
+      const storageManager = StorageManager.emulate({ as: owner });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager,
+      });
+      const PROGRAM_TEXT = "program-text-made-from-a-cell";
+      try {
+        const compiled = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ n: string }, { out: string }>(",
+              "  ({ n }) => {",
+              `    const out = computed(() => '${PROGRAM_TEXT}' + n);`,
+              "    return { out };",
+              "  },",
+              ");",
+            ].join("\n"),
+          }],
+        }, { space });
+        const input = runtime.getCell(space, "program-input");
+        const result = runtime.getCell(
+          space,
+          "program-result",
+          compiled.resultSchema,
+        );
+        const tx = runtime.edit();
+        input.withTx(tx).set({ n: "x" });
+        runtime.run(tx, compiled, input, result);
+        await tx.commit();
+        const cancel = result.sink(() => {});
+        await runtime.idle();
+        const processorFor = (ceiling: boolean) =>
+          buildProcessor({
+            runtime,
+            identity: owner,
+            space,
+            ...(ceiling
+              ? {
+                renderConfidentialityCeiling:
+                  defaultRenderConfidentialityCeiling(owner.did()),
+              }
+              : {}),
+          });
+        const sources = {
+          type: RequestType.GetPatternSources,
+        } as const;
+        const graph = { type: RequestType.GetGraphSnapshot } as const;
+        const underCeiling = processorFor(true);
+        const unbounded = processorFor(false);
+        try {
+          const refused = underCeiling.getPatternSources(sources);
+          expect(holds(refused, PROGRAM_TEXT)).toBe(false);
+          expect(refused).toEqual({
+            refused: { refusedBy: "display-ceiling" },
+          });
+          expect(holds(underCeiling.getGraphSnapshot(graph), PROGRAM_TEXT))
+            .toBe(false);
+          // With no ceiling, nothing is decided.
+          expect(holds(unbounded.getPatternSources(sources), PROGRAM_TEXT))
+            .toBe(true);
+          expect(holds(unbounded.getGraphSnapshot(graph), PROGRAM_TEXT))
+            .toBe(true);
+          // A graph marker in telemetry is decided as the snapshot is.
+          const marker: RuntimeTelemetryMarkerResult = {
+            type: "scheduler.graph.snapshot",
+            graph: runtime.scheduler.getGraphSnapshot(),
+            timeStamp: 1,
+          };
+          expect(holds(marker, PROGRAM_TEXT)).toBe(true);
+          expect(
+            holds(
+              gateFor(runtime, owner).telemetry(marker, documentAtIn(runtime)),
+              PROGRAM_TEXT,
+            ),
+          ).toBe(false);
+        } finally {
+          await underCeiling.dispose();
+          await unbounded.dispose();
+        }
+        cancel();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
     it("names a refused document alone in a cell update's telemetry marker", async () => {
       await using docs = await shelf();
       const marker = {

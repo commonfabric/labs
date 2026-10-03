@@ -3377,7 +3377,9 @@ export class RuntimeProcessor {
   }
 
   getGraphSnapshot(_: GetGraphSnapshotRequest): GraphSnapshotResponse {
-    return { snapshot: this.#runtime.scheduler.getGraphSnapshot() };
+    return this.#hostReadGate.graphSnapshot(
+      this.#runtime.scheduler.getGraphSnapshot(),
+    );
   }
 
   getLoggerCounts(_: GetLoggerCountsRequest): LoggerCountsResponse {
@@ -3467,6 +3469,11 @@ export class RuntimeProcessor {
   getPatternSources(
     _request: GetPatternSourcesRequest,
   ): PatternSourcesResponse {
+    return this.#hostReadGate.patternSources(() => this.#livePatternSources());
+  }
+
+  /** The authored files of every live pattern, for {@link getPatternSources}. */
+  #livePatternSources(): PatternSourceInfo[] {
     const snapshot = this.#runtime.scheduler.getGraphSnapshot();
     const seen = new Set<string>();
     const patterns: PatternSourceInfo[] = [];
@@ -3497,7 +3504,7 @@ export class RuntimeProcessor {
         });
       }
     }
-    return { patterns };
+    return patterns;
   }
 
   setBreakpoints(request: SetBreakpointsRequest): void {

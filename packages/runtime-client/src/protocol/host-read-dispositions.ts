@@ -139,11 +139,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.RegisterSpaceHostDetailed]: lifecycle,
   [RequestType.RetrySpaceAccess]: lifecycle,
   [RequestType.FlushCompileCacheWrites]: lifecycle,
-  [RequestType.GetGraphSnapshot]: {
-    kind: "ungated",
-    why: "the scheduler's graph: the addresses actions read and write, " +
-      "field paths included, and no values",
-  },
+  [RequestType.GetGraphSnapshot]: DECIDED,
   [RequestType.GetLoggerCounts]: setting,
   [RequestType.GetStorageDiagnostics]: {
     kind: "no-cell-value",
@@ -175,10 +171,7 @@ export const REQUEST_DISPOSITIONS = {
   },
   [RequestType.SetWriteStackTraceMatchers]: setting,
   [RequestType.DetectNonIdempotent]: DECIDED,
-  [RequestType.GetPatternSources]: {
-    kind: "no-cell-value",
-    why: "the source of the patterns the runtime runs",
-  },
+  [RequestType.GetPatternSources]: DECIDED,
   [RequestType.SetBreakpoints]: setting,
   [RequestType.UploadBlob]: write,
   [RequestType.GetSpaceRootPattern]: reference,

@@ -7064,10 +7064,15 @@ describe("runtime-processor", () => {
         },
       });
 
-    const sourcesOf = (processor: RuntimeProcessor) =>
-      processor.getPatternSources({
+    // A processor built with no ceiling decides nothing, so the list is
+    // never refused here.
+    const sourcesOf = (processor: RuntimeProcessor) => {
+      const answer = processor.getPatternSources({
         type: RequestType.GetPatternSources,
       } as GetPatternSourcesRequest);
+      if ("refused" in answer) throw new Error("the list was refused");
+      return answer;
+    };
 
     it("says which of a running pattern's files carry data", () => {
       const { patterns } = sourcesOf(processorOver({
