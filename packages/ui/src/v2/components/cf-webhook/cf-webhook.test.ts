@@ -23,6 +23,15 @@ describe("cf-webhook", () => {
     expect(html).toContain("Create Webhook");
   });
 
+  it("offers nothing to create while the worker has not answered for the configuration", () => {
+    const element = new CFWebhook();
+    element.config = createMockCellHandle<WebhookConfig | null>();
+
+    const html = JSON.stringify(element.render());
+
+    expect(html).not.toContain("Create Webhook");
+  });
+
   it("shows a configuration the worker refuses as withheld, with nothing to create", () => {
     const element = new CFWebhook();
     const config = createMockCellHandle<WebhookConfig | null>({

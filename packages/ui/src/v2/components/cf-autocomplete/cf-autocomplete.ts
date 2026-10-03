@@ -1023,17 +1023,12 @@ export class CFAutocomplete extends BaseElement {
 
     // Update value through cell controller
     if (this.multiple) {
-      // Add to array
-      const current =
-        (this._getCurrentValue() as readonly string[] | undefined) || [];
-      if (!current.includes(item.value)) {
-        // Computed from what the cell holds, so made from the worker's
-        // answer where the cell has read nothing yet, which may already hold
-        // it.
-        void this._cellController.updateValue((held) =>
-          withSelected(held, item.value)
-        );
-      }
+      // Add to array: computed from what the cell holds, so made from the
+      // worker's answer where the cell has read nothing yet, which may
+      // already hold it, in which case nothing is written.
+      void this._cellController.updateValue((held) =>
+        withSelected(held, item.value)
+      );
     } else {
       // Replace single value
       this._cellController.setValue(item.value);
@@ -1058,17 +1053,12 @@ export class CFAutocomplete extends BaseElement {
 
     // Update value through cell controller
     if (this.multiple) {
-      // Add to array
-      const current =
-        (this._getCurrentValue() as readonly string[] | undefined) || [];
-      if (!current.includes(customValue)) {
-        // Computed from what the cell holds, so made from the worker's
-        // answer where the cell has read nothing yet, which may already hold
-        // it.
-        void this._cellController.updateValue((held) =>
-          withSelected(held, customValue)
-        );
-      }
+      // Add to array: computed from what the cell holds, so made from the
+      // worker's answer where the cell has read nothing yet, which may
+      // already hold it, in which case nothing is written.
+      void this._cellController.updateValue((held) =>
+        withSelected(held, customValue)
+      );
     } else {
       // Replace single value
       this._cellController.setValue(customValue);

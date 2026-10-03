@@ -231,7 +231,10 @@ export class CFCustodyAnswer extends BaseElement {
     // publish for: nothing to ask, and nothing to say. The terms
     // subscription asks once they are written.
     // Terms the worker refuses are not terms to publish for: nothing is
-    // asked while the refusal stands.
+    // asked while the refusal stands. Nor is anything asked for a policy the
+    // worker refuses or has not answered: the terms' subscription can ask
+    // before the policy's has heard from the worker.
+    if (!("value" in policy.lastRead())) return;
     const proposed = terms.refusal === undefined ? terms.get() : undefined;
     if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) {
       if (this.#error) {

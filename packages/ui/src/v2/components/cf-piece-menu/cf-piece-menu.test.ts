@@ -3850,6 +3850,17 @@ describe("the data panel", () => {
     expect(argumentReads.length).toBe(1);
   });
 
+  it("shows a result the worker answers holding nothing as such, not as one it waits for", async () => {
+    const piece = statefulPiece();
+    const menu = openMenu(piece.cell);
+    await menu.showPanel("data");
+
+    piece.cell[$onCellUpdate](undefined);
+
+    const rendered = shows(menu);
+    expect(rendered).not.toContain("Waiting for a value");
+  });
+
   describe("for a piece whose whole result the worker refuses", () => {
     // A piece holding one field the viewer may not see, such as a
     // credential, is shown field by field: everything the display ceiling

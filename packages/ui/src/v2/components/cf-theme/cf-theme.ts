@@ -18,7 +18,8 @@ export function unwrapThemeCellValues(
   seen = new WeakSet<object>(),
 ): unknown {
   if (isCellHandle(value)) {
-    // A theme value the worker will not show is left out, so the default
+    // A theme value the worker will not show, or has not answered, reads as
+    // `undefined`, which the object branch below leaves out, so the default
     // takes its place.
     return valueForDisplay(value);
   }
@@ -38,7 +39,10 @@ export function unwrapThemeCellValues(
 
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    out[key] = unwrapThemeCellValues(child, seen);
+    const unwrapped = unwrapThemeCellValues(child, seen);
+    // Left out rather than set to `undefined`, which a merge would take
+    // over the default.
+    if (unwrapped !== undefined) out[key] = unwrapped;
   }
   return out;
 }

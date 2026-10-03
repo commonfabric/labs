@@ -2571,7 +2571,7 @@ export class CFPieceMenu extends BaseElement {
           <p>Reading argument…</p>
         `}
       <h3 class="section-title">Result</h3>
-      ${this.#resultRead?.shown() === undefined
+      ${!this.#resultRead?.ready
         ? html`
           <p>Waiting for a value…</p>
         `
