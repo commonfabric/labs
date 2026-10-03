@@ -148,11 +148,16 @@ present; no stage handles a missing one.
      written there, or reached through `const` bindings, imports of them, and
      member accesses on the object literals they lead to (nested, aliased, or
      held in a spread), including `toSchema` calls inside a schema written out
-     as a literal. A `toSchema` call in another module is generated there as a
-     view; passed where a document is defined, it is reported
+     as a literal. A call is read through its arguments, and a function the
+     program writes also through what it returns, its parameters standing for
+     those arguments; a function only declared, as the library's are, writes
+     no `toSchema` call. A value of a primitive type holds no schema. A
+     `toSchema` call in another module is generated there as a view; passed
+     where a document is defined, it is reported
      (`cfc-write-authorized-by:unread`) when its type holds a writer policy. So
      is a schema that cannot be read back to its `toSchema` calls and
-     literals, such as a call's result. SchemaGeneration passes the flag to the
+     literals, such as a `let` binding or a call whose function cannot be
+     read. SchemaGeneration passes the flag to the
      schema generator as its `definesDocument` option, under which a writer it
      cannot read is an error. Like `patternResultAnchor`, a plain identity
      lookup with **no** `getOriginalNode` fallback. A result inferred from the
