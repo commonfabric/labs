@@ -301,7 +301,8 @@ export class Scheduler {
   readonly #eventQueue: QueuedEvent[] = [];
   #eventHandlers: [NormalizedFullLink, EventHandler][] = [];
   readonly #lineage = new SpeculationLineage({
-    dropQueuedEvent: (event, reason) => this.#dropEvent(event, reason),
+    dropQueuedEvent: (event, reason, quiet) =>
+      this.#dropEvent(event, reason, { quiet }),
     queueExecution: () => this.queueExecution(),
     onError: (error) => logger.error("lineage", () => [error]),
   });
@@ -3318,6 +3319,9 @@ export class Scheduler {
       },
       recordLineageEvent: (originTx, queuedEvent) => {
         this.#lineage.recordEvent(originTx, queuedEvent);
+      },
+      noteLineageRerun: (originTx) => {
+        this.#lineage.noteRerun(originTx);
       },
       getOriginLocalSeq: (originTx, targetSpace) =>
         getCommitLocalSeq(originTx.tx, targetSpace),
