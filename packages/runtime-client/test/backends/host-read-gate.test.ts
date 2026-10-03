@@ -467,34 +467,39 @@ describe("HostReadGate", () => {
   });
 
   describe("fields()", () => {
-    for (const piece of ["importer"] as const) {
-      const where = "a document of its own";
+    it("lists the owner every field of a piece holding a credential in a document of its own, whose whole read it refuses", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      expect("refused" in gate.read(docs.importer.asSchema(true))).toBe(true);
 
-      it(`lists the owner every field of a piece holding a credential in ${where}, whose whole read it refuses`, async () => {
-        await using docs = await shelf();
-        const gate = gateFor(docs.runtime, owner);
-        expect("refused" in gate.read(docs[piece].asSchema(true))).toBe(true);
+      const answer = gate.fields(docs.importer);
 
-        const answer = gate.fields(docs[piece]);
-
-        expect(holds(answer, CREDENTIAL)).toBe(false);
-        expect(answer).toEqual({
-          fields: Object.fromEntries(
-            ["$NAME", "openPath", "sidebarUI", "auth"].map((name) => [
-              name,
-              { ...address(docs[piece]), path: [name] },
-            ]),
-          ),
-        });
-        // Each field's own read is decided on its own.
-        expect(gate.read(docs[piece].key("auth").asSchema(true))).toEqual({
-          refused: { refusedBy: "display-ceiling" },
-        });
-        expect(gate.read(docs[piece].key(NAME).asSchema(true))).toEqual({
-          value: "Importer",
-        });
+      expect(holds(answer, CREDENTIAL)).toBe(false);
+      expect(answer).toEqual({
+        fields: Object.fromEntries(
+          ["$NAME", "openPath", "sidebarUI", "auth"].map((name) => [
+            name,
+            { ...address(docs.importer), path: [name] },
+          ]),
+        ),
       });
-    }
+      // Each field's own read is decided on its own.
+      expect(gate.read(docs.importer.key("auth").asSchema(true))).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+      });
+      expect(gate.read(docs.importer.key(NAME).asSchema(true))).toEqual({
+        value: "Importer",
+      });
+    });
+
+    it("refuses the owner the list of a piece holding a credential in its own document, under a fit that decides on every label the document stores", async () => {
+      await using docs = await shelf();
+
+      const answer = gateFor(docs.runtime, owner).fields(docs.inlineImporter);
+
+      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(answer, CREDENTIAL)).toBe(false);
+    });
 
     it("refuses a visitor the list of a piece only its owner may see", async () => {
       await using docs = await shelf();
@@ -503,6 +508,35 @@ describe("HostReadGate", () => {
 
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
       expect(holds(answer, SEALED_NAME)).toBe(false);
+    });
+
+    it("decides the list on the record's own schema, which the list's read does not carry", async () => {
+      await using docs = await shelf();
+      // No stored label: only the record's schema says who may see it.
+      const keys = await docs.write("keys", {
+        "alice-secret-key": "alice's value",
+        "bob-secret-key": "bob's value",
+      });
+      const record = keys.asSchema({
+        type: "object",
+        additionalProperties: { type: "string" },
+        ifc: { confidentiality: [ownerOnly] },
+      });
+      const visitorGate = gateFor(docs.runtime, visitor);
+      expect("refused" in visitorGate.read(record)).toBe(true);
+
+      const refused = visitorGate.fields(record);
+
+      expect(refused).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(refused, "alice-secret-key")).toBe(false);
+      expect(gateFor(docs.runtime, owner).fields(record)).toEqual({
+        fields: Object.fromEntries(
+          ["alice-secret-key", "bob-secret-key"].map((name) => [
+            name,
+            address(record.key(name)),
+          ]),
+        ),
+      });
     });
   });
 
