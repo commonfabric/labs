@@ -3602,6 +3602,7 @@ function statefulPiece(
     scope = "space",
     pieceSchema = { type: "object" } as Record<string, unknown>,
     fields = {},
+    unsubscribable,
   }: {
     result?: Record<string, unknown>;
     argument?: unknown;
@@ -3632,6 +3633,9 @@ function statefulPiece(
     fields?: Readonly<
       Record<string, readonly string[] | "refused" | "no record" | "pending">
     >;
+
+    /** A field of the piece whose subscription cannot be opened. */
+    unsubscribable?: string;
   } = {},
 ) {
   const requests: Array<Record<string, unknown>> = [];
@@ -3640,6 +3644,12 @@ function statefulPiece(
   const subscribed: CellHandle[] = [];
   const conn = {
     subscribe: (handle: CellHandle) => {
+      if (
+        unsubscribable !== undefined &&
+        handle.ref().path.join("/") === unsubscribable
+      ) {
+        throw new Error(`no subscription for ${unsubscribable}`);
+      }
       counters.subscribes++;
       subscribed.push(handle);
     },
@@ -3905,6 +3915,33 @@ describe("the data panel", () => {
         expect(rendered).not.toContain(FIELD_BY_FIELD_NOTE);
       });
     }
+
+    it("shows a field the worker has not answered for as waiting, not as one holding nothing", async () => {
+      const piece = statefulPiece({ pieceSchema: schema, fields });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      const rendered = shows(menu);
+      expect(rendered).toContain('"title": "[waiting]"');
+      expect(rendered).toContain('"auth": "[waiting]"');
+    });
+
+    it("marks a field whose read cannot be opened as not read", async () => {
+      const piece = statefulPiece({
+        pieceSchema: schema,
+        fields,
+        unsubscribable: "title",
+      });
+      const menu = openMenu(piece.cell);
+      await menu.showPanel("data");
+      piece.cell[$onCellRefused](REFUSED);
+      await settled();
+
+      expect(shows(menu)).toContain('"title": "[could not be read]"');
+    });
 
     it("says it shows a result field by field where it does", async () => {
       const piece = statefulPiece({ pieceSchema: schema, fields });

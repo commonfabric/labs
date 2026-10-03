@@ -30,13 +30,25 @@ export const HIDDEN_BY_POLICY: unique symbol = Symbol("hidden by policy");
  */
 export const NOT_READ: unique symbol = Symbol("not read");
 
+/**
+ * Stands in a displayed value for a field whose read the worker has not
+ * answered yet, which is not one that holds nothing.
+ */
+export const WAITING: unique symbol = Symbol("waiting");
+
 /** What a read holds: the value, or the refusal that stands in its place. */
 type Read =
   | { readonly value: unknown }
   | { readonly refused: CellReadRefusal };
 
-/** A field read on its own: what it holds, that it is refused, or nothing yet. */
-type FieldRead = Read | { readonly pending: true };
+/**
+ * A field read on its own: what it holds, that it is refused, that its read
+ * could not be opened, or nothing yet.
+ */
+type FieldRead =
+  | Read
+  | { readonly failed: true }
+  | { readonly pending: true };
 
 /**
  * The worker's answer for the list of fields, asked for while the whole is
@@ -69,6 +81,8 @@ export class PanelRead {
     this.#cell = cell;
     this.#onChange = onChange;
     this.#cancelWhole = cell.subscribe((value) => {
+      // A handle that has read nothing yet holds no value to show.
+      if ("unread" in cell.lastRead()) return;
       this.#closeFields();
       this.#whole = { value };
       this.#onChange();
@@ -117,7 +131,9 @@ export class PanelRead {
   /**
    * What the panel shows, once {@link ready}: the value, or, while the whole
    * is refused, an object of the fields, with `HIDDEN_BY_POLICY` at each
-   * field the worker refuses. `HIDDEN_BY_POLICY` alone stands for the whole
+   * field the worker refuses, `WAITING` at each it has not answered for yet,
+   * and `NOT_READ` at each whose read could not be opened. `HIDDEN_BY_POLICY`
+   * alone stands for the whole
    * where the worker refuses even the list of fields, or where the cell
    * holds no record to show field by field, and `NOT_READ` where the list
    * could not be read. `undefined` while not ready, which is never shown as
@@ -132,8 +148,13 @@ export class PanelRead {
     if (!(list instanceof Map)) return HIDDEN_BY_POLICY;
     const shown: Record<string, unknown> = {};
     for (const [name, field] of list) {
-      if ("pending" in field) continue;
-      shown[name] = "refused" in field ? HIDDEN_BY_POLICY : field.value;
+      shown[name] = "pending" in field
+        ? WAITING
+        : "failed" in field
+        ? NOT_READ
+        : "refused" in field
+        ? HIDDEN_BY_POLICY
+        : field.value;
     }
     return shown;
   }
@@ -188,12 +209,21 @@ export class PanelRead {
         }
         this.#onChange();
       };
-      this.#fieldReads.set(
-        name,
-        field.subscribe((value) => heard({ value }), {
-          onRefused: (refused) => heard({ refused }),
-        }),
-      );
+      try {
+        this.#fieldReads.set(
+          name,
+          field.subscribe((value) => {
+            // Its handle has read nothing yet: still waiting.
+            if ("unread" in field.lastRead()) return;
+            heard({ value });
+          }, {
+            onRefused: (refused) => heard({ refused }),
+          }),
+        );
+      } catch (error) {
+        console.error("[PanelRead] Reading a field failed:", error);
+        heard({ failed: true });
+      }
     }
   }
 

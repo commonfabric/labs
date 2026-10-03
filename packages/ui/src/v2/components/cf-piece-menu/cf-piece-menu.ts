@@ -50,7 +50,12 @@ import {
   formatTimestamp,
   patternRefLabel,
 } from "./origin-view.ts";
-import { HIDDEN_BY_POLICY, NOT_READ, PanelRead } from "./panel-read.ts";
+import {
+  HIDDEN_BY_POLICY,
+  NOT_READ,
+  PanelRead,
+  WAITING,
+} from "./panel-read.ts";
 
 /** The marker on the rendered piece while its built-in menu is open. */
 export const PIECE_MENU_OPEN_ATTRIBUTE = "data-cf-piece-menu-open";
@@ -185,6 +190,7 @@ function toDisplay(
 ): unknown {
   if (value === HIDDEN_BY_POLICY) return "[hidden by policy]";
   if (value === NOT_READ) return "[could not be read]";
+  if (value === WAITING) return "[waiting]";
   if (isStreamHandle(value)) return "[stream]";
   if (isCellHandle(value)) {
     const ref = value.ref();
