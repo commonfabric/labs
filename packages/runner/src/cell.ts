@@ -35,6 +35,7 @@ import {
   deepFrozenCloneAndInternSchema,
   internSchema,
   isInternedSchema,
+  isNontrivialSchema,
 } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
@@ -400,12 +401,18 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
-/** Whether `schema` declares a type, and declares no array. */
-const schemaDeclaresOtherThanArray = (
-  schema: JSONSchema | undefined,
-): boolean =>
-  isObjectOrArray(schema) && schema.type !== undefined &&
-  !schemaDeclaresArray(schema);
+/**
+ * Whether an item write under a missing parent, which the stored envelope
+ * describes as `schema`, writes an item of an array. The storage write creates
+ * an array for a missing container an index addresses, and that answers where
+ * the envelope gives the parent no shape at all. Where the envelope declares
+ * an array, it agrees. Any other declaration is taken as written, whether by
+ * type, by the members of an object, by a combinator or by a reference: the
+ * input is then spelled at the index, and the envelope's checks of the member
+ * it declares there apply to the write.
+ */
+const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
+  !isNontrivialSchema(schema) || schemaDeclaresArray(schema);
 
 /**
  * The schema write-policy input for a write landing at an item of an array:
@@ -420,11 +427,11 @@ const schemaDeclaresOtherThanArray = (
  * envelope's at the item — a writer through a bare link answers to the
  * stored claim as any routed write does. The slot is an item of an array
  * where the parent holds one, or holds nothing yet and the stored envelope
- * declares no other type there: an absent container's first item write is
- * still an item write, as the storage write creates an array for a missing
- * container an index addresses. That includes the first write into an
- * instance no envelope describes yet, such as the scoped instance a slot's
- * content is narrowed into. A numeric key of an object stays a property.
+ * gives it no other shape ({@link missingParentIsArray}): an absent
+ * container's first item write is still an item write. That includes the
+ * first write into an instance no envelope describes yet, such as the scoped
+ * instance a slot's content is narrowed into. A numeric key of an object
+ * stays a property.
  * `undefined` where none of that holds, or where no schema for the item is
  * known; the parent read propagates what `readValueOrThrow` throws, since an
  * absent or mismatched parent reads as `undefined` and anything else is a
@@ -472,9 +479,7 @@ const arrayItemPolicyInput = (
   if (
     !Array.isArray(held) &&
     (held !== undefined ||
-      schemaDeclaresOtherThanArray(
-        storedSchemaForWritePolicyInput(tx, parent),
-      ))
+      !missingParentIsArray(storedSchemaForWritePolicyInput(tx, parent)))
   ) {
     return undefined;
   }

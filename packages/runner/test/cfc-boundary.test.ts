@@ -2710,6 +2710,86 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  describe("an item write under a missing container the stored envelope describes as an object", () => {
+    // The envelope declares `list` by its members, with no `type`, and `list`
+    // is missing. A write at `list/0` is answered by the declaration of
+    // member `0`, as for any object, whatever the storage write creates for
+    // the missing container.
+    const member = {
+      type: "string",
+      ifc: { confidentiality: ["secret"] },
+    } as const satisfies JSONSchema;
+    const containers: Record<string, JSONSchema> = {
+      "properties": { properties: { "0": member } },
+      "additionalProperties": { additionalProperties: member },
+      "a reference to its properties": { $ref: "#/$defs/Members" },
+    };
+
+    const refusalOfItemWrite = async (
+      container: JSONSchema,
+      itemSchema: JSONSchema,
+      item: string | number,
+    ): Promise<string | undefined> => {
+      // The runtime's default posture: the characterization posture this
+      // suite's other cases use turns the merge's checks off.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const seed = runtime.edit();
+        const doc = runtime.getCell(
+          signer.did(),
+          "cfc-missing-member-container",
+          {
+            type: "object",
+            properties: {
+              // A labeled sibling, so the document stores an envelope.
+              title: { type: "string", ifc: { confidentiality: ["title"] } },
+              list: container,
+            },
+            $defs: { Members: { properties: { "0": member } } },
+          },
+          seed,
+        );
+        doc.set({ title: "t" });
+        expect((await seed.commit()).error).toBeUndefined();
+
+        const tx = runtime.edit();
+        runtime.getCellFromLink(
+          { ...doc.getAsNormalizedFullLink(), path: ["list", "0"] },
+          itemSchema,
+          tx,
+        ).set(item);
+        return (await tx.commit()).error?.message;
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    for (const [shape, container] of Object.entries(containers)) {
+      it(`keeps a member's confidentiality (${shape})`, async () => {
+        expect(
+          await refusalOfItemWrite(container, {
+            type: "string",
+            ifc: { confidentiality: ["other"] },
+          }, "x"),
+        ).toMatch(/confidentiality cannot be weakened at \/list\/0/);
+      });
+
+      it(`keeps a member's type (${shape})`, async () => {
+        expect(
+          await refusalOfItemWrite(container, {
+            type: "number",
+            ifc: { confidentiality: ["secret"] },
+          }, 1),
+        ).toMatch(/type changed incompatibly at \/list\/0/);
+      });
+    }
+  });
+
   it("persists CFC metadata for stored link writes without link schema", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
