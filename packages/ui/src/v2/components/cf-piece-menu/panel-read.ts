@@ -51,12 +51,12 @@ export class PanelRead {
   #whole: Read | undefined;
   /** The last answer for the list of fields, while the whole is refused. */
   #list: FieldList | undefined;
-  /** Whether a list of fields has been asked for and not yet answered. */
-  #listing = false;
-  #cancelFields: Cancel[] = [];
+  /** The open read of each listed field, by name. */
+  readonly #fieldReads = new Map<string, Cancel>();
   /**
-   * Advanced whenever the field reads open or close, so that a list that
-   * arrives after the whole was admitted again opens nothing.
+   * Advanced whenever a list is asked for and whenever the field reads
+   * close, so that only the latest list is taken, and a list that arrives
+   * after the whole was admitted again opens nothing.
    */
   #generation = 0;
   readonly #cancelWhole: Cancel;
@@ -94,6 +94,14 @@ export class PanelRead {
   /** Whether the worker refuses the whole of the cell's read. */
   get refused(): boolean {
     return this.#whole !== undefined && "refused" in this.#whole;
+  }
+
+  /**
+   * Whether the panel shows the cell field by field: the worker refuses the
+   * whole and lists the fields of the record it holds.
+   */
+  get shownByField(): boolean {
+    return this.refused && this.#list instanceof Map;
   }
 
   /**
@@ -136,55 +144,77 @@ export class PanelRead {
     this.#closeFields();
   }
 
+  /**
+   * Asks the worker for the list of fields, as each refusal of the whole
+   * does, since each stands for a change to the record: a field added or
+   * removed while the whole is refused is listed or dropped. A field still
+   * listed keeps the read it has.
+   */
   async #openFields(): Promise<void> {
-    if (this.#listing || this.#list instanceof Map) return;
     const generation = ++this.#generation;
-    this.#listing = true;
     let fields: Record<string, CellHandle<unknown>> | undefined;
     try {
       fields = await this.#cell.fields();
     } catch (error) {
       if (generation !== this.#generation) return;
-      this.#listing = false;
       if (error instanceof CellReadRefusedError) {
-        this.#list = "refused";
+        this.#setList("refused");
       } else {
         // Shown as not read; the next refusal of the whole asks again.
         console.error("[PanelRead] Listing the fields failed:", error);
-        this.#list = "failed";
+        this.#setList("failed");
       }
-      this.#onChange();
       return;
     }
     if (generation !== this.#generation) return;
-    this.#listing = false;
     if (fields === undefined) {
-      this.#list = "no record";
-      this.#onChange();
+      this.#setList("no record");
       return;
     }
+    const previous = this.#list instanceof Map ? this.#list : undefined;
     const list = new Map<string, FieldRead>();
-    this.#list = list;
-    for (const [name, field] of Object.entries(fields)) {
-      list.set(name, { pending: true });
-      this.#cancelFields.push(field.subscribe((value) => {
-        list.set(name, { value });
-        this.#onChange();
-      }, {
-        onRefused: (refused) => {
-          list.set(name, { refused });
-          this.#onChange();
-        },
-      }));
+    for (const name of Object.keys(fields)) {
+      list.set(name, previous?.get(name) ?? { pending: true });
     }
+    this.#setList(list);
+    for (const [name, field] of Object.entries(fields)) {
+      if (this.#fieldReads.has(name)) continue;
+      const heard = (read: FieldRead) => {
+        // Into the list shown now, which a later listing may have replaced
+        // with one that still holds the field.
+        const current = this.#list;
+        if (current instanceof Map && current.has(name)) {
+          current.set(name, read);
+        }
+        this.#onChange();
+      };
+      this.#fieldReads.set(
+        name,
+        field.subscribe((value) => heard({ value }), {
+          onRefused: (refused) => heard({ refused }),
+        }),
+      );
+    }
+  }
+
+  /**
+   * Takes `list` as the answer for the list of fields, closing the read of
+   * each field it no longer holds.
+   */
+  #setList(list: FieldList): void {
+    for (const [name, cancel] of this.#fieldReads) {
+      if (list instanceof Map && list.has(name)) continue;
+      cancel();
+      this.#fieldReads.delete(name);
+    }
+    this.#list = list;
     this.#onChange();
   }
 
   #closeFields(): void {
     this.#generation++;
     this.#list = undefined;
-    this.#listing = false;
-    for (const cancel of this.#cancelFields) cancel();
-    this.#cancelFields = [];
+    for (const cancel of this.#fieldReads.values()) cancel();
+    this.#fieldReads.clear();
   }
 }

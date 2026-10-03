@@ -16,6 +16,7 @@ import {
 import { type JSONSchema, parseFabricRef } from "@commonfabric/runner/shared";
 import {
   $conn,
+  $onCellRefused,
   CellHandle,
   isCellHandle,
   RequestType,
@@ -1767,7 +1768,9 @@ export class CFPieceMenu extends BaseElement {
         // stream declarations for argument-side handlers, and the handle
         // gives the panel a live view instead of a one-shot snapshot. A
         // refused read still names it, so the panel reads its fields one by
-        // one.
+        // one. The handle starts with what this read found, the refusal as
+        // much as a value, so the panel never shows it as an argument that
+        // holds nothing while its own read is on the way.
         const argumentCell = new CellHandle(
           rt,
           response.cell,
@@ -1776,6 +1779,9 @@ export class CFPieceMenu extends BaseElement {
             response.value,
           ),
         );
+        if (response.refused !== undefined) {
+          argumentCell[$onCellRefused](response.refused);
+        }
         this.#argumentCell = argumentCell;
         this.#argumentRead = new PanelRead(argumentCell, changed);
       } else if ("refused" in response) {
@@ -2583,10 +2589,10 @@ export class CFPieceMenu extends BaseElement {
 
   /**
    * Says, beneath a read the worker refused as a whole, that it is shown
-   * field by field.
+   * field by field, where it is.
    */
   #renderRefusedNote(read: PanelRead | undefined) {
-    if (!read?.refused) return nothing;
+    if (!read?.shownByField) return nothing;
     return html`
       <p class="note">
         ${CFC_POLICY_PLACEHOLDER_TEXT}: part of this value. Each field it
