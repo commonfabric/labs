@@ -2512,11 +2512,13 @@ carry a repeated source-metadata helper implementation.
 
 Cell constructors whose authored type arguments name a `typeof` value binding
 retain those arguments when their result is lowered into a lift or captured
-(`getConstructedCellTypeNode`), whether the cell is made by `new` or by the
-constructor's static `of()`. Recovery follows `.for()`, unannotated `const`
-aliases, and a binding an unannotated `const` destructures straight out of an
-object literal, and also preserves the declaration in an inferred
-object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
+(`getConstructedCellTypeNode`), whether the cell is made by `new`, by the
+constructor's static `of()`, or by `cell<T>()`, under whatever import alias,
+namespace, or `const` alias names it. Recovery follows `.for()`, unannotated
+`const` aliases, and a binding an unannotated `const` destructures straight out
+of an object literal, unless a later spread, computed key, or method or
+accessor of the same name may replace the property, and also preserves the
+declaration in an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
 writer instead of an inferred structural function type. Explicit variable
 annotations remain authoritative; mutable aliases, and a property of an object
 held elsewhere, which a write can replace, are not followed. Two writers of the

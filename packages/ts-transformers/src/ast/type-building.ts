@@ -599,7 +599,8 @@ function constInitializer(
  * `const { items } = { items: new Writable<…>(…) }`. The literal exists only
  * to be destructured, so no write can replace the value first. `undefined`
  * for a binding with a default, a rest or computed key, a property a later
- * spread may override, or any other source.
+ * member may override, or any other source. A later spread, computed key, or
+ * method or accessor of the same name may override it.
  */
 function destructuredLiteralValue(
   binding: ts.BindingElement,
@@ -632,7 +633,11 @@ function destructuredLiteralValue(
   const property = literal.properties[index];
   if (
     !property ||
-    literal.properties.slice(index + 1).some(ts.isSpreadAssignment)
+    literal.properties.slice(index + 1).some((member) =>
+      ts.isSpreadAssignment(member) ||
+      ts.isComputedPropertyName(member.name) ||
+      getPropertyNameText(member.name) === name
+    )
   ) {
     return undefined;
   }

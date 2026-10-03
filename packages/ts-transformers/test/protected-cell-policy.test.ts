@@ -866,7 +866,11 @@ export default pattern(() => {
 
     const constructed =
       `const items = new Writable<Owned<Item[], typeof removeItem>>([]).for("items");`;
-    const transform = async (result: string, declaration = constructed) =>
+    const transform = async (
+      result: string,
+      declaration = constructed,
+      typeCheck = true,
+    ) =>
       parseModule(
         await transformSource(
           `import { Cfc, CurrentPrincipal, cell, computed, Default, handler, pattern, RepresentsCurrentUser, UI, wish, Writable, WriteAuthorizedBy } from "commonfabric";
@@ -881,7 +885,7 @@ export default pattern(() => {
   ${declaration}
   return ${result};
 });`,
-          { types: COMMONFABRIC_TYPES, typeCheck: true },
+          { types: COMMONFABRIC_TYPES, typeCheck },
         ),
       );
     // Each item's button hands the captured list to its handler as a
@@ -970,6 +974,16 @@ export default pattern(() => {
         );
       });
 
+      it("keeps the cell's writer where an alias of the function makes it", async () => {
+        computedKeepsPolicy(
+          await transform(
+            count,
+            `const make = cell;
+  const items = make<Owned<Item[], typeof removeItem>>([]);`,
+          ),
+        );
+      });
+
       it("keeps the writer of a cell its writer alone protects", async () => {
         const root = await transform(
           count,
@@ -1000,6 +1014,46 @@ export default pattern(() => {
         properties?: { items?: { ifc?: Record<string, unknown> } };
       }).properties?.items;
       expect(items?.ifc?.writeAuthorizedBy).toBeUndefined();
+    });
+
+    it("does not follow a property of an object literal that a later computed key may replace", async () => {
+      // `key` may name `items`, so the property is not the value the binding
+      // receives, and its writer is not the binding's.
+      const root = await transform(
+        count,
+        `const key: string = "items";
+  const other = new Writable<Item[]>([]).for("other");
+  const { items, ...rest } = { items: new Writable<Owned<Item[], typeof removeItem>>([]).for("items"), [key]: other };
+  void rest;`,
+      );
+      const [capture] = callSchemas(root, "lift");
+      expect(capture).toMatchObject({
+        properties: { items: expect.anything() },
+      });
+      expect(capture).not.toMatchObject({
+        properties: {
+          items: { ifc: { writeAuthorizedBy: expect.anything() } },
+        },
+      });
+    });
+
+    it("does not follow a property of an object literal that a later accessor of the same name replaces", async () => {
+      // The checker refuses the literal, and the transformer still reads it.
+      const root = await transform(
+        count,
+        `const other = new Writable<Item[]>([]).for("other");
+  const { items } = { items: new Writable<Owned<Item[], typeof removeItem>>([]).for("items"), get items() { return other; } };`,
+        false,
+      );
+      const [capture] = callSchemas(root, "lift");
+      expect(capture).toMatchObject({
+        properties: { items: expect.anything() },
+      });
+      expect(capture).not.toMatchObject({
+        properties: {
+          items: { ifc: { writeAuthorizedBy: expect.anything() } },
+        },
+      });
     });
 
     it("keeps the writer of a cell whose value may be missing on its value member", async () => {
