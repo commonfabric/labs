@@ -8470,6 +8470,17 @@ export class Runner {
             derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
               undefined
           ) return;
+          // A default belongs to its owning piece, so it carries the label on
+          // the piece's root. The pattern pointer and the manifest read above
+          // are members of the piece's document, and reading a member
+          // consumes no label, so this read is what brings the root label
+          // into the seed. It is `nonRecursive`, which consumes the root
+          // entry alone: the labels on the piece's fields belong to other
+          // values, and a constant default does not derive from them.
+          tx.readValueOrThrow({ ...resultLink, path: [] }, {
+            nonRecursive: true,
+            meta: ignoreReadForScheduling,
+          });
           // The graph has not enrolled its stores yet. This seed carries the
           // same ownership claim as setup through the ordinary writer-fit gate.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
