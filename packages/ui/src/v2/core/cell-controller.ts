@@ -153,6 +153,10 @@ export class CellController<T> implements ReactiveController {
    * then holds nothing of the cell: it reads as its empty value, and it
    * writes nothing, since a value made from that empty value (a toggle, a
    * list with an item added or removed) would replace one never shown.
+   *
+   * The handle refuses such a write itself; the controller's checks keep a
+   * typed edit from showing as if it were written, and the console free of
+   * a refused write for each keystroke. Each layer stands on its own.
    */
   private _refusal: CellReadRefusal | undefined;
 
