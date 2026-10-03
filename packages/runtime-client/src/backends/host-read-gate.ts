@@ -150,7 +150,7 @@ const placeScoped =
     }
     return {
       document: `${space}/${id}/${scopeKey}`,
-      path,
+      path: path.filter((segment) => segment.length > 0),
       root: documentAt(space, id, scopeKey),
     };
   };
@@ -946,7 +946,7 @@ export class HostReadGate {
     const shown = (key: string): string => {
       const placed = place(key);
       if (placed === undefined) return WITHHELD;
-      if (placed.path.length === 0) return key;
+      if (placed.path.length === 0) return placed.document;
       let refused = verdicts.get(placed.document);
       if (refused === undefined) {
         refused = placed.root === undefined ||
@@ -1123,26 +1123,44 @@ export class HostReadGate {
    * withholds is not returned as nothing: it throws
    * `NavigationWithheldError`.
    *
-   * The decision is made once, so it waits first for the access lists of
-   * the spaces the labels name. A withhold is `definitive`, so that a caller
-   * may count the navigation as done, only where it cannot turn out
-   * otherwise for this viewer: labels were read and refused, and none of
-   * them depends on what the worker may yet learn, a space's access list
-   * (which can load late, fail to load, or grant access later) or a module
-   * policy's manifest. Any other withhold leaves the navigation undecided.
+   * The decision is made at once, as a one-shot read's is. Only a refusal
+   * whose labels name a space whose access list the replica does not hold
+   * waits for those lists and is decided again, so a navigation that needs
+   * no list is not held behind a load.
+   *
+   * A withhold is `definitive`, so that a caller may count the navigation
+   * as done, only where it cannot turn out otherwise for this viewer:
+   * labels were read and refused, and none of them depends on what the
+   * worker may yet learn, a space's access list (which can load late, fail
+   * to load, or grant access later) or a module policy's manifest. Any other
+   * withhold leaves the navigation undecided.
    */
   async navigate(
     target: CellRef,
     consumed: (() => SinkConsumedLabel) | undefined,
   ): Promise<NavigateRequestNotification> {
-    const labels = this.#labelsOf(consumed);
-    if (labels !== undefined) {
-      await this.#loadAccessListsNamedBy(labels.confidentiality);
+    let verdict = this.#consumedVerdict(consumed);
+    if (verdict === "refused") {
+      const labels = this.#labelsOf(consumed);
+      if (
+        labels !== undefined &&
+        await this.#loadAccessListsNamedBy(labels.confidentiality) ===
+          "loaded"
+      ) {
+        verdict = this.#consumedVerdict(consumed);
+      }
     }
-    const verdict = this.#consumedVerdict(consumed);
     if (verdict !== "admitted") {
+      // This rests on the ceiling being fixed for a worker's life, and on
+      // the resolver consulting no grant: a refusal of labels that name no
+      // space or module policy would be refused again. Display-boundary
+      // grant rules, such as a share grant, would be one more thing a later
+      // decision can learn, and must be added here before they exist.
+      const labels = verdict === "refused"
+        ? this.#labelsOf(consumed)
+        : undefined;
       throw new NavigationWithheldError(
-        verdict === "refused" && labels !== undefined &&
+        labels !== undefined &&
           membershipSpacesInConfidentiality(labels.confidentiality)
               .length === 0 &&
           modulePolicyRefsInConfidentiality(labels.confidentiality).length ===
@@ -1289,7 +1307,7 @@ export class HostReadGate {
   #labelsOf(
     consumed: (() => SinkConsumedLabel) | undefined,
   ): SinkConsumedLabel | undefined {
-    if (consumed === undefined) return undefined;
+    if (this.#policy === undefined || consumed === undefined) return undefined;
     try {
       return consumed();
     } catch {

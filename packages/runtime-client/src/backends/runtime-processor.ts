@@ -223,6 +223,7 @@ import {
   type LoggerCountsResponse,
   type LoggerMetadata,
   type LogLevel,
+  type NavigateRequestNotification,
   NotificationType,
   type OperationApplyRequest,
   type OperationApplyResponse,
@@ -770,6 +771,38 @@ export function renderSpaceAccessProviderFor(
       return storage.subscribeSpaceAccessChange?.(changed) ??
         storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
     },
+  };
+}
+
+/**
+ * Where a pattern's navigation requests go: to `post`, as `gate()`, the
+ * worker's gate when each is decided, decides them, in the order they were
+ * issued, a later one never overtaken by an earlier one.
+ *
+ * Most navigations are decided at once, and are posted in the order they
+ * were issued. One the gate refused at first, on a space whose access list
+ * had not loaded, waits for the list and is decided again, and a navigation
+ * issued after it may have been posted meanwhile. A user who asked to go
+ * somewhere and then somewhere else expects to end up at the second, so a
+ * navigation decided after a later one was posted is dropped, as is one
+ * decided after the worker was disposed (`disposed()`). A dropped navigation
+ * returns normally: it is done, superseded, not withheld. A withheld one
+ * rejects, as the gate rejects it.
+ */
+export function navigationPoster(
+  gate: () => HostReadGate,
+  post: (request: NavigateRequestNotification) => void,
+  disposed: () => boolean,
+): NonNullable<BrowserWorkerPresetParams["navigateCallback"]> {
+  let issued = 0;
+  let posted = 0;
+  return async (target, consumed) => {
+    const order = ++issued;
+    const link = parseLink(target.getAsLink()) as NormalizedFullLink;
+    const request = await gate().navigate(link, consumed);
+    if (order < posted || disposed()) return;
+    posted = order;
+    post(request);
   };
 }
 
@@ -4475,14 +4508,14 @@ export class RuntimeProcessor {
         return args;
       },
 
-      navigateCallback: async (target, consumed) => {
-        const link = parseLink(target.getAsLink()) as NormalizedFullLink;
-        // Where to go is what the run that asked chose, from what it had
-        // read, so the gate decides the request on that. A withheld request
-        // rejects, so neither a flush nor the effects channel records it as
-        // made.
-        postToClient(await gate().navigate(link, consumed));
-      },
+      // Where to go is what the run that asked chose, from what it had read,
+      // so the gate decides the request on that. A withheld request rejects,
+      // so neither a flush nor the effects channel records it as made.
+      navigateCallback: navigationPoster(
+        gate,
+        postToClient,
+        () => processor !== undefined && processor.#isDisposed,
+      ),
 
       pieceCreatedCallback: (piece) => {
         const writeContext = runtime.getWriteDebugContext();

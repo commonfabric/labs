@@ -217,7 +217,7 @@ export class EffectsChannel {
 
   #warnedNoNavigate = false;
 
-  /** Withheld intents, each reported once in this life. */
+  /** Withheld intents, by intent and outcome, each reported once. */
   readonly #reportedWithheld = new Set<string>();
 
   /**
@@ -376,16 +376,13 @@ export class EffectsChannel {
         // Withheld, and not retired here: an undecidable intent waits for a
         // delivery that can be decided, and an optimistic flush leaves the
         // server's intent to decide. Reported once.
-        if (!this.#reportedWithheld.has(nonce)) {
-          this.#reportedWithheld.add(nonce);
-          logger.warn("enact-withheld", () => [
-            `navigate intent ${nonce} withheld by the display ceiling ` +
-            (error.definitive
-              ? "on labels this viewer is refused"
-              : "with nothing it can be decided on") +
-            "; left unacked",
-          ]);
-        }
+        this.#reportWithheld(
+          nonce,
+          error.definitive
+            ? "on labels this viewer is refused; the server's intent decides " +
+              "whether it retires"
+            : "with nothing it can yet be decided on; left unacked",
+        );
         return false;
       }
       logger.warn("enact-failed", () => [
@@ -433,6 +430,19 @@ export class EffectsChannel {
       };
     }
     return () => read;
+  }
+
+  /**
+   * Reports that an intent was withheld and how, once per intent and
+   * outcome in this life.
+   */
+  #reportWithheld(nonce: string, how: string): void {
+    const key = `${nonce}\0${how}`;
+    if (this.#reportedWithheld.has(key)) return;
+    this.#reportedWithheld.add(key);
+    logger.warn("enact-withheld", () => [
+      `navigate intent ${nonce} withheld by the display ceiling ${how}`,
+    ]);
   }
 
   /** ONE listener per channel (design (e) item 13): wants the session
@@ -561,6 +571,11 @@ export class EffectsChannel {
                 error instanceof NavigationWithheldError && error.definitive
               ) {
                 this.#withheldForSession.add(nonce);
+                this.#reportWithheld(
+                  nonce,
+                  "on labels this viewer is refused; acked as done for this " +
+                    "session",
+                );
                 return;
               }
               throw error;

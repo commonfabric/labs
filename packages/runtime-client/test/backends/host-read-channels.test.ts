@@ -51,6 +51,7 @@ import {
   HostReadGate,
 } from "@/backends/host-read-gate.ts";
 import {
+  navigationPoster,
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
   renderModulePolicySourceFor,
@@ -1241,7 +1242,8 @@ describe("HostReadGate, for what crosses beside a value", () => {
         type: "scheduler.dependencies.update",
         actionId: "action",
         reads: [sealedKey],
-        writes: [`${space}/${docs.contactsId}`],
+        // One document, spelled with and without a trailing separator.
+        writes: [`${space}/${docs.contactsId}`, `${space}/${docs.contactsId}/`],
         timeStamp: 1,
       };
       const run: RuntimeTelemetryMarkerResult = {
@@ -1258,6 +1260,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
         expect(shownDependencies.marker).toEqual({
           ...dependencies,
           reads: [`${space}/${docs.contactsId}`],
+          writes: [`${space}/${docs.contactsId}`],
         });
         expect(holds(gate.telemetry(run, docs.documentAt), SECRET_KEY))
           .toBe(false);
@@ -2119,6 +2122,75 @@ describe("HostReadGate, for what crosses beside a value", () => {
         expect(await outcome([ownerOnly])).toEqual({ definitive: true });
       } finally {
         await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
+    it("posts navigations in the order they were issued, a later one never overtaken", async () => {
+      // The visitor may read the owner's space; neither worker has loaded
+      // its access list.
+      const server = newLoopbackServer();
+      const writer = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      const readers: Runtime[] = [];
+      try {
+        const tx = writer.edit();
+        tx.writeOrThrow({
+          space,
+          id: `of:${space}` as `${string}:${string}`,
+          type: "application/json",
+          path: [],
+        }, { value: { [space]: "OWNER", [visitor.did()]: "READ" } });
+        expect((await tx.commit()).ok).toBeDefined();
+        await writer.storageManager.synced();
+        const labels = (confidentiality: CfcAtom[]) => () => ({
+          confidentiality,
+          integrity: [],
+          modulePolicySpaces: new Map(),
+          sources: [],
+        });
+        const posted = async (viewer: Identity, disposed = false) => {
+          const reader = new Runtime({
+            apiUrl: new URL("http://localhost"),
+            storageManager: EmulatedStorageManager.connectTo(server, {
+              as: viewer,
+            }),
+          });
+          readers.push(reader);
+          const gate = gateFor(reader, viewer);
+          const first = reader.getCell(space, "first");
+          const second = reader.getCell(space, "second");
+          const names = new Map([
+            [first.getAsNormalizedFullLink().id, "first"],
+            [second.getAsNormalizedFullLink().id, "second"],
+          ]);
+          const sent: string[] = [];
+          const navigate = navigationPoster(
+            () => gate,
+            (request) => sent.push(names.get(request.targetCellRef.id) ?? "?"),
+            () => disposed,
+          );
+          // A navigation labeled with the owner's space, then one with no
+          // labeled input, issued one after the other.
+          await Promise.all([
+            navigate(first, labels([cfcAtom.space(space)])),
+            navigate(second, labels([])),
+          ]);
+          return sent;
+        };
+
+        // The owner is admitted at once, and nothing waits for a list.
+        expect(await posted(owner)).toEqual(["first", "second"]);
+        // The visitor is refused at first, admitted once the list loads,
+        // and by then the later navigation has gone: it is not overtaken.
+        expect(await posted(visitor)).toEqual(["second"]);
+        // Nothing is posted once the worker is disposed.
+        expect(await posted(owner, true)).toEqual([]);
+      } finally {
+        for (const reader of readers) await reader.dispose();
         await writer.dispose();
         await server.close();
       }
