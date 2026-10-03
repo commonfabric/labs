@@ -236,6 +236,20 @@ const getLangExtFromMimeType = (mime: MimeType) => {
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
 
 /**
+ * What `cell` holds, or nothing where the worker refuses its read. A piece
+ * found among the mentionable entries is read with `get()`, the one read every
+ * such handle answers, and a refusal reads as nothing rather than rejecting.
+ */
+function readUnlessRefused(cell: { get(): unknown }): unknown {
+  try {
+    return cell.get();
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
+  }
+}
+
+/**
  * CFCodeEditor - Code editor component with syntax highlighting and debounced changes
  *
  * @element cf-code-editor
@@ -758,10 +772,15 @@ export class CFCodeEditor extends BaseElement {
       void this._handleExternalRefTitleChange(key, name);
     }
     for (const pieceId of this._pieceNameSubscriptions.keys()) {
+      // A title the worker refuses leaves the link text as written.
+      if (this._refusedTitles.has(pieceId)) continue;
       const pieceCell = this.findPieceById(pieceId);
       if (pieceCell) void this._handleExternalTitleChange(pieceId, pieceCell);
     }
   }
+
+  /** Pieces whose title subscription the worker last refused, by id. */
+  private readonly _refusedTitles = new Set<string>();
 
   /** The reference map's current contents, for display. */
   private _refMap(): MentionRefMap {
@@ -3582,10 +3601,14 @@ export class CFCodeEditor extends BaseElement {
 
       // Subscribe with changeGroup so our own edits are filtered out
       const unsub = titleCell.subscribe(() => {
+        this._refusedTitles.delete(pieceId);
         void this._handleExternalTitleChange(pieceId, pieceCell);
       }, {
-        // A title the worker will not show leaves the link text as written.
-        onRefused: () => {},
+        // A title the worker will not show leaves the link text as written,
+        // now and when the editor catches up.
+        onRefused: () => {
+          this._refusedTitles.add(pieceId);
+        },
       });
 
       this._pieceNameSubscriptions.set(pieceId, unsub);
@@ -3596,6 +3619,7 @@ export class CFCodeEditor extends BaseElement {
       if (!activeIds.has(id)) {
         unsub();
         this._pieceNameSubscriptions.delete(id);
+        this._refusedTitles.delete(id);
       }
     }
   }
@@ -3631,9 +3655,10 @@ export class CFCodeEditor extends BaseElement {
     // Nothing is rewritten while a read is refused.
     if (this._readsWithheld) return;
 
-    // Get the piece's title (without emoji prefix)
-    const title = pieceCell.key("title").get() as string;
-    if (!title) return;
+    // Get the piece's title (without emoji prefix). A title the worker
+    // refuses, or has not answered, rewrites nothing.
+    const title = readUnlessRefused(pieceCell.key("title"));
+    if (typeof title !== "string" || !title) return;
 
     // Find backlink in document
     const backlinks = this._editorView.state.field(backlinkField);
@@ -3647,8 +3672,8 @@ export class CFCodeEditor extends BaseElement {
     if (docNameStripped === title) return;
 
     // Get the full NAME (with emoji) to insert into document
-    const currentName = pieceCell.key(NAME).get() as string;
-    if (!currentName) return;
+    const currentName = readUnlessRefused(pieceCell.key(NAME));
+    if (typeof currentName !== "string" || !currentName) return;
 
     // Update tracking map BEFORE dispatch so _detectAndSyncNameChanges doesn't
     // try to sync this change back to the piece (it runs synchronously during dispatch)
@@ -3697,6 +3722,7 @@ export class CFCodeEditor extends BaseElement {
       unsub();
     }
     this._pieceNameSubscriptions.clear();
+    this._refusedTitles.clear();
   }
 
   /**

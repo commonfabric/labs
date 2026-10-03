@@ -1557,6 +1557,10 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     _refusalGate(): Extension;
     _handleEditorUpdate(update: UpdateStub): void;
     createBacklinkFromPattern(text: string, navigate: boolean): Promise<void>;
+    _handleExternalTitleChange(
+      pieceId: string,
+      pieceCell: { key(key: string): CellHandle<unknown> },
+    ): Promise<void>;
     addEventListener(type: string, listener: () => void): void;
     handleBacklinkActivation(view: ViewStub): boolean;
     willUpdate(changedProperties: Map<string, unknown>): void;
@@ -2106,6 +2110,20 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
 
     expect(view.state.doc.toString()).toBe("Topic");
     expect(writesSent(references)).toEqual([]);
+  });
+
+  it("rewrites nothing, and does not fail, for a rename whose title the worker refuses", async () => {
+    const element = editor();
+    const view = viewOver("See [[Old (piece-1)]].");
+    element._editorView = view;
+    const title = createMockCellHandle<unknown>("New");
+    pushRefusal(title);
+
+    await expect(
+      element._handleExternalTitleChange("piece-1", { key: () => title }),
+    ).resolves.toBeUndefined();
+
+    expect(view.state.doc.toString()).toBe("See [[Old (piece-1)]].");
   });
 
   it("mints no key into a refused reference map", () => {
