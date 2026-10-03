@@ -645,6 +645,7 @@ describe("agent runner", () => {
     const renewalCommitted = defer<void>();
     const recoveryReady = defer<void>();
     const releaseRenewal = defer<void>();
+    const executionStarted = defer<ClaimedAgentRun>();
     const held = defer<AgentRunExecution>();
     const original = runnerSide.editWithRetry.bind(runnerSide);
     let delayedRenewal = false;
@@ -676,10 +677,9 @@ describe("agent runner", () => {
         }
         return value;
       }, ...rest)) as typeof runnerSide.editWithRetry;
-    let active: ClaimedAgentRun | undefined;
     let wake: (() => void) | undefined;
     const runner = await startRunner((run) => {
-      active = run;
+      executionStarted.resolve(run);
       return held.promise;
     }, {
       runtimeForHost: () => Promise.resolve(runnerSide),
@@ -689,9 +689,10 @@ describe("agent runner", () => {
       },
     });
     await waitForState(result, "running");
+    const active = await executionStarted.promise;
 
     clock = new Date("2026-09-18T12:00:30.000Z");
-    const renewal = active!.renewLease();
+    const renewal = active.renewLease();
     await renewalReady.promise;
     clock = new Date("2026-09-18T12:01:00.000Z");
     wake!();
@@ -704,7 +705,7 @@ describe("agent runner", () => {
       (value) => value?.claim?.leaseUntil === "2026-09-18T12:01:30.000Z",
     );
 
-    expect(active!.signal.aborted).toBe(false);
+    expect(active.signal.aborted).toBe(false);
     expect(runner.activeRuns).toBe(1);
     held.resolve({ outcome: "refused" });
     await waitForState(result, "refused");

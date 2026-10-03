@@ -189,7 +189,7 @@ describe("cfc-denials", () => {
         );
         expect(code).toBe(1);
         expect(stdout).toContain(
-          "      - writeAuthorizedBy requires a trusted verified binding identity at /",
+          "      - writeAuthorizedBy requires a trusted verified binding identity at /note",
         );
         expect(stdout).not.toContain(hint);
       });
@@ -231,7 +231,7 @@ describe("cfc-denials", () => {
           `    [alice] CFC denied (write-policy-gate): ${SUMMARY}`,
         );
         expect(stdout).toContain(
-          "    [alice]   - writeAuthorizedBy requires a trusted verified binding identity at /",
+          "    [alice]   - writeAuthorizedBy requires a trusted verified binding identity at /note",
         );
       });
 
