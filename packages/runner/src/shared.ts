@@ -63,6 +63,7 @@ export type {
   RuntimeTelemetry,
   RuntimeTelemetryEvent,
   RuntimeTelemetryMarkerResult,
+  SchedulerActionInfo,
   SchedulerDiagnosisResult,
   SchedulerGraphEdge,
   SchedulerGraphNode,

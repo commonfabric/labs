@@ -1234,6 +1234,41 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(toOwner.reads).toEqual([sealedKey, openKey]);
     });
 
+    it("names the document alone in a telemetry marker's addresses, which name no scope", async () => {
+      await using docs = await shelf();
+      const sealedKey = `${space}/${docs.contactsId}/${SECRET_KEY}`;
+      const dependencies: RuntimeTelemetryMarkerResult = {
+        type: "scheduler.dependencies.update",
+        actionId: "action",
+        reads: [sealedKey],
+        writes: [`${space}/${docs.contactsId}`],
+        timeStamp: 1,
+      };
+      const run: RuntimeTelemetryMarkerResult = {
+        type: "scheduler.run.complete",
+        actionId: "action",
+        actionInfo: { patternName: "p", reads: [sealedKey], writes: [] },
+        durationMs: 1,
+        timeStamp: 2,
+      };
+      for (const viewer of [visitor, owner]) {
+        const gate = gateFor(docs.runtime, viewer);
+        const shownDependencies = gate.telemetry(dependencies, docs.documentAt);
+        expect(holds(shownDependencies, SECRET_KEY)).toBe(false);
+        expect(shownDependencies.marker).toEqual({
+          ...dependencies,
+          reads: [`${space}/${docs.contactsId}`],
+        });
+        expect(holds(gate.telemetry(run, docs.documentAt), SECRET_KEY))
+          .toBe(false);
+      }
+      // With no ceiling, nothing is decided.
+      expect(
+        new HostReadGate(undefined, {}).telemetry(dependencies, docs.documentAt)
+          .marker,
+      ).toEqual(dependencies);
+    });
+
     it("names a refused document alone in the trigger trace", async () => {
       await using docs = await shelf();
       const entry = {

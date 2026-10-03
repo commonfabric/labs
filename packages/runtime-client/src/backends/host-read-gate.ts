@@ -51,6 +51,7 @@ import {
   useCancelGroup,
 } from "@commonfabric/runner";
 import type {
+  SchedulerActionInfo,
   SchedulerDiagnosisResult,
   SchedulerGraphSnapshot,
   TriggerTraceEntry,
@@ -122,6 +123,51 @@ export type GraphDocumentAt = (
   id: string,
   scopeKey: string,
 ) => Cell<unknown> | undefined;
+
+/**
+ * An address a diagnostic names, split: the document it names, as the
+ * address spells it; its path inside that document; and the document's root,
+ * or `undefined` where the address cannot be placed.
+ */
+type PlacedAddress = {
+  document: string;
+  path: readonly string[];
+  root: Cell<unknown> | undefined;
+};
+
+/** Splits and places an address, or `undefined` for a string that is none. */
+type AddressPlacement = (key: string) => PlacedAddress | undefined;
+
+/**
+ * An address as the scheduler graph spells it, `space/id/scopeKey/path`,
+ * placed by `documentAt`.
+ */
+const placeScoped =
+  (documentAt: GraphDocumentAt): AddressPlacement => (key) => {
+    const [space, id, scopeKey, ...path] = key.split("/");
+    if (space === undefined || id === undefined || scopeKey === undefined) {
+      return undefined;
+    }
+    return {
+      document: `${space}/${id}/${scopeKey}`,
+      path,
+      root: documentAt(space, id, scopeKey),
+    };
+  };
+
+/**
+ * An address as telemetry spells it, `space/id/path`, which names no scope:
+ * the instance it names cannot be told, so it is not placed.
+ */
+const placeUnscoped: AddressPlacement = (key) => {
+  const [space, id, ...path] = key.split("/");
+  if (space === undefined || id === undefined) return undefined;
+  return {
+    document: `${space}/${id}`,
+    path: path.filter((segment) => segment.length > 0),
+    root: undefined,
+  };
+};
 
 /** What stands in a diagnostic for a value the ceiling refuses. */
 const WITHHELD = CFC_POLICY_PLACEHOLDER_TEXT;
@@ -747,10 +793,12 @@ export class HostReadGate {
     marker: RuntimeTelemetryMarkerResult,
     documentAt: DocumentAt,
     consumed?: () => SinkConsumedLabel,
+    graphDocumentAt: GraphDocumentAt = (space, id, scopeKey) =>
+      scopeKey === "space" ? documentAt(space, id) : undefined,
   ): TelemetryNotification {
     return decided({
       type: NotificationType.Telemetry as const,
-      marker: this.#markerShown(marker, documentAt, consumed),
+      marker: this.#markerShown(marker, documentAt, consumed, graphDocumentAt),
     });
   }
 
@@ -758,6 +806,7 @@ export class HostReadGate {
     marker: RuntimeTelemetryMarkerResult,
     documentAt: DocumentAt,
     consumed: (() => SinkConsumedLabel) | undefined,
+    graphDocumentAt: GraphDocumentAt,
   ): RuntimeTelemetryMarkerResult {
     // Decided once, on the first text the marker carries.
     let withheld: boolean | undefined;
@@ -765,6 +814,21 @@ export class HostReadGate {
       withheld ??= this.#withheld(consumed);
       return withheld ? WITHHELD : text;
     };
+    // A marker's addresses name no scope, so the instance one names cannot
+    // be told: under a policy each names its document alone.
+    const addresses = this.#addressesShown(placeUnscoped);
+    const info = (
+      actionInfo: SchedulerActionInfo | undefined,
+    ): { actionInfo?: SchedulerActionInfo } =>
+      actionInfo === undefined ? {} : {
+        actionInfo: {
+          ...actionInfo,
+          reads: addresses(actionInfo.reads),
+          writes: addresses(actionInfo.writes),
+        },
+      };
+    const error = (text: string | undefined) =>
+      text === undefined ? {} : { error: said(text) };
     switch (marker.type) {
       case "cell.update": {
         const error = marker.error === undefined
@@ -789,9 +853,33 @@ export class HostReadGate {
       }
       case "scheduler.run":
       case "scheduler.run.complete":
+        return {
+          ...marker,
+          ...info(marker.actionInfo),
+          ...error(marker.error),
+        };
       case "scheduler.invocation":
-      case "scheduler.event.commit":
-      case "scheduler.event.preflight":
+      case "scheduler.event.preflight": {
+        const { actionInfo: handlerInfo } = info(marker.handlerInfo);
+        return { ...marker, handlerInfo, ...error(marker.error) };
+      }
+      case "scheduler.event.commit": {
+        const { actionInfo: handlerInfo } = info(marker.handlerInfo);
+        return {
+          ...marker,
+          handlerInfo,
+          writes: addresses(marker.writes) ?? [],
+          ...error(marker.error),
+        };
+      }
+      case "scheduler.materializer.register":
+        return { ...marker, writes: addresses(marker.writes) ?? [] };
+      case "scheduler.dependencies.update":
+        return {
+          ...marker,
+          reads: addresses(marker.reads) ?? [],
+          writes: addresses(marker.writes) ?? [],
+        };
       case "storage.push.start":
       case "storage.push.complete":
       case "storage.pull.start":
@@ -816,15 +904,9 @@ export class HostReadGate {
           })),
         };
       case "scheduler.graph.snapshot":
-        // A marker names a document by space and id alone, so only the
-        // space instance's addresses are placed.
         return {
           ...marker,
-          graph: this.#graphShown(
-            marker.graph,
-            (space, id, scopeKey) =>
-              scopeKey === "space" ? documentAt(space, id) : undefined,
-          ),
+          graph: this.#graphShown(marker.graph, graphDocumentAt),
         };
       case "scheduler.read-attempt":
       case "runner.piece.install":
@@ -835,11 +917,9 @@ export class HostReadGate {
       case "harness.implementation.register":
       case "pattern.cache-write-back.start":
       case "pattern.cache-write-back.complete":
-      case "scheduler.materializer.register":
       case "scheduler.diagnosis.start":
       case "scheduler.settle":
       case "scheduler.subscribe":
-      case "scheduler.dependencies.update":
       case "scheduler.non-settling":
         return marker;
       default: {
@@ -847,6 +927,38 @@ export class HostReadGate {
         return undecided;
       }
     }
+  }
+
+  /**
+   * Addresses as a host may see them. A diagnostic names what an action read
+   * or wrote by address, field path included, and a field's path names the
+   * document's fields, so under a policy an address in a document the policy
+   * refuses names the document alone, as the trigger trace does. `place`
+   * splits an address into the document it names, its path, and the
+   * document's root where it can be placed; one that cannot be placed is
+   * named alone, and a string that is no address is withheld. Each
+   * document is decided once per call.
+   */
+  #addressesShown(
+    place: AddressPlacement,
+  ): (keys: readonly string[] | undefined) => string[] | undefined {
+    const verdicts = new Map<string, boolean>();
+    const shown = (key: string): string => {
+      const placed = place(key);
+      if (placed === undefined) return WITHHELD;
+      if (placed.path.length === 0) return key;
+      let refused = verdicts.get(placed.document);
+      if (refused === undefined) {
+        refused = placed.root === undefined ||
+          this.#cellRefusal(placed.root) !== undefined;
+        verdicts.set(placed.document, refused);
+      }
+      return refused ? placed.document : key;
+    };
+    return (keys) =>
+      keys === undefined || this.#policy === undefined
+        ? keys === undefined ? undefined : [...keys]
+        : [...new Set(keys.map(shown))];
   }
 
   /**
@@ -883,24 +995,7 @@ export class HostReadGate {
     documentAt: GraphDocumentAt,
   ): SchedulerGraphSnapshot {
     if (this.#policy === undefined) return snapshot;
-    const verdicts = new Map<string, boolean>();
-    const shown = (key: string): string => {
-      const [space, id, scopeKey, ...path] = key.split("/");
-      if (space === undefined || id === undefined || scopeKey === undefined) {
-        return WITHHELD;
-      }
-      if (path.length === 0) return key;
-      const document = `${space}/${id}/${scopeKey}`;
-      let refused = verdicts.get(document);
-      if (refused === undefined) {
-        const cell = documentAt(space, id, scopeKey);
-        refused = cell === undefined || this.#cellRefusal(cell) !== undefined;
-        verdicts.set(document, refused);
-      }
-      return refused ? document : key;
-    };
-    const addresses = (keys: string[] | undefined) =>
-      keys === undefined ? undefined : [...new Set(keys.map(shown))];
+    const addresses = this.#addressesShown(placeScoped(documentAt));
     return {
       ...snapshot,
       nodes: snapshot.nodes.map(({ preview: _withheld, ...node }) => ({

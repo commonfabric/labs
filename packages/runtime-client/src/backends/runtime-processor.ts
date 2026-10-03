@@ -3484,7 +3484,12 @@ export class RuntimeProcessor {
     if (!this.#telemetryEnabled) return;
     const { marker, consumed } = event as RuntimeTelemetryEvent;
     postToClient(
-      this.#hostReadGate.telemetry(marker, this.#documentAt, consumed),
+      this.#hostReadGate.telemetry(
+        marker,
+        this.#documentAt,
+        consumed,
+        this.#graphDocumentAt,
+      ),
     );
   };
 

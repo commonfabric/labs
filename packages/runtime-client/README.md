@@ -90,7 +90,9 @@ records, which carry what each member chose to share; and the action-run trace
 and the write-stack trace, which carry addresses, field paths included, and no
 values. The scheduler graph is decided: under a ceiling its nodes carry no
 function previews, and an address in a document the ceiling refuses names the
-document alone.
+document alone. Telemetry markers' addresses name no scope, so under a ceiling
+each names its document alone. A storage error's conflict set and a refused
+commit's inputs still carry addresses with field paths, and no values.
 
 Two things fall outside the tables:
 
