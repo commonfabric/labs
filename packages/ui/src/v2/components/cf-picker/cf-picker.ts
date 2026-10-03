@@ -1,6 +1,6 @@
 import { numberSchema, pieceListSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
-import { css, html, PropertyValues } from "lit";
+import { css, html, nothing, PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
 import {
@@ -22,7 +22,7 @@ import "../cf-render/index.ts";
  * @attr {boolean} disabled - Whether the picker is disabled
  * @attr {string} min-height - Optional minimum height for the picker area
  *
- * @prop {CellHandle<any[]> | any[]} items - Array of Cells with [UI] to render (CellHandle or plain array)
+ * @prop {CellHandle<any[]> | any[]} items - Array of Cells with [UI] to render (CellHandle or plain array); with none, the picker shows nothing
  * @prop {CellHandle<number>} selectedIndex - Two-way bound cell for current selection index
  *
  * @fires cf-change - Fired when selection changes: { index, value, items }
@@ -189,7 +189,7 @@ export class CFPicker extends BaseElement {
     disabled: { type: Boolean, reflect: true },
   };
 
-  declare items: CellHandle<any[]> | any[];
+  declare items: CellHandle<any[]> | any[] | undefined;
   declare selectedIndex: CellHandle<number>;
   declare minHeight: string;
   declare disabled: boolean;
@@ -266,11 +266,7 @@ export class CFPicker extends BaseElement {
 
   override firstUpdated() {
     this._indexCellController.bind(this.selectedIndex, numberSchema);
-    this._itemsCellController.bind(
-      isCellHandle(this.items)
-        ? this.items.asSchema(pieceListSchema)
-        : this.items,
-    );
+    this._itemsCellController.bind(this.#itemsToBind());
     this._updateAriaAttributes();
     this._updateMinHeight();
   }
@@ -281,12 +277,15 @@ export class CFPicker extends BaseElement {
       this._indexCellController.bind(this.selectedIndex, numberSchema);
     }
     if (changedProperties.has("items")) {
-      this._itemsCellController.bind(
-        isCellHandle(this.items)
-          ? this.items.asSchema(pieceListSchema)
-          : this.items,
-      );
+      this._itemsCellController.bind(this.#itemsToBind());
     }
+  }
+
+  /** The items as the controller binds them: a handle read as a piece list. */
+  #itemsToBind(): CellHandle<any[]> | any[] {
+    return isCellHandle(this.items)
+      ? this.items.asSchema(pieceListSchema)
+      : this.items ?? [];
   }
 
   override updated(changed: PropertyValues) {
@@ -303,6 +302,9 @@ export class CFPicker extends BaseElement {
   }
 
   override render() {
+    // A view's render policy withholds an `items` binding the viewer may not
+    // see, and then no items arrive, which is not an empty list.
+    if (this.items === undefined) return nothing;
     const items = this._getItems();
     const hasMultipleItems = items.length > 1;
     const currentIndex = items.length
