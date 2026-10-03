@@ -31,6 +31,7 @@ import {
   getCarriedCfcLabelView,
   isCell,
   recordRelevantSchemaWritePolicyInput,
+  recordWriteDestinationPolicyInput,
 } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { canonicalizeLogicalPath } from "./cfc/canonical.ts";
@@ -1256,12 +1257,12 @@ export function normalizeAndDiff(
   // the broader-scope slot holds a link to it, so readers at the broader scope
   // follow it to the narrower instance. A reference value (link/cell) is exempt:
   // it already carries its own target scope. Both writes recurse back through
-  // normalizeAndDiff so they get the usual diffing, no-op detection, and CFC
-  // label/policy handling. Applying this at the top of normalizeAndDiff makes it
-  // compose to arbitrary depth (every nested descent re-enters here): narrowing
-  // fires at whatever slot declares it. Element-level scope (an array's `items`
-  // schema) therefore yields one redirect per element, while array-level scope
-  // (the array slot's own schema) redirects the whole array.
+  // normalizeAndDiff so they get the usual diffing, no-op detection, and policy
+  // input for each link they write. Applying this at the top of normalizeAndDiff
+  // makes it compose to arbitrary depth (every nested descent re-enters here):
+  // narrowing fires at whatever slot declares it. Element-level scope (an
+  // array's `items` schema) therefore yields one redirect per element, while
+  // array-level scope (the array slot's own schema) redirects the whole array.
   const declaredScope = declaredCellScope(link.schema);
   if (
     declaredScope !== undefined &&
@@ -1270,6 +1271,18 @@ export function normalizeAndDiff(
     !isCell(newValue)
   ) {
     const scopedLink: NormalizedFullLink = { ...link, scope: declaredScope };
+    // A write's schema policy input is recorded where the write lands, and
+    // the write's entry point recorded it at the broader instance it started
+    // in. The narrower instance holds the content, so it takes an input of
+    // its own, and its envelope is stamped as a direct write to it would be:
+    // the labels this slot's schema declares, beside what the flow stamps.
+    // The broader slot keeps what its own input declares, beside the redirect.
+    recordWriteDestinationPolicyInput(
+      tx,
+      scopedLink,
+      scopedLink.schema,
+      options?.schemaRole,
+    );
     // The eager via-user hop (scopes.md §2's MUST, flag-gated so the OFF
     // arm keeps today's one-hop-per-event behavior): a space→session
     // narrowing writes CHAINED redirects, space→user→session — ALWAYS

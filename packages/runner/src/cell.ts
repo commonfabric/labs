@@ -400,6 +400,13 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
+/** Whether `schema` declares a type, and declares no array. */
+const schemaDeclaresOtherThanArray = (
+  schema: JSONSchema | undefined,
+): boolean =>
+  isObjectOrArray(schema) && schema.type !== undefined &&
+  !schemaDeclaresArray(schema);
+
 /**
  * The schema write-policy input for a write landing at an item of an array:
  * the array itself, with the item's schema as its `items`. A candidate
@@ -413,14 +420,17 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
  * envelope's at the item — a writer through a bare link answers to the
  * stored claim as any routed write does. The slot is an item of an array
  * where the parent holds one, or holds nothing yet and the stored envelope
- * declares one there: an absent container's first item write is still an
- * item write. A numeric key of an object stays a property. `undefined`
- * where none of that holds, or where no schema for the item is known; the
- * parent read propagates what `readValueOrThrow` throws, since an absent or
- * mismatched parent reads as `undefined` and anything else is a failure a
- * policy decision must not be built on. The item's own definitions move to
- * the array's root, where the envelope's references to them point. An item
- * of an item lifts through every index to the outermost array.
+ * declares no other type there: an absent container's first item write is
+ * still an item write, as the storage write creates an array for a missing
+ * container an index addresses. That includes the first write into an
+ * instance no envelope describes yet, such as the scoped instance a slot's
+ * content is narrowed into. A numeric key of an object stays a property.
+ * `undefined` where none of that holds, or where no schema for the item is
+ * known; the parent read propagates what `readValueOrThrow` throws, since an
+ * absent or mismatched parent reads as `undefined` and anything else is a
+ * failure a policy decision must not be built on. The item's own definitions
+ * move to the array's root, where the envelope's references to them point. An
+ * item of an item lifts through every index to the outermost array.
  */
 const arrayItemPolicyInput = (
   tx: IExtendedStorageTransaction,
@@ -462,7 +472,9 @@ const arrayItemPolicyInput = (
   if (
     !Array.isArray(held) &&
     (held !== undefined ||
-      !schemaDeclaresArray(storedSchemaForWritePolicyInput(tx, parent)))
+      schemaDeclaresOtherThanArray(
+        storedSchemaForWritePolicyInput(tx, parent),
+      ))
   ) {
     return undefined;
   }
@@ -489,6 +501,29 @@ const arrayItemPolicyInput = (
     lifted.schema,
     lifted.storedSchema,
   ) ?? lifted;
+};
+
+/**
+ * Records the schema write-policy input for a write of `schema`'s value
+ * landing at `destination`, an item of an array spelled as
+ * {@link arrayItemPolicyInput} spells it. The input describes the write, so it
+ * is recorded where the write lands: `Cell.set` records its destination, and
+ * the diff records the scoped instance a slot's content is narrowed into.
+ */
+export const recordWriteDestinationPolicyInput = (
+  tx: IExtendedStorageTransaction,
+  destination: NormalizedFullLink,
+  schema: JSONSchema | undefined,
+  schemaRole?: "output",
+): void => {
+  const policyInput = arrayItemPolicyInput(tx, destination, schema);
+  recordRelevantSchemaWritePolicyInput(
+    tx,
+    policyInput?.link ?? destination,
+    policyInput?.schema ?? schema,
+    schemaRole,
+    policyInput?.storedSchema,
+  );
 };
 
 /**
@@ -2557,17 +2592,10 @@ export class CellImpl<T extends FabricValue>
       // item's schema as its `items`: a candidate envelope spells a path
       // segment as a named property, and the stored schema spells the array
       // as one, so an input at the index alone could never merge with it.
-      const policyInput = arrayItemPolicyInput(
+      recordWriteDestinationPolicyInput(
         this.#tx,
         writeLink,
         writeLink.schema ?? this.schema,
-      );
-      recordRelevantSchemaWritePolicyInput(
-        this.#tx,
-        policyInput?.link ?? writeLink,
-        policyInput?.schema ?? writeLink.schema ?? this.schema,
-        undefined,
-        policyInput?.storedSchema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj

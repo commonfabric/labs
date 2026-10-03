@@ -2603,6 +2603,113 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("persists a narrowed write's CFC metadata on the scoped instance it lands in", async () => {
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const tx = runtime.edit();
+      tx.setCfcEnforcementMode("enforce-explicit");
+      // Written through the space instance: `notes` narrows into the user
+      // instance, and the space slot keeps a redirect to it.
+      const cell = runtime.getCell(
+        signer.did(),
+        "cfc-scoped-narrowed-write",
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            notes: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          },
+        },
+        tx,
+      );
+      cell.set({ title: "t", notes: "hello" });
+      tx.prepareCfc();
+      expect((await tx.commit()).ok).toBeDefined();
+      const id = parseLink(cell.getAsLink()).id!;
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string, scope?: "space" | "user" | "session"): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: unknown[] } };
+        } | undefined;
+      };
+      const scopedPersisted = replica.getDocument(id, "user");
+      const spacePersisted = replica.getDocument(id, "space");
+      const declared = {
+        path: ["notes"],
+        label: { confidentiality: ["secret"], integrity: ["trusted"] },
+        origin: "declared",
+      };
+
+      expect(scopedPersisted?.value).toEqual({ notes: "hello" });
+      expect(scopedPersisted?.cfc?.labelMap?.entries).toEqual([declared]);
+      // The space slot keeps the label its own input declares, beside the
+      // redirect's link entry.
+      expect(spacePersisted?.cfc?.labelMap?.entries).toContainEqual(declared);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("commits an element narrowed into a scoped instance again once that instance holds the array", async () => {
+    // The first write creates the user instance's array; its envelope spells
+    // the array as one, so the next write's input, at the array the
+    // instance now holds, merges with it.
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const schema = {
+        type: "object",
+        properties: {
+          list: {
+            type: "array",
+            items: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+      let id = "";
+      for (const list of [["a"], ["a", "b"]]) {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-explicit");
+        const cell = runtime.getCell(
+          signer.did(),
+          "cfc-scoped-narrowed-elements",
+          schema,
+          tx,
+        );
+        cell.set({ list });
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+        id = parseLink(cell.getAsLink()).id!;
+      }
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string, scope?: "space" | "user" | "session"): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: unknown[] } };
+        } | undefined;
+      };
+      const scopedPersisted = replica.getDocument(id, "user");
+      expect(scopedPersisted?.value).toEqual({ list: ["a", "b"] });
+      expect(scopedPersisted?.cfc?.labelMap?.entries).toEqual([{
+        path: ["list", "*"],
+        label: { confidentiality: ["secret"] },
+        origin: "declared",
+      }]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("persists CFC metadata for stored link writes without link schema", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
