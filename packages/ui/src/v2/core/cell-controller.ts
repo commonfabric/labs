@@ -207,6 +207,9 @@ export class CellController<T> implements ReactiveController {
         sameCellDoc(this._currentValue.ref(), value.ref());
       if (!samePersistentCell) {
         this._bindEpoch++;
+        // A write waiting on its timing was made for the cell bound when it
+        // was asked for; run later, it would go to whatever is bound then.
+        this._inputTiming?.cancel();
         this._localEdit = undefined;
         this._settledAwaitingRelease = false;
         this._lastKnownValue = undefined;
@@ -214,8 +217,9 @@ export class CellController<T> implements ReactiveController {
         this._refusal = undefined;
       }
       // A refusal of the same cell stands across the rebind: the new handle
-      // has read nothing yet, which says nothing of the cell. It ends when a
-      // read through the new handle is admitted.
+      // has read nothing yet, which says nothing of the cell. It ends when the
+      // new handle holds a value: one a read of it returned, or one written
+      // through it.
       this._cleanupCellSubscription();
       // Only apply the component's schema when the CellHandle doesn't already
       // have one. Pattern-compiled $bindings (e.g. $images, $files) arrive with
@@ -231,7 +235,7 @@ export class CellController<T> implements ReactiveController {
         this._currentValue = value;
       }
       this._setupCellSubscription();
-      if (this._refusal !== undefined) this._askWorker();
+      if (this._refusal !== undefined) void this._askWorker();
     }
   }
 
@@ -284,10 +288,17 @@ export class CellController<T> implements ReactiveController {
    * refused nothing is written, and while the bound handle has read nothing
    * yet the worker is asked first, and the value computed from its answer.
    * That nothing is not a value: a toggle or a list computed from it would
-   * replace one never shown. Settles once the value is written or passed
-   * over.
+   * replace one never shown. A refusal of the read asked for stops it, even
+   * where an update that raced it left the handle holding a value.
+   *
+   * `compute` is handed what the controller reads as, which is `undefined`
+   * for a cell that holds nothing where the controller has no empty value of
+   * its own. A value equal to the current one is not written. Settles once
+   * the value is written or passed over.
    */
-  updateValue(compute: (current: Readonly<T>) => T): Promise<void> {
+  updateValue(
+    compute: (current: Readonly<T> | undefined) => T,
+  ): Promise<void> {
     if (this._currentValue === undefined || this._currentValue === null) {
       return Promise.resolve();
     }
@@ -296,35 +307,48 @@ export class CellController<T> implements ReactiveController {
       ? this._currentValue as CellHandle<T>
       : undefined;
     if (handle === undefined || !("unread" in handle.lastRead())) {
-      this.setValue(compute(this.getValue()));
+      this._writeComputed(compute);
       return Promise.resolve();
     }
     const epoch = this._bindEpoch;
-    return this._askWorker().then(() => {
+    return this._askWorker().then((admitted) => {
       if (
-        epoch !== this._bindEpoch || this._currentValue !== handle ||
-        this._refusal !== undefined || !("value" in handle.lastRead())
+        !admitted || epoch !== this._bindEpoch ||
+        this._currentValue !== handle || this._refusal !== undefined ||
+        !("value" in handle.lastRead())
       ) return;
-      this.setValue(compute(this.getValue()));
+      this._writeComputed(compute);
     });
+  }
+
+  /** Writes what `compute` makes of the current value, where it changes it. */
+  private _writeComputed(
+    compute: (current: Readonly<T> | undefined) => T,
+  ): void {
+    const current = this.getValue();
+    const next = compute(current);
+    if (deepValueEqual(next, current)) return;
+    this.setValue(next);
   }
 
   /**
    * Asks the worker to read the bound cell. The answer reaches the
    * controller through its subscription, a refusal as much as a value, and
    * answers a handle that has read nothing yet even where the cell holds
-   * nothing, which its subscription never delivers.
+   * nothing, which its subscription never delivers. Settles with whether the
+   * worker admitted the read.
    */
-  private _askWorker(): Promise<void> {
-    if (!isCellHandle(this._currentValue)) return Promise.resolve();
+  private _askWorker(): Promise<boolean> {
+    if (!isCellHandle(this._currentValue)) return Promise.resolve(true);
     return (this._currentValue as CellHandle<T>).pull({
       awaitDurability: false,
     }).then(
-      () => {},
+      () => true,
       (error) => {
         if (!(error instanceof CellReadRefusedError)) {
           console.error("[CellController] Reading the cell failed:", error);
         }
+        return false;
       },
     );
   }
@@ -742,7 +766,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
       cell.push(item);
     } else {
       // Fallback for plain arrays
-      void this.updateValue((current) => [...current, item]);
+      void this.updateValue((current) => [...(current ?? []), item]);
     }
   }
 
@@ -754,7 +778,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
     // `Object.is` matching: a `NaN` element is removable, and `0`/`-0` are
     // distinct.
     return this.updateValue((current) =>
-      current.filter((item) => !Object.is(item, itemToRemove))
+      (current ?? []).filter((item) => !Object.is(item, itemToRemove))
     );
   }
 

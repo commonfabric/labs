@@ -14,6 +14,7 @@ import {
   holdReads,
   pushRefusal,
   pushUpdate,
+  refuseReads,
   writesSent,
 } from "../test-utils/mock-cell-handle.ts";
 import {
@@ -827,6 +828,21 @@ describe("CellController — a handle that has read nothing yet", () => {
     ]);
   });
 
+  it("computes nothing once the read it asked for is refused, though an update raced it", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle<boolean>();
+    refuseReads(cell);
+    ctrl.bind(cell);
+
+    const toggled = ctrl.toggle();
+    // An update arrives while the read is on the way; the read's refusal is
+    // then not the latest answer, but it is the answer to the toggle.
+    pushUpdate(cell, false);
+    await toggled;
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
   it("still writes a value typed in, which is computed from nothing it read", () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
@@ -851,6 +867,23 @@ describe("CellController — a refusal, then an admission, while a write waits",
   });
   afterEach(() => {
     time.restore();
+  });
+
+  it("drops a write waiting on its timing when it is bound to another cell, rather than make it there", () => {
+    const ctrl = new CellController<string[]>(createMockHost(), {
+      timing: { strategy: "debounce", delay: 50 },
+    });
+    const first = createMockCellHandle(["a"]);
+    ctrl.bind(first);
+    ctrl.setValue(["a", "x"]);
+
+    const other = createMockCellHandle<string[]>(undefined, {
+      id: "of:another-cell",
+    });
+    ctrl.bind(other);
+    time.tick(50);
+
+    expect(writesSent(other)).toEqual([]);
   });
 
   it("drops the write typed before the refusal, rather than make it over the admitted value", () => {
