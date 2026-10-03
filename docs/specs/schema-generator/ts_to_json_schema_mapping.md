@@ -597,7 +597,12 @@ pre-cleanup schemas.
   formats member-wise, preserving `{ type: "undefined" }` / `{ type: "null" }`,
   skipping conditional/type-parameter members, deduping identical member
   schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`).
-  Mixed unions fall to `UnionFormatter`. Primitive alternatives merge only
+  Mixed unions fall to `UnionFormatter`. A wrapper that CFC labels hold, as
+  `Confidential<Cell<T>, …>` does, is a labeled value rather than a wrapper
+  here: a union holding one falls to `UnionFormatter`, which reads it through
+  its CFC alias, so `Confidential<Cell<string>, ["b"]> | undefined` keeps
+  `ifc` on the cell's alternative (tested: cfc-authoring "a labeled cell that
+  may be missing", the runner's cfc-labeled-cell-input). Primitive alternatives merge only
   when both schemas contain exclusively `type` and `enum`; metadata-bearing
   alternatives, including Cell wrappers, remain separate even when their
   underlying primitive types match.
@@ -781,9 +786,14 @@ Default paths of §7:
   **`type` arrays** — how `string | undefined` becomes
   `{ type: ["string","undefined"] }` (fixture `default-with-undefined-union`).
   Singletons unwrap.
-- **`widenLiterals`** additionally merges structurally-identical-modulo-enum
-  member schemas before the anyOf pass (`mergeIdenticalSchemas`). It does
-  **not** reach the all-literal path:
+- **`widenLiterals`** additionally merges member schemas that differ only in
+  their literal values, an `enum` or a `const` whose values share one base
+  type, widening those to that type, before the anyOf pass
+  (`mergeIdenticalSchemas`). Every other keyword, at any depth, must match
+  for members to merge, and the merged member keeps it: a cell and a plain
+  value of one type, two cells under different labels, two named types (two
+  `$ref`s), and literals of more than one type all stay separate members.
+  It does **not** reach the all-literal path:
   `"a" | "b"` still emits `{ enum: ["a","b"] }` under `widenLiterals: true`
   (probe; the all-literal `enum` branch runs first and never consults the
   flag).
@@ -1523,12 +1533,12 @@ declaration file is the default library's (the transformer supplies
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);
-(2) structurally-identical-modulo-enum union members merge recursively
-(`union-formatter.ts`). It does **not** widen all-literal
-unions (§8) and has no other effects. `test/widen-literals.test.ts` pins the
-in-package behavior; consumer-side it is extracted from `toSchema` options and
-exercised via ts-transformers' injection paths
-(`ts-transformers/.../schema-generator.ts`).
+(2) union members that differ only in their literal values merge
+recursively, keeping every other keyword (`union-formatter.ts`). It does
+**not** widen all-literal unions (§8) and has no other effects.
+`test/widen-literals.test.ts` pins the in-package behavior; consumer-side it is
+extracted from `toSchema` options and exercised via ts-transformers' injection
+paths (`ts-transformers/.../schema-generator.ts`).
 
 ## 15. Fail-Loud Inventory And Silent Degradations
 

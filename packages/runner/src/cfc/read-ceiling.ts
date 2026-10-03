@@ -35,7 +35,7 @@ import {
   cfcLabelViewFromMetadata,
   rebaseCfcLabelView,
 } from "./label-view-state.ts";
-import { readStoredCfcMetadata } from "./metadata.ts";
+import { readStoredCfcLabelsForReader } from "./metadata.ts";
 import { atomsOutsideCeiling } from "./observation.ts";
 import { readConsumesEntry } from "./observation-classes.ts";
 
@@ -148,10 +148,12 @@ export class CfcReadCeilingError extends Error {
 /**
  * Measures a payload read against its runtime ceiling before returning content.
  * Labels come from the stored envelope, including descendants of a raw object
- * read. A link-resolution probe issued inside dereference resolution or marked
- * as runtime wiring is machinery, as are write-destination and scheduler
- * dependency probes. A standalone link probe observes the pointer and is
- * measured here; the content read after resolution is measured at its target.
+ * read, and for a scoped instance from its broader instances' confidentiality
+ * too (`readStoredCfcLabelsForReader`). A link-resolution probe issued inside
+ * dereference resolution or marked as runtime wiring is machinery, as are
+ * write-destination and scheduler dependency probes. A standalone link probe
+ * observes the pointer and is measured here; the content read after
+ * resolution is measured at its target.
  */
 export function assertCfcReadCeiling(
   tx: IExtendedStorageTransaction,
@@ -169,7 +171,7 @@ export function assertCfcReadCeiling(
     isWriteDestinationRead(options?.meta) ||
     isSchedulerDependencyRead(options?.meta)
   ) return;
-  const metadata = readStoredCfcMetadata(tx, address);
+  const metadata = readStoredCfcLabelsForReader(tx, address);
   // A read addresses the stored document, so its path is rooted there.
   const documentPath = toDocumentPath(address.path);
   let entries = cfcLabelViewFromMetadata(
