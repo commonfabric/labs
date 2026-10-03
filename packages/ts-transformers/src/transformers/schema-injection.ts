@@ -25,6 +25,8 @@ import {
   isCallbackReference,
   isCellLikeType,
   isFunctionLikeExpression,
+  isReactiveValueExpression,
+  isReactiveValueSymbol,
   isSyntheticNode,
   isUnresolvedSchemaType,
   preserveSourceMapRange,
@@ -880,16 +882,133 @@ function isToSchemaCall(node: ts.Expression): node is ts.CallExpression {
 /**
  * Marks `schema`, a schema argument the author wrote where SchemaInjection
  * would otherwise inject one that defines a document, as defining it
- * (`CrossStageState.markDocumentSchemaCall`), where it is a `toSchema` call
- * the schema generator reads. A schema written out as a literal is read as
- * written.
+ * (`CrossStageState.markDocumentSchemaCall`). What is marked is the
+ * `toSchema` call that generates it (`generatingToSchemaCall()`). A schema
+ * written out as a literal is read as written. A `toSchema` call in another
+ * module is generated there, unmarked, as one that views a document; where
+ * its type holds a writer policy, the schema could lose that writer with
+ * nothing reported, so the reference is reported instead.
  */
 function markAuthoredDocumentSchema(
   schema: ts.Expression,
   context: TransformationContext,
 ): void {
-  const call = unwrapExpression(schema);
-  if (isToSchemaCall(call)) context.state.markDocumentSchemaCall(call);
+  const call = generatingToSchemaCall(schema, context.checker);
+  if (!call) return;
+  if (call.getSourceFile().fileName === context.sourceFile.fileName) {
+    context.state.markDocumentSchemaCall(call);
+    return;
+  }
+  const typeArgument = call.typeArguments?.[0];
+  if (
+    typeArgument &&
+    holdsWriterPolicy(
+      context.checker.getTypeFromTypeNode(typeArgument),
+      context.checker,
+    )
+  ) {
+    context.reportDiagnosticOnce({
+      severity: "error",
+      type: "cfc-write-authorized-by:unread",
+      message: "This schema defines a document, and the `toSchema` call that " +
+        "generates it is in another module, which generates it as a schema " +
+        "that views a document: a writer policy it holds that names no " +
+        "writer there would be lost with nothing reported, and the document " +
+        "would admit any writer. Call `toSchema` in this module.",
+      node: schema,
+    });
+  }
+}
+
+/**
+ * The `toSchema` call that `expression` evaluates to: one written in place,
+ * or one a `const` binding or a property of a `const` object literal holds,
+ * through imports, `as`, `satisfies`, `!` and parentheses. `undefined` for
+ * any other expression, such as a schema written out as a literal.
+ */
+function generatingToSchemaCall(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  depth = 0,
+): ts.CallExpression | undefined {
+  if (depth >= 8) return undefined;
+  const value = unwrapExpression(expression);
+  if (isToSchemaCall(value)) return value;
+  const next = (inner: ts.Expression | undefined) =>
+    inner && generatingToSchemaCall(inner, checker, depth + 1);
+  if (ts.isIdentifier(value)) return next(constInitializer(value, checker));
+  if (
+    !ts.isPropertyAccessExpression(value) &&
+    !ts.isElementAccessExpression(value)
+  ) {
+    return undefined;
+  }
+  const key = ts.isPropertyAccessExpression(value)
+    ? value.name.text
+    : ts.isStringLiteralLike(value.argumentExpression) ||
+        ts.isNumericLiteral(value.argumentExpression)
+    ? value.argumentExpression.text
+    : undefined;
+  let holder: ts.Expression | undefined = unwrapExpression(value.expression);
+  if (ts.isIdentifier(holder)) {
+    holder = constInitializer(holder, checker);
+    holder = holder && unwrapExpression(holder);
+  }
+  if (key === undefined || !holder || !ts.isObjectLiteralExpression(holder)) {
+    return undefined;
+  }
+  for (const property of holder.properties) {
+    if (staticPropertyName(property.name) !== key) continue;
+    if (ts.isPropertyAssignment(property)) return next(property.initializer);
+    if (ts.isShorthandPropertyAssignment(property)) {
+      return next(property.name);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The initializer of the `const` declaration `identifier` names, through an
+ * import of one.
+ */
+function constInitializer(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.Expression | undefined {
+  let symbol = ts.isShorthandPropertyAssignment(identifier.parent)
+    ? checker.getShorthandAssignmentValueSymbol(identifier.parent)
+    : checker.getSymbolAtLocation(identifier);
+  if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declaration = symbol?.valueDeclaration;
+  return declaration && ts.isVariableDeclaration(declaration) &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+    ? declaration.initializer
+    : undefined;
+}
+
+/**
+ * The name `name` gives its member where no evaluation is needed to read it:
+ * an identifier, a string or numeric literal, or a computed name holding one.
+ */
+function staticPropertyName(
+  name: ts.PropertyName | undefined,
+): string | undefined {
+  if (!name) return undefined;
+  if (
+    ts.isIdentifier(name) || ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  if (ts.isComputedPropertyName(name)) {
+    const key = unwrapExpression(name.expression);
+    return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)
+      ? key.text
+      : undefined;
+  }
+  return undefined;
 }
 
 function createUnknownSchemaTypeNode(factory: ts.NodeFactory): ts.TypeNode {
@@ -2106,15 +2225,18 @@ function buildObjectLiteralReturnTypeNode(
 }
 
 /**
- * Whether `expr`, a value a pattern's callback returns, puts fresh data where
- * `type`, the type its schema is read from, carries a writer policy. Fresh
- * data is what the result document holds itself: a literal, a template whose
- * parts are all literals, an object or array literal, or a `const` bound to
- * one, seen through `as`, `satisfies`, `!` and parentheses. An object or
- * array literal is fresh data itself, carrying `type`'s own policy, and is
- * read member by member against `type`'s members, any of which may be a
- * reference instead. A reference, a call, or any other expression reaches
- * another document, or derives from one.
+ * Whether `expr`, a value a pattern's callback returns, puts data the result
+ * document holds itself where `type`, the type its schema is read from,
+ * carries a writer policy. Only a reactive reference
+ * (`isReactiveReference()`) is a view of a document that exists
+ * already: the pattern's argument, a cell, the result of a reactive call, or
+ * a member of one. An object or array literal holds its own data, carrying
+ * `type`'s own policy, and is read member by member against `type`'s members,
+ * a spread among them; a member whose name cannot be read statically is read
+ * against its own type. A `const` binding is read through its initializer.
+ * Anything else that is not a reactive reference, such as a literal or a
+ * plain call's result, is data the result document holds, so the policy
+ * `type` holds counts as its own. Past a nesting bound the same holds.
  */
 function holdsFreshWriterPolicy(
   expr: ts.Expression,
@@ -2122,85 +2244,99 @@ function holdsFreshWriterPolicy(
   checker: ts.TypeChecker,
   depth = 0,
 ): boolean {
-  if (depth >= 8) return false;
   const value = unwrapExpression(expr);
-  const within = (inner: ts.Expression, innerType: ts.Type | undefined) =>
-    !!innerType && holdsFreshWriterPolicy(inner, innerType, checker, depth + 1);
+  if (isReactiveReference(value, checker)) return false;
+  if (depth >= 8) return holdsWriterPolicy(type, checker);
+  const within = (inner: ts.Expression, innerType: ts.Type) =>
+    holdsFreshWriterPolicy(inner, innerType, checker, depth + 1);
   if (ts.isObjectLiteralExpression(value)) {
     const object = checker.getNonNullableType(type);
     return carriesWriterPolicy(type, checker) ||
       value.properties.some((property) => {
-        if (
-          !ts.isPropertyAssignment(property) &&
-          !ts.isShorthandPropertyAssignment(property)
-        ) {
-          return false;
+        if (ts.isSpreadAssignment(property)) {
+          return within(property.expression, type);
         }
-        const name = ts.isIdentifier(property.name) ||
-            ts.isStringLiteral(property.name) ||
-            ts.isNumericLiteral(property.name)
-          ? property.name.text
-          : undefined;
+        const name = staticPropertyName(property.name);
         const member = name === undefined
           ? undefined
           : checker.getPropertyOfType(object, name);
-        return within(
-          ts.isPropertyAssignment(property)
-            ? property.initializer
-            : property.name,
-          member && checker.getTypeOfSymbol(member),
-        );
+        if (ts.isPropertyAssignment(property)) {
+          return within(
+            property.initializer,
+            member
+              ? checker.getTypeOfSymbol(member)
+              : checker.getTypeAtLocation(property.initializer),
+          );
+        }
+        if (ts.isShorthandPropertyAssignment(property)) {
+          return within(
+            property.name,
+            member
+              ? checker.getTypeOfSymbol(member)
+              : checker.getTypeAtLocation(property.name),
+          );
+        }
+        // A method holds no data; an accessor's value is read from its type.
+        return holdsWriterPolicy(checker.getTypeAtLocation(property), checker);
       });
   }
   if (ts.isArrayLiteralExpression(value)) {
     const array = checker.getNonNullableType(type);
-    const elementTypes = checker.isTupleType(array)
+    // A spread shifts the positions after it, so a tuple's elements are then
+    // read against the type of any of them.
+    const elementTypes = checker.isTupleType(array) &&
+        !value.elements.some(ts.isSpreadElement)
       ? checker.getTypeArguments(array as ts.TypeReference)
       : undefined;
-    const elementType = checker.isArrayType(array)
-      ? checker.getTypeArguments(array as ts.TypeReference)[0]
-      : checker.getIndexTypeOfType(array, ts.IndexKind.Number);
+    const elementType = checker.getIndexTypeOfType(array, ts.IndexKind.Number);
     return carriesWriterPolicy(type, checker) ||
-      value.elements.some((element, index) =>
-        !ts.isSpreadElement(element) &&
-        within(element, elementTypes ? elementTypes[index] : elementType)
-      );
+      value.elements.some((element, index) => {
+        if (ts.isOmittedExpression(element)) return false;
+        if (ts.isSpreadElement(element)) {
+          return within(element.expression, type);
+        }
+        const elementTypeAt = elementTypes?.[index] ?? elementType;
+        return within(
+          element,
+          elementTypeAt ?? checker.getTypeAtLocation(element),
+        );
+      });
   }
-  if (isFreshLiteral(value)) return holdsWriterPolicy(type, checker);
-  if (!ts.isIdentifier(value)) return false;
-  const symbol = ts.isShorthandPropertyAssignment(value.parent)
-    ? checker.getShorthandAssignmentValueSymbol(value.parent)
-    : checker.getSymbolAtLocation(value);
-  const declaration = symbol?.valueDeclaration;
-  return !!declaration && ts.isVariableDeclaration(declaration) &&
-    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
-    !!declaration.initializer && within(declaration.initializer, type);
+  if (ts.isIdentifier(value)) {
+    const initializer = constInitializer(value, checker);
+    if (initializer) return within(initializer, type);
+  }
+  return holdsWriterPolicy(type, checker);
 }
 
 /**
- * Whether `expr` is a literal: a primitive, or a template or a signed number
- * made of literals alone.
+ * Whether `expression` is a reactive reference (`isReactiveValueExpression()`),
+ * reading a shorthand property's name as the binding it reads rather than as
+ * the property it declares.
  */
-function isFreshLiteral(expr: ts.Expression): boolean {
-  const value = unwrapExpression(expr);
-  if (ts.isPrefixUnaryExpression(value)) return isFreshLiteral(value.operand);
-  if (ts.isTemplateExpression(value)) {
-    return value.templateSpans.every((span) => isFreshLiteral(span.expression));
-  }
-  return ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) ||
-    ts.isBigIntLiteral(value) || ts.isRegularExpressionLiteral(value) ||
-    value.kind === ts.SyntaxKind.TrueKeyword ||
-    value.kind === ts.SyntaxKind.FalseKeyword ||
-    value.kind === ts.SyntaxKind.NullKeyword;
+function isReactiveReference(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+): boolean {
+  return isReactiveValueExpression(expression, checker) ||
+    (ts.isIdentifier(expression) &&
+      ts.isShorthandPropertyAssignment(expression.parent) &&
+      expression.parent.name === expression &&
+      isReactiveValueSymbol(
+        checker.getShorthandAssignmentValueSymbol(expression.parent),
+        checker,
+      ));
 }
 
 /**
  * For a pattern's inferred result, the result type node rebuilt from
- * `returned`, the object literal its callback returns, with each fresh value
- * that carries a writer policy hinted as defining the result document
- * (`SchemaHint.definesDocument`); `undefined` where it returns no such value.
- * A returned value the rebuild cannot read member by member, or a fresh value
- * returned whole, is `"whole"`: the whole result then defines its document.
+ * `returned`, the object literal its callback returns, with each member that
+ * puts data the result document holds under a writer policy
+ * (`holdsFreshWriterPolicy()`) hinted as defining that document
+ * (`SchemaHint.definesDocument`); `undefined` where it returns no such data.
+ * A returned value that is not an object literal, or one the rebuild cannot
+ * read member by member, such as one holding a spread, is `"whole"`: the
+ * whole result then defines its document.
  */
 function freshResultTypeNode(
   returned: ts.Expression | undefined,
@@ -2210,19 +2346,17 @@ function freshResultTypeNode(
   typeRegistry: TypeRegistry | undefined,
   context: TransformationContext,
 ): ts.TypeNode | "whole" | undefined {
-  if (!returned) return undefined;
-  const carriesWriter = (value: ts.Expression) =>
-    holdsFreshWriterPolicy(value, checker.getTypeAtLocation(value), checker);
-  if (!ts.isObjectLiteralExpression(returned)) {
-    return carriesWriter(returned) ? "whole" : undefined;
+  if (
+    !returned ||
+    !holdsFreshWriterPolicy(
+      returned,
+      checker.getTypeAtLocation(returned),
+      checker,
+    )
+  ) {
+    return undefined;
   }
-  const fresh = returned.properties.some((property) =>
-    ts.isPropertyAssignment(property)
-      ? carriesWriter(property.initializer)
-      : ts.isShorthandPropertyAssignment(property) &&
-        carriesWriter(property.name)
-  );
-  if (!fresh) return undefined;
+  if (!ts.isObjectLiteralExpression(returned)) return "whole";
   return buildObjectLiteralReturnTypeNode(
     returned,
     checker,
