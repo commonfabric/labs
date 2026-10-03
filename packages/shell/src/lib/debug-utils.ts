@@ -467,7 +467,7 @@ export function createDebugUtils(
       });
       // A refused read says so, as `CellHandle.sync()` does below, rather
       // than return as a cell that holds nothing.
-      if ("refused" in response) {
+      if (response.refused !== undefined) {
         throw new CellReadRefusedError(response.refused);
       }
       value = CellHandle.deserialize(
