@@ -3414,7 +3414,9 @@ export class SchemaGenerator {
       }
       // Filter out `false` schemas (from `never` types) — they reject all
       // values and are no-ops inside anyOf.
-      const filtered = memberSchemas.filter((s) => s !== false);
+      const filtered = dedupeByValueEqual(
+        memberSchemas.filter((s) => s !== false),
+      );
       if (filtered.length === 0) return false;
       if (filtered.length === 1) return filtered[0]!;
       return { anyOf: filtered as MutableJSONSchemaObj[] };
@@ -4070,9 +4072,7 @@ export class SchemaGenerator {
             ? node.typeName
             : node.typeName.right;
           const symbol = this.#resolveTypeName(node, name, checker, at);
-          if (
-            symbol?.name === "WriteAuthorizedBy" || symbol?.name === "Owned"
-          ) {
+          if (symbol?.name === "WriteAuthorizedBy") {
             const binding = node.typeArguments?.[1];
             if (binding && visit(binding, at, true)) return true;
           }

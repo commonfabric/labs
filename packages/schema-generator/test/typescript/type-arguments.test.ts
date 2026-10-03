@@ -40,6 +40,18 @@ const boxOfNumber = {
 };
 
 describe("type-arguments", () => {
+  it("emits one schema for equal arms of a generic marker union", async () => {
+    expect(
+      await schemaOfC(`
+      declare const FRAMEWORK_MARKER: unique symbol;
+      type FrameworkProvidedMarker = { readonly [FRAMEWORK_MARKER]: true };
+      type FrameworkProvided<T> = (T & FrameworkProvidedMarker) | T;
+      interface Input<T> { c: FrameworkProvided<T> }
+      type Root = Input<string>;
+    `),
+    ).toEqual({ type: "string" });
+  });
+
   describe("a property declared in a generic interface", () => {
     // Each property is read for an instantiation of its interface, and its
     // schema is the one the property gets with the argument written in place.

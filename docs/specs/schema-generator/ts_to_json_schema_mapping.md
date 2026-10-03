@@ -114,7 +114,8 @@ tuples, else an array's items read through a reference — the same lossy
 form as the type path), intersections (reduced as the checker reduces the
 types, then merged as `IntersectionFormatter` merges them; the rules are
 below), unions (`true` member short-circuits, `false` members filtered,
-singletons unwrapped), literal nodes, `TypeReference` nodes (wrapper
+formatted arms deduplicated by value-model equality, singletons unwrapped),
+literal nodes, `TypeReference` nodes (wrapper
 detection first; then the default library's generic aliases — `Readonly`,
 `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`, `Array`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the

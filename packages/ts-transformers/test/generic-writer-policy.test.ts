@@ -85,6 +85,29 @@ export default ${
       );
     });
 
+    it(`matches Partial of an ordinary Owned alias and its declared shape in the ${position} schema`, async () => {
+      const output = await transformSource(
+        `import { pattern } from "commonfabric";
+interface Shape { text: string; value: number; child: { n: number }; values: number[] }
+declare const x: Shape;
+type Owned<T, Binding> = T;
+type Payload = { named: Partial<Owned<Shape, typeof x>>; declared: Partial<Shape> };
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      const root = valueSchema(schema, schema);
+      expect(valueSchema(root.properties?.named, schema)).toEqual(
+        valueSchema(root.properties?.declared, schema),
+      );
+    });
+
     it(`keeps nongeneric aliases of different instantiations distinct in the ${position} schema`, async () => {
       const output = await transformSource(
         `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
