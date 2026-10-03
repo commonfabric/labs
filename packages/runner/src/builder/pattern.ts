@@ -651,6 +651,7 @@ function factoryFromPattern<T, R>(
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
     spaceGrants?: InSpaceGrants,
+    spaceRoot?: true,
   ): PatternFactory<T, R> => {
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
@@ -670,11 +671,13 @@ function factoryFromPattern<T, R>(
           const targetSpace = resolveInSpaceTargetSpace(
             defaultSpace,
             spaceGrants,
+            spaceRoot,
             frame,
           );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
+            if (spaceRoot) module.targetSpaceRoot = true;
           }
         }
         const node: NodeRef = {
@@ -708,7 +711,12 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
+      const derived = makePatternFactory(
+        scope,
+        defaultSpace,
+        spaceGrants,
+        spaceRoot,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -726,10 +734,17 @@ function factoryFromPattern<T, R>(
           );
         }
       }
+      if (options?.root && (isDID(space) || isCell(space))) {
+        throw new Error(
+          "inSpace() makes a pattern the root only of a space it creates, " +
+            "and a DID or a cell names a space that exists",
+        );
+      }
       const derived = makePatternFactory(
         defaultScope,
         space ?? "",
         options?.grants,
+        options?.root ? true : undefined,
       );
       noteDerivedCopy(derived, factory);
       return derived;
@@ -1133,8 +1148,8 @@ function assignComputedCellKinds(
  *   returned; the runner resolves pending names after the run and re-runs the
  *   handler or action (RetryImmediately), at which point the target resolves
  *   synchronously. The first call to name a space in a run is the one whose
- *   grants create it: a later call naming it reads the record that call
- *   writes, as it would read the record of an earlier run.
+ *   grants and `root` create it: a later call naming it reads the record that
+ *   call writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
@@ -1143,6 +1158,7 @@ function assignComputedCellKinds(
 function resolveInSpaceTargetSpace(
   space: unknown,
   grants: InSpaceGrants | undefined,
+  root: true | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1166,12 +1182,18 @@ function resolveInSpaceTargetSpace(
     name,
     tx,
     grants,
+    root,
   );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
   const pending = frame!.pendingSpaceNames ??= new Map();
-  if (!pending.has(name)) pending.set(name, grants);
+  if (!pending.has(name)) {
+    pending.set(name, {
+      ...(grants !== undefined ? { grants } : {}),
+      ...(root ? { root } : {}),
+    });
+  }
   return undefined;
 }
 

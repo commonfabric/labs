@@ -141,6 +141,7 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "./reader-schema-precedence-config.ts";
 import {
+  IN_SPACE_ROOT_CAUSE,
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
@@ -1037,21 +1038,23 @@ const inSpaceAllocationSchema = {
 
 /**
  * The key under which a space created for the `inSpace` name `name` of the
- * space `space` is remembered: the name, together with the owner and the
- * grants the space was created with, so that only a request for the same
- * access-control document finds it. Grants are keyed in principal order.
+ * space `space` is remembered: the name, together with the owner, the grants
+ * and the root reservation the space was created with, so that only a request
+ * for the same genesis commit finds it. Grants are keyed in principal order.
  */
 const inSpaceCreationKey = (
   space: MemorySpace,
   name: string,
   owner: DID,
   grants: ACL = {},
+  root = false,
 ): string =>
   JSON.stringify([
     space,
     name,
     owner,
     Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+    root,
   ]);
 
 export interface SpaceCellContents {
@@ -4404,9 +4407,9 @@ export class Runtime {
    * {@link resolveInSpaceName} created a space for the same request, that DID
    * is the answer and the record is written in `tx`: the record then commits
    * in the same commit as the writes that refer to the space, or not at all.
-   * The request is `grants` and the owner {@link actingPrincipalFor} gives
-   * `tx`, so the space a run records was created with the access-control
-   * document that run asked for. `tx` reads the absent record, so a
+   * The request is `grants`, `root` and the owner {@link actingPrincipalFor}
+   * gives `tx`, so the space a run records was created with the genesis
+   * commit that run asked for. `tx` reads the absent record, so a
    * concurrent writer of the same record makes this commit conflict, and the
    * run that follows reads the record it wrote.
    *
@@ -4420,13 +4423,14 @@ export class Runtime {
     name: string,
     tx: IExtendedStorageTransaction,
     grants?: ACL,
+    root?: boolean,
   ): MemorySpace | undefined {
     const record = this.#inSpaceAllocationCell(space, name, tx);
     const recorded = record.get()?.did;
     if (isDID(recorded)) return recorded;
     const owner = this.actingPrincipalFor(tx);
     const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
-      inSpaceCreationKey(space, name, owner, grants),
+      inSpaceCreationKey(space, name, owner, grants, root),
     );
     if (created !== undefined) record.set({ did: created });
     return created;
@@ -4439,7 +4443,9 @@ export class Runtime {
    *
    * The calling space's allocation record decides when it exists. Otherwise
    * this creates a space owned by `options.owner` with `options.grants`, whose
-   * DID the next run making the same request records. A record naming a DID
+   * DID the next run making the same request records. With `options.root`,
+   * the space's genesis commit reserves its root at
+   * {@link IN_SPACE_ROOT_CAUSE}, for the run that records it to place there. A record naming a DID
    * that has no history is reported rather than replaced: the record is
    * immutable, and replacing the space it names would move whatever the
    * name's writers expect to find.
@@ -4455,13 +4461,14 @@ export class Runtime {
   async resolveInSpaceName(
     space: MemorySpace,
     name: string,
-    options: { owner?: DID; grants?: ACL } = {},
+    options: { owner?: DID; grants?: ACL; root?: boolean } = {},
   ): Promise<MemorySpace> {
     const creationKey = inSpaceCreationKey(
       space,
       name,
       options.owner ?? this.userIdentityDID,
       options.grants,
+      options.root,
     );
     const inFlight = this.#inSpaceResolutions.get(creationKey);
     if (inFlight !== undefined) return await inFlight;
@@ -4478,8 +4485,12 @@ export class Runtime {
         }
         return recorded;
       }
+      const { root, ...access } = options;
       const created = this.#inSpaceCreated.get(creationKey) ??
-        await this.createSpace(options);
+        await this.createSpace({
+          ...access,
+          ...(root ? { root: { cause: IN_SPACE_ROOT_CAUSE } } : {}),
+        });
       this.#inSpaceCreated.set(creationKey, created);
       return created;
     })();
