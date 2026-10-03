@@ -4169,7 +4169,7 @@ export class RuntimeProcessor {
         if (healthy || built.#isDisposed) return;
         for (const client of clients()) {
           client.post(
-            gate().error({
+            gate().runtimeError({
               code: RuntimeErrorCode.HostUnreachable,
               message: unreachableHostMessage(data),
             }),

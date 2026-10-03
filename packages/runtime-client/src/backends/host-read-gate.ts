@@ -78,6 +78,7 @@ import {
   NotificationType,
   type OperationUpdateNotification,
   type PieceRef,
+  type RuntimeErrorCode,
   type SlugResponse,
   type TelemetryNotification,
   TransportNotificationType,
@@ -667,16 +668,20 @@ export class HostReadGate {
   }
 
   /**
-   * A runtime error as a host may see it: as reported, or, where the policy
-   * refuses what the failing action had read (`consumed`), which its message
-   * and stack can quote, with both withheld. An error raised outside an
-   * action's transaction is reported as is.
+   * A pattern's error as a host may see it: as reported, or, where the
+   * policy refuses what the failing run had read (`consumed`), which its
+   * message and stack can quote, with both withheld. Under a policy, an error
+   * that carries no labels to decide it on is withheld as well, as a
+   * `console` call is: it may have been raised by a continuation of a run,
+   * after the run's transaction had gone, holding anything it read.
    */
   error(
     report: Omit<ErrorReport, "type">,
     consumed?: () => SinkConsumedLabel,
   ): ErrorNotification {
-    if (!this.#consumedRefused(consumed)) {
+    const withheld = this.#policy !== undefined &&
+      (consumed === undefined || this.#consumedRefused(consumed));
+    if (!withheld) {
       return decided({
         type: NotificationType.ErrorReport as const,
         ...report,
@@ -688,6 +693,18 @@ export class HostReadGate {
       ...rest,
       message: `An error occurred. ${WITHHELD}.`,
     });
+  }
+
+  /**
+   * An error the runtime raises about itself, as an unreachable host is, as
+   * a host may see it: as reported. Its message is the runtime's own, made
+   * from no cell, so nothing in it is decided. A pattern's error goes through
+   * {@link error}.
+   */
+  runtimeError(
+    report: { code: RuntimeErrorCode; message: string },
+  ): ErrorNotification {
+    return decided({ type: NotificationType.ErrorReport as const, ...report });
   }
 
   /**
