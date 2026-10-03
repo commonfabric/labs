@@ -456,13 +456,18 @@ export type CfcAddress = Immutable<{
 }>;
 
 /**
- * The address a transaction record binds. Its `path` is a payload path unless
- * `root` is `"document"`, which marks a path rooted at the stored document
- * that names one of the document's own members, such as `source`. Such a
- * record binds the member without being matched as the payload field of the
- * same name.
+ * The address a prepared-digest record binds, which carries exactly one of
+ * two paths: `path`, a payload path relative to `value`, or `metaPath`, a path
+ * relative to the stored document that names one of the document's own
+ * members, such as `source`. A consumer reaches a member's address only
+ * through `metaPath`, so it cannot take one for the payload field of the same
+ * name (spec §4.6.4).
  */
-export type CfcRecordAddress = CfcAddress & Immutable<{ root?: "document" }>;
+export type CfcRecordAddress =
+  | (CfcAddress & { readonly metaPath?: never })
+  | (Omit<CfcAddress, "path"> & Immutable<{ metaPath: string[] }> & {
+    readonly path?: never;
+  });
 
 export type ConsumedRead =
   & CfcRecordAddress
@@ -483,7 +488,7 @@ export type ConsumedRead =
     journalIndex?: number;
   }>;
 
-export type AttemptedWrite = CfcRecordAddress;
+export type AttemptedWrite = CfcAddress;
 
 /**
  * One applied write attempt in transaction order (§6 of
@@ -745,8 +750,8 @@ export type ConsultedPolicyManifest = {
 
 export type PreparedDigestInput = {
   readonly consumedReads: readonly ConsumedRead[];
-  readonly attemptedWrites: readonly AttemptedWrite[];
-  readonly writes: readonly AttemptedWrite[];
+  readonly attemptedWrites: readonly CfcRecordAddress[];
+  readonly writes: readonly CfcRecordAddress[];
 
   /**
    * The ordered write-attempt log (see `OrderedWriteAttempt`). Mandatory in

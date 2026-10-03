@@ -142,19 +142,19 @@ describe("path-forms", () => {
       .toBeUndefined();
   });
 
-  it("records a payload path unmarked and a member's path marked document-rooted", () => {
+  it("records a payload path as `path` and a member's path as `metaPath`", () => {
     expect(cfcRecordPath(toDocumentPath(["value", "slug"]))).toEqual({
       path: ["slug"],
     });
     expect(cfcRecordPath(toDocumentPath(["slug"]))).toEqual({
-      path: ["slug"],
-      root: "document",
+      metaPath: ["slug"],
     });
   });
 
   it("records a frozen member path as it stands", () => {
     const meta = toDocumentPath(Object.freeze(["cfc", "labels"]));
+    const record = cfcRecordPath(meta);
 
-    expect(cfcRecordPath(meta).path).toBe(meta);
+    expect("metaPath" in record && record.metaPath).toBe(meta);
   });
 });

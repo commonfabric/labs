@@ -31,7 +31,6 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
-  type AttemptedWrite,
   canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   CFC_ENFORCEMENT_MODES,
@@ -54,6 +53,7 @@ import {
   cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
+  type CfcRecordAddress,
   cfcRecordPath,
   CfcRefusalDetail,
   type CfcTriggerReadGating,
@@ -2427,36 +2427,38 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
     const consumedReads: ConsumedRead[] = [];
     for (const { read, raw } of pendingReads) {
-      // Strip the raw stamp before the spread; re-attach its rank (or leave
-      // the field absent when the backend never stamped one — an explicit
-      // undefined would hash differently from absence).
-      const { journalIndex: _raw, ...bare } = read;
+      // Strip the raw stamp and path before the spread; re-attach the rank
+      // (or leave the field absent when the backend never stamped one — an
+      // explicit undefined would hash differently from absence), and the
+      // record's one path.
+      const { journalIndex: _raw, path, ...bare } = read;
       consumedReads.push(deepFreeze({
         ...bare,
         scope: normalizeCellScope(read.scope),
-        ...cfcRecordPath(read.path),
+        ...cfcRecordPath(path),
         ...(raw !== undefined ? { journalIndex: rankByRaw.get(raw)! } : {}),
       }));
     }
 
     const log = this.getReactivityLog();
-    const attemptedWrites: AttemptedWrite[] = (log.attemptedWrites ?? []).map(
-      (address) =>
+    const attemptedWrites: CfcRecordAddress[] = (log.attemptedWrites ?? [])
+      .map(({ path, ...address }) =>
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
           // The reactivity log records the journal's document-rooted paths.
-          ...cfcRecordPath(toDocumentPath(address.path)),
-        }),
-    );
+          ...cfcRecordPath(toDocumentPath(path)),
+        })
+      );
 
-    const writes: AttemptedWrite[] = [];
+    const writes: CfcRecordAddress[] = [];
     for (const space of getTransactionWrittenSpaces(this)) {
       for (const write of this.getWriteDetails(space)) {
+        const { path, ...address } = write.address;
         writes.push(deepFreeze({
-          ...write.address,
-          scope: normalizeCellScope(write.address.scope),
-          ...cfcRecordPath(write.address.path),
+          ...address,
+          scope: normalizeCellScope(address.scope),
+          ...cfcRecordPath(path),
         }));
       }
     }

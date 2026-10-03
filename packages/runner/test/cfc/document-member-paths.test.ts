@@ -139,11 +139,11 @@ describe("document-member-paths", () => {
     tx.read({ ...address, path: ["value", "slug"] });
 
     const reads = tx.accessForTestingOnly.buildPreparedDigestInput()
-      .consumedReads.map(({ path, root }) => ({ path, root }));
+      .consumedReads.map(({ path, metaPath }) => ({ path, metaPath }));
     tx.abort();
     expect(reads).toEqual([
-      { path: ["slug"], root: "document" },
-      { path: ["slug"], root: undefined },
+      { path: undefined, metaPath: ["slug"] },
+      { path: ["slug"], metaPath: undefined },
     ]);
   });
 

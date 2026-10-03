@@ -69,21 +69,18 @@ export const canonicalizeDocumentPath = (
 
 /**
  * The path a transaction record binds for `path`, which is rooted at the
- * stored document: the payload path {@link canonicalizeDocumentPath} returns,
- * or, for one of the document's own members, `path` itself, frozen as
- * {@link canonicalizeLogicalPath} freezes a path, and marked
- * `root: "document"`. The record keeps the member's address that way without
- * its being taken for the payload field of the same name.
+ * stored document: `{ path }` with the payload path
+ * {@link canonicalizeDocumentPath} returns, or, for one of the document's own
+ * members, `{ metaPath }` with `path` itself, frozen as
+ * {@link canonicalizeLogicalPath} freezes a path. See {@link CfcRecordAddress}.
  */
 export const cfcRecordPath = (
   path: DocumentPath,
-): { path: ValuePath } | { path: readonly string[]; root: "document" } => {
+): { path: ValuePath } | { metaPath: readonly string[] } => {
   const payload = canonicalizeDocumentPath(path);
-  if (payload !== undefined) return { path: payload };
-  return {
-    path: canonicalizeLogicalPath(path as readonly string[]),
-    root: "document",
-  };
+  return payload !== undefined
+    ? { path: payload }
+    : { metaPath: canonicalizeLogicalPath(path as readonly string[]) };
 };
 
 /**
@@ -122,18 +119,27 @@ const compareAddress = (left: CfcAddress, right: CfcAddress): number => {
 };
 
 /**
- * {@link compareAddress}, then the record's `root`: a record of a payload path
- * and a record of the document member at the same path name different places.
+ * {@link compareAddress} over prepared-digest records: a payload record sorts
+ * before a member record of the same document, since the two name different
+ * places even where their paths are equal.
  */
 const compareRecordAddress = (
   left: CfcRecordAddress,
   right: CfcRecordAddress,
 ): number => {
-  const byAddress = compareAddress(left, right);
-  if (byAddress !== 0) return byAddress;
-  const leftRoot = left.root ?? "";
-  const rightRoot = right.root ?? "";
-  return leftRoot < rightRoot ? -1 : leftRoot > rightRoot ? 1 : 0;
+  if (left.metaPath === undefined && right.metaPath === undefined) {
+    return compareAddress(left, right);
+  }
+  if (left.space !== right.space) {
+    return left.space < right.space ? -1 : 1;
+  }
+  if (left.id !== right.id) return left.id < right.id ? -1 : 1;
+  if (left.scope !== right.scope) return left.scope < right.scope ? -1 : 1;
+  if (left.metaPath === undefined) return -1;
+  if (right.metaPath === undefined) return 1;
+  const leftPointer = encodePointer(left.metaPath);
+  const rightPointer = encodePointer(right.metaPath);
+  return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
 };
 
 /**
@@ -283,10 +289,17 @@ const compareWritePolicyInput = (
 // itself.
 export const canonicalizeConsumedRead = (
   read: ConsumedRead,
-): ConsumedRead => ({
-  ...read,
-  path: canonicalizeLogicalPath(read.path),
-});
+): ConsumedRead =>
+  read.metaPath === undefined
+    ? { ...read, path: canonicalizeLogicalPath(read.path) }
+    : { ...read, metaPath: canonicalizeLogicalPath(read.metaPath) };
+
+export const canonicalizeRecordAddress = (
+  record: CfcRecordAddress,
+): CfcRecordAddress =>
+  record.metaPath === undefined
+    ? { ...record, path: canonicalizeLogicalPath(record.path) }
+    : { ...record, metaPath: canonicalizeLogicalPath(record.metaPath) };
 
 export const canonicalizeAttemptedWrite = (
   write: AttemptedWrite,
@@ -479,9 +492,9 @@ export const canonicalizePreparedDigestInput = (
   consumedReads: [...input.consumedReads].map(canonicalizeConsumedRead).sort(
     compareRecordAddress,
   ),
-  attemptedWrites: [...input.attemptedWrites].map(canonicalizeAttemptedWrite)
+  attemptedWrites: [...input.attemptedWrites].map(canonicalizeRecordAddress)
     .sort(compareRecordAddress),
-  writes: [...input.writes].map(canonicalizeAttemptedWrite).sort(
+  writes: [...input.writes].map(canonicalizeRecordAddress).sort(
     compareRecordAddress,
   ),
   // ORDER-PRESERVING on purpose (sorted by journalIndex, which is unique
