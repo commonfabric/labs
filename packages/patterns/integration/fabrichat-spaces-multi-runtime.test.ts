@@ -8,7 +8,9 @@
  * starter, who creates the rooms; a member, named in each; and a stranger,
  * named in none. A room's space grants its members at creation, so the member
  * reads it with nothing more to do, and the stranger's read is refused, except
- * of a joinable group's.
+ * of a joinable group's. All three run the manager, which labels each room for
+ * the user it runs for, so a room the stranger may not read leaves every
+ * runtime quiet once settled.
  * `fabrichat-manager.test.ts` checks the access list each room's space holds.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
@@ -48,6 +50,7 @@ describe("fabrichat spaces across runtimes", () => {
         "fabrichat-spaces-stranger",
       ],
       aclMode: "enforce",
+      diagnostics: true,
     });
     [starter, member, stranger] = harness.sessions;
     await harness.settle();
@@ -56,6 +59,20 @@ describe("fabrichat spaces across runtimes", () => {
   afterAll(async () => {
     await harness?.dispose();
   });
+
+  /**
+   * How many times each session's runtime has run each of its actions, by the
+   * session's label and the action's id.
+   */
+  async function runCounts(): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const session of harness.sessions) {
+      for (const node of (await session.diagnostics()).graph.nodes) {
+        counts[`${session.label} ${node.id}`] = node.stats?.runCount ?? 0;
+      }
+    }
+    return counts;
+  }
 
   /**
    * Has the starter send `event` on the manager's `stream`, checks that the
@@ -84,6 +101,11 @@ describe("fabrichat spaces across runtimes", () => {
       .toBe("Team");
     await expect(stranger.read(["about", "title"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
+
+    // Settled, the runtimes have nothing left to run for one another.
+    const settled = await runCounts();
+    await harness.settle();
+    expect(await runCounts()).toEqual(settled);
   });
 
   it("lets anyone read a group room made joinable by its link", async () => {
