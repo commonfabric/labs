@@ -1306,6 +1306,9 @@ export class CFCodeEditor extends BaseElement {
     try {
       const piece = await this._createPiece(label);
       if (!piece) return;
+      // A refusal that arrived during the create stands against telling the
+      // host, which registers the piece by writing it into a list.
+      if (this._readsRefused) return;
 
       // The piece exists whether or not its token survived, so the host hears
       // about it either way and can register it.
@@ -1557,6 +1560,10 @@ export class CFCodeEditor extends BaseElement {
       // from — creation, like every piece op, names its space.
       const piece = await this._createPiece(backlinkText);
       if (!piece) return;
+      // A refusal that arrived during the create stands against linking the
+      // piece and telling the host, which registers it by writing it into a
+      // list.
+      if (this._readsRefused) return;
       const pieceId = piece.id();
 
       // Insert the ID into the text if we have an editor
@@ -3297,8 +3304,12 @@ export class CFCodeEditor extends BaseElement {
     try {
       const storedFiles: StoredFile[] = [];
       for (const file of files) {
+        // A refusal that arrived during an upload stands against the rest,
+        // and against the insert, which the editor no longer takes.
+        if (this._readsRefused) return;
         storedFiles.push(await uploadFile({ file, runtime, space }));
       }
+      if (this._readsRefused) return;
 
       const markdown = storedFiles
         .map((file) =>

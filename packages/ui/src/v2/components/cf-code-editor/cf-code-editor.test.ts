@@ -1540,6 +1540,8 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     _writeRefEntry(destination: CellHandle<unknown>): string | null;
     _refusalGate(): Extension;
     _handleEditorUpdate(update: UpdateStub): void;
+    createBacklinkFromPattern(text: string, navigate: boolean): Promise<void>;
+    addEventListener(type: string, listener: () => void): void;
     handleBacklinkActivation(view: ViewStub): boolean;
     willUpdate(changedProperties: Map<string, unknown>): void;
     updated(changedProperties: Map<string, unknown>): void;
@@ -1915,6 +1917,34 @@ describe("CFCodeEditor while the worker refuses a read it computes its writes fr
     await Promise.resolve();
 
     expect(creations).toBe(0);
+  });
+
+  it("tells the host of no piece whose create returns after a refusal", async () => {
+    const element = editor();
+    const universe = createMockCellHandle<MentionableArray>([]);
+    element.mentionable = universe;
+    const created = Promise.withResolvers<unknown>();
+    element.pattern = {
+      get: () => "{}",
+      space: () => "did:key:mock",
+      runtime: () => ({
+        signal: new AbortController().signal,
+        createPiece: () => created.promise,
+      }),
+    };
+    let told = 0;
+    element.addEventListener("backlink-create", () => told++);
+    const creating = element.createBacklinkFromPattern("New note", false);
+
+    pushRefusal(universe);
+    created.resolve({
+      id: () => "new-note",
+      cell: () => createMockCellHandle({ [NAME]: "New note" }),
+    });
+    await creating;
+
+    // The host registers a piece it is told of by writing it into a list.
+    expect(told).toBe(0);
   });
 
   it("mints no key into a refused reference map", () => {
