@@ -355,16 +355,52 @@ describe("in-space allocation", () => {
     });
   });
 
-  it("throws for a grant beyond READ or WRITE, whatever the caller's type says", () => {
+  it("creates a space whose grants name another principal OWNER, with the creator an OWNER too", async () => {
+    const member = (await Identity.generate()).did();
+    const root = await spawnRoot((Child, value) => [
+      Child.inSpace("co-owned", { grants: { [member]: "OWNER" } })({ value }),
+    ]);
+    await root.send("first");
+
+    const [space] = await root.spaces();
+    expect(await aclOf(space as MemorySpace)).toEqual({
+      [member]: "OWNER",
+      [signer.did()]: "OWNER",
+    });
+  });
+
+  it("creates a space whose creator is an OWNER when the grants name it at a lower level", async () => {
+    const member = (await Identity.generate()).did();
+    const space = await runtime.resolveInSpaceName(home, "demoted", {
+      grants: { [signer.did()]: "READ", [member]: "OWNER" },
+    });
+
+    expect(await aclOf(space)).toEqual({
+      [member]: "OWNER",
+      [signer.did()]: "OWNER",
+    });
+  });
+
+  it("throws for a grant beyond READ, WRITE, or OWNER, whatever the caller's type says", () => {
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+    const grants = { "*": "ADMIN" } as unknown as Record<string, "READ">;
+
+    expect(() => Child.inSpace("admin", { grants })).toThrow(
+      "grants READ, WRITE, or OWNER only",
+    );
+    expect(() => Child.inSpace("read", { grants: { "*": "READ" } })).not
+      .toThrow();
+  });
+
+  it("throws for an OWNER grant to `*`, whatever the caller's type says", () => {
     const { pattern } = createTrustedBuilder(runtime).commonfabric;
     const Child = pattern<{ value: string }>(({ value }) => ({ value }));
     const grants = { "*": "OWNER" } as unknown as Record<string, "READ">;
 
     expect(() => Child.inSpace("owned", { grants })).toThrow(
-      "grants READ or WRITE only",
+      "grants OWNER only to a principal DID",
     );
-    expect(() => Child.inSpace("read", { grants: { "*": "READ" } })).not
-      .toThrow();
   });
 
   it("settles two processes resolving one name on one record", async () => {

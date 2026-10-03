@@ -713,17 +713,23 @@ function factoryFromPattern<T, R>(
       return derived;
     };
     factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
-      // Pattern code is not trusted to keep to the type: a created space's
-      // only owner is the identity the run acts for.
+      // Pattern code is not trusted to keep to the type. `*` is refused OWNER
+      // because a space anyone owns is anyone's to take from the identity the
+      // run acts for.
       for (
         const [principal, capability] of Object.entries(options?.grants ?? {})
       ) {
-        if (capability !== "READ" && capability !== "WRITE") {
+        if (
+          capability !== "READ" && capability !== "WRITE" &&
+          capability !== "OWNER"
+        ) {
           throw new Error(
-            `inSpace() grants READ or WRITE only, not ${
-              JSON.stringify(capability)
-            } to ${JSON.stringify(principal)}`,
+            debugStr`inSpace() grants READ, WRITE, or OWNER only, not ` +
+              debugStr`$quote${capability} to $quote${principal}`,
           );
+        }
+        if (capability === "OWNER" && principal === "*") {
+          throw new Error("inSpace() grants OWNER only to a principal DID");
         }
       }
       const derived = makePatternFactory(
