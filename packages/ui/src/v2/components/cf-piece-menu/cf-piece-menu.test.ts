@@ -3779,6 +3779,18 @@ function statefulPiece(
 
 const REFUSED = { refusedBy: "display-ceiling" } as const;
 
+/**
+ * The address a refused read of a piece's argument names, whose schema the
+ * host holds only as an interned reference.
+ */
+const ARGUMENT_REF: CellRef = {
+  id: "of:fid1:argument",
+  space: SPACE,
+  scope: "space",
+  path: [],
+  schema: { $ref: "cid:fid1:interned-argument-schema" },
+};
+
 /** What the data panel says beneath a value it shows field by field. */
 const FIELD_BY_FIELD_NOTE = "is shown on its own";
 
@@ -4018,12 +4030,7 @@ describe("the data panel", () => {
     it("shows a refused argument field by field when its address is given", async () => {
       const piece = statefulPiece({
         argumentRefused: true,
-        argumentRef: {
-          id: "of:fid1:argument",
-          space: SPACE,
-          path: [],
-          schema: { $ref: "cid:fid1:interned-argument-schema" },
-        } as unknown as CellRef,
+        argumentRef: ARGUMENT_REF,
         fields: { "of:fid1:argument": ["account"] },
       });
       const menu = openMenu(piece.cell);
@@ -4041,12 +4048,7 @@ describe("the data panel", () => {
     it("never shows a refused argument whose address is given as one holding nothing", async () => {
       const piece = statefulPiece({
         argumentRefused: true,
-        argumentRef: {
-          id: "of:fid1:argument",
-          space: SPACE,
-          path: [],
-          schema: { $ref: "cid:fid1:interned-argument-schema" },
-        } as unknown as CellRef,
+        argumentRef: ARGUMENT_REF,
         fields: { "of:fid1:argument": "pending" },
       });
       const menu = openMenu(piece.cell);

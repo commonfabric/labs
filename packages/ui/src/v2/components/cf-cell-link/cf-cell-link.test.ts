@@ -149,8 +149,8 @@ describe("CFCellLink", () => {
 
   it("names a link the worker will not show the name of as withheld", () => {
     const ref: CellRef = {
-      id: "of:sealed-cell" as CellRef["id"],
-      space: "did:key:test-space" as CellRef["space"],
+      id: "of:sealed-cell",
+      space: "did:key:test-space",
       scope: "space",
       path: [],
       schema: { type: "object" },

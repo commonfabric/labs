@@ -439,7 +439,8 @@ describe("HostReadGate", () => {
         refused: { refusedBy: "display-ceiling" },
         cell: expect.objectContaining({ id: expect.any(String), path: [] }),
       });
-      expect("cfcLabelView" in (answer as { cell: object }).cell).toBe(false);
+      if (answer.cell === undefined) throw new Error("no cell was named");
+      expect("cfcLabelView" in answer.cell).toBe(false);
       expect(holds(answer, CREDENTIAL)).toBe(false);
     });
 
