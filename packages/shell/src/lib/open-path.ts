@@ -11,14 +11,19 @@ import type { JSONSchema } from "@commonfabric/runner/shared";
 import {
   type CellHandle,
   CellReadRefusedError,
+  isCellHandle,
 } from "@commonfabric/runtime-client";
 
 /**
- * The read that asks whether a piece exports an `openPath` stream: the
- * stream marker at that field and nothing else. A schema that read the field
- * as a stream would make a handle for it whether or not the piece held one,
- * so this reads only what is stored there, and the piece's other fields not
- * at all, which the display ceiling decides it on.
+ * The read that asks whether a piece exports an `openPath` stream: what is
+ * stored at that field and nothing else, which the display ceiling decides
+ * it on. A handler's stream is stored there as a link whose schema declares
+ * the stream, and so comes back as a handle: this schema declares no handle
+ * of its own, so a link to anything else is followed and comes back as the
+ * value it leads to. A piece from before streams were declared by schema
+ * holds the `$stream` marker there instead. The field is not read as a
+ * stream: a schema that declared one would make a handle for it whether or
+ * not the piece held one.
  */
 const OPEN_PATH_PRESENCE_SCHEMA = {
   type: "object",
@@ -43,17 +48,25 @@ export async function deliverOpenPath<T>(
   path: string,
   claim: () => boolean,
 ): Promise<boolean> {
-  let exported: { openPath?: { $stream?: boolean } } | undefined;
+  let exported: { openPath?: unknown } | undefined;
   try {
-    exported = await cell.asSchema<{ openPath?: { $stream?: boolean } }>(
+    exported = await cell.asSchema<{ openPath?: unknown }>(
       OPEN_PATH_PRESENCE_SCHEMA,
     ).sync();
   } catch (error) {
     if (error instanceof CellReadRefusedError) return false;
     throw error;
   }
-  if (exported?.openPath?.$stream !== true || !claim()) return false;
+  const field = exported?.openPath;
+  const stream = isCellHandle(field) ||
+    (isRecord(field) && field.$stream === true);
+  if (!stream || !claim()) return false;
   await cell.asSchema<{ openPath: { path: string } }>({ type: "object" })
     .key("openPath").send({ path });
   return true;
+}
+
+/** Whether `value` is a plain record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
