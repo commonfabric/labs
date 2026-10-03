@@ -67,6 +67,19 @@ const LABEL_KEYS = [
 ] as const satisfies readonly (keyof IFCLabel)[];
 
 /**
+ * The part of `label` that restricts who may read, without the part that
+ * speaks for who wrote: its confidentiality, or `undefined` where it has
+ * none. It is what a label passes on to readers of a value it does not
+ * vouch for, such as a reference's target or a narrower instance of the same
+ * document. A key added to {@link LABEL_KEYS} decides here whether it goes
+ * with it.
+ */
+export const confidentialityOnly = (label: IFCLabel): IFCLabel | undefined =>
+  label.confidentiality !== undefined && label.confidentiality.length > 0
+    ? { confidentiality: label.confidentiality }
+    : undefined;
+
+/**
  * Returns a mutable copy of a label view's logical path. A view's paths are
  * relative to the node it describes, so a first segment of `"value"` names a
  * payload field of that name and is kept.

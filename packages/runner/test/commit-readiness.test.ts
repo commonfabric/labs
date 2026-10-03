@@ -17,6 +17,148 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 const signer = await Identity.fromPassphrase("commit-readiness");
 
 describe("commit-readiness", () => {
+  it("selects a space value while a same-id user-scope commit remains pending", async () => {
+    const server = newSharedServer();
+    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let committing: Promise<unknown> | undefined;
+    let pulling: Promise<unknown> | undefined;
+    try {
+      const target = runtime.getCell<number>(signer.did(), "scope-readiness");
+      await target.sync();
+      const seed = runtime.edit();
+      target.withTx(seed).set(6);
+      expect((await seed.commit()).error).toBeUndefined();
+      const user = runtime.getCell<number>(
+        signer.did(),
+        "scope-readiness",
+        undefined,
+        undefined,
+        "user",
+      );
+      await user.sync();
+      const tx = runtime.edit();
+      tx.writeValueOrThrow(user.getAsNormalizedFullLink(), 7);
+      const transact = server.transact.bind(server);
+      using _held = stub(server, "transact", async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return transact(...args);
+      });
+      committing = tx.commit();
+      await entered.promise;
+      pulling = pullForInitialization(target);
+      await expect(pulling).resolves.toBe(6);
+      expect(storage.hasPendingCommits()).toBe(true);
+      expect(storage.hasPendingCommits([{
+        space: signer.did(),
+        id: target.getAsNormalizedFullLink().id,
+      }])).toBe(true);
+    } finally {
+      release.resolve();
+      await committing;
+      await pulling;
+      await runtime.dispose();
+      await storage.close();
+      await server.close();
+    }
+  });
+
+  it("rechecks a disjoint origin promoted while a selected commit settles", async () => {
+    const other = await Identity.fromPassphrase("late-readiness-origin");
+    const server = newSharedServer();
+    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+    });
+    const entered = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
+    const release = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
+    const commits: Promise<unknown>[] = [];
+    let barrier: Promise<void> | undefined;
+    try {
+      const target = runtime.getCell<number>(
+        signer.did(),
+        "late-readiness-target",
+      );
+      const unrelated = runtime.getCell<number>(
+        other.did(),
+        "late-readiness-origin",
+      );
+      await Promise.all([target.sync(), unrelated.sync()]);
+      const transact = server.transact.bind(server);
+      let index = 0;
+      using _held = stub(server, "transact", async (...args) => {
+        const current = index++;
+        if (current < 2) {
+          entered[current].resolve();
+          await release[current].promise;
+        }
+        return transact(...args);
+      });
+      const selected = runtime.edit();
+      target.withTx(selected).set(1);
+      commits.push(selected.commit());
+      await entered[0].promise;
+      const origin = runtime.edit();
+      unrelated.withTx(origin).set(7);
+      commits.push(origin.commit());
+      await entered[1].promise;
+      await runtime.scheduler.idle();
+      const documents = [target.getAsNormalizedFullLink()];
+      const firstRound = Promise.withResolvers<void>();
+      const secondRound = Promise.withResolvers<void>();
+      const settled = storage.pendingCommitsSettled.bind(storage);
+      let rounds = 0;
+      using _observed = stub(storage, "pendingCommitsSettled", (targets) => {
+        if (++rounds === 1) firstRound.resolve();
+        if (rounds === 2) secondRound.resolve();
+        return settled(targets);
+      });
+      barrier = runtime.scheduler.idleWithPendingCommits(() => documents);
+      await firstRound.promise;
+      // The lineage has no scheduler queue hooks: only scope promotion can
+      // make the next readiness round wait for this origin.
+      const lineage = new SpeculationLineage({
+        dropQueuedEvent: () => {},
+        queueExecution: () => {},
+        onError: (error) => {
+          throw error;
+        },
+      });
+      lineage.recordPieceStop(origin, () => {});
+      release[0].resolve();
+      expect(
+        await Promise.race([
+          barrier.then(() => "ready"),
+          secondRound.promise.then(() => "rechecked"),
+        ]),
+      ).toBe("rechecked");
+      expect(origin.status().status).toBe("pending");
+      expect(storage.hasPendingCommits(documents)).toBe(true);
+      release[1].resolve();
+      await barrier;
+    } finally {
+      for (const gate of release) gate.resolve();
+      await Promise.allSettled(commits);
+      await barrier;
+      await runtime.dispose();
+      await storage.close();
+      await server.close();
+    }
+  });
+
   it("settles a document barrier while a disjoint commit remains pending", async () => {
     const storage = StorageManager.emulate({ as: signer });
     const target = { space: signer.did(), id: "of:target" };

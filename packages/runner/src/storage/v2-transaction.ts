@@ -2548,16 +2548,28 @@ export class V2StorageTransaction implements IStorageTransaction {
     const documents: readonly PendingCommitDocument[] = Object.freeze([
       ...[...this.#branches].flatMap(([space, branch]) =>
         [...branch.docs.values()].map((doc) =>
-          Object.freeze({ space, id: doc.initial.address.id })
+          Object.freeze({
+            space,
+            id: doc.initial.address.id,
+            scope: normalizeCellScope(doc.initial.address.scope),
+          })
         )
       ),
       ...[...this.#commitPreconditions].flatMap(([space, conditions]) =>
         conditions.flatMap((condition) =>
-          "id" in condition ? [Object.freeze({ space, id: condition.id })] : []
+          "id" in condition
+            ? [Object.freeze({
+              space,
+              id: condition.id,
+              scope: normalizeCellScope(condition.scope),
+            })]
+            : []
         )
       ),
       ...[...this.#createOnlyMarks].flatMap(([space, marks]) =>
-        [...marks.values()].map(({ id }) => Object.freeze({ space, id }))
+        [...marks.values()].map(({ id, scope }) =>
+          Object.freeze({ space, id, scope: normalizeCellScope(scope) })
+        )
       ),
     ]);
     const hasGlobalOperations = this.#sqliteOps.size > 0 ||

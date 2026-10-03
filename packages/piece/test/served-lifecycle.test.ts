@@ -525,18 +525,20 @@ export default pattern(() => {
     ) {
       const delegated = mode !== "client event";
       it(`registers through the computed root action using ${mode}`, async () => {
+        // The root records the principal its `addPiece` acts for.
         const rootReceipt = await instantiate({
           program: programOf(`
-import { computed, handler, pattern, Writable } from "commonfabric";
-const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
-  ({piece}, {panels}) => { panels.addUnique(piece); },
+import { computed, currentPrincipal, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>, adder: Writable<string>}>(
+  ({piece}, {panels, adder}) => { panels.addUnique(piece); adder.set(currentPrincipal() ?? ""); },
 );
 const removePiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
   ({piece}, {panels}) => { panels.set(panels.get().filter(member => !member.equals(piece))); },
 );
 export default pattern(() => {
   const panels = new Writable<Writable<unknown>[]>([]);
-  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}), removePiece: removePiece({panels}) };
+  const adder = new Writable<string>("");
+  return { panels, adder, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels, adder}), removePiece: removePiece({panels}) };
 });
 `),
         });
@@ -625,6 +627,12 @@ export default pattern(() => {
             ),
           ),
         ).toBe(true);
+        expect(
+          await root.getCell().asSchema({
+            type: "object",
+            properties: { adder: { type: "string" } },
+          }).key("adder").pull(),
+        ).toBe(aliceSigner.did());
         expect(await pieces.remove(created.pieceId)).toBe(true);
         await panels.pull();
         expect(panels.get().length).toBe(0);

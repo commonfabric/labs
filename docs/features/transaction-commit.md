@@ -49,6 +49,8 @@ check or any installed action's scheduling reads. The backing-value check follow
 read links and the final write redirect, including cross-space targets. Commit
 footprints include every read, write, and document precondition in every space,
 so delayed later-space writes and rejection repair remain covered.
+Known normalized scope kinds are matched separately. An omitted scope matches
+every scope; paths and principal/session instance identities are not narrowed.
 
 Only ordinary extended storage commits with known document effects can be
 excluded. Raw or unclassified work, callbacks, post-commit effects, SQLite
