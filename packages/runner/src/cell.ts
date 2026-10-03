@@ -1689,11 +1689,14 @@ export class CellImpl<T extends FabricValue>
    * const value = await cell.pull();
    * ```
    *
-   * @returns A promise that resolves to the cell's current value after all
-   *          dependencies have been computed.
+   * The default waits for installed producers and required loads. A pending
+   * commit can still install a producer later, so an absent result can change
+   * after this pull completes.
    *
    * `awaitDurability: true` keeps the read demanded through the runtime-wide
    * commit-aware barrier, including producers installed by pending commits.
+   *
+   * @returns The cell's reactive value after the selected readiness barrier.
    */
   pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
     if (this.#boundToRun()) {

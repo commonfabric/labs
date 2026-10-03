@@ -479,9 +479,18 @@ function transactionCommitReceipt(
   const verdict = signal === undefined
     ? settled
     : Promise.race([signal, settled]);
-  // Either stage can be observed independently. Keep an internal rejection
-  // on the auxiliary promise observable without making it unhandled.
-  if (verdict !== settled) void verdict.catch(() => {});
+  let reported = false;
+  const report = (error: unknown) => {
+    if (reported) return;
+    reported = true;
+    // This module's logger is opt-in. Internal commit failures must remain
+    // visible even when local-only callers observe neither receipt stage.
+    console.error("[storage] transaction commit failed internally:", error);
+  };
+  // Settlement can reject after an accepted verdict. Observe both promises
+  // so either failure is reported, while callers still receive the rejection.
+  void settled.catch(report);
+  if (verdict !== settled) void verdict.catch(report);
   return Object.freeze({ verdict, settled });
 }
 

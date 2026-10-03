@@ -1221,7 +1221,9 @@ export interface TransactionCommitOptions {
 /** The independently observable completion stages of one commit attempt. */
 export interface TransactionCommitReceipt {
   /**
-   * The commit's fate, before subscription coverage or rejection repair.
+   * The commit's fate. A separate backend verdict signal can report it before
+   * subscription coverage or rejection repair; otherwise it resolves with
+   * settlement.
    * A sealed contribution's fate follows its seal destination's contract.
    */
   readonly verdict: Promise<Result<Unit, CommitError>>;

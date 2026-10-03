@@ -169,9 +169,11 @@ required loads; readiness does not confirm unrelated pending writes.
 be ready with the value `undefined`. Include `undefined` in the hook type. Use
 the declared input default for an absent read-only input. For writable state or
 output, initialize only after that Cell's pull completes. Call
-`initialize()` once even when the compiled schema fallback is already visible:
-the idempotent operation materializes the backing value without replacing a
-value another session won.
+`initialize()` once even when the compiled schema fallback is already visible.
+The runtime adapter keeps the cell demanded through pending commits before
+choosing the default, then atomically materializes the backing value without
+replacing a value supplied by its producer or another session. An ordinary pull
+can finish before a pending commit installs that producer.
 Bridge `set()` reports commit failure, but its write remains an intentional
 last-writer-wins replacement.
 

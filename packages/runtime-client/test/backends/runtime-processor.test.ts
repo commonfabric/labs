@@ -295,75 +295,95 @@ describe("runtime-processor", () => {
       });
     }
 
-    it("keeps a durable pull demanded while a pending commit installs lazy producers", async () => {
-      const server = newLoopbackServer();
-      const storageManager = EmulatedStorageManager.connectTo(server, {
-        as: cfcSigner,
-      });
-      const runtime = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager,
-      });
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const barrier = Promise.withResolvers<void>();
-      let committing: Promise<unknown> | undefined;
-      let pulling: Promise<unknown> | undefined;
-      try {
-        const { commonfabric: cf } = createTrustedBuilder(runtime);
-        const pattern = cf.pattern<{ value: number }>(({ value }) => ({
-          doubled: cf.lift((value: number) => value * 2)(value),
-        }));
-        const root = runtime.getCell<{ doubled: number }>(
-          cfcSigner.did(),
-          "durable-pull-deferred-producer",
-        );
-        await root.sync();
-        const transact = server.transact.bind(server);
-        using _transact = stub(server, "transact", async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return transact(...args);
-        });
-        const settled = storageManager.pendingCommitsSettled.bind(
-          storageManager,
-        );
-        using _barrier = stub(storageManager, "pendingCommitsSettled", () => {
-          barrier.resolve();
-          return settled();
-        });
-        const tx = runtime.edit();
-        tx.tx.immediate = true;
-        (tx.tx as { deferRunnerStartUntilCommit?: boolean })
-          .deferRunnerStartUntilCommit = true;
-        runtime.run(tx, pattern, { value: 3 }, root.withTx(tx));
-        committing = tx.commit();
-        await entered.promise;
-        const output = root.key("doubled");
-        const processor = buildProcessor({ runtime });
-        await expect(processor.handleCellPull({
-          type: RequestType.CellPull,
-          cell: createCellRef(output),
-        })).resolves.toEqual({ value: undefined });
+    for (const initialize of [false, true]) {
+      it(
+        initialize
+          ? "waits for a pending producer before choosing an initializer"
+          : "keeps a durable pull demanded while a pending commit installs lazy producers",
+        async () => {
+          const server = newLoopbackServer();
+          const storageManager = EmulatedStorageManager.connectTo(server, {
+            as: cfcSigner,
+          });
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager,
+          });
+          const entered = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
+          const barrier = Promise.withResolvers<void>();
+          let committing: Promise<unknown> | undefined;
+          let pulling: Promise<unknown> | undefined;
+          try {
+            const { commonfabric: cf } = createTrustedBuilder(runtime);
+            const pattern = cf.pattern<{ value: number }>(({ value }) => ({
+              doubled: cf.lift((value: number) => value * 2)(value),
+            }));
+            const root = runtime.getCell<{ doubled: number }>(
+              cfcSigner.did(),
+              "durable-pull-deferred-producer",
+            );
+            await root.sync();
+            const transact = server.transact.bind(server);
+            using _transact = stub(server, "transact", async (...args) => {
+              entered.resolve();
+              await release.promise;
+              return transact(...args);
+            });
+            const settled = storageManager.pendingCommitsSettled.bind(
+              storageManager,
+            );
+            using _barrier = stub(
+              storageManager,
+              "pendingCommitsSettled",
+              () => {
+                barrier.resolve();
+                return settled();
+              },
+            );
+            const tx = runtime.edit();
+            tx.tx.immediate = true;
+            (tx.tx as { deferRunnerStartUntilCommit?: boolean })
+              .deferRunnerStartUntilCommit = true;
+            runtime.run(tx, pattern, { value: 3 }, root.withTx(tx));
+            committing = tx.commit();
+            await entered.promise;
+            const output = root.key("doubled");
+            const processor = buildProcessor({ runtime });
+            await expect(processor.handleCellPull({
+              type: RequestType.CellPull,
+              cell: createCellRef(output),
+            })).resolves.toEqual({ value: undefined });
 
-        pulling = processor.handleCellPull({
-          type: RequestType.CellPull,
-          cell: createCellRef(output),
-          awaitDurability: true,
-        });
-        await barrier.promise;
-        release.resolve();
-        await expect(pulling).resolves.toEqual({ value: 6 });
-        expect(storageManager.hasPendingCommits()).toBe(false);
-      } finally {
-        release.resolve();
-        await committing;
-        await pulling;
-        await runtime.dispose();
-        await storageManager.close();
-        await server.close();
-      }
-    });
+            pulling = initialize
+              ? processor.handleCellInitialize({
+                type: RequestType.CellInitialize,
+                cell: createCellRef(output),
+                value: 99,
+              })
+              : processor.handleCellPull({
+                type: RequestType.CellPull,
+                cell: createCellRef(output),
+                awaitDurability: true,
+              });
+            if (!initialize) {
+              await barrier.promise;
+              expect(output.get()).toBeUndefined();
+            }
+            release.resolve();
+            await expect(pulling).resolves.toEqual({ value: 6 });
+            expect(storageManager.hasPendingCommits()).toBe(false);
+          } finally {
+            release.resolve();
+            await committing;
+            await pulling;
+            await runtime.dispose();
+            await storageManager.close();
+            await server.close();
+          }
+        },
+      );
+    }
 
     for (const bytes of [new Uint8Array(), new Uint8Array([1, 2, 3])]) {
       it(`returns ${bytes.length} readable bytes while an unrelated commit is pending`, async () => {
@@ -4867,6 +4887,7 @@ describe("runtime-processor", () => {
     it("rejects malformed initializers and surfaces transaction failures", async () => {
       const failed = buildProcessor({
         runtime: {
+          getCellFromLink: () => ({ pull: () => Promise.resolve(undefined) }),
           editWithRetry: () =>
             Promise.resolve({ error: new Error("initialize failed") }),
         },

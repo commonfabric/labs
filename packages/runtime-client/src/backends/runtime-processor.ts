@@ -1578,6 +1578,9 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
+    // A pending commit can install the producer of an apparently absent
+    // value. Keep it demanded through settlement before choosing a default.
+    await getCell(this.#runtime, request.cell).pull({ awaitDurability: true });
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
       // Initialization materializes the same backing value a whole-cell write

@@ -12,6 +12,8 @@ A transaction stages writes until the caller starts its commit. Calling
 The receipt is not a promise. A caller selects the stage its next operation
 requires. Both stages return a `Result`: expected refusal is carried in
 `.error`; internal exceptions can reject the promises.
+Internal exceptions are reported even when neither stage is observed. Backends
+without a separate verdict signal resolve `verdict` with settlement.
 
 For an ordinary valid single-space transaction, the local replica receives the
 optimistic writes before `startCommit()` returns. Local computation and
@@ -31,6 +33,8 @@ A read of reactive state usually needs producer and load readiness, not a
 commit outcome. Runtime `Cell.pull()` and bridge `CellHandle.pull()` demand
 those computations and required loads. Both return absent values and empty
 objects under the same readiness contract while writes may remain pending.
+An absent result can also precede a producer that a pending commit installs;
+it does not prove that the cell will remain absent.
 
 Pass `awaitDurability: true` to either pull to keep its demand active through
 the runtime-wide commit-aware barrier. Keeping the demand active lets a commit
@@ -38,6 +42,10 @@ install a lazy producer that the pull then computes, and includes the writes
 that computation produces. The barrier also covers pending pattern work.
 `RuntimeClient.idle()` crosses the same barrier without adding a cell demand.
 Hosts use pending-write notifications to guard teardown independently of reads.
+Bridge `initialize()` keeps that demand through the commit-aware barrier before
+atomically selecting an existing value or storing the default. It can therefore
+initialize a cell whose producer is being installed without replacing the value
+that producer supplies.
 
 Observe `receipt.verdict` when the next step requires knowing the commit's
 fate. Use `receipt.settled` when a retry needs the repaired read basis, when a
@@ -64,7 +72,8 @@ const result = await receipt.verdict;
 if (result.error) throw new Error(result.error.message);
 ```
 
-`tx.commit()` remains supported and returns the settlement promise by default.
+`tx.commit()` is the promise-returning completion convenience and selects
+settlement by default.
 Its `resolveAt: "verdict"` option selects the earlier fate signal; it leaves
 commit callbacks, pending-commit registration, repair, and effects on their
 own timelines. `startCommit()` exposes both stages of the same attempt and

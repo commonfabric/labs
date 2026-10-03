@@ -179,6 +179,31 @@ describe("start-commit", () => {
     }
   });
 
+  for (const ready of [false, true]) {
+    it(`reports an internal exception when neither receipt stage is observed with ready=${ready}`, async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+      });
+      try {
+        const tx = runtime.edit();
+        if (!ready) tx.abort("closed");
+        const failure = new Error("unobserved commit failure");
+        using reported = stub(console, "error", () => {});
+        using _commit = stub(tx, "commit", () => Promise.reject(failure));
+        new TransactionWrapper(tx).startCommit();
+        await clock.settle();
+        expect(reported.calls).toHaveLength(1);
+        expect(reported.calls[0].args).toContain(failure);
+        if (ready) tx.abort("done");
+      } finally {
+        await runtime.dispose();
+        await storage.close();
+      }
+    });
+  }
+
   it("preserves internal rejection when only settlement is observed", async () => {
     const storage = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -188,10 +213,46 @@ describe("start-commit", () => {
     try {
       const tx = runtime.edit();
       const failure = new Error("internal commit failure");
+      using reported = stub(console, "error", () => {});
       using _commit = stub(tx, "commit", () => Promise.reject(failure));
       const receipt = new TransactionWrapper(tx).startCommit();
       await expect(receipt.settled).rejects.toBe(failure);
       await clock.settle();
+      expect(reported.calls).toHaveLength(1);
+      tx.abort("done");
+    } finally {
+      await runtime.dispose();
+      await storage.close();
+    }
+  });
+
+  it("reports a settlement exception after a successful verdict", async () => {
+    const storage = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+    });
+    try {
+      const accepted = await runtime.edit().commit();
+      const tx = runtime.edit();
+      const completion = Promise.withResolvers<
+        Awaited<ReturnType<typeof tx.commit>>
+      >();
+      const failure = new Error("late settlement failure");
+      using reported = stub(console, "error", () => {});
+      using _commit = stub(tx, "commit", () => completion.promise);
+      using _verdict = stub(
+        tx,
+        "commitVerdict",
+        () => Promise.resolve(accepted),
+      );
+      const receipt = tx.startCommit();
+      expect((await receipt.verdict).error).toBeUndefined();
+      completion.reject(failure);
+      await clock.settle();
+      expect(reported.calls).toHaveLength(1);
+      expect(reported.calls[0].args).toContain(failure);
+      await expect(receipt.settled).rejects.toBe(failure);
       tx.abort("done");
     } finally {
       await runtime.dispose();
