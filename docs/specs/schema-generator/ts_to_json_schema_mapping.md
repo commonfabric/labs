@@ -1474,9 +1474,12 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
   the position, in definitions of its own, with nothing reported, and only for
   its labels: a type no CFC wrapper holds, other than a union or an
-  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A cell has
-  the labels of its value, read at the value's own node where its wrapper is
-  written out. A value that may be `undefined` or `null` has the labels of its
+  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A cell, as
+  its type identifies one, has the labels declared on it, as an outer
+  `Confidential<Cell<T>, …>` declares them, combined with its value's, read
+  at the value's own node where its wrapper is written out and from the
+  value's type otherwise, as for a cell an alias makes of its own parameter
+  (`type MaybeCell<T> = Cell<T | null>`). A value that may be `undefined` or `null` has the labels of its
   one other member, and where the node's schema is such a union whose value
   member declares labels of its own and the union none, they are combined into
   that member's, where formatting put the part of them it could read
