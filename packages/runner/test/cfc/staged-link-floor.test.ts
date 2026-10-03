@@ -60,7 +60,7 @@ interface Tree {
   [key: string]: Tree;
 }
 
-describe("cfc-staged-link-floor", () => {
+describe("staged-link-floor", () => {
   let runtime: Runtime;
   let manager: ReturnType<typeof StorageManager.emulate>;
 
@@ -186,6 +186,18 @@ describe("cfc-staged-link-floor", () => {
 
     expect(await stage("secret", "empty", ["secret"])).toBeUndefined();
     expect(await stage("secret", "via", ["secret"])).toBeUndefined();
+  });
+
+  it("refuses a capture whose stored link leads into a document this replica does not hold", async () => {
+    // Nothing has been written to `absent`, so what it holds is unknown.
+    await seed("to-absent", { secret: linkTo("absent", ["secret"]) });
+
+    expect(await stage("secret", "to-absent", ["secret"])).toContain(
+      refusedAt("secret"),
+    );
+    expect(await stage("record", "to-absent", [])).toContain(
+      refusedAt("record/secret"),
+    );
   });
 
   for (const crossDocument of [false, true]) {

@@ -81,6 +81,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
+import { toMemorySpaceAddress } from "../link-types.ts";
 import {
   areLinksSame,
   isPrimitiveCellLink,
@@ -5706,7 +5707,11 @@ type LinkedValue =
     readonly kind: "absent";
   }
   | {
-    /** The walk follows more links than link resolution follows. */
+    /**
+     * The walk follows more links than link resolution follows, or a stored
+     * link leads into a space-scoped document this replica does not hold, so
+     * the value there is unknown rather than absent, as it is to a reader.
+     */
     readonly kind: "unfinished";
     readonly stored: boolean;
   };
@@ -5732,6 +5737,9 @@ const resolveValueThroughLinks = (
   let path: string[] = [];
   let remaining: readonly string[] = canonicalizeLogicalPath(address.path);
   let stored = false;
+  // Whether the walk reached `document` through a link stored before this
+  // transaction, and has read nothing in it yet.
+  let enteredByStoredLink = false;
   // Each turn either follows a link or consumes a segment, so bounding the
   // links followed bounds the walk.
   let hops = 0;
@@ -5739,8 +5747,16 @@ const resolveValueThroughLinks = (
     const value = tx.readValueOrThrow({ ...document, path }, {
       meta: INTERNAL_VERIFIER_META,
     });
+    if (
+      enteredByStoredLink && value === undefined &&
+      document.scope === "space" && documentIsMissing(tx, document)
+    ) {
+      return { kind: "unfinished", stored };
+    }
+    enteredByStoredLink = false;
     if (isPrimitiveCellLink(value)) {
-      stored ||= !writtenInTransaction(tx, document, path);
+      const storedHere = !writtenInTransaction(tx, document, path);
+      stored ||= storedHere;
       if (++hops > MAX_PATH_RESOLUTION_LENGTH) {
         return { kind: "unfinished", stored };
       }
@@ -5748,6 +5764,7 @@ const resolveValueThroughLinks = (
       document = { space: next.space, id: next.id, scope: next.scope };
       path = [];
       remaining = [...next.path.map(String), ...remaining];
+      enteredByStoredLink = storedHere;
       continue;
     }
     if (remaining.length === 0) {
@@ -5762,6 +5779,22 @@ const resolveValueThroughLinks = (
     path = [...path, segment];
     remaining = rest;
   }
+};
+
+/** Whether this transaction reads no document at all at `document`. */
+const documentIsMissing = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean => {
+  const read = tx.read(toMemorySpaceAddress({ ...document, path: [] }), {
+    meta: INTERNAL_VERIFIER_META,
+  });
+  return read.error !== undefined && "path" in read.error &&
+    read.error.name === "NotFoundError" && read.error.path.length === 0;
 };
 
 /** Whether this transaction wrote at `path` of `document`, or above it. */
@@ -10138,16 +10171,7 @@ const verifyWriteFloor = function* (
       // slot's integrity for its stager, so it is credited by the value it
       // brings, where that value lives. A link a write sets is credited with
       // the label this commit persists for it.
-      const staged = pathHoldsStagedReference(
-        tx,
-        {
-          space: input.target.space,
-          id: input.target.id,
-          scope: normalizeCellScope(input.target.scope),
-        },
-        input.target.path,
-      );
-      const credit = staged
+      const credit = pathHoldsStagedReference(tx, target, input.target.path)
         ? yield* linkedValueCredit(tx, ctx.linkLabels, input, [], persisted)
         : (yield* persisted())?.integrity ?? [];
       if (credit !== undefined) contributions.push(credit);
