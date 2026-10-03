@@ -1668,7 +1668,7 @@ map whose entry paths are relative to `value`: an entry at `["error", "code"]`
 labels what §4.6.4 spells `/value/error/code`, and an entry at the empty path
 labels the payload root. No entry can name an envelope member.
 
-**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `open`.
+**SC-55 [normative] Value-relative label-map entries — §4.6.4.** `applied`.
 §4.6.4 requires persisted payload labels under an explicit `/value` prefix and
 allows an equivalent internal layout. The runner's map is such a layout, and it
 spares the common case, a payload label, from spelling `value` (owner decision
@@ -1691,6 +1691,14 @@ data into a member would arrive unlabeled. No pattern reaches the meta seam,
 and every runtime write there is a link, a pattern identity or definition, a
 schema, a source origin or reconciliation record, or a slug an operator
 chooses.
+
+`applied` — specs#39 (2026-10-03): §4.6.4 keys a payload label by its path
+relative to `value` and marks the label-metadata entries `root: "document"`,
+the only document-rooted entries it persists. Label lookup selects the root
+before matching a path, so an entry of the other root never takes part, and
+a runtime should decode the two kinds into distinct address forms before any
+lookup sees them. §4.6.5 and §8.10.1.1 keep envelope metadata out of payload
+matching.
 
 ## From the render-time remote-load gate (2026-10-01)
 
