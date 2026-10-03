@@ -747,6 +747,14 @@ export class CellHandle<T = unknown> {
     ) => Cancel | undefined | void,
     options: CellSubscribeOptions,
   ): Cancel {
+    // A caller the compiler did not check can leave the options out. It is
+    // told what it owes, rather than meeting a property read of `undefined`.
+    if (typeof options?.onRefused !== "function") {
+      throw new TypeError(
+        "CellHandle.subscribe() requires `options.onRefused`, which says what " +
+          "the subscriber shows while the worker refuses the cell's read",
+      );
+    }
     this.#requireSchema("subscribe");
     // If a label-aware subscription is added AFTER a value-only one already
     // opened the backend subscription, that backend sub carries no label and
