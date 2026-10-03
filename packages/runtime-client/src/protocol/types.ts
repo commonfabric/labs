@@ -3469,17 +3469,28 @@ export type SpaceHostRegistrationResponse = {
   registration: SpaceHostRegistration;
 };
 
-declare const decidedByHostReadGate: unique symbol;
+/**
+ * What carries {@link HostReadDecided}: a class with a private field, so that
+ * the type is nominal. A value that is not one, however its fields read, does
+ * not have the type, and a spread of a decided answer, which copies the
+ * answer's fields and never a class's private one, does not either. No value
+ * is ever built from it: the gate gives an answer the type, and the wire
+ * never carries it.
+ */
+declare class HostReadDecidedMark {
+  #decidedByHostReadGate: true;
+}
 
 /**
  * The mark of an answer to a host's read of a cell that the worker's
  * host-read gate made: the gate decides what of a cell a host may see, under
  * the display ceiling the worker renders with, and is the one place that
  * builds such an answer. The mark exists only in the type, never on the wire,
- * so a handler that builds an answer of its own fails to type-check rather
- * than handing the host a value nothing decided.
+ * so a handler that builds an answer of its own, or remakes a decided one by
+ * spreading it, fails to type-check rather than handing the host a value
+ * nothing decided.
  */
-export type HostReadDecided = { readonly [decidedByHostReadGate]: true };
+export type HostReadDecided = HostReadDecidedMark;
 
 /**
  * Why the worker returned nothing of a cell for a host's read: what refused

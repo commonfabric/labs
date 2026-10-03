@@ -180,6 +180,7 @@ import {
   type CellValueResponse,
   type CfcLabelViewResponse,
   ClientNotificationType,
+  type CommandResponse,
   type CreateSpaceRequest,
   type CustodyAnswerPublishRequest,
   type CustodyAnswerPublishResponse,
@@ -896,6 +897,28 @@ type RenderPolicyConfiguration = Pick<
   InitializationData,
   "renderDeclassificationPolicy" | "renderConfidentialityCeiling"
 >;
+
+/**
+ * `answer`, as the answer to a request of type `type`. Each of the
+ * dispatcher's cases answers through this, so that a case whose answer is
+ * not of the type its own request's answer is, such as an answer the
+ * host-read gate did not build where the request's answer carries its mark,
+ * fails to type-check, rather than passing as some other request's answer.
+ */
+function answering<K extends RequestType>(
+  _type: K,
+  answer: AnswerTo<K> | Promise<AnswerTo<K>>,
+): AnswerTo<K> | Promise<AnswerTo<K>> {
+  return answer;
+}
+
+/**
+ * The answer to a request of type `K`, as a handler gives it: a request whose
+ * answer is empty is answered by a handler that returns nothing.
+ */
+type AnswerTo<K extends RequestType> = [CommandResponse<K>] extends [undefined]
+  ? CommandResponse<K> | void
+  : CommandResponse<K>;
 
 /**
  * The worker side of a runtime client connection. An instance owns the
@@ -2213,12 +2236,12 @@ export class RuntimeProcessor {
     // The preview shows the host the source's value, so it is decided as an
     // answer built from the source is, and no consent is kept for one the
     // display ceiling refuses.
-    return await this.#hostReadGate.fromCell(source, () => {
+    return await this.#hostReadGate.fromCell(source, (decided) => {
       if (this.#isDisposed || this.#detachedClients.has(client)) {
         throw new Error("Snapshot sharing is unavailable");
       }
       const prepared = prepareSnapshotShare(
-        source,
+        decided,
         "user" in audience ? { user: audienceCell } : { space: audienceCell },
         appendBooksTo,
       );
@@ -2429,7 +2452,7 @@ export class RuntimeProcessor {
     // it, and not through a read the gate can measure.
     return await this.#hostReadGate.fromCell(
       cell,
-      () => this.#querySqlite(cell, request),
+      (decided) => this.#querySqlite(decided, request),
     );
   }
 
@@ -3071,8 +3094,8 @@ export class RuntimeProcessor {
     );
     // Synced first, so that the labels it is decided on are the document's.
     await cell.sync();
-    return await this.#hostReadGate.fromMetadata(cell, async () => {
-      const state = await readPieceSourceState(this.#runtime, cell);
+    return await this.#hostReadGate.fromMetadata(cell, async (decided) => {
+      const state = await readPieceSourceState(this.#runtime, decided);
       return { source: { ...state, space: state.space as DID } };
     });
   }
@@ -3090,10 +3113,10 @@ export class RuntimeProcessor {
       request.scope,
     );
     await cell.sync();
-    return await this.#hostReadGate.fromMetadata(cell, async () => ({
+    return await this.#hostReadGate.fromMetadata(cell, async (decided) => ({
       source: await readPieceSourceRevision(
         this.#runtime,
-        cell,
+        decided,
         request.revisionId,
       ),
     }));
@@ -3168,10 +3191,10 @@ export class RuntimeProcessor {
     await cell.sync();
     return await this.#hostReadGate.fromMetadata(
       cell,
-      () =>
+      (decided) =>
         this.#changePieceSource(
           pieces,
-          cell,
+          decided,
           request,
           confirmationKey,
           confirmedChange,
@@ -3579,189 +3602,420 @@ export class RuntimeProcessor {
   ): Promise<RemoteResponse | void> {
     switch (request.type) {
       case RequestType.Dispose:
-        return await this.dispose();
+        return answering(RequestType.Dispose, await this.dispose());
       case RequestType.CellGet:
-        return await this.#settledGet(request);
+        return answering(RequestType.CellGet, await this.#settledGet(request));
       case RequestType.CellPull:
-        return await this.handleCellPull(request);
+        return answering(
+          RequestType.CellPull,
+          await this.handleCellPull(request),
+        );
       case RequestType.CellInitialize:
-        return await this.handleCellInitialize(request);
+        return answering(
+          RequestType.CellInitialize,
+          await this.handleCellInitialize(request),
+        );
       case RequestType.CellSet:
-        return this.handleCellSet(request);
+        return answering(RequestType.CellSet, this.handleCellSet(request));
       case RequestType.CellPush:
-        return this.handleCellPush(request);
+        return answering(RequestType.CellPush, this.handleCellPush(request));
       case RequestType.CellSend:
-        return this.handleCellSend(request);
+        return answering(RequestType.CellSend, this.handleCellSend(request));
       case RequestType.CellSubscribe:
-        return this.handleCellSubscribe(request, client);
+        return answering(
+          RequestType.CellSubscribe,
+          this.handleCellSubscribe(request, client),
+        );
       case RequestType.CellUnsubscribe:
-        return this.handleCellUnsubscribe(request, client);
+        return answering(
+          RequestType.CellUnsubscribe,
+          this.handleCellUnsubscribe(request, client),
+        );
       case RequestType.CellResolveAsCell:
-        return this.handleCellResolveAsCell(request);
+        return answering(
+          RequestType.CellResolveAsCell,
+          this.handleCellResolveAsCell(request),
+        );
       case RequestType.CellGetCfcLabel:
-        return await this.handleCellGetCfcLabel(request);
+        return answering(
+          RequestType.CellGetCfcLabel,
+          await this.handleCellGetCfcLabel(request),
+        );
       case RequestType.CellFields:
-        return await this.handleCellFields(request);
+        return answering(
+          RequestType.CellFields,
+          await this.handleCellFields(request),
+        );
       case RequestType.SnapshotSharePrepare:
-        return await this.handleSnapshotSharePrepare(request, client);
+        return answering(
+          RequestType.SnapshotSharePrepare,
+          await this.handleSnapshotSharePrepare(request, client),
+        );
       case RequestType.SnapshotShareCommit:
-        return await this.handleSnapshotShareCommit(request, client);
+        return answering(
+          RequestType.SnapshotShareCommit,
+          await this.handleSnapshotShareCommit(request, client),
+        );
       case RequestType.SnapshotShareCancel:
         this.#snapshotShares.delete(clientScopedKey(client, request.id));
         return;
       case RequestType.CustodySealPrepare:
-        return await this.handleCustodySealPrepare(request, client);
+        return answering(
+          RequestType.CustodySealPrepare,
+          await this.handleCustodySealPrepare(request, client),
+        );
       case RequestType.CustodySealCommit:
-        return await this.handleCustodySealCommit(request, client);
+        return answering(
+          RequestType.CustodySealCommit,
+          await this.handleCustodySealCommit(request, client),
+        );
       case RequestType.CustodySealCancel:
         this.#custodySeals.delete(clientScopedKey(client, request.id));
         return;
       case RequestType.CustodyAnswerPublish:
-        return await this.handleCustodyAnswerPublish(request);
+        return answering(
+          RequestType.CustodyAnswerPublish,
+          await this.handleCustodyAnswerPublish(request),
+        );
       case RequestType.CustodyAnswerRead:
-        return await this.handleCustodyAnswerRead(request);
+        return answering(
+          RequestType.CustodyAnswerRead,
+          await this.handleCustodyAnswerRead(request),
+        );
       case RequestType.OperationQuery:
-        return await this.handleOperationQuery(request, client);
+        return answering(
+          RequestType.OperationQuery,
+          await this.handleOperationQuery(request, client),
+        );
       case RequestType.OperationCapabilities:
-        return await this.handleOperationCapabilities(request, client);
+        return answering(
+          RequestType.OperationCapabilities,
+          await this.handleOperationCapabilities(request, client),
+        );
       case RequestType.OperationApply:
-        return await this.handleOperationApply(request, client);
+        return answering(
+          RequestType.OperationApply,
+          await this.handleOperationApply(request, client),
+        );
       case RequestType.OperationRelease:
-        return await this.handleOperationRelease(request, client);
+        return answering(
+          RequestType.OperationRelease,
+          await this.handleOperationRelease(request, client),
+        );
       case RequestType.OperationSubscribe:
-        return await this.handleOperationSubscribe(request, client);
+        return answering(
+          RequestType.OperationSubscribe,
+          await this.handleOperationSubscribe(request, client),
+        );
       case RequestType.OperationUnsubscribe:
-        return this.handleOperationUnsubscribe(request, client);
+        return answering(
+          RequestType.OperationUnsubscribe,
+          this.handleOperationUnsubscribe(request, client),
+        );
       case RequestType.OperationSessionClose:
-        return this.handleOperationSessionClose(request, client);
+        return answering(
+          RequestType.OperationSessionClose,
+          this.handleOperationSessionClose(request, client),
+        );
       case RequestType.PresenceJoin:
-        return await this.handlePresenceJoin(request, client);
+        return answering(
+          RequestType.PresenceJoin,
+          await this.handlePresenceJoin(request, client),
+        );
       case RequestType.PresencePublish:
-        return this.handlePresencePublish(request, client);
+        return answering(
+          RequestType.PresencePublish,
+          this.handlePresencePublish(request, client),
+        );
       case RequestType.PresenceLeave:
-        return await this.handlePresenceLeave(request, client);
+        return answering(
+          RequestType.PresenceLeave,
+          await this.handlePresenceLeave(request, client),
+        );
       case RequestType.SqliteQuery:
-        return await this.handleSqliteQuery(request);
+        return answering(
+          RequestType.SqliteQuery,
+          await this.handleSqliteQuery(request),
+        );
       case RequestType.SqliteExec:
-        return await this.handleSqliteExec(request);
+        return answering(
+          RequestType.SqliteExec,
+          await this.handleSqliteExec(request),
+        );
       case RequestType.GetCell:
-        return this.handleGetCell(request);
+        return answering(RequestType.GetCell, this.handleGetCell(request));
       case RequestType.GetHomeSpaceCell:
-        return this.handleGetHomeSpaceCell(request);
+        return answering(
+          RequestType.GetHomeSpaceCell,
+          this.handleGetHomeSpaceCell(request),
+        );
       case RequestType.EnsureHomePatternRunning:
-        return await this.handleEnsureHomePatternRunning(request);
+        return answering(
+          RequestType.EnsureHomePatternRunning,
+          await this.handleEnsureHomePatternRunning(request),
+        );
       case RequestType.Idle:
-        return await this.handleIdle();
+        return answering(RequestType.Idle, await this.handleIdle());
       case RequestType.ListEventAttention:
-        return await this.handleListEventAttention(request);
+        return answering(
+          RequestType.ListEventAttention,
+          await this.handleListEventAttention(request),
+        );
       case RequestType.ResolveEventAttention:
-        return await this.handleResolveEventAttention(request);
+        return answering(
+          RequestType.ResolveEventAttention,
+          await this.handleResolveEventAttention(request),
+        );
       case RequestType.FlushCompileCacheWrites:
-        return await this.handleFlushCompileCacheWrites();
+        return answering(
+          RequestType.FlushCompileCacheWrites,
+          await this.handleFlushCompileCacheWrites(),
+        );
       case RequestType.PieceCreate:
-        return await this.handlePieceCreate(
-          request,
+        return answering(
+          RequestType.PieceCreate,
+          await this.handlePieceCreate(
+            request,
+          ),
         );
       case RequestType.GetSpaceRootPattern:
-        return await this.handleGetSpaceRootPattern(
-          request,
+        return answering(
+          RequestType.GetSpaceRootPattern,
+          await this.handleGetSpaceRootPattern(
+            request,
+          ),
         );
       case RequestType.RecreateSpaceRootPattern:
-        return await this.handleRecreateSpaceRootPattern(
-          request,
+        return answering(
+          RequestType.RecreateSpaceRootPattern,
+          await this.handleRecreateSpaceRootPattern(
+            request,
+          ),
         );
       case RequestType.PieceGet:
-        return await this.handlePieceGet(request);
+        return answering(
+          RequestType.PieceGet,
+          await this.handlePieceGet(request),
+        );
       case RequestType.PieceGetSlug:
-        return await this.handlePieceGetSlug(request);
+        return answering(
+          RequestType.PieceGetSlug,
+          await this.handlePieceGetSlug(request),
+        );
       case RequestType.SlugResolve:
-        return await this.handleSlugResolve(request);
+        return answering(
+          RequestType.SlugResolve,
+          await this.handleSlugResolve(request),
+        );
       case RequestType.PieceRemove:
-        return await this.handlePieceRemove(request);
+        return answering(
+          RequestType.PieceRemove,
+          await this.handlePieceRemove(request),
+        );
       case RequestType.PieceStart:
-        return await this.handlePieceStart(request);
+        return answering(
+          RequestType.PieceStart,
+          await this.handlePieceStart(request),
+        );
       case RequestType.PieceStop:
-        return await this.handlePieceStop(request);
+        return answering(
+          RequestType.PieceStop,
+          await this.handlePieceStop(request),
+        );
       case RequestType.PieceGetAll:
-        return await this.handlePieceGetAll(request);
+        return answering(
+          RequestType.PieceGetAll,
+          await this.handlePieceGetAll(request),
+        );
       case RequestType.PieceGetSource:
-        return await this.handlePieceGetSource(request);
+        return answering(
+          RequestType.PieceGetSource,
+          await this.handlePieceGetSource(request),
+        );
       case RequestType.PieceGetSourceRevision:
-        return await this.handlePieceGetSourceRevision(request);
+        return answering(
+          RequestType.PieceGetSourceRevision,
+          await this.handlePieceGetSourceRevision(request),
+        );
       case RequestType.PieceClone:
-        return await this.handlePieceClone(request);
+        return answering(
+          RequestType.PieceClone,
+          await this.handlePieceClone(request),
+        );
       case RequestType.PieceUpdateSource:
-        return await this.handlePieceUpdateSource(request);
+        return answering(
+          RequestType.PieceUpdateSource,
+          await this.handlePieceUpdateSource(request),
+        );
       case RequestType.SpaceGetAcl:
-        return await this.handleSpaceGetAcl(request);
+        return answering(
+          RequestType.SpaceGetAcl,
+          await this.handleSpaceGetAcl(request),
+        );
       case RequestType.SpaceSetAclEntry:
-        return await this.handleSpaceSetAclEntry(request);
+        return answering(
+          RequestType.SpaceSetAclEntry,
+          await this.handleSpaceSetAclEntry(request),
+        );
       case RequestType.SpaceRemoveAclEntry:
-        return await this.handleSpaceRemoveAclEntry(request);
+        return answering(
+          RequestType.SpaceRemoveAclEntry,
+          await this.handleSpaceRemoveAclEntry(request),
+        );
       case RequestType.PieceSynced:
-        return await this.handlePieceSynced(request);
+        return answering(
+          RequestType.PieceSynced,
+          await this.handlePieceSynced(request),
+        );
       case RequestType.RuntimeSynced:
-        return await this.handleRuntimeSynced();
+        return answering(
+          RequestType.RuntimeSynced,
+          await this.handleRuntimeSynced(),
+        );
       case RequestType.CreateSpace:
-        return await this.handleCreateSpace(request);
+        return answering(
+          RequestType.CreateSpace,
+          await this.handleCreateSpace(request),
+        );
       case RequestType.RegisterSpaceHost:
-        return this.handleRegisterSpaceHost(request);
+        return answering(
+          RequestType.RegisterSpaceHost,
+          this.handleRegisterSpaceHost(request),
+        );
       case RequestType.RegisterSpaceHostDetailed:
-        return this.handleRegisterSpaceHostDetailed(request);
+        return answering(
+          RequestType.RegisterSpaceHostDetailed,
+          this.handleRegisterSpaceHostDetailed(request),
+        );
       case RequestType.RetrySpaceAccess:
-        return await this.handleRetrySpaceAccess(request);
+        return answering(
+          RequestType.RetrySpaceAccess,
+          await this.handleRetrySpaceAccess(request),
+        );
       case RequestType.GetGraphSnapshot:
-        return this.getGraphSnapshot(request);
+        return answering(
+          RequestType.GetGraphSnapshot,
+          this.getGraphSnapshot(request),
+        );
       case RequestType.GetStorageDiagnostics:
-        return {
+        return answering(RequestType.GetStorageDiagnostics, {
           diagnostics: this.#runtime.storageManager.getDiagnostics?.() ?? null,
-        };
+        });
       case RequestType.GetLoggerCounts:
-        return this.getLoggerCounts(request);
+        return answering(
+          RequestType.GetLoggerCounts,
+          this.getLoggerCounts(request),
+        );
       case RequestType.GetPatternCoverage:
-        return this.getPatternCoverage(request);
+        return answering(
+          RequestType.GetPatternCoverage,
+          this.getPatternCoverage(request),
+        );
       case RequestType.SetLoggerLevel:
-        return this.setLoggerLevel(request);
+        return answering(
+          RequestType.SetLoggerLevel,
+          this.setLoggerLevel(request),
+        );
       case RequestType.SetLoggerEnabled:
-        return this.setLoggerEnabled(request);
+        return answering(
+          RequestType.SetLoggerEnabled,
+          this.setLoggerEnabled(request),
+        );
       case RequestType.SetTelemetryEnabled:
-        return this.setTelemetryEnabled(request);
+        return answering(
+          RequestType.SetTelemetryEnabled,
+          this.setTelemetryEnabled(request),
+        );
       case RequestType.SetReadStatsEnabled:
-        return this.setReadStatsEnabled(request);
+        return answering(
+          RequestType.SetReadStatsEnabled,
+          this.setReadStatsEnabled(request),
+        );
       case RequestType.SetMemoryMessageCompression:
-        return await this.setMemoryMessageCompression(request);
+        return answering(
+          RequestType.SetMemoryMessageCompression,
+          await this.setMemoryMessageCompression(request),
+        );
       case RequestType.ResetLoggerBaselines:
-        return this.resetLoggerBaselines(request);
+        return answering(
+          RequestType.ResetLoggerBaselines,
+          this.resetLoggerBaselines(request),
+        );
       case RequestType.GetSettleStats:
-        return this.getSettleStats(request);
+        return answering(
+          RequestType.GetSettleStats,
+          this.getSettleStats(request),
+        );
       case RequestType.GetSettleStatsHistory:
-        return this.getSettleStatsHistory(request);
+        return answering(
+          RequestType.GetSettleStatsHistory,
+          this.getSettleStatsHistory(request),
+        );
       case RequestType.SetSettleStatsEnabled:
-        return this.setSettleStatsEnabled(request);
+        return answering(
+          RequestType.SetSettleStatsEnabled,
+          this.setSettleStatsEnabled(request),
+        );
       case RequestType.GetActionRunTrace:
-        return this.getActionRunTrace(request);
+        return answering(
+          RequestType.GetActionRunTrace,
+          this.getActionRunTrace(request),
+        );
       case RequestType.SetActionRunTraceEnabled:
-        return this.setActionRunTraceEnabled(request);
+        return answering(
+          RequestType.SetActionRunTraceEnabled,
+          this.setActionRunTraceEnabled(request),
+        );
       case RequestType.GetTriggerTrace:
-        return this.getTriggerTrace(request);
+        return answering(
+          RequestType.GetTriggerTrace,
+          this.getTriggerTrace(request),
+        );
       case RequestType.SetTriggerTraceEnabled:
-        return this.setTriggerTraceEnabled(request);
+        return answering(
+          RequestType.SetTriggerTraceEnabled,
+          this.setTriggerTraceEnabled(request),
+        );
       case RequestType.GetWriteStackTrace:
-        return this.getWriteStackTrace(request);
+        return answering(
+          RequestType.GetWriteStackTrace,
+          this.getWriteStackTrace(request),
+        );
       case RequestType.SetWriteStackTraceMatchers:
-        return this.setWriteStackTraceMatchers(request);
+        return answering(
+          RequestType.SetWriteStackTraceMatchers,
+          this.setWriteStackTraceMatchers(request),
+        );
       case RequestType.DetectNonIdempotent:
-        return await this.detectNonIdempotent(request);
+        return answering(
+          RequestType.DetectNonIdempotent,
+          await this.detectNonIdempotent(request),
+        );
       case RequestType.GetPatternSources:
-        return this.getPatternSources(request);
+        return answering(
+          RequestType.GetPatternSources,
+          this.getPatternSources(request),
+        );
       case RequestType.SetBreakpoints:
-        return this.setBreakpoints(request);
+        return answering(
+          RequestType.SetBreakpoints,
+          this.setBreakpoints(request),
+        );
       case RequestType.UploadBlob:
-        return await this.handleUploadBlob(request);
+        return answering(
+          RequestType.UploadBlob,
+          await this.handleUploadBlob(request),
+        );
       case RequestType.VDomMount:
-        return this.handleVDomMount(request, client);
+        return answering(
+          RequestType.VDomMount,
+          this.handleVDomMount(request, client),
+        );
       case RequestType.VDomUnmount:
-        return this.handleVDomUnmount(request, client);
+        return answering(
+          RequestType.VDomUnmount,
+          this.handleVDomUnmount(request, client),
+        );
       default:
         throw new Error(`Unknown message type: ${(request as any).type}`);
     }

@@ -77,6 +77,7 @@ import {
   type ErrorNotification,
   type ErrorReport,
   type HostReadDecided,
+  type IPCRemotePost,
   NotificationType,
   type OperationUpdateNotification,
   type PieceRef,
@@ -153,6 +154,18 @@ const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
  */
 function decided<T>(answer: T): T & HostReadDecided {
   return answer as T & HostReadDecided;
+}
+
+/**
+ * `message` as the wire carries it. The mark `decided()` gives an answer
+ * exists only in its type, as a class's private field no value has, so a
+ * message holding a decided answer is not, to the compiler, a value the wire
+ * can encode. This is the one place the type is set aside, at the boundary
+ * every message the worker sends crosses, as `decided()` is the one place it
+ * is given; what is sent is the same value.
+ */
+export function onTheWire(message: IPCRemotePost): FabricValue {
+  return message as unknown as FabricValue;
 }
 
 /**
@@ -527,18 +540,19 @@ export class HostReadGate {
    * An answer built from `root`'s metadata by `build`, such as a piece's
    * source, or the refusal that stands in its place. `build` runs only once
    * the document's labels admit a read of its metadata, so a refused piece's
-   * source is neither read for the host nor changed through it.
+   * source is neither read for the host nor changed through it. `build` is
+   * handed the document the decision was made on, and builds from it alone.
    */
   async fromMetadata<T extends object>(
     root: Cell<unknown>,
-    build: () => Promise<T>,
+    build: (root: Cell<unknown>) => Promise<T>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
     await this.#hold(root);
     const refusal = this.metadataRefusal(root);
     if (refusal?.refused !== undefined) {
       return decided({ refused: refusal.refused });
     }
-    return decided(await build());
+    return decided(await build(root));
   }
 
   /**
@@ -546,18 +560,19 @@ export class HostReadGate {
    * query of a database returns or the state of a collaborative field, or
    * the refusal that stands in its place. Decided on the labels `cell`
    * carries, which cover everything inside it, since what `build` reads is
-   * reached through it and not through a read the gate can measure.
+   * reached through it and not through a read the gate can measure. `build`
+   * is handed the cell the decision was made on, and builds from it alone.
    */
   async fromCell<T extends object>(
     cell: Cell<unknown>,
-    build: () => Promise<T>,
+    build: (cell: Cell<unknown>) => Promise<T>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
     await this.#hold(cell);
     const refusal = this.#cellRefusal(cell);
     if (refusal !== undefined) {
       return decided({ refused: this.#refuse(refusal).refused });
     }
-    return decided(await build());
+    return decided(await build(cell));
   }
 
   /**

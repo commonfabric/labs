@@ -576,7 +576,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     this.#subscriptionDiagnostics.clear();
   }
 
-  #handleMessage = (message: IPCRemoteMessage): void => {
+  #handleMessage = (message: IPCRemoteMessage | ErrorReport): void => {
     // Once dead (disposed), the connection ignores incoming messages without
     // warning: notifications are dropped here, stray/late messages are dropped
     // below. The one exception is a reply to a still-pending request — the
