@@ -485,13 +485,16 @@ const parseParameter = (
   } else if (isObjectNotArray(value) && value.kind === "text") {
     if (
       hasExactKeys(value, ["kind", "maxLength"]) &&
-      isPositiveInteger(value.maxLength)
+      isCount(value.maxLength)
     ) return { kind: "text", maxLength: value.maxLength };
   }
   throw new Error(
     debugStr`Reviewed intent descriptor declares a parameter this build cannot show: $quote${key}`,
   );
 };
+
+/** What a parameter key may be: a name that starts with a letter. */
+const PARAMETER_KEY = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 /**
  * Reads a reviewed-intent descriptor, as a host does before a preview and a
@@ -536,6 +539,14 @@ export function parseReviewedIntentDescriptor(
   }
   const parsed: Record<string, ReviewedIntentParameter> = {};
   for (const [key, declared] of Object.entries(parameters)) {
+    // A key is a name that starts with a letter. That keeps `__proto__`
+    // out: assigned below, it would set the record's prototype rather than
+    // declare a parameter, and every later check would skip it.
+    if (!PARAMETER_KEY.test(key)) {
+      throw new Error(
+        debugStr`Reviewed intent descriptor parameter keys start with a letter and hold letters, digits and underscores: $quote${key}`,
+      );
+    }
     parsed[key] = parseParameter(key, declared);
   }
   return {

@@ -73,7 +73,8 @@ cell, and a pattern binds that cell. For a messaging consumer:
 - `operation` is what a record authorizes, `endpointName` is how the surface
   names the way the intent is carried, and `consumer` names the application that
   acts on records.
-- `parameters` are the only keys a record carries. A `destinations` parameter
+- `parameters` are the only keys a record carries. A key is a name that starts
+  with a letter and holds letters, digits and underscores. A `destinations` parameter
   takes between `min` and `max` destination cells the pattern binds, and
   `integrity` is a nonempty list of atom patterns each destination's integrity
   must satisfy together, as one conjunction whose variables are shared across
@@ -81,7 +82,8 @@ cell, and a pattern binds that cell. For a messaging consumer:
   in; absent, it is the subject's home space. Each destinations parameter
   states its own rules, since a payee and a funding source need different
   ones. A `text` parameter is text the actor enters on the surface, at most
-  `maxLength` Unicode code points, counted as JSON Schema counts them.
+  `maxLength` (zero or more) Unicode code points, counted as JSON Schema counts
+  them.
 - `windowMs` is how long after the gesture a record stays good. A record takes
   the smaller of this and ten minutes.
 - `maxAttempts` bounds the delivery attempts a consumer makes on one record.
