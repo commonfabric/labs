@@ -10,6 +10,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
+  callbacks, a cohesive handles module, one session UI for both command aliases,
+  and hands-on demo validation across labs, Weaver, and Loom.
+- [Memory router security requirements](memory-router-security-requirements.md)
+  defines the authentication, authorization, isolation, and public-ingress
+  gates for multiplexed Memory WebSockets routed to toolsheds.
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
@@ -53,6 +59,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Topics computation cost and live upgrade](topics-computation-cost.md)
   sequences shared backlink lookup, incremental mention maintenance, topic
   summaries, measurement gates, and rehearsed upgrades of populated boards.
+- [One way to render Markdown](markdown-rendering.md) brings the three modules
+  that render `marked` tokens — the `<cf-markdown>` component, the harness
+  console, and the `cf` pager — onto one character reference decoder and one URL
+  policy, and asks whether the two Lit renderers should share their token walk.
 - [Cast-free patterns](cast-free-patterns.md) sequences shared type and API
   repairs, migration of authored patterns and their tests, and enforcement
   through lint and new-source admission.

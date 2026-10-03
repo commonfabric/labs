@@ -98,9 +98,9 @@ export interface DescribeHandleToolOutput {
    * kind it is, which tool observed it, and where its label came from.
    */
   referent?: {
-    kind: "document" | "research";
+    kind: "document" | "research" | "return";
     source: string;
-    labelSource: "row" | "query" | "research";
+    labelSource: "row" | "query" | "research" | "child";
   };
 
   /**

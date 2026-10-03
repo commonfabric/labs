@@ -42,13 +42,15 @@ return { [UI]: <div>{wishResult.result}</div> };
 
 ### Results wait for loading documents
 
-Wish waits for the backing documents of its discovery collections and
-mentionable candidates before selecting a result. This loading behavior applies
-to every hashtag Wish. Pending document loads leave any existing state untouched;
-a cold Wish with no existing state publishes none until loading settles. UI
-loading affordances must not depend on an empty `candidates` array. A confirmed
-empty collection produces a no-match error; a failed document load produces a
-load error.
+Wish waits for the backing documents of its discovery collections and of the
+favorite and mentionable candidates before selecting a result. This loading
+behavior applies to every hashtag Wish. Pending document loads leave any
+existing state untouched; a cold Wish with no existing state publishes none
+until loading settles. A favorite whose piece document is confirmed absent is
+excluded from matches; its bookmark remains in the home collection. UI loading
+affordances must not depend on an empty `candidates` array. A confirmed empty
+collection produces a no-match error; a failed document load produces a load
+error.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
@@ -285,8 +287,9 @@ This ensures the wish is established once. Conditional logic belongs in how you
 
 These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
-`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, and the
-`#profile*` targets, which require a signed-in user and resolve from that user's home space.
+`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
+`#chatManager`, and the `#profile*` targets, which require a signed-in user and
+resolve from that user's home space.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |
@@ -307,6 +310,7 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#learned`          | User's learned data (home space)                        |
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
+| `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
 | `#profile`          | Profile default pattern object                          |
 | `#profileName`      | User's profile display name                             |
 | `#profileAvatar`    | User's profile avatar                                   |

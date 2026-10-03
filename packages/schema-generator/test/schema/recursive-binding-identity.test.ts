@@ -58,6 +58,91 @@ function* recursiveValues(
 }
 
 describe("recursive binding identity", () => {
+  it("keeps inherited, forwarded, and defaulted writers distinct through plain generics", async () => {
+    const { schema, diagnostics } = await generate(`
+      interface Base<A, B> {
+        left: WriteAuthorizedBy<string, A>;
+        right: WriteAuthorizedBy<string, B>;
+      }
+      interface Derived<A, B = A> extends Base<A, B> {}
+      type Forward<X, Y = X> = Derived<X, Y>;
+      interface Holder {
+        original: Forward<typeof f, typeof g>;
+        reversed: Forward<typeof g, typeof f>;
+        defaulted: Forward<typeof f>;
+      }
+    `);
+
+    for (
+      const [field, left, right] of [
+        ["original", "f", "g"],
+        ["reversed", "g", "f"],
+        ["defaulted", "f", "f"],
+      ] as const
+    ) {
+      const members = asObjectSchema(schema.properties![field]!).properties!;
+      for (
+        const [member, writer] of [["left", left], ["right", right]] as const
+      ) {
+        expect(asObjectSchema(members[member]!).ifc?.writeAuthorizedBy)
+          .toEqual({
+            __ctWriterIdentityOf: { file: "test.ts", path: [writer] },
+          });
+      }
+    }
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("keeps each named policy through Record and recursive interface payloads", async () => {
+    const { schema, diagnostics } = await generate(`
+      type F = WriteAuthorizedBy<string, typeof f>;
+      type G = WriteAuthorizedBy<string, typeof g>;
+      interface Node<W> { value: W; next?: Sec<Identity<W>> }
+      type Sec<W> = Confidential<Node<W>, readonly ["a"]>;
+      interface Holder {
+        f: Sec<F>;
+        g: Sec<G>;
+        records: Record<string, F>;
+      }
+    `);
+
+    for (const writer of ["f", "g"]) {
+      for (
+        const value of recursiveValues(schema, schema.properties![writer]!)
+      ) {
+        expect(value.ifc?.writeAuthorizedBy).toEqual({
+          __ctWriterIdentityOf: { file: "test.ts", path: [writer] },
+        });
+      }
+    }
+    const record = asObjectSchema(schema.properties!.records!);
+    const value = asObjectSchema(record.additionalProperties!);
+    const resolved = typeof value.$ref === "string"
+      ? asObjectSchema(schema.$defs![value.$ref.split("/").pop()!]!)
+      : value;
+    expect(resolved.ifc?.writeAuthorizedBy).toEqual({
+      __ctWriterIdentityOf: { file: "test.ts", path: ["f"] },
+    });
+    expect(diagnostics).toEqual([]);
+  });
+
+  for (const member of ["[W][0]", "W extends unknown ? W : never"]) {
+    it(`reports an unread writer when a generic member uses ${member}`, async () => {
+      const { diagnostics } = await generate(`
+        interface Box<W> { value: ${member} }
+        interface Holder { a: Box<WriteAuthorizedBy<string, typeof f>> }
+      `);
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        type: "cfc-write-authorized-by:unread",
+        severity: "error",
+      });
+      expect(diagnostics[0]!.message).toContain("operator syntax");
+      expect(diagnostics[0]!.message).toContain("pass the policy unchanged");
+    });
+  }
+
   for (const order of [["x", "y"], ["y", "x"]]) {
     it(`rejects indirect writer bindings in recursive policies, reading ${order.join(" then ")}`, async () => {
       const { diagnostics } = await generate(`

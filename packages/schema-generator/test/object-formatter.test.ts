@@ -23,6 +23,121 @@ describe("object-formatter", () => {
     );
   }
 
+  it("classifies generic callable members from their instantiated arguments", async () => {
+    const schema = await schemaFor(`
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
+declare const h: () => Stream<void>;
+declare const cellFactory: () => Cell<string>;
+declare const sqliteFactory: () => SqliteDb;
+declare const plainFn: () => number;
+declare const subPattern: () => { value: string };
+type H = typeof h;
+interface Box<T> { value: T; n: number }
+type Guarded<H> = { action: H; value: WriteAuthorizedBy<string, H> };
+interface SchemaRoot {
+  handler: Box<typeof h>;
+  aliasedHandler: Box<H>;
+  cell: Box<typeof cellFactory>;
+  sqlite: Box<typeof sqliteFactory>;
+  plain: Box<typeof plainFn>;
+  subPattern: Box<typeof subPattern>;
+  guarded: Guarded<typeof h>;
+}
+`);
+
+    for (
+      const [name, kind] of [
+        ["handler", "stream"],
+        ["aliasedHandler", "stream"],
+        ["cell", "cell"],
+        ["sqlite", "sqlite"],
+      ] as const
+    ) {
+      const member = asObjectSchema(schema.properties![name]!);
+      expect(member.properties).toEqual({
+        value: { asCell: [kind] },
+        n: { type: "number" },
+      });
+      expect(member.required).toHaveLength(2);
+      expect(member.required).toEqual(expect.arrayContaining(["value", "n"]));
+    }
+    for (const name of ["plain", "subPattern"]) {
+      const member = asObjectSchema(schema.properties![name]!);
+      expect(member.properties).toEqual({ n: { type: "number" } });
+      expect(member.required).toEqual(["n"]);
+    }
+    const guarded = asObjectSchema(schema.properties!.guarded!);
+    expect(guarded.properties!.action).toEqual({ asCell: ["stream"] });
+    expect(asObjectSchema(guarded.properties!.value!).ifc?.writeAuthorizedBy)
+      .toEqual({
+        __ctWriterIdentityOf: { file: "test.ts", path: ["h"] },
+      });
+  });
+
+  it("retains collapsed writer alternatives through a generic member", async () => {
+    const schema = await schemaFor(`
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
+declare const f: (event: string) => void;
+declare const g: typeof f;
+interface Box<T> { value: T }
+interface SchemaRoot {
+  value: Box<WriteAuthorizedBy<string, typeof f> | WriteAuthorizedBy<string, typeof g>>;
+}
+`);
+    const box = asObjectSchema(schema.properties!.value!);
+    const value = asObjectSchema(box.properties!.value!);
+    expect(value.anyOf).toHaveLength(2);
+    expect(value.anyOf!.map((branch) => {
+      const alternative = asObjectSchema(branch);
+      expect(alternative.type).toBe("string");
+      return alternative.ifc?.writeAuthorizedBy;
+    })).toEqual([
+      { __ctWriterIdentityOf: { file: "test.ts", path: ["f"] } },
+      { __ctWriterIdentityOf: { file: "test.ts", path: ["g"] } },
+    ]);
+  });
+
+  it("keeps all factory wrapper kinds through nested generic members", async () => {
+    const schema = await schemaFor(`
+declare const h: () => Stream<void>;
+declare const cellFactory: () => Cell<string>;
+declare const sqliteFactory: () => SqliteDb;
+declare const plainFn: () => number;
+declare const subPattern: () => { value: string };
+interface Box<T> { inner: { value: T; n: number } }
+interface SchemaRoot {
+  handler: Box<typeof h>;
+  cell: Box<typeof cellFactory>;
+  sqlite: Box<typeof sqliteFactory>;
+  plain: Box<typeof plainFn>;
+  subPattern: Box<typeof subPattern>;
+}
+`);
+    for (
+      const [name, kind] of [["handler", "stream"], ["cell", "cell"], [
+        "sqlite",
+        "sqlite",
+      ]] as const
+    ) {
+      const box = asObjectSchema(schema.properties![name]!);
+      const inner = asObjectSchema(box.properties!.inner!);
+      expect(inner.properties).toEqual({
+        value: { asCell: [kind] },
+        n: { type: "number" },
+      });
+      expect(inner.required).toHaveLength(2);
+      expect(inner.required).toEqual(expect.arrayContaining(["value", "n"]));
+    }
+    for (const name of ["plain", "subPattern"]) {
+      const box = asObjectSchema(schema.properties![name]!);
+      const inner = asObjectSchema(box.properties!.inner!);
+      expect(inner.properties).toEqual({ n: { type: "number" } });
+      expect(inner.required).toEqual(["n"]);
+    }
+  });
+
   it("emits an open object schema for the bare `object` type", async () => {
     // The `object` type says a value is an object and nothing about its
     // properties, so the formatter claims it by name and emits a schema that

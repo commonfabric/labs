@@ -43,6 +43,19 @@ value path therefore retains the authored cell capability and the full value
 shape. Completing least-capability and path-sensitive shrinking for this shape
 requires reaching the cell through the printed union while retaining its scope.
 
+### `input[SELF]` inside a reactive collection callback (open)
+
+`input[SELF]` reads the pattern's own result in the pattern body, but inside a
+reactive collection callback, such as `input.items.map((item) => ...)`, it is
+reported by `pattern-context:self-access`, while a `self` bound in the pattern
+body (`const self = input[SELF]`, or a destructured `[SELF]: self`) and
+captured into the same callback works. The asymmetry comes from capture: the
+callback becomes a pattern of its own, and it receives `input` as a captured
+reference under its own input, on which `SELF` names nothing. Supporting the
+form would mean capturing a `SELF` read as a capture in its own right, the way
+a lift-applied computation already captures `input[SELF].title`. Whether the
+form should be supported is undecided.
+
 ## Implementation Snapshot (March 17, 2026)
 
 - Landed:

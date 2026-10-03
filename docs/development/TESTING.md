@@ -677,9 +677,6 @@ whose child is done, or is waiting only on input the test controls, ends it by
 closing that input and then awaits its `status` rather than sending it a signal.
 A test whose subject is a child killed while it runs is not in that position:
 the kill loses that child's coverage, but it cannot truncate a profile.
-`packages/memory/test/inbox-store.test.ts` ends its writer processes by closing
-their input, and `packages/memory/test/inbox-store-child-coverage.test.ts` fails
-when any of them loses its profile.
 
 A web worker that a test starts writes coverage profiles too, and it writes them
 while it shuts down, after `terminate()` has already returned. A process that

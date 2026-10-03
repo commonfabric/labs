@@ -493,6 +493,14 @@ button[disabled] {
   text-transform: uppercase;
 }
 
+/* A model's summary of its own reasoning reads as an aside to the step. */
+.pane.thought .body {
+  color: var(--muted);
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .pane-note {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0;

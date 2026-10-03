@@ -291,6 +291,27 @@ export const ProfileBadgeSchema = {
   },
 } as const satisfies JSONSchema;
 
+/**
+ * How a component that shows a cell only through a render mounted from its
+ * reference reads that reference: as a cell, which names the document the
+ * reference lands on and reads none of its contents.
+ */
+export const NestedRenderReferenceSchema = {
+  asCell: ["cell"],
+} as const satisfies JSONSchema;
+
+/**
+ * Nested render roots: component bindings whose component shows the cell they
+ * name only through renders mounted from its reference, each with the schema
+ * that component reads the binding with. The reconciler decides such a binding
+ * on that read and leaves the cell's contents to the renders.
+ */
+export const nestedRenderReadContracts: Readonly<
+  Record<string, Readonly<Record<string, JSONSchema>>>
+> = {
+  "cf-render": { cell: NestedRenderReferenceSchema },
+};
+
 /** Version exchanged when a renderer registers its component read contract. */
 export const COMPONENT_READ_CONTRACT_VERSION = "1";
 

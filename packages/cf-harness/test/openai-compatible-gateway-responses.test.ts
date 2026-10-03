@@ -90,6 +90,9 @@ Deno.test("gpt-5.6 turns go to the Responses API with reasoning enabled", async 
   assertEquals(body.store, false);
   // Reasoning must not be disabled the way the Chat Completions workaround did.
   assertEquals(body.reasoning_effort, undefined);
+  // A gateway routes models that do not reason too, so without an effort the
+  // request names no reasoning at all, summary included.
+  assertEquals(body.reasoning, undefined);
   assertEquals(body.include, ["reasoning.encrypted_content"]);
   // Tools use the Responses shape: a flat name, not { function: { name } }.
   assertEquals(body.tools, [{
@@ -407,7 +410,7 @@ Deno.test("cache affinity, explicit breakpoint, and reasoning are configurable",
     mode: "explicit",
     ttl: "30m",
   });
-  assertEquals(body.reasoning, { effort: "low" });
+  assertEquals(body.reasoning, { effort: "low", summary: "auto" });
   const input = body.input as Array<Record<string, unknown>>;
   const content = input[0].content as Array<Record<string, unknown>>;
   assertEquals(content[content.length - 1].prompt_cache_breakpoint, {
@@ -496,7 +499,7 @@ Deno.test("GPT-5.6 cache controls fail before sending an older model", async () 
         promptCacheMode: "explicit",
       })),
     Error,
-    "prompt cache mode explicit requires a GPT-5.6 model",
+    "prompt cache mode explicit requires a GPT-5.6 or GPT-6.1 Sol model",
   );
   assertEquals(captured.length, 0);
 });
@@ -508,7 +511,7 @@ Deno.test("unsupported GPT-5.6 reasoning effort fails before sending", async () 
   await assertRejects(
     () => client.complete(turn({ reasoningEffort: "ultra" })),
     Error,
-    "reasoning effort ultra is not supported by gpt-5.6-terra",
+    'reasoning effort `"ultra"` is not supported by `"gpt-5.6-terra"`',
   );
   assertEquals(captured.length, 0);
 });

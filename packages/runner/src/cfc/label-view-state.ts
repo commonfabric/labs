@@ -1,3 +1,5 @@
+import type { NonDocumentPath } from "@commonfabric/memory/v2";
+
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
 import { entryObservationClass } from "./observation-classes.ts";
@@ -63,7 +65,7 @@ const cfcLabelViewEntriesFromMetadata = (
 
 export const cfcLabelViewFromMetadata = (
   metadata: CfcMetadata | undefined,
-  path: readonly string[],
+  path: NonDocumentPath,
 ): CfcLabelView | undefined => {
   if (!metadata) {
     return undefined;

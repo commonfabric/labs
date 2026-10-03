@@ -39,6 +39,7 @@ import {
   CompilerStackLoadError,
   entityIdFrom,
   type EventIntentOutcome,
+  type IExtendedStorageTransaction,
   parseLink,
   popFrame,
   pushFrame,
@@ -90,6 +91,7 @@ import {
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { buildProcessor } from "./build-processor.ts";
@@ -161,6 +163,257 @@ const createRuntime = (
 const fid = (seed: string) => taggedHashStringOf(seed);
 
 describe("runtime-processor", () => {
+  it("reports pending storage work without waiting for it to settle", async () => {
+    const { runtime, storageManager } = createRuntime();
+    const pending = Promise.withResolvers<void>();
+    try {
+      storageManager.trackPendingCommit(pending.promise, () => ({
+        kind: "event-intent",
+        spaces: [cfcSigner.did()],
+      }));
+      const processor = buildProcessor({ runtime });
+      const result = await processor.handleRequest({
+        type: RequestType.GetStorageDiagnostics,
+      });
+      expect(result).toMatchObject({
+        diagnostics: {
+          pendingCommitCount: 1,
+          pendingCommits: [{ kind: "event-intent", spaces: [cfcSigner.did()] }],
+        },
+      });
+    } finally {
+      pending.resolve();
+      await storageManager.pendingCommitsSettled();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("returns `null` diagnostics for a storage manager without them", async () => {
+    const processor = buildProcessor({ runtime: { storageManager: {} } });
+
+    expect(
+      await processor.handleRequest({
+        type: RequestType.GetStorageDiagnostics,
+      }),
+    ).toEqual({ diagnostics: null });
+  });
+
+  describe("render-readiness pulls", () => {
+    for (const bytes of [new Uint8Array(), new Uint8Array([1, 2, 3])]) {
+      it(`returns ${bytes.length} readable bytes while an unrelated commit is pending`, async () => {
+        const { runtime, storageManager } = createRuntime();
+        const release = Promise.withResolvers<void>();
+        const barrierEntered = Promise.withResolvers<void>();
+        let pull: ReturnType<RuntimeProcessor["handleCellPull"]> | undefined;
+        const originalBarrier = storageManager.pendingCommitsSettled.bind(
+          storageManager,
+        );
+        try {
+          const cell = runtime.getCell<FabricBytes>(
+            cfcSigner.did(),
+            "render-readable-bytes",
+          );
+          const tx = runtime.edit();
+          cell.withTx(tx).set(new FabricBytes(bytes));
+          expect((await tx.commit()).error).toBeUndefined();
+          await runtime.scheduler.idleWithPendingCommits();
+
+          storageManager.trackPendingCommit(release.promise);
+          using _barrier = stub(storageManager, "pendingCommitsSettled", () => {
+            barrierEntered.resolve();
+            return originalBarrier();
+          });
+          pull = buildProcessor({ runtime }).handleCellPull({
+            type: RequestType.CellPull,
+            cell: createCellRef(cell),
+            awaitDurability: false,
+          });
+          expect(
+            await Promise.race([
+              pull.then(() => "read"),
+              barrierEntered.promise.then(() => "commit-barrier"),
+            ]),
+          ).toBe("read");
+          const value = (await pull).value;
+          if (!(value instanceof FabricBytes)) {
+            throw new Error("Expected a byte value from the pull");
+          }
+          expect(value.slice()).toEqual(bytes);
+          expect(storageManager.hasPendingCommits()).toBe(true);
+        } finally {
+          release.resolve();
+          await pull;
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
+    it("demands a stale lazy producer while unrelated writes remain pending", async () => {
+      const { runtime, storageManager } = createRuntime();
+      const release = Promise.withResolvers<void>();
+      try {
+        const source = runtime.getCell<number>(
+          cfcSigner.did(),
+          "render-source",
+          { type: "number" },
+        );
+        const output = runtime.getCell<number>(
+          cfcSigner.did(),
+          "render-output",
+          { type: "number" },
+        );
+        const seed = runtime.edit();
+        source.withTx(seed).set(1);
+        await seed.commit();
+        let runs = 0;
+        const action = (tx: IExtendedStorageTransaction) => {
+          runs++;
+          output.withTx(tx).set(source.withTx(tx).get() * 2);
+        };
+        const setup = runtime.edit();
+        action(setup);
+        const log = txToReactivityLog(setup);
+        await setup.commit();
+        runtime.scheduler.subscribe(action, log, { isEffect: false });
+        const edit = runtime.edit();
+        source.withTx(edit).set(3);
+        await edit.commit();
+        await runtime.scheduler.idleWithPendingCommits();
+        const beforePull = runs;
+        expect(output.withTx().get()).toBe(2);
+        storageManager.trackPendingCommit(release.promise);
+        const result = await buildProcessor({ runtime }).handleCellPull({
+          type: RequestType.CellPull,
+          cell: createCellRef(output),
+          awaitDurability: false,
+        });
+        expect(result).toMatchObject({ value: 6 });
+        expect(runs).toBeGreaterThan(beforePull);
+        expect(storageManager.hasPendingCommits()).toBe(true);
+      } finally {
+        release.resolve();
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    for (const awaitDurability of [false, true, undefined]) {
+      it(
+        awaitDurability === undefined
+          ? "waits for pending commits by default"
+          : awaitDurability
+          ? "holds a durable pull until pending commits settle"
+          : "returns readable state while an unrelated commit is pending",
+        async () => {
+          const { runtime, storageManager } = createRuntime();
+          const releaseCommit = Promise.withResolvers<void>();
+          const barrierEntered = Promise.withResolvers<void>();
+          let pull: Promise<unknown> | undefined;
+          const originalBarrier = storageManager.pendingCommitsSettled.bind(
+            storageManager,
+          );
+          try {
+            const cell = runtime.getCell<number>(
+              cfcSigner.did(),
+              "render-readiness",
+              { type: "number" },
+            );
+            await cell.sync();
+            const tx = runtime.edit();
+            cell.withTx(tx).set(7);
+            expect((await tx.commit()).error).toBeUndefined();
+            await runtime.scheduler.idleWithPendingCommits();
+
+            storageManager.trackPendingCommit(releaseCommit.promise);
+            using _barrier = stub(
+              storageManager,
+              "pendingCommitsSettled",
+              () => {
+                barrierEntered.resolve();
+                return originalBarrier();
+              },
+            );
+            const processor = buildProcessor({ runtime });
+            pull = processor.handleCellPull({
+              type: RequestType.CellPull,
+              cell: createCellRef(cell),
+              awaitDurability,
+            });
+            const first = await Promise.race([
+              pull.then(() => "read"),
+              barrierEntered.promise.then(() => "commit-barrier"),
+            ]);
+            expect(first).toBe(
+              awaitDurability === false ? "read" : "commit-barrier",
+            );
+            expect(storageManager.hasPendingCommits()).toBe(true);
+            releaseCommit.resolve();
+            await expect(pull).resolves.toMatchObject({ value: 7 });
+          } finally {
+            releaseCommit.resolve();
+            await pull;
+            await runtime.dispose();
+            await storageManager.close();
+          }
+        },
+      );
+    }
+
+    it("returns the value a pending commit creates when the cell had none", async () => {
+      // The render pull skips the barrier only when there is a value to
+      // render. Here there is none until a write commits while the pull waits.
+
+      const { runtime, storageManager } = createRuntime();
+      const releaseCommit = Promise.withResolvers<void>();
+      const barrierEntered = Promise.withResolvers<void>();
+      let pull: Promise<unknown> | undefined;
+      const originalBarrier = storageManager.pendingCommitsSettled.bind(
+        storageManager,
+      );
+      try {
+        const cell = runtime.getCell<number>(
+          cfcSigner.did(),
+          "render-readiness-missing",
+          { type: "number" },
+        );
+        await cell.sync();
+
+        storageManager.trackPendingCommit(releaseCommit.promise);
+        using _barrier = stub(
+          storageManager,
+          "pendingCommitsSettled",
+          () => {
+            barrierEntered.resolve();
+            return originalBarrier();
+          },
+        );
+        pull = buildProcessor({ runtime }).handleCellPull({
+          type: RequestType.CellPull,
+          cell: createCellRef(cell),
+          awaitDurability: false,
+        });
+        const first = await Promise.race([
+          pull.then(() => "read"),
+          barrierEntered.promise.then(() => "commit-barrier"),
+        ]);
+        expect(first).toBe("commit-barrier");
+
+        const tx = runtime.edit();
+        cell.withTx(tx).set(7);
+        expect((await tx.commit()).error).toBeUndefined();
+        releaseCommit.resolve();
+        await expect(pull).resolves.toMatchObject({ value: 7 });
+      } finally {
+        releaseCommit.resolve();
+        await pull;
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
   describe("renderConfidentialityResolverFor()", () => {
     it("returns `undefined` when no ceiling is configured", async () => {
       const { runtime, storageManager } = createRuntime();
@@ -1789,6 +2042,57 @@ describe("runtime-processor", () => {
 
       expect(calls).toEqual([[pieceCell, true]]);
       expect(result.piece.cell).toMatchObject(resultRef);
+    });
+
+    it("returns a redirect's target as a cell when its document carries a `pattern` field and no `patternIdentity`", async () => {
+      // `patternIdentity` alone names a piece's pattern. A `pattern` field,
+      // which documents in older spaces can carry, names nothing the runtime
+      // can start.
+
+      const targetRef: CellRef = {
+        id: "of:fid1-pattern-field-only" as CellRef["id"],
+        space,
+        scope: "space",
+        path: [],
+      };
+      const slugRef: CellRef = {
+        id: "of:fid1-slug-doc" as CellRef["id"],
+        space,
+        scope: "space",
+        path: [],
+      };
+      const targetCell = mockCell(targetRef, {
+        patternLink: cellRefToSigilLink({
+          ...targetRef,
+          id: "of:fid1-pattern-document" as CellRef["id"],
+        }),
+      });
+      const slugCell = mockCell(slugRef, { raw: redirectRaw(targetRef) });
+      const pieces = {
+        getSpace: () => space,
+        getPieceCell: () => {
+          throw new Error(
+            "a document without `patternIdentity` should not load as a piece",
+          );
+        },
+      };
+      const processor = buildProcessor({
+        runtime: {
+          getCellFromEntityId: () => slugCell,
+          getCellFromLink: () => targetCell,
+        },
+        cc: pieces,
+        space,
+      });
+
+      const result = await processor.handlePieceGet({
+        type: RequestType.PieceGet,
+        pieceId: fid("slug-doc"),
+        space,
+        runIt: true,
+      });
+
+      expect(result.piece.cell).toMatchObject(targetRef);
     });
   });
 

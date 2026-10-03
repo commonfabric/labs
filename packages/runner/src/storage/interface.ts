@@ -28,6 +28,7 @@ import type {
   CommitClass,
   CommitPrecondition,
   DeliveryFailureClass,
+  DocumentPath,
   EntityDocument,
   EntityIdListOptions,
   EntityIdListResult,
@@ -90,6 +91,12 @@ import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
+import type {
+  PendingCommitContext,
+  SpaceStorageDiagnostic,
+  StorageDiagnostics,
+} from "./diagnostics.ts";
+
 export type {
   ACL,
   DID,
@@ -118,7 +125,9 @@ export interface IStorageError {
 /** Typed producer evidence for a required replica load that failed before an
  * at-most-once handler could dispatch. The scheduler receives typed failure
  * evidence; an error name may inform `failureClass`, but diagnostic text never
- * constitutes policy evidence or durable `permanentEvidence`. */
+ * constitutes policy evidence or durable `permanentEvidence`. A name is
+ * permanent evidence only for a refusal this process decides by construction
+ * (`IForeignScopedReadRefusedError`). */
 export type ReplicaLoadFailure = {
   failureClass: DeliveryFailureClass;
   recoveryEpoch: string;
@@ -151,13 +160,14 @@ export const toReplicaLoadFailureError = (
     aclRevision?: unknown;
   } | undefined;
   const name = typeof named?.name === "string" ? named.name : "";
+  const foreignScopedReadRefused = name === "ForeignScopedReadRefusedError";
   const failureClass: DeliveryFailureClass = name === "SessionRevokedError"
     ? "session-revoked"
     : name === "ConnectionError"
     ? "connection"
     : name === "AuthorizationError"
     ? "authorization"
-    : name === "ProtocolError"
+    : name === "ProtocolError" || foreignScopedReadRefused
     ? "protocol"
     : name === "TimeoutError"
     ? "timeout"
@@ -168,10 +178,13 @@ export const toReplicaLoadFailureError = (
   return new ReplicaLoadFailureError({
     failureClass,
     recoveryEpoch: permanentAclEvidence ? `acl:${aclRevision}` : recoveryEpoch,
-    // A name is not durable evidence. Authorization becomes permanent only
-    // when the memory server supplies the current ACL revision. Versioned
-    // protocol validators construct ReplicaLoadFailureError directly.
-    permanentEvidence: permanentAclEvidence,
+    // A name off the wire is not durable evidence. Authorization becomes
+    // permanent only when the memory server supplies the current ACL
+    // revision. A foreign scoped read refusal is minted by this process from
+    // the read's scope and its serving posture, so the same read is refused
+    // every time. Versioned protocol validators construct
+    // ReplicaLoadFailureError directly.
+    permanentEvidence: permanentAclEvidence || foreignScopedReadRefused,
   }, cause);
 };
 
@@ -473,7 +486,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * invisible to the barrier. The registration must tolerate rejection and
    * drop the promise once it settles.
    */
-  trackPendingCommit(promise: Promise<unknown>): void;
+  trackPendingCommit(
+    promise: Promise<unknown>,
+    context?: () => PendingCommitContext,
+  ): void;
+
+  /** Snapshot pending work without waiting for durability or starting I/O. */
+  getDiagnostics?(): StorageDiagnostics;
 
   /**
    * Whether any registered commit is still unconfirmed. Every write flows
@@ -1425,19 +1444,18 @@ export interface IStorageTransaction {
   ): void;
 
   /**
-   * Abandon the mergeable fast path for the arrays covered by `address`. A
-   * caller that rewrites an array in a way a recorded mergeable op cannot
-   * represent — an in-place reshape such as sort/reverse/splice after a push, or
-   * a whole-value overwrite — calls this so the commit emits the whole-array
-   * diff (the correct local value) instead of a tail-relative op whose recorded
-   * tail no longer identifies the appended elements.
+   * Abandon the mergeable fast path for the values covered by `address`, for
+   * the rest of the transaction. A caller that writes a value whole — a
+   * whole-value overwrite, or an in-place reshape such as sort/reverse/splice
+   * — calls this so the commit emits the whole-value diff (the correct local
+   * value) instead of an op. The write says what the value is, and an op
+   * resolves against whatever the store holds.
    *
-   * This covers every recorded op AT or BENEATH `address`, since a write to an
-   * enclosing object rewrites the arrays inside it too, and nothing above it, so
-   * a write beneath an array (an element edit) leaves that array's op alone. A
-   * path carrying no op yet is left untouched — not because a reshape before an
-   * op is harmless, but because that case is caught at commit instead, when the
-   * op's recorded tail is checked against the value it claims to describe.
+   * This covers every op AT or BENEATH `address`, since a write to an
+   * enclosing object rewrites the arrays inside it too, and nothing above it,
+   * so a write beneath an array (an element edit) leaves that array's op
+   * alone. An op recorded ahead of the write is dropped, and one that would
+   * be recorded after it is refused.
    */
   poisonMergeableOp?(address: IMemorySpaceAddress): void;
 
@@ -2934,6 +2952,14 @@ export type IMemorySpaceAddress = IMemoryAddress & {
   space: MemorySpace;
 };
 
+/**
+ * A memory address as the transaction journal records it: its path is rooted
+ * at the stored document, so user data sits under `value`.
+ */
+export type IMemorySpaceDocumentAddress = IMemorySpaceAddress & {
+  path: DocumentPath;
+};
+
 export type MemoryAddressPathComponent = string;
 
 export interface Assert {
@@ -3015,6 +3041,9 @@ export interface ViewInterestLease {
 }
 
 export interface ISpaceReplica extends ISpace {
+  /** Existing session progress without starting I/O or awaiting commits. */
+  getDiagnostics?(): SpaceStorageDiagnostic;
+
   /**
    * Return a state for the requested entry or returns `undefined` if replica
    * does not have it. The state carries `since`, the commit sequence the
@@ -3408,7 +3437,18 @@ export type PullError =
   | IQueryError
   | IStoreError
   | IConnectionError
-  | IAuthorizationError;
+  | IAuthorizationError
+  | IForeignScopedReadRefusedError;
+
+/** A serving runtime's refusal of a scoped read of a space other than its home
+ * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
+ * scope and the runtime's serving posture decide it, never transport or session
+ * state, so the same read from the same runtime is refused every time. A served
+ * event whose required load meets it terminalizes at once instead of spending
+ * the delivery-failure budget (events.md §5). */
+export interface IForeignScopedReadRefusedError extends IStorageError {
+  readonly name: "ForeignScopedReadRefusedError";
+}
 
 export interface IStoreError extends IStorageError {
   readonly name: "StoreError";
@@ -3430,7 +3470,7 @@ export interface TransactionReactivityLog {
 }
 
 export interface TransactionWriteDetail {
-  address: IMemorySpaceAddress;
+  address: IMemorySpaceDocumentAddress;
   value?: FabricValue;
   previousValue?: FabricValue;
 
@@ -3488,10 +3528,10 @@ export interface NativeStorageCommit {
 
 export type Activity = Variant<{
   read: IReadActivity;
-  write: IMemorySpaceAddress;
+  write: IMemorySpaceDocumentAddress;
 }>;
 
-export interface IReadActivity extends IMemorySpaceAddress {
+export interface IReadActivity extends IMemorySpaceDocumentAddress {
   meta: Metadata;
   nonRecursive?: boolean;
 
@@ -3519,7 +3559,7 @@ export interface IReadActivity extends IMemorySpaceAddress {
  * the transaction inspection surface sees. `journalIndex` is the shared
  * activity clock (see {@link IReadActivity.journalIndex}).
  */
-export interface IWriteAttempt extends IMemorySpaceAddress {
+export interface IWriteAttempt extends IMemorySpaceDocumentAddress {
   journalIndex: number;
 }
 

@@ -15,6 +15,7 @@
     "FabricSpecialObject",
     "FabricUnavailable",
     "NAME",
+    "SELF",
     "Stream",
     "TESTS",
     "UI",

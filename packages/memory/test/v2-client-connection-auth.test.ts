@@ -2,8 +2,10 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
+import type { FabricPlainObject } from "@commonfabric/api";
 import { defer } from "@commonfabric/utils/defer";
 
+import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
 import {
   connect,
   type SessionAuth,
@@ -122,6 +124,48 @@ describe("Client connection authentication", () => {
         expect(
           transport.sentTypes.filter((type) => type === "connection.auth"),
         ).toHaveLength(2);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("keeps the hello audience when a session response names another audience", async () => {
+      const server = createServer("router-audience");
+      const inner = new ServerTransport(server);
+      const transport: Transport = {
+        send: (payload) => inner.send(payload),
+        close: () => inner.close(),
+        setCloseReceiver: (receiver) => inner.setCloseReceiver(receiver),
+        setReceiver(receiver) {
+          inner.setReceiver((payload) => {
+            const message = decodeMemoryBoundary(payload) as FabricPlainObject;
+            const ok = message.ok as FabricPlainObject | undefined;
+            const sessionOpen = ok?.sessionOpen as
+              | FabricPlainObject
+              | undefined;
+            if (sessionOpen === undefined) {
+              receiver(payload);
+              return;
+            }
+            receiver(encodeMemoryBoundary({
+              ...message,
+              ok: {
+                ...ok,
+                sessionOpen: { ...sessionOpen, audience: mallory.did() },
+              },
+            }));
+          });
+        },
+      };
+      const client = await connect({ transport });
+      try {
+        await client.mount(SPACES[0], {}, principalOf(alice));
+        await client.mount(SPACES[1], {}, principalOf(spaceIdentity));
+        expect(
+          inner.sent.filter((message) => message.type === "connection.auth")
+            .map((message) => (message.invocation as FabricPlainObject).aud),
+        ).toEqual([AUDIENCE, AUDIENCE]);
       } finally {
         await client.close();
         await server.close();
@@ -286,6 +330,7 @@ describe("Client connection authentication", () => {
         transport.clearSent();
         await client.mount(SPACES[1], {}, principalOf(spaceIdentity));
         expect(transport.sentTypes).toEqual([
+          "connection.challenge",
           "connection.auth",
           "session.open",
         ]);

@@ -56,6 +56,7 @@ import {
   dataFileSpecifier,
   FABRIC_MOUNT_ROOT,
   type FabricMount,
+  type SourcePackageIdentity,
   sourceRootSpecifier,
 } from "../sandbox/module-record-compiler.ts";
 import {
@@ -574,11 +575,11 @@ export class Engine extends EventTarget {
           idPrefix: `/${id}`,
           ...(sourceRoots.length || dataPaths.length
             ? {
-              sourcePackage: {
+              sourcePackages: [{
                 entryPath: mappedProgram.main,
                 rootPaths: sourceRoots,
                 dataPaths,
-              },
+              }],
             }
             : {}),
         },
@@ -1100,18 +1101,31 @@ export class Engine extends EventTarget {
       patternCoverage?: PatternCoverageCollector;
       sourceRoots?: readonly string[];
       dataFiles?: readonly string[];
+      sourcePackages?: readonly SourcePackageIdentity[];
     } = {},
   ): Promise<{ modules: CacheableModule[]; entryIdentity: string }> {
     const { compiler } = await this.#getCompilerInternals();
     assertNoReservedFabricPaths(resolvedFiles);
+    // A child can reach package attachments owned by another module. Their
+    // original owners are part of the content identity of the whole closure.
+    const sourcePackages = options.sourcePackages ?? [{
+      entryPath: entryFilename,
+      rootPaths: canonicalSourceRoots(entryFilename, options.sourceRoots),
+      dataPaths: canonicalDataFiles(entryFilename, options.dataFiles),
+    }];
+    const attachedRoots = sourcePackages.flatMap((sourcePackage) => [
+      sourcePackage.entryPath,
+      ...sourcePackage.rootPaths,
+    ]);
+    const attachedData = sourcePackages.flatMap((sourcePackage) =>
+      sourcePackage.dataPaths ?? []
+    );
     // Data files carry arbitrary bytes; keep them away from every scan, parse
     // and compile step, and rejoin them at the pristine set below.
     const { dataPaths, codeFiles, dataSources } = partitionDataFiles({
       main: entryFilename,
       files: resolvedFiles,
-      ...(options.dataFiles === undefined
-        ? {}
-        : { dataFiles: [...options.dataFiles] }),
+      dataFiles: attachedData,
     });
     assertFabricImportsHaveSpace(codeFiles, options);
     // The stored source set holds prefix-free AUTHORED TS (the helper import is
@@ -1133,9 +1147,7 @@ export class Engine extends EventTarget {
       transformInjectHelperModule({
         main: entryFilename,
         files: codeFiles,
-        ...(options.sourceRoots === undefined
-          ? {}
-          : { sourceRoots: [...options.sourceRoots] }),
+        sourceRoots: attachedRoots,
       }, { tolerateStoredLegacyEnvelope: true })
     );
     const sourceRoots = canonicalSourceRoots(
@@ -1193,15 +1205,7 @@ export class Engine extends EventTarget {
     const identityByPath = computeFabricModuleIdentities(
       pristineSourceFiles,
       mounts,
-      sourceRoots.length || dataPaths.length
-        ? {
-          sourcePackage: {
-            entryPath: entryFilename,
-            rootPaths: sourceRoots,
-            dataPaths,
-          },
-        }
-        : {},
+      { sourcePackages },
     );
 
     // Instrumenting does not disturb the identity check below: identity hashes
@@ -1283,8 +1287,11 @@ export class Engine extends EventTarget {
         identityByPath,
         specifierAliases,
       );
-      if (file.name === entryFilename) {
-        for (const rootPath of sourceRoots) {
+      const sourcePackage = sourcePackages.find((sourcePackage) =>
+        sourcePackage.entryPath === file.name
+      );
+      if (sourcePackage !== undefined) {
+        for (const rootPath of sourcePackage.rootPaths) {
           const rootIdentity = identityByPath.get(rootPath);
           if (rootIdentity === undefined) {
             throw new Error(
@@ -1298,7 +1305,7 @@ export class Engine extends EventTarget {
             targetIdentity: rootIdentity,
           });
         }
-        for (const dataPath of dataPaths) {
+        for (const dataPath of sourcePackage.dataPaths ?? []) {
           imports.push({
             specifier: dataFileSpecifier(
               storedFilenameFor(dataPath, undefined, mounts),
