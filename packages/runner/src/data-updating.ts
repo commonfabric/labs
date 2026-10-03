@@ -1274,9 +1274,11 @@ export function normalizeAndDiff(
     // A write's schema policy input is recorded where the write lands, and
     // the write's entry point recorded it at the broader instance it started
     // in. The narrower instance holds the content, so it takes an input of
-    // its own, and its envelope is stamped as a direct write to it would be:
-    // the labels this slot's schema declares, beside what the flow stamps.
-    // The broader slot keeps what its own input declares, beside the redirect.
+    // its own: its envelope carries the labels this slot's schema declares,
+    // beside the per-path flow stamps any written document gets. (The flow
+    // stamp of a whole value set, which `Cell.set` records for its own
+    // destination, is not recorded here.) The broader slot keeps what its
+    // own input declares, beside the redirect.
     recordWriteDestinationPolicyInput(
       tx,
       scopedLink,
