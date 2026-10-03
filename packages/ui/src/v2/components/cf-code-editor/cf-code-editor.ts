@@ -236,6 +236,20 @@ const getLangExtFromMimeType = (mime: MimeType) => {
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
 
 /**
+ * What `cell` holds, or nothing where the worker refuses its read. A piece
+ * found among the mentionable entries is read with `get()`, the one read every
+ * such handle answers, and a refusal reads as nothing rather than rejecting.
+ */
+function readUnlessRefused(cell: { get(): unknown }): unknown {
+  try {
+    return cell.get();
+  } catch (error) {
+    if (error instanceof CellReadRefusedError) return undefined;
+    throw error;
+  }
+}
+
+/**
  * CFCodeEditor - Code editor component with syntax highlighting and debounced changes
  *
  * @element cf-code-editor
@@ -3643,8 +3657,7 @@ export class CFCodeEditor extends BaseElement {
 
     // Get the piece's title (without emoji prefix). A title the worker
     // refuses, or has not answered, rewrites nothing.
-    const titleRead = pieceCell.key("title").lastRead();
-    const title = "value" in titleRead ? titleRead.value : undefined;
+    const title = readUnlessRefused(pieceCell.key("title"));
     if (typeof title !== "string" || !title) return;
 
     // Find backlink in document
@@ -3659,8 +3672,7 @@ export class CFCodeEditor extends BaseElement {
     if (docNameStripped === title) return;
 
     // Get the full NAME (with emoji) to insert into document
-    const nameRead = pieceCell.key(NAME).lastRead();
-    const currentName = "value" in nameRead ? nameRead.value : undefined;
+    const currentName = readUnlessRefused(pieceCell.key(NAME));
     if (typeof currentName !== "string" || !currentName) return;
 
     // Update tracking map BEFORE dispatch so _detectAndSyncNameChanges doesn't
