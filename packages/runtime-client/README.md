@@ -57,17 +57,27 @@ The gate also decides what crosses beside a value:
 - **Reads the gate cannot measure.** A SQLite query is decided on the database
   cell's labels. A collaborative field's query, operation and each update are
   decided on the field the session holds, and on the cell the host named to
-  reach it.
+  reach it. Each such decision, and a slug's, waits for the documents and the
+  access lists it consults (`hold()`); an access list that cannot be loaded is a
+  refusal.
+- **Reads of scoped instances.** What a read consumed is measured for a reader
+  (`collectReaderConsumedLabel()`): a read of a user- or session-scoped instance
+  also answers to its broader instances' confidentiality, so a record whose link
+  reaches such an instance is decided as a read of it is.
 - **Diagnostics.** Telemetry `cell.update` markers, the trigger trace, and
   `DetectNonIdempotent` name a document the ceiling refuses alone, with the
   placeholder in place of its values and paths. A telemetry marker's error or
   rejection message, and a refused commit's reasons, are decided on the labels
-  of the transaction it reports on, and withheld where it carries none.
+  of the transaction it reports on, and withheld where it carries none. Nothing
+  records what a program was made from, so under a ceiling the live patterns'
+  sources are refused and the scheduler graph's function previews are dropped.
 - **What an action says.** A pattern's `console` arguments, a runtime error's
   message and stack, and where a pattern asks the host to navigate, are decided
   on the labels of everything the action had read; where those are refused, or
-  it carries none, the placeholder stands in their place, or no navigation is
-  requested.
+  it carries none, the placeholder stands in their place. A withheld navigation
+  throws (`NavigationWithheldError`), so the effects channel does not ack a
+  server's intent it did not enact. A server's intent carries the labels of what
+  chose its target (`chosenFrom`), and is decided on them.
 
 Every request and notification the worker sends is classified in
 `REQUEST_DISPOSITIONS` and `NOTIFICATION_DISPOSITIONS`: decided by the gate,
@@ -76,9 +86,10 @@ The answers of the channels marked as decided carry a mark only the gate gives
 them, and a type-level check holds the tables to it, so a new channel fails to
 type-check until it says how it stands. The ungated channels are a space's
 access list, which the space's own access rules govern; a presence room's
-records, which carry what each member chose to share; and the action-run trace,
-the write-stack trace and the scheduler graph, which carry addresses, field
-paths included, and no values.
+records, which carry what each member chose to share; and the action-run trace
+and the write-stack trace, which carry addresses, field paths included, and no
+values. The scheduler graph is decided for its previews, and its addresses are
+not decided.
 
 Two things fall outside the tables:
 
