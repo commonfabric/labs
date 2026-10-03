@@ -2299,9 +2299,9 @@ export default pattern<
     });
   });
 
-  it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, and that space's serving ensure leaves the root to it", async () => {
-    // The default root is servable, so an ensure that did not honor the
-    // genesis reservation would create one in the room's space.
+  it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {
+    // The default root is servable, so the room space's own serving ensure
+    // can create one there if it reaches the space before the child.
     const defaultAppSource = [
       "import { pattern } from 'commonfabric';",
       "export default pattern<Record<string, never>, { marker: string }>(",
