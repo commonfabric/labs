@@ -127,8 +127,9 @@ const stopSecret = secret.sink((value) => render(value), {
 ```
 
 A cell the host has not read yet is loading, not empty: `get()` returns
-`undefined`, its sink hears nothing until the host's read answers, and
-`update()` pulls before it computes.
+`undefined`, which a sink's listener is handed at once as any sink's is, the
+listener hears nothing more until the host's read answers, and `update()` pulls
+before it computes.
 
 The host holds the path a guest read to that refusal: `set()` and `push()`
 through the same path reject with `read-refused` until a read of it (a `pull()`,

@@ -629,6 +629,96 @@ describe("Fabric iframe bridge", () => {
     }
   });
 
+  it("tells a sink a snapshot listener adds on a refusal of it alone, handing it no value", async () => {
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          sink: () => () => {},
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("secret");
+      const seen: Array<string | undefined> = [];
+      let refusals = 0;
+      let cancelSink: (() => void) | undefined;
+      const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
+        if (snapshot.status !== "error" || cancelSink !== undefined) return;
+        cancelSink = cell.sink((value) => {
+          seen.push(value);
+        }, { onRefused: () => refusals++ });
+      });
+
+      await expect(cell.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(seen).toStrictEqual([]);
+      expect(refusals).toBe(1);
+      cancelSink?.();
+      cancelSnapshot();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("keeps no sink whose listener throws as it is added", async () => {
+    let deliver: ((value: FabricValue | undefined) => void) | undefined;
+    const bridge = createFabricBridge({
+      count: {
+        kind: "cell",
+        cell: {
+          get: () => 1,
+          pull: () => 1,
+          sink: (listener) => {
+            deliver = listener;
+            return () => {};
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<number>("count");
+      const heard = Promise.withResolvers<number | undefined>();
+      const stop = cell.sink((value) => {
+        if (value !== undefined) heard.resolve(value);
+      });
+      let brokenCalls = 0;
+      expect(() =>
+        cell.sink(() => {
+          brokenCalls++;
+          throw new Error("a broken consumer");
+        })
+      ).toThrow("a broken consumer");
+
+      await client.describe();
+      deliver!(2);
+      await expect(heard.promise).resolves.toBe(2);
+
+      expect(brokenCalls).toBe(1);
+      stop();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
   it("resolves a moving array entry before sinking and writing its path", async () => {
     type Item = { title: string; done: boolean };
     const records: Record<string, Item> = {

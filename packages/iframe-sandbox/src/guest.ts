@@ -179,7 +179,14 @@ export class RemoteCell<T = FabricValue> {
     };
     this.#sinks.set(listener, entry);
     if (this.#refusal === undefined) {
-      entry.cleanup = listener(this.get());
+      try {
+        entry.cleanup = listener(this.get());
+      } catch (error) {
+        // A sink whose listener threw was never set up: nothing calls it
+        // again, and its caller holds no function to tear it down.
+        this.#sinks.delete(listener);
+        throw error;
+      }
     } else {
       this.#tellRefusal(entry, this.#refusal);
     }
@@ -449,13 +456,18 @@ export class RemoteCell<T = FabricValue> {
           ? this.#target.resource
           : undefined,
       });
+    const refused = operation === "read" &&
+      bridgeError.code === BRIDGE_READ_REFUSED;
+    // The refusal stands before anyone hears of the error, so a sink added
+    // from a snapshot listener hears it alone, at once; the sinks told below
+    // are the ones that held a value.
+    const holding = refused ? [...this.#sinks] : [];
+    if (refused) this.#refusal = bridgeError;
     this.#snapshot = { status: "error", error: bridgeError };
     for (const listener of this.#snapshotListeners) listener(this.#snapshot);
-    if (operation !== "read" || bridgeError.code !== BRIDGE_READ_REFUSED) {
-      return;
-    }
-    this.#refusal = bridgeError;
-    for (const entry of this.#sinks.values()) {
+    for (const [listener, entry] of holding) {
+      // One a snapshot listener tore down meanwhile hears nothing more.
+      if (this.#sinks.get(listener) !== entry) continue;
       this.#runSinkCleanup(entry);
       this.#tellRefusal(entry, bridgeError);
     }
