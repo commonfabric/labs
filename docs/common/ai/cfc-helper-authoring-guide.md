@@ -334,7 +334,9 @@ The dataset attributes and type metadata must agree:
   above. A click's UI provenance is read from the element the handler is bound
   to and its ancestors only, so a handler on an element above the control does
   not get the control's `data-ui-action`, and a handler bound outside the
-  surface gets no UI provenance at all.
+  surface gets no UI provenance at all. A click vouches only for handlers on or
+  inside the innermost surface it lands in, so a handler above that surface
+  gets no UI provenance even on an element carrying the same markers.
 
 Use generic names and neutral copy. A trusted surface may say what operation it
 performs, such as "publish" or "confirm recipient", but it should not mention a

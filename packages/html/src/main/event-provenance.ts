@@ -10,7 +10,7 @@ export type EventUiProvenance = {
   uiContractDataset?: Record<string, string>;
 };
 
-type EventLike = Pick<Event, "isTrusted"> & {
+type EventLike = Pick<Event, "isTrusted" | "target"> & {
   composedPath?: () => readonly unknown[];
 };
 
@@ -25,12 +25,13 @@ const UI_CONTRACT_DATASET_KEYS = [
  * Returns the provenance of `event` as the listener bound on `boundNode`
  * receives it, or `undefined` when the browser did not mark the event trusted.
  *
- * The UI provenance is read from `boundNode` and the nodes above it, and never
- * from the nodes between `boundNode` and the event's target. So a trusted
- * surface's markers vouch for a click only to the handlers bound on the surface
- * or inside it: a listener on an ancestor outside the surface, which the same
- * click reaches as it bubbles, finds none of them on its own path. Without a
- * `boundNode`, the event carries no UI provenance.
+ * The UI provenance is read from `boundNode` and the nodes above it, never from
+ * the nodes between `boundNode` and the event's target, and there is none when
+ * one of those nodes carries `data-ui-pattern`. So a click vouches only for the
+ * handlers bound on or inside the innermost trusted surface it lands in: a
+ * listener above that surface gets no UI provenance, even one on an element
+ * carrying markers of its own. There is none either when `boundNode` is not on
+ * the event's path, or without a `boundNode`.
  */
 export const getEventProvenance = (
   event: EventLike,
@@ -41,8 +42,8 @@ export const getEventProvenance = (
       origin: "dom",
       trusted: true,
     };
-    const ui = boundNode &&
-      getEventUiProvenance(getBoundNodePath(event, boundNode));
+    const path = boundNode && getBoundNodePath(event, boundNode);
+    const ui = path && getEventUiProvenance(path);
     if (ui) {
       provenance.ui = ui;
     }
@@ -106,31 +107,47 @@ const getEventUiProvenance = (
 };
 
 /**
- * Returns `boundNode` and the nodes above it: the part of the event's composed
- * path that starts at `boundNode`, which crosses shadow boundaries as the event
- * does. When the composed path does not hold `boundNode`, returns the chain of
- * parent nodes from `boundNode` instead, which ends at the first shadow root it
- * reaches.
+ * Returns `boundNode` and the nodes above it on the event's path, or
+ * `undefined` when `boundNode` is not on the path or a node between it and the
+ * event's target carries `data-ui-pattern`.
  */
 const getBoundNodePath = (
-  event: { composedPath?: () => readonly unknown[] },
+  event: EventLike,
   boundNode: EventTarget,
-): readonly unknown[] => {
+): readonly unknown[] | undefined => {
+  const path = getEventPath(event);
+  const start = path.indexOf(boundNode);
+  if (start < 0 || path.slice(0, start).some(carriesUiPattern)) {
+    return undefined;
+  }
+  return path.slice(start);
+};
+
+/**
+ * Returns the event's path from its target up: its composed path, which
+ * crosses shadow boundaries as the event does, or else the chain of parent
+ * nodes from its target, which ends at the first shadow root it reaches.
+ */
+const getEventPath = (event: EventLike): readonly unknown[] => {
   if (typeof event.composedPath === "function") {
     const path = event.composedPath();
-    const start = Array.isArray(path) ? path.indexOf(boundNode) : -1;
-    if (start >= 0) {
-      return path.slice(start);
+    if (Array.isArray(path) && path.length > 0) {
+      return path;
     }
   }
 
   const path: unknown[] = [];
-  let current: unknown = boundNode;
+  let current: unknown = event.target;
   while (current && typeof current === "object") {
     path.push(current);
     current = "parentNode" in current ? current.parentNode : undefined;
   }
   return path;
+};
+
+const carriesUiPattern = (node: unknown): boolean => {
+  const dataset = readDataset(node);
+  return dataset !== undefined && "uiPattern" in dataset;
 };
 
 const readDataset = (value: unknown): Record<string, string> | undefined => {

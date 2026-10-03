@@ -1032,6 +1032,10 @@ Implementation notes for spec update:
       event target: a click on a trusted surface vouches only for handlers bound
       on or inside it, and a handler above the clicked control gets the
       surface's pattern and labels but not the control's `data-ui-action`
+- [x] A click vouches only for handlers on or inside the innermost trusted
+      surface it lands in: a handler above an element carrying
+      `data-ui-pattern` between it and the event target gets no UI provenance,
+      even when its own element carries the same markers
 - [x] Render-time label disclosure now has a generic `cf-cfc-label` UI
       primitive: it takes a bound `$value` and optional `atom`/`kind` filters,
       asks the trusted runtime IPC layer for that cell's CFC label view, and
