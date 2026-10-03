@@ -444,6 +444,40 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("leaves the result cell alone when its runtime writes the record without the stamp", async () => {
+      const fixture = await setup();
+      const unstamped = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: fixture.storage,
+        trustSnapshotProvider: () => ({
+          id: sender.did(),
+          actingPrincipal: sender.did(),
+        }),
+        cfcReadMaxConfidentiality: [
+          cfcAtom.user(sender.did()),
+          ADDRESS_BOOK_CLAUSE,
+        ],
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "off",
+      });
+      try {
+        const local = (cell: Cell<unknown>) =>
+          unstamped.getCellFromLink(cell.getAsNormalizedFullLink());
+        const prepared = await prepareReviewedIntent({
+          descriptor: local(fixture.descriptor),
+          destinations: { to: [local(fixture.recipient)] },
+          result: local(fixture.result),
+        });
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/not written by the reviewed-intent builtin/);
+        expect(local(fixture.result).get()).toBeNull();
+      } finally {
+        await unstamped.dispose();
+        await fixture.dispose();
+      }
+    });
+
     it("refuses text for a parameter the descriptor does not declare, missing text, and text over its `maxLength`", async () => {
       const fixture = await setup();
       try {
@@ -847,7 +881,7 @@ describe("reviewed-intent", () => {
       try {
         await expect(prepareReviewedIntent(
           fixture.bindings({ destinations: { to: [fixture.composer] } }),
-        )).rejects.toThrow(/without cell references/);
+        )).rejects.toThrow(/destination to be JSON without cell references/);
       } finally {
         await fixture.dispose();
       }
