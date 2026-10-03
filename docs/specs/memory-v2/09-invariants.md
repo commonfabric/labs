@@ -43,6 +43,11 @@ Checkers referenced below:
   dependency-recording, staleness-basis, and identity-acceptance variant,
   and — in its delayed-verdict-delivery mode (the `PendingStacks_Channel*.cfg`
   configs) — INV-6 over the decided-but-not-yet-processed window.
+- the **local-fold model**: `docs/specs/memory-v2/tla/LocalFolds.tla`,
+  which checks the unchanged-base fold, same-seq retention, newer-frame
+  replacement, and whole-document validation on publication over a local
+  fold. It keeps durable content separate from local content, and does not
+  claim the pending-stack model's read-coherence proof for folded inputs.
 - the **delivery model**: `docs/specs/memory-v2/tla/SessionDelivery.tla`,
   which model-checks INV-14 over one session's watch delivery across lost
   pushes, a wiped replica, and both reconnect paths (resumed and
@@ -52,7 +57,8 @@ Checkers referenced below:
 
 ### INV-1 — Read coherence (no phantom, no missed write)
 
-> Every read recorded by an **accepted** commit observed exactly the durable
+> Except for the explicit local-fold and identity-commit cases below, every
+> read recorded by an **accepted** commit observed exactly the durable
 > state at the commit's resolution point: the set of writes that produced the
 > observed value equals the set of accepted overlapping writes with
 > `seq < commit.seq` (restricted to the read's path, branch, and scope).
@@ -121,6 +127,27 @@ the content does not (`PendingStacks_IdentityWriterForm.cfg` is the witness,
 on the writer-set form restricted to commits that wrote). `ElidedUnchanged`
 pins the exemption's premise: every path an elided commit would have written
 already held its value at its resolution point.
+
+A third case is a **local fold** (`03-commit-model.md` §3.8.3). A replica may
+retain a refused derived value, and a later accepted commit may consume it.
+Its read names the durable base's seq while its observed value includes
+local computation. The fold is an explicit local input, not an accepted
+contributor to that durable prefix. This exception does not permit dropping
+a still-pending dependency or retaining an arbitrary rejected handler write.
+
+A write to a folded document publishes the whole document and MUST validate
+a recursive root read at the fold's base seq, after mergeable-read filtering.
+That protects every field it replaces against intervening writes. It does
+not establish that the fold's contents were durable, nor that reading a fold
+while writing a different document persists the fold. The server validates
+version dependencies; it does not reconstruct or verify the local derivation.
+
+`PendingStacks.tla` excludes these local inputs: its `ReadCoherence` and
+`ContentCoherence` results concern the durable and pending views it models.
+`LocalFolds.tla` checks the publication guard in a one-document replacement
+model, including a counterexample when validation covers only the edited
+field. Neither that model nor the durable-history oracle proves that a
+folded input matched stored content; seq-only history cannot establish it.
 
 ### INV-2 — Overlap over-approximation only
 
@@ -382,10 +409,18 @@ comparison (a torn apply diverges from the naive fold).
 
 ### INV-9 — Log determinism and convergence
 
-> An entity's value is a deterministic function of the accepted commit log
-> prefix: `value = fold(apply, genesis, log[1..n])`. Any two replicas that
-> have integrated the same prefix compute identical values, and a stored
-> snapshot equals the replay of its prefix (`01-data-model.md` §7.3).
+> An entity's durable value is a deterministic function of the accepted
+> commit log prefix: `value = fold(apply, genesis, log[1..n])`. Replaying the
+> same prefix computes identical durable values, and a stored snapshot
+> equals the replay of its prefix (`01-data-model.md` §7.3).
+
+The locally visible value may additionally include pending writes or a local
+fold (§3.8.3 of the commit model). A fold shares its durable base's seq but
+can differ in content between replicas. Equal seqs therefore do not imply
+equal visible values. Retaining a fold never adds it to the durable log;
+a newer authoritative revision replaces it, while a same-seq frame leaves
+it visible. `LocalFolds.tla` checks this distinction with
+`DurableBaseMatchesLog`, `FoldSurvivesReplay`, and `NewerFrameReplacesFold`.
 
 Layer: patch application (`packages/memory/v2/patch.ts` server-side, the
 client apply path in `v2-document.ts`); snapshot materialization.
@@ -402,8 +437,9 @@ Checked by: the differential harness (engine `read` versus naive fold);
 ### INV-10 — Single-snapshot reads
 
 > A transaction's recorded read set describes one coherent local snapshot:
-> confirmed bases from one integrated prefix plus the session's own pending
-> stack, never a mixture of states observed across an integration boundary
+> confirmed bases from one integrated prefix, any local folds over those
+> bases, and the session's own pending stack, never a mixture of states
+> observed across an integration boundary
 > (`03-commit-model.md` §3.3.4).
 
 Layer: client, in either of the forms `03-commit-model.md` §3.3.4 admits:
@@ -412,9 +448,15 @@ claim check, which re-reads every document the transaction snapshotted from
 the state the read set is built from and rejects the transaction locally when
 a value differs.
 
+A fold's read names its durable base, not the locally derived content.
+The claim check still compares actual local values: a fold appearing,
+changing, or being replaced during transaction construction cannot silently
+change what a transaction read. This is local snapshot coherence, separate
+from INV-1's durable-content claim and its local-input exception.
+
 Soundness direction: MAY reject a transaction whose reads are in fact coherent
 (a local rejection costs a re-run); MUST NOT export a read set that mixes two
-prefixes.
+prefixes or different local views of a fold.
 
 Checked by: `packages/runner/test/commit-read-basis.test.ts` for the claim
 check (a document that lands under an open transaction rejects the commit
@@ -608,8 +650,17 @@ uninitialized".
 
 > A reconnect brings a session's replica to the current state of its watch
 > union: after the reconnect's frame, every document the union covers is
-> held at its current seq (a tombstone as a tombstone, an uncovered document
-> removed), whatever the replica lost, was wiped of, or missed while away.
+> covered by its current delivered revision (a tombstone as a tombstone,
+> an uncovered document removed), whatever the replica lost, was wiped of,
+> or missed while away.
+
+This is convergence of delivered revisions, not equality of locally visible
+content. A local fold at the delivered seq may remain visible across a
+reconnect; delivery of a later revision replaces it. Holdings report the
+last absorbed frame's seq and deletedness, never a fold's local value or
+local deletion. `SessionDelivery.tla` models those delivered revisions only;
+`LocalFolds.tla` separately checks same-seq and newer-frame effects on local
+content. The two models do not prove their composition.
 
 This is the mandatory clause. Its efficiency companion — **no redundant
 delivery**: the frame delivers nothing the replica already holds at its
@@ -686,6 +737,10 @@ scanning, cascade scope, or retry behavior:
    delivery side: a change to the reconnect diff base, the holdings
    declaration, or removal semantics runs the `SessionDelivery` configs,
    and a new base or declaration shape becomes a `Mode` variant there.
+   Changes to local folds run the `LocalFolds` configs, including their
+   expected-failure controls. A new local-input shape needs an explicit
+   invariant scope and a model variant or a focused model; passing the
+   durable-only configs does not certify it.
 4. Run the differential harness; if the change makes the engine accept
    strictly more histories, the naive validator must agree on every newly
    accepted one.

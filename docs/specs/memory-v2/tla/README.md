@@ -1,4 +1,4 @@
-# TLA+ models: pending-stack commits and session delivery
+# TLA+ models: pending stacks, local folds, and session delivery
 
 `PendingStacks.tla` is a bounded, model-checked specification of the Memory v2
 pending-stack commit protocol (`03-commit-model.md` §3.3–3.6), built to check
@@ -10,6 +10,12 @@ shape — the legacy old-client/old-server dependency recording whose
 under-recording produced the CT-1872 "1c" phantom — is deliberately not
 modeled; only the shipped full-stack shape and the proposed overlap-filtered
 refinement are.)
+
+`LocalFolds.tla` models the separate local-input case of §3.8.3: a refused
+derivation retained at its durable base's seq, and subsequent publication.
+`SessionDelivery.tla` models delivered revisions across reconnects. The
+three models check separate mechanisms; their results are not a proof of
+the combined runtime.
 
 ## Results
 
@@ -43,9 +49,15 @@ read path re-creates the CT-1872 phantom); the filtered configs certify that
 the proposed narrowing keeps every overlapping layer and stays sound.
 
 **Scope of the certification.** The model checks the ADMISSION CORE under
-two structural assumptions the runtime does not automatically share, so the
+explicit structural assumptions the runtime does not automatically share, so the
 Repaired result certifies the rule, not the whole pipeline:
 
+- **Durable and pending inputs only.** `ObsConfirmed` is derived solely
+  from the accepted log. Rejections drop their layers; no state retains a
+  refused derivation as a local fold. INV-1's explicit local-input exception
+  is outside `ReadCoherence` and `ContentCoherence`. The focused
+  [local-fold model](#model-local-folds) checks its own safety properties,
+  not this model's durable-observation equality.
 - **Canonical reads.** `Build` constructs one read per path directly from
   session state (`cbasis = csn`). The runner's raw-activity → wire
   compaction layer (`compactCommitReads`) is outside the model; losing a
@@ -220,9 +232,75 @@ or missed contributor directly.
 - **No branches, scopes, preconditions, or schema sync.** Orthogonal to the
   pending-stack machinery under study.
 
+## Model: local folds
+
+`LocalFolds.tla` models one document with replaceable fields, its durable
+history, one replica's confirmed seq and local value, and its delivered seq.
+`Begin` stages either a derived write or a handler write; `Deny` records its
+non-retriable authorization refusal; `HandleRefusal` removes the pending
+layer, retaining a derivation only when its base still matches. `Grant`
+enables a later
+`Publish`, which changes one field of the fold but sends the whole document.
+`Decide` validates the read set and atomically accepts or refuses that set.
+`ForeignWrite` and `Receive` interleave with these steps, including between
+the refusal and its handling, and between publication and its decision.
+
+The invariants distinguish the obligations:
+
+- `FoldUsesUnchangedBase` and `OnlyDerivationsFold`: retention requires the
+  unchanged confirmed base and a derived write.
+- `FoldKeepsVisibleValue`: retaining the refused write causes no visible
+  value change when its pending layer leaves.
+- `DurableBaseMatchesLog`: an unfolded confirmed value matches durable
+  history; the marked local fold is explicitly exempt from that equality.
+- `FoldSurvivesReplay` and `NewerFrameReplacesFold`: same-seq delivery keeps
+  the local result; later delivery replaces it with the authoritative value.
+- `WholePublicationChecksBase`: accepting publication requires no intervening
+  document revision after its base. The root read protects every field the
+  replacement carries, including fields the user's edit did not touch.
+
+All configs use two fields, two values, at most two foreign writes, one
+refused write, and at most one later publication. `Mode` selects the safe
+rules or changes exactly one guard for an expected-failure control. Checked
+with TLC 2.19: the safe mode exhausts 3,691 distinct states, and each control
+reports its named invariant violation. These are bounded
+safety results, not an unbounded convergence or liveness claim.
+
+| Config | Mode | Observed result |
+| --- | --- | --- |
+| `LocalFolds_Safe.cfg` | `safe` | All invariants hold (3,691 distinct states). |
+| `LocalFolds_PathOnly.cfg` | `pathOnly` | `WholePublicationChecksBase` fails: a sibling changes after publication is built, and field-only validation accepts the stale whole-document replacement. |
+| `LocalFolds_StaleBase.cfg` | `staleFold` | `FoldUsesUnchangedBase` fails: a newer frame arrives under the pending write, and refusal handling retains the stale computation. |
+| `LocalFolds_Replay.cfg` | `overwriteReplay` | `FoldSurvivesReplay` fails: a same-seq frame discards the retained result. |
+
+Run from this directory (substitute each config name):
+
+```bash
+java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
+  -config LocalFolds_Safe.cfg -workers 2 LocalFolds.tla
+```
+
+The three controls must fail with their named invariant, not merely exit
+nonzero: parser failures and checker startup errors are not witnesses.
+
+**Scope of the certification.** This model isolates local-fold behavior
+rather than adding replacement semantics to the append-based pending-stack
+model. It has one pending layer at a time, so the runtime's no-earlier-layer
+and no-wave-promotion eligibility checks are assumed, not certified. It has
+one document and does not check a folded input used to write another document.
+Its seq 0 is a genesis document, not an absent document. It omits deletion,
+scopes, mergeable operations, read compaction, identity elision, and scheduler
+liveness. Stale identity writes are conservatively refused; whole-document
+validation is checked directly, and not through the runner's read builder.
+There is no new server admission policy in this model: the new root read uses
+the ordinary conflict rule. Composition with pending stacks and reconnects
+requires further modeling. The runtime counterpart for retention and
+concurrent publication is
+`packages/runner/test/refused-derived-write.test.ts`.
+
 ## Model: session delivery across a reconnect
 
-`SessionDelivery.tla` is a second, deliberately small model of the delivery
+`SessionDelivery.tla` is a deliberately small model of the delivery
 side that `PendingStacks.tla` leaves out of scope: one session's watch union,
 the server's per-session delivery memory (`session.entities`), the client's
 replica, and the diff base a reconnect's frame is computed against
@@ -258,6 +336,12 @@ of that declaration is an assumed input — the declaration IS the replica,
 exactly — and each construction obligation is enforced by a unit test, not by
 TLC:
 
+- **Revision convergence only.** `rep` contains seqs, not values. A fold
+  may retain local content at the delivered seq across reconnects, so
+  `ReconnectConverges` does not assert visible-content equality. The fold
+  is not a holdings entry of its own; same-seq frames still update delivery
+  bookkeeping. `LocalFolds.tla` checks frame effects on local content
+  separately, without modeling disconnects or proving composition.
 - **Delivered state only.** The runtime derives the declaration from the last
   frame the replica absorbed per document, never from a locally promoted
   confirmed seq the server never sent — the replica in the model advances
@@ -281,9 +365,15 @@ same trust class as a client fabricating reads. Catch-up frames are absorbed:
 the pre-watch loss they were once subject to is fixed and pinned separately
 (#6292, `precedingSyncs`), and the residual loss class the model exercises is
 the steady-state push and the removal frame. Commit replay (INV-11) remains
-outside both models.
+outside all three models.
 
 ## Changing the models
+
+Changes to local-fold eligibility, retention, or publication run all four
+`LocalFolds` configs. Keep the unsafe modes as counterexample controls, and
+extend the model's stated bounds when a change relies on behavior it omits.
+A new local-input policy must state its relationship to INV-1, INV-9, INV-10,
+and INV-14; passing a durable-only model cannot certify local content.
 
 Per the change discipline in `09-invariants.md`: if a change introduces a new
 dependency-recording shape, staleness basis, or acceptance rule, add it as a
