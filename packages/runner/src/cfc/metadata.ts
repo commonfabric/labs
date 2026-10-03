@@ -477,8 +477,12 @@ const readerRestrictionOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
  * the broader instance can hold a stamp the narrower one lacks, such as the
  * flow stamp of the whole value a writer set. An entry for the pointer the
  * broader slot holds (a `followRef` entry, a link-origin one included) is left
- * out. It labels the redirect, whose resolution is machinery, and it was
- * stamped by whichever writer stored the redirect, not for this content.
+ * out. It copies the labels of the instance the redirect's writer narrowed
+ * into, and every user's redirect is that one stored link, so it speaks for
+ * whichever user's write stored it, not for this instance's content, whose
+ * labels its own envelope and the joined declared entries carry. A read that
+ * resolves the redirect does measure that pointer, so it can refuse what a
+ * read of this instance admits; that over-taint predates this rule.
  *
  * Integrity is the instance's own. It speaks for whoever wrote the value, and
  * whoever wrote the broader instance did not write this one: a claim stored

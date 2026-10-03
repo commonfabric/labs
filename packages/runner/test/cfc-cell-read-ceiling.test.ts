@@ -193,8 +193,9 @@ describe("cfc-cell-read-ceiling", () => {
   });
 
   it("reads a scoped instance whose broader instance labels only the pointer it holds", async () => {
-    // Resolving the broader slot's redirect is machinery, so the label on
-    // that pointer does not gate the content it leads to.
+    // The label on the broader slot's pointer copies whichever user's
+    // instance the redirect was written for, so it does not gate a read of
+    // this instance's content.
     const tx = writer.edit();
     const link = writer.getCell(
       signer.did(),
