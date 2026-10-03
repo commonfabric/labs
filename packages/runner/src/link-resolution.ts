@@ -24,6 +24,7 @@ import {
 import type {
   IExtendedStorageTransaction,
   INotFoundError,
+  Metadata,
 } from "./storage/interface.ts";
 import {
   dereferenceResolutionProbe,
@@ -116,14 +117,17 @@ const recordDereferenceHop = (
   tx: IExtendedStorageTransaction,
   hop: LinkHop,
 ): CfcDereferenceTrace => {
-  const trace = {
-    source: cfcAddressFromLink(hop.source),
-    target: cfcAddressFromLink(hop.link),
-    kind: hop.kind,
-  };
+  const trace = dereferenceTrace(hop);
   tx.recordCfcDereferenceTrace(trace);
   return trace;
 };
+
+/** The dereference trace of one hop. */
+const dereferenceTrace = (hop: LinkHop): CfcDereferenceTrace => ({
+  source: cfcAddressFromLink(hop.source),
+  target: cfcAddressFromLink(hop.link),
+  kind: hop.kind,
+});
 
 // The scope cap a link's schema imposes on the next link it permits a read to
 // follow (see ContextualFlowControl.getSchemaScopeCap for the precedence). This
@@ -544,26 +548,88 @@ export function resolveLinkTracingDereferences(
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
   lastNode: LastNode = "value",
-  options: {
-    preserveOverwrite?: boolean;
-    onScopeBlocked?: () => void;
+  options: ResolveLinkOptions = {},
+): {
+  link: ResolvedFullLink;
+  traces: readonly CfcDereferenceTrace[];
+  memoKey: string | undefined;
+} {
+  return walkLink(runtime, tx, link, lastNode, options);
+}
 
-    /**
-     * Mark the transaction cfc-relevant for every crossed link whose
-     * stored schema carries `ifc` (the crossing seam,
-     * `markIfcBearingLinkCrossing`). Read entry points opt in; write-path
-     * resolutions leave relevance to the write-policy gate.
-     */
-    markIfcCrossings?: boolean;
+/**
+ * Where a reader of `link` finds its value, and the hops it takes there, by
+ * the walk {@link resolveLink} takes, for a verifier that must leave nothing
+ * behind on the transaction it checks. Every read the walk makes carries
+ * `meta`, and it records no dereference trace, uses no memo and kicks no
+ * sync. It returns `undefined` where the walk names no value a reader could
+ * read: a link cycle, a path that grows without end, a narrower-scope link the
+ * reader may not follow, a chain that ends in a document that has not
+ * arrived, or a read that fails.
+ */
+export function resolveLinkForVerifier(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  meta: Metadata,
+): {
+  link: NormalizedFullLink;
+  traces: readonly CfcDereferenceTrace[];
+} | undefined {
+  let blocked = false;
+  let resolved: ReturnType<typeof walkLink>;
+  try {
+    resolved = tx.runWithAmbientReadMeta(
+      meta,
+      () =>
+        walkLink(undefined, tx, link, "value", {
+          onScopeBlocked: () => {
+            blocked = true;
+          },
+        }),
+    );
+  } catch {
+    return undefined;
+  }
+  return blocked || resolved.link.pendingHopDoc === true ? undefined : {
+    link: resolved.link,
+    traces: resolved.traces,
+  };
+}
 
-    /**
-     * Whether to kick a sync of each hop target in another space. On by
-     * default. A caller that resolves a link some read in the same pass has
-     * already resolved turns it off, since that read's resolution kicks the
-     * same targets and a second, unreserved kick would repeat the pull.
-     */
-    kickCrossSpaceTargets?: boolean;
-  } = {},
+/** What a caller may ask of {@link resolveLink}. */
+type ResolveLinkOptions = {
+  preserveOverwrite?: boolean;
+  onScopeBlocked?: () => void;
+
+  /**
+   * Mark the transaction cfc-relevant for every crossed link whose
+   * stored schema carries `ifc` (the crossing seam,
+   * `markIfcBearingLinkCrossing`). Read entry points opt in; write-path
+   * resolutions leave relevance to the write-policy gate.
+   */
+  markIfcCrossings?: boolean;
+
+  /**
+   * Whether to kick a sync of each hop target in another space. On by
+   * default. A caller that resolves a link some read in the same pass has
+   * already resolved turns it off, since that read's resolution kicks the
+   * same targets and a second, unreserved kick would repeat the pull.
+   */
+  kickCrossSpaceTargets?: boolean;
+};
+
+/**
+ * The walk behind {@link resolveLinkTracingDereferences}. Without a `runtime`
+ * it is {@link resolveLinkForVerifier}'s: it records no dereference trace on
+ * the transaction, uses no memo, kicks no sync and warns of no blocked follow,
+ * and decides everything else as a reader's walk does.
+ */
+function walkLink(
+  runtime: Runtime | undefined,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  lastNode: LastNode,
+  options: ResolveLinkOptions,
 ): {
   link: ResolvedFullLink;
   traces: readonly CfcDereferenceTrace[];
@@ -571,7 +637,7 @@ export function resolveLinkTracingDereferences(
 } {
   // The walk needs this to detect cycles; the memo needs it to name the entry.
   let addressKey = linkAddressKey(link);
-  const memo = tx.getSnapshotMemo?.();
+  const memo = runtime === undefined ? undefined : tx.getSnapshotMemo?.();
   const memoKey = memo === undefined ? "" : resolutionMemoVariant(
     link,
     lastNode,
@@ -585,7 +651,7 @@ export function resolveLinkTracingDereferences(
         markIfcBearingLinkCrossing(tx, hop.space, hop.schema, hop.id);
       }
     }
-    if (options.kickCrossSpaceTargets !== false) {
+    if (runtime !== undefined && options.kickCrossSpaceTargets !== false) {
       for (const target of cached.crossSpaceTargets) {
         kickDocPull(runtime, target, false);
       }
@@ -799,19 +865,22 @@ export function resolveLinkTracingDereferences(
       if (!canFollowScopedLink(hopCap, nextHop.link.scope)) {
         // Blocked narrower-scope follow during link resolution — resolves to
         // undefined silently. Warn (not info) so the drop is observable; see
-        // the matching site in traverse.ts followPointer (CT-1642).
-        logger.warn("scope: blocked narrower link follow", () => [
-          `a "${hopCap}"-scoped read cannot follow a ` +
-          `"${nextHop.link.scope}"-scoped link, so it resolves to undefined. ` +
-          `If this is inside a .map()/lift, resolve the narrower-scoped value ` +
-          `at the top level and pass the value down.`,
-          {
-            schemaScope: hopCap,
-            linkScope: nextHop.link.scope,
-            source: cfcAddressFromLink(link),
-            target: cfcAddressFromLink(nextHop.link),
-          },
-        ]);
+        // the matching site in traverse.ts followPointer (CT-1642). A
+        // verifier reports it to its caller instead.
+        if (runtime !== undefined) {
+          logger.warn("scope: blocked narrower link follow", () => [
+            `a "${hopCap}"-scoped read cannot follow a ` +
+            `"${nextHop.link.scope}"-scoped link, so it resolves to undefined. ` +
+            `If this is inside a .map()/lift, resolve the narrower-scoped value ` +
+            `at the top level and pass the value down.`,
+            {
+              schemaScope: hopCap,
+              linkScope: nextHop.link.scope,
+              source: cfcAddressFromLink(link),
+              target: cfcAddressFromLink(nextHop.link),
+            },
+          ]);
+        }
         options.onScopeBlocked?.();
         memoizable = false;
         link = undefinedDataLink(link);
@@ -836,7 +905,11 @@ export function resolveLinkTracingDereferences(
         throw new Error(`Link cycle detected at ${key}: ${detail}`);
       }
       carriedCap = hopCap;
-      traces.push(recordDereferenceHop(tx, nextHop));
+      traces.push(
+        runtime === undefined
+          ? dereferenceTrace(nextHop)
+          : recordDereferenceHop(tx, nextHop),
+      );
       if (readStatsActive) recordLinkResolution(tx);
       followedHop = true;
       // The crossing seam's data: schema-bearing hops are collected AS
@@ -941,10 +1014,10 @@ export function resolveLinkTracingDereferences(
         // long as the link is held.
         ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
       }
-      const mgr = runtime.storageManager;
+      const mgr = runtime?.storageManager;
       const reserved = !crossSpace &&
-        mgr.shouldPullDoc?.(link.space, link.id, link.scope) === true;
-      if (crossSpace || reserved) {
+        mgr?.shouldPullDoc?.(link.space, link.id, link.scope) === true;
+      if (runtime !== undefined && (crossSpace || reserved)) {
         // Only the cross-space kick is replayed. A same-space one is taken
         // against a reservation, so a second resolution of this link would not
         // kick it either — and if the sync fails and retracts the reservation,

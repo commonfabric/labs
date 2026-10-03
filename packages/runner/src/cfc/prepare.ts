@@ -87,6 +87,7 @@ import {
   type NormalizedLink,
   parseLink,
 } from "../link-utils.ts";
+import { readMaybeLink, resolveLinkForVerifier } from "../link-resolution.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
 import { isReservedSibling } from "../reserved-sibling-seam.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
@@ -1755,6 +1756,32 @@ const pathHoldsStagedReference = (
     normalizeCellScope(input.target.scope) === scope &&
     concretePathHasPrefix(logicalPath, input.target.path) &&
     slotHoldsInitialization(tx, { ...target, scope }, input)
+  );
+};
+
+/**
+ * Whether `input` is a link the runtime staged as a capture or a binding, and
+ * its slot still holds it: a link that writes none of the value it names and
+ * mints none of its slot's integrity for the principal staging it.
+ */
+const linkIsStagedReference = (
+  tx: IExtendedStorageTransaction,
+  input: LinkWritePolicyInput,
+): boolean => {
+  const path = canonicalizeLogicalPath(input.target.path);
+  const target = {
+    space: input.target.space,
+    id: input.target.id,
+    scope: normalizeCellScope(input.target.scope),
+  };
+  return tx.getCfcState().writePolicyInputs.some((staged) =>
+    staged.kind === "initialization" &&
+    (staged.mode === "capture" || staged.mode === "binding") &&
+    tx.isRuntimeWritePolicyInput(staged) &&
+    staged.target.space === target.space && staged.target.id === target.id &&
+    normalizeCellScope(staged.target.scope) === target.scope &&
+    arraysEqual(canonicalizeLogicalPath(staged.target.path), path) &&
+    slotHoldsInitialization(tx, target, staged)
   );
 };
 
@@ -3438,16 +3465,15 @@ type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
 /**
  * What stands at `rel` below `value`: the first link met on the way down,
  * which the path then continues inside of and which is therefore what the
- * path resolves through, with the number of segments of `rel` above it, else
- * the value at `rel`, else nothing.
+ * path resolves through, else the value at `rel`, else nothing.
  */
 const pointerAlongPath = (
   value: unknown,
   rel: readonly string[],
-): { link: unknown; depth: number } | { value: unknown } | undefined => {
+): { link: unknown } | { value: unknown } | undefined => {
   let current = value;
   for (let depth = 0;; depth++) {
-    if (isPrimitiveCellLink(current)) return { link: current, depth };
+    if (isPrimitiveCellLink(current)) return { link: current };
     if (depth === rel.length) return { value: current };
     if (!isObjectOrArray(current) || !Object.hasOwn(current, rel[depth])) {
       return undefined;
@@ -8162,24 +8188,30 @@ type LinkLabelDeriver = {
   ) => Generator<void, IFCLabel | undefined>;
 
   /**
-   * Follows the links the source's documents stored before this transaction
-   * from a recorded link's source at `relativePath` below its receiving slot
-   * to the document that holds the value there.
+   * What a reader of `relativePath` below a recorded link's receiving slot
+   * finds there, reading through `readerSchema`, by the walk a reader takes:
+   * the label of the document that holds the value where the walk crosses a
+   * link stored before the transaction.
    */
-  held: (
+  heldLabel: (
     input: LinkWritePolicyInput,
     relativePath: readonly string[],
-  ) => Generator<void, HeldValue>;
+    readerSchema: JSONSchema | undefined,
+  ) => Generator<void, HeldLabel>;
 };
 
-/** What {@link LinkLabelDeriver.held} finds at the end of the stored links. */
-type HeldValue = {
-  /** The integrity each document the path continues into labels it with. */
-  integrity: CfcAtom[];
-
-  /** Whether a readable document at the end of the links holds nothing there. */
-  absent: boolean;
-};
+/**
+ * What {@link LinkLabelDeriver.heldLabel} finds: the label of the document
+ * holding the value; that only links written in this transaction lead to it,
+ * so the recorded chain derives its label; that the document holding the
+ * position holds nothing there; or that the walk names no value a reader
+ * could read.
+ */
+type HeldLabel =
+  | { kind: "label"; label: IFCLabel | undefined }
+  | { kind: "chain" }
+  | { kind: "absent" }
+  | { kind: "unresolved" };
 
 /** Whether repeated pending sources form a document graph without cycles. */
 const hasSharedAcyclicLinkSources = (
@@ -8513,117 +8545,118 @@ const createLinkLabelDeriver = (
     ).label;
   };
 
-  // What `source`'s document holds at its path: the address the first link
-  // stored on the way down to it, or at it, names, extended by the rest of the
-  // path, when the path continues into another document; `"absent"` when the
-  // document holds nothing there; `undefined` when it holds the value itself,
-  // when a reference staged in this transaction at or above the path supplies
-  // it (`pendingSourceView` derives that chain), or when the document cannot
-  // be read, which says nothing about what it holds.
-  const heldAt = (
+  // Whether this transaction wrote the value at `position`, such as a link it
+  // staged there, rather than finding it stored.
+  const writtenHere = (position: CfcAddress): boolean =>
+    writeValueForTarget(tx, {
+      space: position.space,
+      id: position.id as URI,
+      scope: normalizeCellScope(position.scope),
+      path: canonicalizeLogicalPath(position.path),
+    }) !== undefined;
+
+  // Whether the first link a reader meets on the way down to `source` in its
+  // document was stored before this transaction. A read that fails says
+  // nothing about what the document holds, so it counts as one.
+  const reachedThroughStoredLink = (
     source: LinkWritePolicyInput["source"],
-  ): { link: LinkWritePolicyInput["source"] } | "absent" | undefined => {
-    const path = canonicalizeLogicalPath(source.path);
-    if (
-      (linkWrites.get(targetKey(source)) ?? []).some((upstream) =>
-        concretePathHasPrefix(
-          path,
-          canonicalizeLogicalPath(upstream.target.path),
-        )
-      )
-    ) return undefined;
+  ): boolean => {
     const document = {
       space: source.space,
       id: source.id as URI,
       scope: normalizeCellScope(source.scope),
-      path: [],
     };
-    if (
-      !documentRootIsReadable(
-        tx,
-        document.space,
-        document.id,
-        document.scope,
-        "application/json",
-      )
-    ) return undefined;
-    const pointer = pointerAlongPath(
-      tx.readValueOrThrow(document, { meta: INTERNAL_VERIFIER_META }),
-      path,
-    );
-    if (pointer === undefined) return "absent";
-    if ("value" in pointer) {
-      return pointer.value === undefined ? "absent" : undefined;
+    const path = canonicalizeLogicalPath(source.path);
+    try {
+      return tx.runWithAmbientReadMeta(INTERNAL_VERIFIER_META, () => {
+        for (let depth = 0; depth <= path.length; depth++) {
+          const position = { ...document, path: path.slice(0, depth) };
+          if (readMaybeLink(tx, position) !== undefined) {
+            return !writtenHere(position);
+          }
+        }
+        return false;
+      });
+    } catch {
+      return true;
     }
-    const link = parseLink(pointer.link, document);
-    if (link?.id === undefined || link.space === undefined) return undefined;
-    return {
-      link: {
-        space: link.space,
-        id: link.id,
-        scope: normalizeCellScope(link.scope),
-        path: [
-          ...canonicalizeLogicalPath(link.path),
-          ...path.slice(pointer.depth),
-        ],
-      },
-    };
   };
 
-  // A source that holds the path through a link it stored before this
-  // transaction, such as a pattern's argument holding the binding its caller
-  // staged, holds none of the value there: the label it stores at the path is
-  // the slot's own, which staging the binding minted no integrity for. The
-  // value's integrity is that of the document the link leads to. Each such
-  // document's label is derived as the link's source label is, against the
-  // link's own receiving slot and schema; a pointer loop stops the walk.
-  const held = function* (
+  // The reader starts at the receiving slot, so the walk crosses the staged
+  // link and every link after it under the reader's cycle, length and scope
+  // rules. Where every link it crosses was written in this transaction, the
+  // recorded chain derives the value's label (`labelAt`), as it derives one
+  // the walk cannot finish, such as a reference back into its own object. A
+  // link stored before the transaction is no part of that chain: the document
+  // holding it holds none of the value, so its label at the path is no
+  // evidence about the value, and the value is credited with the label of the
+  // document the walk ends in alone (§8.2.6), or with nothing where the walk
+  // cannot finish.
+  const heldLabel = function* (
     input: LinkWritePolicyInput,
     relativePath: readonly string[],
-  ): Generator<void, HeldValue> {
-    const integrity: CfcAtom[] = [];
-    const target = {
-      ...input.target,
-      path: [...canonicalizeLogicalPath(input.target.path), ...relativePath],
-    };
-    let source: LinkWritePolicyInput["source"] = {
-      ...input.source,
-      path: [...canonicalizeLogicalPath(input.source.path), ...relativePath],
-    };
-    const visited = new Set<string>();
-    for (;;) {
-      const at = heldAt(source);
-      if (at === "absent") return { integrity, absent: true };
-      if (at === undefined) return { integrity, absent: false };
-      const key = `${targetKey(at.link)}\u0000${pathKey(at.link.path)}`;
-      if (visited.has(key)) return { integrity, absent: false };
-      visited.add(key);
-      // The view a link carries describes its own source, not the documents
-      // past it.
-      const hop: LinkWritePolicyInput = {
-        ...input,
-        source: at.link,
-        target,
-        cfcLabelView: undefined,
+    readerSchema: JSONSchema | undefined,
+  ): Generator<void, HeldLabel> {
+    const path = [
+      ...canonicalizeLogicalPath(input.target.path),
+      ...relativePath,
+    ];
+    const resolved = resolveLinkForVerifier(tx, {
+      space: input.target.space,
+      id: input.target.id as URI,
+      scope: normalizeCellScope(input.target.scope),
+      path,
+      ...(readerSchema !== undefined && { schema: readerSchema }),
+    }, INTERNAL_VERIFIER_META);
+    if (resolved === undefined || resolved.traces.length === 0) {
+      const source = {
+        ...input.source,
+        path: [...canonicalizeLogicalPath(input.source.path), ...relativePath],
       };
-      const pending = yield* pendingSourceView(hop, emptyWalk());
-      if (pending.reasons.length > 0) return { integrity, absent: false };
-      const label = derivePersistedLinkLabel(
+      return reachedThroughStoredLink(source)
+        ? { kind: "unresolved" }
+        : { kind: "chain" };
+    }
+    const holder = {
+      space: resolved.link.space,
+      id: resolved.link.id,
+      scope: normalizeCellScope(resolved.link.scope),
+      path: canonicalizeLogicalPath(resolved.link.path),
+    };
+    let value: unknown;
+    try {
+      value = tx.readValueOrThrow(holder, { meta: INTERNAL_VERIFIER_META });
+    } catch {
+      return { kind: "unresolved" };
+    }
+    if (value === undefined) return { kind: "absent" };
+    if (resolved.traces.every(({ source }) => writtenHere(source))) {
+      return { kind: "chain" };
+    }
+    const at: LinkWritePolicyInput = {
+      ...input,
+      source: holder,
+      target: { ...input.target, path },
+      cfcLabelView: undefined,
+    };
+    const pending = yield* pendingSourceView(at, emptyWalk());
+    if (pending.reasons.length > 0) return { kind: "unresolved" };
+    return {
+      kind: "label",
+      label: derivePersistedLinkLabel(
         tx,
-        hop,
+        at,
         candidates,
         identityForInput(input),
         metadataResolver,
         valueTargets,
         linkWrites,
         pending.view,
-      ).label;
-      for (const atom of label?.integrity ?? []) integrity.push(atom);
-      source = at.link;
-    }
+      ).label,
+    };
   };
 
-  return { persisted, labelAt, held };
+  return { persisted, labelAt, heldLabel };
 };
 
 const cloneLabel = (label: IFCLabel): IFCLabel => ({
@@ -10032,7 +10065,6 @@ const verifyWriteFloor = function* (
     // `addIntegrity` mints + `exactCopyOf`/`projection` carries,
     // evidence-gated so a pattern author cannot forge runtime-minted atoms
     // to satisfy their own floor.
-    const mint = labelMintOptionsAt(tx, target, entry.path);
     const base = gateRuntimeMintedIntegrity(
       derivePersistedLabel(
         tx,
@@ -10040,7 +10072,11 @@ const verifyWriteFloor = function* (
         entry.label,
         entryLabels,
         target.space,
-        mint,
+        labelMintOptionsAt(
+          tx,
+          target,
+          entry.path,
+        ),
       ),
       ctx.identityForPath(entry.path),
     ).integrity ?? [];
@@ -10049,20 +10085,48 @@ const verifyWriteFloor = function* (
     // value must individually carry the floor), plus one `value` contribution
     // when plain data was written (crediting the flow meet when available).
     const contributions: (readonly CfcAtom[])[] = [];
-    // Where a link's source reaches the value through links its documents
-    // stored earlier, the documents they lead to are credited beside the
-    // source's own label (`held`), as long as the link itself derives.
+    // A link the runtime staged, a capture or a binding, writes none of the
+    // value it names and mints none of the slot's integrity, so the value is
+    // credited where a reader finds it (`stagedCredit`). Where the document
+    // holding it holds nothing there, nothing lands through that link, and
+    // the floor governs values, not absence.
+    const stagedCredit = function* (
+      input: LinkWritePolicyInput,
+      relative: readonly string[],
+      chain: IFCLabel,
+    ): Generator<void, readonly CfcAtom[] | undefined> {
+      const held = yield* ctx.linkLabels.heldLabel(
+        input,
+        relative,
+        canonicalizeLogicalPath(input.target.path).length + relative.length ===
+            entry.path.length
+          ? entry.schema
+          : undefined,
+      );
+      switch (held.kind) {
+        case "absent":
+          return undefined;
+        case "chain":
+          return chain.integrity ?? [];
+        case "label":
+          return held.label?.integrity ?? [];
+        case "unresolved":
+          return [];
+      }
+    };
     for (const input of linksHere) {
       const derived = yield* ctx.linkLabels.persisted(input);
       // An underivable link (`reasons` set, `label` undefined) contributes empty
       // integrity — it fails the floor, fail-closed, alongside the persist
       // loop's own missing-source reason (both reject).
-      contributions.push(
-        derived.label === undefined ? [] : [
-          ...(derived.label.integrity ?? []),
-          ...(yield* ctx.linkLabels.held(input, [])).integrity,
-        ],
-      );
+      if (derived.label === undefined) {
+        contributions.push([]);
+        continue;
+      }
+      const credit = linkIsStagedReference(tx, input)
+        ? yield* stagedCredit(input, [], derived.label)
+        : derived.label.integrity ?? [];
+      if (credit !== undefined) contributions.push(credit);
     }
     for (const input of ancestorLinks) {
       // Re-point the derivation at the floor path INSIDE the linked source:
@@ -10076,13 +10140,10 @@ const verifyWriteFloor = function* (
         contributions.push([]);
         continue;
       }
-      const value = yield* ctx.linkLabels.held(input, relative);
-      // A reference the runtime staged writes nothing at the floor path and
-      // mints none of the slot's integrity for the stager, so only what its
-      // source holds there lands. Where the source holds nothing, nothing
-      // lands, and the floor governs values, not absence.
-      if (value.absent && mint.mintSchemaIntegrity === false) continue;
-      contributions.push([...(label.integrity ?? []), ...value.integrity]);
+      const credit = linkIsStagedReference(tx, input)
+        ? yield* stagedCredit(input, relative, label)
+        : label.integrity ?? [];
+      if (credit !== undefined) contributions.push(credit);
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
     // A value contribution exists when plain data lands at/under the floor
@@ -10095,9 +10156,10 @@ const verifyWriteFloor = function* (
     //   pure-link or undefined and would otherwise be judged by the link
     //   contributions alone (review). The per-path value probe keeps DELETE
     //   details (no value) out;
-    // - nothing else contributed at all (a value-shaped write with no link
-    //   inputs — e.g. a raw sigil smuggled without link policy inputs), so the
-    //   floor is still evaluated, fail-closed.
+    // - no link input reaches the path at all (a value-shaped write with no
+    //   link inputs — e.g. a raw sigil smuggled without link policy inputs),
+    //   so the floor is still evaluated, fail-closed. A staged link whose
+    //   value is absent is such an input, and contributes nothing.
     const descendantValueWrite = writesUnder.some((writePath) =>
       !linksHere.some((input) =>
         concretePathHasPrefix(
@@ -10118,7 +10180,7 @@ const verifyWriteFloor = function* (
     const valueWritten =
       (written !== undefined && !isPureLinkStructure(written)) ||
       descendantValueWrite ||
-      contributions.length === 0;
+      (linksHere.length === 0 && ancestorLinks.length === 0);
     if (valueWritten) contributions.push(ctx.flowIntegrity);
 
     const misses = contributions.some((extra) =>
