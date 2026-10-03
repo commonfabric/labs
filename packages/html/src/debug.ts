@@ -64,8 +64,8 @@ function readCellAsync<T>(cell: CellHandle<T>): Promise<T | undefined> {
         resolve(v);
       }
     }, {
+      // A refusal after the promise settled changes nothing it answered.
       onRefused: (refusal) => {
-        if (settled) return;
         settled = true;
         queueMicrotask(() => cancel());
         reject(new CellReadRefusedError(refusal));
