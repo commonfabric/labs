@@ -238,7 +238,16 @@ export class HostReadGate {
         );
         deliver(
           refusal === undefined
-            ? update(hostValueOf(event), undefined)
+            ? update(
+              hostValueOf(event),
+              // An event carries the label of the stream's document, which
+              // the decision above was made on.
+              includeCfcLabel
+                ? cfcLabelViewForResolvedCell(cell, {
+                  kickCrossSpaceTargets: false,
+                })
+                : undefined,
+            )
             : refusedUpdate(refusal),
         );
       });

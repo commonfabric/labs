@@ -194,12 +194,16 @@ function holds(answer: unknown, text: string): boolean {
 }
 
 /** Subscribes through `gate`, keeping every update it delivers. */
-function subscribe(gate: HostReadGate, cell: Cell<unknown>) {
+function subscribe(
+  gate: HostReadGate,
+  cell: Cell<unknown>,
+  options: { includeCfcLabel?: boolean } = {},
+) {
   const updates: CellUpdateNotification[] = [];
   const cancel = gate.subscribe(
     cell,
     createCellRef(cell),
-    {},
+    options,
     () => {},
     (u) => {
       updates.push(u);
@@ -518,6 +522,39 @@ describe("HostReadGate", () => {
       expect(holds(toOwner.updates, SEALED_ENTRY)).toBe(true);
       expect(holds(toVisitor.updates, SEALED_ENTRY)).toBe(false);
       expect("refused" in toVisitor.updates[0]).toBe(true);
+    });
+
+    it("delivers a stream's event with the stream's label to a subscriber that asks for it", async () => {
+      await using docs = await shelf();
+      const written = await docs.write(
+        "labeled-stream",
+        { $stream: true },
+        [[[], [ownerOnly]]],
+      );
+      const stream = docs.runtime.getCell(
+        space,
+        "labeled-stream",
+        { asCell: ["stream"] },
+      );
+      const { updates, cancel } = subscribe(
+        gateFor(docs.runtime, owner),
+        stream,
+        { includeCfcLabel: true },
+      );
+      stream.send({ said: "hello" } as never);
+      await docs.runtime.idle();
+      cancel();
+
+      expect(written).toBeDefined();
+      expect(updates).toEqual([
+        expect.objectContaining({
+          value: { said: "hello" },
+          cfcLabel: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+          },
+        }),
+      ]);
     });
 
     it("delivers a stream's events to the owner, deciding them on the stream's document", async () => {
