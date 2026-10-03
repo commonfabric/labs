@@ -559,9 +559,10 @@ export function resolveLinkTracingDereferences(
 
 /**
  * Where a reader of `link` finds its value, and the hops it takes there, by
- * the walk {@link resolveLink} takes, for a verifier that must leave nothing
- * behind on the transaction it checks. Every read the walk makes carries
- * `meta`, and it records no dereference trace, uses no memo and kicks no
+ * the walk {@link resolveLink} takes, for the commit verifier of the
+ * transaction it reads. Every read the walk makes carries `meta`, so the
+ * transaction journals them as the verifier's reads and still depends on what
+ * they saw; the walk records no dereference trace, uses no memo and kicks no
  * sync. It returns `undefined` where the walk names no value a reader could
  * read: a link cycle, a path that grows without end, a narrower-scope link the
  * reader may not follow, a chain that ends in a document that has not
