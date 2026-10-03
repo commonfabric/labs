@@ -143,10 +143,7 @@ import {
   createTxCfcGrantResolver,
   flushCfcGrantConsumptionClaims,
 } from "./grants.ts";
-import {
-  deriveLabelMetadataTemplateEntries,
-  isLabelMetadataTemplateEntry,
-} from "./label-metadata-population.ts";
+import { deriveLabelMetadataTemplateEntries } from "./label-metadata-population.ts";
 import {
   commitmentAwareEquals,
   containsCfcFieldCommitment,
@@ -10372,15 +10369,15 @@ export function* prepareBoundaryCommitSteps(
           writtenPrefixes.overlaps(transformedByProbePath(entry))
         ) ||
         // Stage B healing, the template-ONLY arm (cubic P2 on the Stage B
-        // PR): an envelope whose entries are ALL label-metadata templates
-        // has no payload entry a written path could cover, so it would
-        // never re-enter this loop — and its templates describe entries
-        // that no longer exist. Admit it so the re-derivation writes the
-        // healed (empty) label map. Envelopes with any payload entry heal
-        // through the ordinary covering-write arm above (the re-derivation
-        // rebuilds templates whenever payload entries are re-persisted).
-        (existingEntries.length > 0 &&
-          existingEntries.every((entry) => isLabelMetadataTemplateEntry(entry)))
+        // PR): an envelope holding label-metadata templates and no payload
+        // entry has nothing a written path could cover, so it would never
+        // re-enter this loop — and its templates describe entries that no
+        // longer exist. Admit it so the re-derivation writes the healed
+        // (empty) label map. Envelopes with any payload entry heal through
+        // the ordinary covering-write arm above (the re-derivation rebuilds
+        // templates whenever payload entries are re-persisted).
+        (existingEntries.length === 0 &&
+          (existingMeta?.labelMap.documentEntries?.length ?? 0) > 0)
       ) {
         targetKeys.add(key);
       }
@@ -11188,21 +11185,17 @@ export function* prepareBoundaryCommitSteps(
       const { integrity: _dropped, ...rest } = entry.label;
       return kept.length > 0 ? { ...rest, integrity: kept } : rest;
     };
+    // Label-metadata population templates (template-population Stage B,
+    // spec §4.6.4.2) are a pure function of the payload entries in this same
+    // envelope: never carried forward — re-derived below from the FINAL
+    // payload entry set, so they replace on overwrite and clear with the
+    // entries they describe by construction (and a stale template left by a
+    // mixed-version writer heals on the next persist here).
+    droppedLabelMetadataTemplates =
+      (existing?.labelMap.documentEntries?.length ?? 0) > 0;
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
-      // Label-metadata population templates (template-population Stage B,
-      // spec §4.6.4.2) are a pure function of the payload entries in this
-      // same envelope: never carried forward — re-derived below from the
-      // FINAL payload entry set, so they replace on overwrite and clear
-      // with the entries they describe by construction (and a stale
-      // template left by a mixed-version writer heals on the next persist
-      // here — see `droppedLabelMetadataTemplates` for the template-only
-      // arm).
-      if (isLabelMetadataTemplateEntry(entry)) {
-        droppedLabelMetadataTemplates = true;
-        continue;
-      }
       // Minted entries are reconciled as a set, below, against what this
       // transaction wrote.
       if (entry.origin === MINTED_ORIGIN) continue;
@@ -12204,10 +12197,9 @@ export function* prepareBoundaryCommitSteps(
     // the per-path §4.6.4.1 metadata addressing requires. No new dial: the
     // templates describe whatever payload entries the existing dials
     // persisted.
-    const templateEntries = deriveLabelMetadataTemplateEntries(
-      collapsedLabelEntries,
+    const templateEntries = coalesceLabelEntries(
+      deriveLabelMetadataTemplateEntries(collapsedLabelEntries),
     );
-    for (const entry of templateEntries) collapsedLabelEntries.push(entry);
 
     const manifestFailures = installCarriedPolicyManifests(
       tx,
@@ -12248,6 +12240,9 @@ export function* prepareBoundaryCommitSteps(
       labelMap: {
         version: 1,
         entries: coalescedLabelEntries,
+        ...(templateEntries.length > 0
+          ? { documentEntries: templateEntries }
+          : {}),
       },
     };
 
@@ -12394,6 +12389,12 @@ export function* prepareBoundaryCommitSteps(
     // the envelope references (the write-side obligation the commit
     // boundary enforces); the staging dedupes per transaction and elides
     // documents the space's server already holds.
+    // The stored label map holds the payload entries and the document-rooted
+    // ones in one list; readers decode them apart again.
+    const storedEntries = [
+      ...metadata.labelMap.entries,
+      ...(metadata.labelMap.documentEntries ?? []),
+    ];
     const storedEnvelope: StoredCfcMetadata = metadata.version === 2
       ? {
         version: 2,
@@ -12401,7 +12402,7 @@ export function* prepareBoundaryCommitSteps(
         labelMap: {
           version: 1,
           entries: storedLabelMapEntries(
-            metadata.labelMap.entries,
+            storedEntries,
             (content) =>
               tx.stageContentAddressedDocument(
                 space,
@@ -12410,7 +12411,11 @@ export function* prepareBoundaryCommitSteps(
           ),
         },
       }
-      : metadata;
+      : {
+        version: 1,
+        schemaHash: metadata.schemaHash,
+        labelMap: { version: 1, entries: storedEntries },
+      };
     tx.writeOrThrow({
       space,
       id,

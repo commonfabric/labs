@@ -426,13 +426,27 @@ export type StoredCfcMetadata =
  * Label references resolve under the same policy, so a consumer holding a
  * `CfcMetadata` holds every label inline; `version` records which stored
  * spelling it was resolved from.
+ *
+ * The stored label map holds payload entries and document-rooted entries in
+ * one list. A reader decodes them apart (spec §4.6.4): `labelMap.entries`
+ * holds the payload entries alone, so no lookup over it can match a
+ * document-rooted entry, and the persist path writes both back into the one
+ * stored list.
  */
 export type CfcMetadata = {
   version: CfcMetadataVersion;
   schemaHash: string;
   labelMap: {
     version: 1;
+    /** The payload entries, each keyed relative to `value`. */
     entries: Array<LabelMapEntry>;
+
+    /**
+     * The document-rooted entries, each keyed relative to the stored
+     * document: the label-metadata templates of spec §4.6.4.2, which the
+     * introspection surface alone resolves. Absent where there are none.
+     */
+    documentEntries?: Array<LabelMapEntry>;
   };
 };
 

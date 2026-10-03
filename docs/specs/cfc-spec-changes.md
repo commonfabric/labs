@@ -774,9 +774,10 @@ commitment-aware matching), stage 2 as labs#4657
 `labelMetadata` observation channel — the SC-6 revisit discharged)
 completed by template-population Stage B (labs#4660): the full per-field
 §4.6.4.2 profile persists as multi-`*` templates under `/cfc/labels/...`
-(`origin:"label-metadata"`, `observes:"labelMetadata"` — no payload read
-class consumes them), minted at the persist seam from each source-bearing
-derived-containment payload entry, resolved by `inspectConfLabel` at
+(`origin:"label-metadata"`, `observes:"labelMetadata"` — a reader decodes
+them apart from the payload entries, so no payload lookup sees one), minted
+at the persist seam from each source-bearing derived-containment payload
+entry, resolved by `inspectConfLabel` at
 concrete clause/alternative metadata paths with the interim rule staying
 the label source and the in-hand computation the fallback on template-less
 envelopes ([`cfc-template-population.md`](./cfc-template-population.md)

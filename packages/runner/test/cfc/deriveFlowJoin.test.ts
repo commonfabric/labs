@@ -56,7 +56,10 @@ function scan(
   const beneathProbe = (entry: LabelMapEntry) =>
     shape === "followRef" && template(entry) &&
     entry.path.length > path.length && isPrefix(path, entry.path);
+  // A label-metadata entry is keyed relative to the stored document, so a
+  // payload lookup never sees it (spec §4.6.4), whatever class it carries.
   const selected = entries.filter((entry) =>
+    entry.origin !== "label-metadata" &&
     readConsumesEntry(shape, entry) && !(machinery && template(entry)) &&
     !beneathProbe(entry)
   );

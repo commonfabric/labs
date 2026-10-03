@@ -21,6 +21,7 @@ import {
 } from "../src/cfc/label-introspection.ts";
 import {
   deriveLabelMetadataTemplateEntries,
+  isLabelMetadataTemplateEntry,
   resolveLabelMetadataTemplateConfidentiality,
 } from "../src/cfc/label-metadata-population.ts";
 import { containsCfcFieldCommitment } from "../src/cfc/label-representation.ts";
@@ -71,12 +72,17 @@ const residentClause = (
   ...alternatives: readonly CfcConfClause[]
 ): CfcConfClause => ({ anyOf: [cfcAtom.space(space), ...alternatives] });
 
+/** Metadata decoded from `entries`, as a reader decodes a stored map. */
 const metadataWith = (
   entries: CfcMetadata["labelMap"]["entries"],
 ): CfcMetadata => ({
   version: 1,
   schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-  labelMap: { version: 1, entries },
+  labelMap: {
+    version: 1,
+    entries: entries.filter((entry) => !isLabelMetadataTemplateEntry(entry)),
+    documentEntries: entries.filter(isLabelMetadataTemplateEntry),
+  },
 });
 
 /** A persisted label-metadata population template, as the mint produces it. */

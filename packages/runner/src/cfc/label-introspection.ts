@@ -14,7 +14,6 @@ import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
   cfcEntryHasDerivedContainment,
-  isLabelMetadataTemplateEntry,
   labelMetadataFieldIsProtected,
   resolveLabelMetadataTemplateConfidentiality,
 } from "./label-metadata-population.ts";
@@ -214,14 +213,14 @@ type FieldObservation = readonly unknown[] | undefined;
  */
 const protectedFieldObservationLabel = (
   entry: LabelMapEntry,
-  entries: readonly LabelMapEntry[],
+  templates: readonly LabelMapEntry[],
   concretePath: readonly string[],
 ): FieldObservation => {
   if (!cfcEntryHasDerivedContainment(entry)) {
     return undefined;
   }
   const template = resolveLabelMetadataTemplateConfidentiality(
-    entries,
+    templates,
     concretePath,
   );
   if (template !== undefined) {
@@ -252,11 +251,11 @@ const fieldObservationLabel = (
   entry: LabelMapEntry,
   atom: unknown,
   field: string,
-  entries: readonly LabelMapEntry[],
+  templates: readonly LabelMapEntry[],
   concretePath: readonly string[],
 ): FieldObservation =>
   labelMetadataFieldIsProtected(atom, field)
-    ? protectedFieldObservationLabel(entry, entries, concretePath)
+    ? protectedFieldObservationLabel(entry, templates, concretePath)
     : [];
 
 /**
@@ -285,7 +284,7 @@ const fieldObservationLabel = (
 const atomProjectionLabel = (
   entry: LabelMapEntry,
   atom: unknown,
-  entries: readonly LabelMapEntry[],
+  templates: readonly LabelMapEntry[],
   alternativePath: readonly string[],
 ): FieldObservation => {
   const consumed: unknown[] = [];
@@ -305,7 +304,7 @@ const atomProjectionLabel = (
     if (isCfcFieldCommitment(value)) {
       // A bare commitment marker outside a classified field position (it
       // would have been consumed AS the field value below): protected.
-      const label = protectedFieldObservationLabel(entry, entries, valuePath);
+      const label = protectedFieldObservationLabel(entry, templates, valuePath);
       if (label === undefined) return false;
       for (const atom of label) consumed.push(atom);
       return true;
@@ -327,7 +326,7 @@ const atomProjectionLabel = (
         entry,
         context,
         key,
-        entries,
+        templates,
         fieldPath,
       );
       if (observation === undefined) {
@@ -353,7 +352,7 @@ const atomProjectionLabel = (
   }
   if (consumed.length > 0) {
     const template = resolveLabelMetadataTemplateConfidentiality(
-      entries,
+      templates,
       alternativePath,
     );
     if (template !== undefined) {
@@ -441,6 +440,9 @@ export const evaluateConfLabelQuery = (
     .map((key) => ({ ...QUERY_PREDICATES[key], expected: query[key] }));
   const pointer = encodePointer(targetPath);
   const entries = metadata.labelMap.entries;
+  // The label-metadata templates, which a decoded envelope keeps apart from
+  // its payload entries; they label observations of the metadata only.
+  const templates = metadata.labelMap.documentEntries ?? [];
   // The concrete metadata subtree of this target (§4.6.4.1 addressing):
   // consultation paths extend it with the stored clause/alternative indices,
   // and template resolution reads at those concrete paths.
@@ -469,13 +471,6 @@ export const evaluateConfLabelQuery = (
   const atoms: LabelAtomProjection[] = [];
   let clauseIndex = 0;
   for (const entry of entries) {
-    // Label-metadata population templates are the OBSERVATION-LABEL carrier
-    // for the payload label, not payload clauses: they never enumerate as
-    // atoms (a `*`-bearing target path could otherwise wildcard-match their
-    // `cfc`-prefixed entry paths).
-    if (isLabelMetadataTemplateEntry(entry)) {
-      continue;
-    }
     if (!entryPathMatchesTarget(entry, targetPath)) {
       continue;
     }
@@ -533,7 +528,7 @@ export const evaluateConfLabelQuery = (
             entry,
             atom,
             field,
-            entries,
+            templates,
             fieldPath,
           );
           if (observation === undefined) {
@@ -570,7 +565,7 @@ export const evaluateConfLabelQuery = (
         const projection = atomProjectionLabel(
           entry,
           atom,
-          entries,
+          templates,
           alternativePath,
         );
         if (projection === undefined) {

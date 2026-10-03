@@ -19,6 +19,7 @@ import type {
   ConsultedGrant,
   ConsultedPolicyManifest,
   ConsumedRead,
+  LabelMapEntry,
   OrderedWriteAttempt,
   PreparedDigestInput,
   WritePolicyInput,
@@ -429,44 +430,57 @@ const withoutUndefinedLabelMembers = (label: IFCLabel): IFCLabel => {
  * canonical, `undefined` label members dropped, and `version` fixed at 1 —
  * the stored spelling is not part of what two envelopes are compared on,
  * so a version-1 and a version-2 envelope holding the same labels are
- * equal here.
+ * equal here. The document-rooted entries take the same form, and an empty
+ * set of them is the same as none.
  */
 export const canonicalizeCfcMetadata = (
   metadata: CfcMetadata,
-): CfcMetadata => ({
-  version: 1,
-  schemaHash: metadata.schemaHash,
-  labelMap: {
+): CfcMetadata => {
+  const documentEntries = metadata.labelMap.documentEntries ?? [];
+  return {
     version: 1,
-    entries: [...metadata.labelMap.entries].map((entry) => ({
-      path: canonicalizeLogicalPath(entry.path),
-      label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
-      ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
-      ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-    })).sort((left, right) => {
-      const leftKey = logicalPathToPointer(left.path);
-      const rightKey = logicalPathToPointer(right.path);
-      if (leftKey !== rightKey) {
-        return leftKey < rightKey ? -1 : 1;
-      }
-      const leftOrigin = left.origin ?? "";
-      const rightOrigin = right.origin ?? "";
-      if (leftOrigin !== rightOrigin) {
-        return leftOrigin < rightOrigin ? -1 : 1;
-      }
-      // Same (path, origin) can legitimately hold per-class entries (the C2
-      // persist split writes `value` and `shape` siblings) — order by class
-      // so canonicalization stays deterministic.
-      const leftObserves = left.observes ?? "";
-      const rightObserves = right.observes ?? "";
-      return leftObserves < rightObserves
-        ? -1
-        : leftObserves > rightObserves
-        ? 1
-        : 0;
-    }),
-  },
-});
+    schemaHash: metadata.schemaHash,
+    labelMap: {
+      version: 1,
+      entries: canonicalLabelEntries(metadata.labelMap.entries),
+      ...(documentEntries.length > 0
+        ? { documentEntries: canonicalLabelEntries(documentEntries) }
+        : {}),
+    },
+  };
+};
+
+/** Label-map entries in comparison form, sorted by path, origin and class. */
+const canonicalLabelEntries = (
+  entries: readonly LabelMapEntry[],
+): LabelMapEntry[] =>
+  entries.map((entry) => ({
+    path: canonicalizeLogicalPath(entry.path),
+    label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
+    ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+    ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+  })).sort((left, right) => {
+    const leftKey = logicalPathToPointer(left.path);
+    const rightKey = logicalPathToPointer(right.path);
+    if (leftKey !== rightKey) {
+      return leftKey < rightKey ? -1 : 1;
+    }
+    const leftOrigin = left.origin ?? "";
+    const rightOrigin = right.origin ?? "";
+    if (leftOrigin !== rightOrigin) {
+      return leftOrigin < rightOrigin ? -1 : 1;
+    }
+    // Same (path, origin) can legitimately hold per-class entries (the C2
+    // persist split writes `value` and `shape` siblings) — order by class
+    // so canonicalization stays deterministic.
+    const leftObserves = left.observes ?? "";
+    const rightObserves = right.observes ?? "";
+    return leftObserves < rightObserves
+      ? -1
+      : leftObserves > rightObserves
+      ? 1
+      : 0;
+  });
 
 /** Canonicalizes policy records and hashes each tied sort key at most once. */
 const canonicalizeWritePolicyInputs = (

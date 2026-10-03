@@ -34,6 +34,7 @@ import {
   parseCfcLabelReference,
   registerCfcLabelDocument,
 } from "./label-documents.ts";
+import { isLabelMetadataTemplateEntry } from "./label-metadata-population.ts";
 import { confidentialityOnly, type IFCLabel } from "./label-view-core.ts";
 import { readConsumesEntry } from "./observation-classes.ts";
 import type {
@@ -284,10 +285,28 @@ const readStoredEnvelope = (
 // from. Content addressing makes a resolution permanent for the bytes it
 // was computed from — every referenced label verified against its id — so
 // the memo can only ever hold the one answer, and a failure never enters
-// it. Only the entries are memoized: the envelope around them is rebuilt
+// it. Only the label map is memoized: the envelope around it is rebuilt
 // per call from the stored envelope at hand, so a rewrite that shares the
-// `labelMap` subtree by reference cannot serve a stale `schemaHash`.
-const resolvedEntriesByLabelMap = new WeakMap<object, LabelMapEntry[]>();
+// `labelMap` subtree by reference cannot serve a stale `schemaHash`. A
+// version-1 map is memoized only once frozen, since nothing else fixes it.
+const decodedLabelMaps = new WeakMap<object, CfcMetadata["labelMap"]>();
+
+/**
+ * Decodes a stored label map's one list into the payload entries and the
+ * document-rooted label-metadata templates (spec §4.6.4), so that no lookup
+ * over `entries` can match a template. A list holding no template is kept
+ * as it stands.
+ */
+const decodeLabelMap = (
+  entries: LabelMapEntry[],
+): CfcMetadata["labelMap"] =>
+  entries.some(isLabelMetadataTemplateEntry)
+    ? {
+      version: 1,
+      entries: entries.filter((entry) => !isLabelMetadataTemplateEntry(entry)),
+      documentEntries: entries.filter(isLabelMetadataTemplateEntry),
+    }
+    : { version: 1, entries };
 
 /**
  * Helper for {@link resolveStoredCfcMetadata}, which produces the label a
@@ -380,34 +399,51 @@ const resolveStoredCfcMetadata = (
   stored: StoredCfcMetadata,
   policy: StoredCfcReadPolicy,
 ): CfcMetadata => {
-  if (stored.version === 1) return stored;
-  let entries = resolvedEntriesByLabelMap.get(stored.labelMap);
-  if (entries === undefined) {
-    entries = stored.labelMap.entries.map((entry) => ({
-      ...entry,
-      label: resolveStoredLabel(tx, space, entry, policy),
-    }));
-    resolvedEntriesByLabelMap.set(stored.labelMap, entries);
+  if (stored.version === 1) {
+    let labelMap = decodedLabelMaps.get(stored.labelMap);
+    if (labelMap === undefined) {
+      labelMap = decodeLabelMap(stored.labelMap.entries);
+      if (isDeepFrozen(stored.labelMap)) {
+        decodedLabelMaps.set(stored.labelMap, labelMap);
+      }
+    }
+    return labelMap.documentEntries === undefined
+      ? stored
+      : { version: 1, schemaHash: stored.schemaHash, labelMap };
+  }
+  let labelMap = decodedLabelMaps.get(stored.labelMap);
+  if (labelMap === undefined) {
+    labelMap = decodeLabelMap(
+      stored.labelMap.entries.map((entry) => ({
+        ...entry,
+        label: resolveStoredLabel(tx, space, entry, policy),
+      })),
+    );
+    decodedLabelMaps.set(stored.labelMap, labelMap);
   }
   return {
     version: stored.version,
     schemaHash: stored.schemaHash,
-    labelMap: { version: 1, entries },
+    labelMap,
   };
 };
 
 /**
- * The path and origin of each entry a stored envelope holds, read without
- * resolving any label: both are inline in every version, so a consumer that
- * asks only where policy applies pays no label-document read. Fails closed
- * exactly as the resolving reader does, and returns `undefined` for a
- * document storing no envelope.
+ * The path and origin of each payload entry a stored envelope holds, read
+ * without resolving any label: both are inline in every version, so a
+ * consumer that asks only where policy applies pays no label-document read.
+ * The document-rooted label-metadata templates are left out, as decoding
+ * leaves them out of a resolved envelope's entries. Fails closed exactly as
+ * the resolving reader does, and returns `undefined` for a document storing
+ * no envelope.
  */
 const readStoredCfcLabelPaths = (
   tx: IExtendedStorageTransaction,
   target: StoredCfcTarget,
 ): readonly Pick<StoredLabelMapEntry, "path" | "origin">[] | undefined =>
-  readStoredEnvelope(tx, target, DEPENDENT_READ)?.labelMap.entries;
+  readStoredEnvelope(tx, target, DEPENDENT_READ)?.labelMap.entries.filter(
+    (entry) => !isLabelMetadataTemplateEntry(entry),
+  );
 
 /**
  * The resolved envelope stored for `target`, or `undefined` when the
@@ -511,6 +547,7 @@ export const readStoredCfcLabelsForReader = (
   if (broader.length === 0) return own;
   return {
     labelMap: {
+      ...own?.labelMap,
       version: 1,
       entries: [...(own?.labelMap.entries ?? []), ...broader],
     },
