@@ -26,6 +26,13 @@ const OPTIONS: Option[] = Array.from({ length: 14 }, (_, index) => ({
 
 const NAMES = ["Alex", "Blair", "Casey", "Drew", "Eli", "Fran", "Gale", "Hal"];
 
+/**
+ * The instant the poll reads as now, and every seeded vote's stamp: noon on a
+ * fixed local day, so what the poll counts as today's votes does not depend on
+ * where the run falls against a day boundary.
+ */
+const NOW = new Date(2026, 0, 1, 12).getTime();
+
 export default pattern(() => {
   const people = NAMES.map((name) => ({
     name,
@@ -33,7 +40,12 @@ export default pattern(() => {
   }));
   const users = Writable.of<User[]>([]);
   const votes = Writable.of<Vote[]>([]);
-  const poll = CozyPoll({ options: OPTIONS, users, votes });
+  const poll = CozyPoll({
+    options: OPTIONS,
+    users,
+    votes,
+    clock: { at: NOW },
+  });
 
   const seed = action(() => {
     users.set(people.map(({ name, profile }) => ({
@@ -47,7 +59,7 @@ export default pattern(() => {
       const key = voteKeyFor(voter, optionId);
       if (key === undefined) throw new Error("Fixture voter has no identity");
       const vote = votes.elementById(key);
-      vote.set({ optionId, voter, voteType: "green", castAt: Date.now() });
+      vote.set({ optionId, voter, voteType: "green", castAt: NOW });
       votes.addUnique(vote);
     });
   });
