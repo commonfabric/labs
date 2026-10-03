@@ -22,10 +22,11 @@ interface LinkedViewOutput {
 /**
  * A view showing a marker of its own and, beneath it, the piece its input
  * links to, which a test places in a space the viewer may not be granted. The
- * piece is a child of the view rather than the cell of a `cf-render`, so that
- * while its space refuses the viewer the renderer shows the access placeholder
- * in its place: a `cf-render` whose cell cannot be read is not bound, and
- * shows nothing.
+ * piece is a cell child of the view, which the renderer replaces with the
+ * access placeholder while the piece's space refuses the viewer. As the cell of
+ * a `cf-render` it would show nothing then: a `$` binding is withheld while a
+ * space its read reaches is out of reach
+ * (`docs/specs/cfc-render-boundary-composition.md`).
  */
 export default pattern<LinkedViewInput, LinkedViewOutput>(({ shown }) => ({
   [NAME]: "Linked View Piece",
