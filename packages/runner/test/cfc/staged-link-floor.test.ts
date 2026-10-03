@@ -23,8 +23,11 @@ import type { Cell } from "../../src/cell.ts";
 import type { IFCLabel } from "../../src/cfc/mod.ts";
 import { recordCapturedArgumentFields } from "../../src/cfc/reference-initialization.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { txToReactivityLog } from "../../src/scheduler/reactivity.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
+import { isInternalVerifierRead } from "../../src/storage/reactivity-log.ts";
+import { getTransactionReadActivities } from "../../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("cfc-staged-link-floor");
 const space = signer.did();
@@ -130,15 +133,18 @@ describe("staged-link-floor", () => {
   }
 
   /**
-   * Stages a capture of `path` of the document `id` at `params/<at>` of a new
-   * argument, as a list builtin stages one, and returns the commit's error.
+   * A transaction, prepared for commit, that stages a capture of `path` of the
+   * document `id` at `params/<at>` of a new argument, as a list builtin stages
+   * one, after making the writes `before` makes.
    */
-  async function stage(
+  function stagedTx(
     at: "record" | "secret",
     id: string,
     path: readonly string[],
-  ): Promise<string | undefined> {
+    before: (tx: IExtendedStorageTransaction) => void = () => {},
+  ): IExtendedStorageTransaction {
     const tx = runtime.edit();
+    before(tx);
     const argument = runtime.getCell(
       space,
       `argument-${at}-${id}-${path.join("/")}`,
@@ -152,7 +158,17 @@ describe("staged-link-floor", () => {
       "params",
     ]);
     runtime.prepareTxForCommit(tx);
-    return (await tx.commit()).error?.message;
+    return tx;
+  }
+
+  /** Commits {@link stagedTx}'s transaction, and returns the commit's error. */
+  async function stage(
+    at: "record" | "secret",
+    id: string,
+    path: readonly string[],
+    before?: (tx: IExtendedStorageTransaction) => void,
+  ): Promise<string | undefined> {
+    return (await stagedTx(at, id, path, before).commit()).error?.message;
   }
 
   const refusedAt = (at: string) =>
@@ -198,6 +214,48 @@ describe("staged-link-floor", () => {
     expect(await stage("record", "to-absent", [])).toContain(
       refusedAt("record/secret"),
     );
+  });
+
+  it("depends, for scheduling, on a document a stored link leads into that this replica does not hold", async () => {
+    // A run the floor refused for want of the document runs again when it
+    // lands.
+    await seed("to-absent", { secret: linkTo("absent", ["secret"]) });
+    const tx = stagedTx("secret", "to-absent", ["secret"]);
+    const absent = cellAt(tx, "absent", []).getAsNormalizedFullLink().id;
+    const log = txToReactivityLog(tx);
+
+    expect([...log.reads, ...log.shallowReads].map((read) => read.id))
+      .toContain(absent);
+    tx.abort();
+  });
+
+  it("reads the value of each document the walk crosses only for its shape", async () => {
+    // A verifier read of a value is a commit-time dependency on it. The floor
+    // depends on where the value lives and whether it is there, not on what
+    // it holds, so a write elsewhere in these documents does not conflict.
+    await seed("e", { secret: "ok", other: "x" }, { integrity: [ADMIN] }, [
+      "secret",
+    ]);
+    await seed("to-e", { secret: linkTo("e", ["secret"]), other: "y" });
+    const tx = runtime.edit();
+    const crossed = new Set(
+      ["e", "to-e"].map((id) =>
+        cellAt(tx, id, []).getAsNormalizedFullLink().id
+      ),
+    );
+    tx.abort();
+
+    for (
+      const [at, path] of [["secret", ["secret"]], ["record", []]] as const
+    ) {
+      const staged = stagedTx(at, "to-e", path);
+      const deep = [...getTransactionReadActivities(staged)].filter((read) =>
+        crossed.has(read.id) && isInternalVerifierRead(read.meta) &&
+        read.path[0] === "value" && read.nonRecursive !== true
+      );
+      expect(deep.map((read) => read.path)).toEqual([]);
+      expect((await staged.commit()).error).toBeUndefined();
+    }
   });
 
   for (const crossDocument of [false, true]) {

@@ -109,9 +109,12 @@ link stored before the transaction, the floor uses the label of the document
 holding the value, at the value's own position, and only that label. A stored
 link's label describes whatever its target held when the link was written, so
 it is no evidence about the value there now. Where the walk to the value
-crosses a stored link and cannot finish, as a chain whose path grows on every
-hop cannot, or a stored link leads into a space-scoped document the replica
-does not hold, nothing credits the floor: what is there is unknown, not absent.
+cannot finish, as a chain whose path grows on every hop cannot, or a stored
+link leads into a space-scoped document the replica does not hold, nothing
+credits the floor: what is there is unknown, not absent. The walk records a
+scheduling dependency on such a document, so a refused run runs again when it
+arrives. It reads each position it passes for its shape alone, so a write
+within a value the floor does not read is no conflict for the commit.
 
 When deriving a pending reference source, schema labels are minted at their
 declaration paths, with wildcard segments bound to the projected source path.

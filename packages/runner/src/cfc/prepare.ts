@@ -251,6 +251,15 @@ const LINK_SOURCE_SCHEMA_META = {
   ...internalVerifierRead,
 };
 
+// The floor's probe of a document a stored link leads into and the replica
+// does not hold (`documentIsMissing`), which reactivity SEES for the reason
+// `LINK_SOURCE_SCHEMA_META` does: the floor refuses until the document
+// arrives, the commit boundary ends the retries, and the run is re-triggered
+// when the document lands.
+const MISSING_DOCUMENT_PROBE_META = {
+  ...internalVerifierRead,
+};
+
 // A runtime-minted `*`-path class template (template-population §3.1): the
 // membership/slot twins minted beside the container-anchored structure
 // stamps (and any future derived-origin population entries of the same
@@ -5692,8 +5701,8 @@ const previousWriteValueForTarget = (
 
 /**
  * Where {@link resolveValueThroughLinks} finds the value at an address.
- * `stored` says whether the walk followed a link this transaction did not
- * write.
+ * `stored` says whether the walk to a held value followed a link this
+ * transaction did not write.
  */
 type LinkedValue =
   | {
@@ -5713,7 +5722,6 @@ type LinkedValue =
      * the value there is unknown rather than absent, as it is to a reader.
      */
     readonly kind: "unfinished";
-    readonly stored: boolean;
   };
 
 /**
@@ -5744,22 +5752,26 @@ const resolveValueThroughLinks = (
   // links followed bounds the walk.
   let hops = 0;
   while (true) {
+    // Each read is a commit-time dependency. The walk decides on where the
+    // value lives and whether it is there, not on what it holds, so it reads
+    // each position for its shape: a write at or above the position, or one
+    // adding or removing a key there, conflicts; a write within the value
+    // does not.
     const value = tx.readValueOrThrow({ ...document, path }, {
       meta: INTERNAL_VERIFIER_META,
+      nonRecursive: true,
     });
     if (
       enteredByStoredLink && value === undefined &&
       document.scope === "space" && documentIsMissing(tx, document)
     ) {
-      return { kind: "unfinished", stored };
+      return { kind: "unfinished" };
     }
     enteredByStoredLink = false;
     if (isPrimitiveCellLink(value)) {
       const storedHere = !writtenInTransaction(tx, document, path);
       stored ||= storedHere;
-      if (++hops > MAX_PATH_RESOLUTION_LENGTH) {
-        return { kind: "unfinished", stored };
-      }
+      if (++hops > MAX_PATH_RESOLUTION_LENGTH) return { kind: "unfinished" };
       const next = parseLink(value, { ...document, path });
       document = { space: next.space, id: next.id, scope: next.scope };
       path = [];
@@ -5781,7 +5793,11 @@ const resolveValueThroughLinks = (
   }
 };
 
-/** Whether this transaction reads no document at all at `document`. */
+/**
+ * Whether this transaction reads no document at all at `document`. The read
+ * is visible to scheduling (`MISSING_DOCUMENT_PROBE_META`), so a run that
+ * found the document missing runs again when it arrives.
+ */
 const documentIsMissing = (
   tx: IExtendedStorageTransaction,
   document: {
@@ -5791,7 +5807,8 @@ const documentIsMissing = (
   },
 ): boolean => {
   const read = tx.read(toMemorySpaceAddress({ ...document, path: [] }), {
-    meta: INTERNAL_VERIFIER_META,
+    meta: MISSING_DOCUMENT_PROBE_META,
+    nonRecursive: true,
   });
   return read.error !== undefined && "path" in read.error &&
     read.error.name === "NotFoundError" && read.error.path.length === 0;
@@ -9990,8 +10007,8 @@ const attemptedWritePathsUnder = (
  * stored before this transaction, the credit is the label of the document
  * holding the value, at the value's own position, and that label alone: a
  * stored link's label describes whatever its target held when the link was
- * written, which says nothing of the value there now. A walk through such a
- * link that cannot finish credits nothing (§8.2.6, §8.2.7).
+ * written, which says nothing of the value there now. A walk that cannot
+ * finish credits nothing (§8.2.6, §8.2.7): no reader finds a value there.
  */
 const linkedValueCredit = function* (
   tx: IExtendedStorageTransaction,
@@ -10012,7 +10029,7 @@ const linkedValueCredit = function* (
         ? linkLabels.labelAt({ ...input, source: resolved.held }, [])
         : chain()))?.integrity ?? [];
     case "unfinished":
-      return resolved.stored ? [] : (yield* chain())?.integrity ?? [];
+      return [];
   }
 };
 
