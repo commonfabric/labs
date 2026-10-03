@@ -29,6 +29,12 @@ restart retains the selected custom root. A linked root at a different address
 is a conflict, rather than permission to replace it. Without a reservation the
 ordinary home/default-app selection applies.
 
+A reservation may instead name a cause and nothing else. That one leaves
+placing the root to the space's creator: the serving loop creates nothing for
+it, and resolves the root once the creator has placed it at the cause-derived
+address and linked `defaultPattern`. A linked root at a different address is
+the same conflict.
+
 Only deployment-local system sources are accepted by this bootstrap seam. The
 source path and attached test paths cannot traverse directories or specify an
 external origin. A caller preparing custom application sources should deploy

@@ -429,7 +429,12 @@ export type SpaceServerOptions = {
    * polled; a test that has to act once an attempt has landed waits on
    * this instead. */
   onRootEnsure?: (
-    outcome: "created" | "resolved" | "skipped-no-owner" | "failed",
+    outcome:
+      | "created"
+      | "resolved"
+      | "awaiting-creator"
+      | "skipped-no-owner"
+      | "failed",
   ) => void;
 };
 
@@ -5768,7 +5773,9 @@ export class SpaceServer implements TransactionSealDestination {
       stats.runs += 1;
       if (result.outcome === "created") stats.created += 1;
       this.#options.onRootEnsure?.(
-        result.outcome === "created" ? "created" : "resolved",
+        result.outcome === "created" || result.outcome === "awaiting-creator"
+          ? result.outcome
+          : "resolved",
       );
       logger.info?.("space-root-ensure", () => [
         `space ${space}: root ensure ${result.outcome} ` +

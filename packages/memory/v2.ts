@@ -1061,9 +1061,15 @@ export type CommitPrecondition =
     valueHash: string | null;
   };
 
-/** A generic root reserved atomically with a fresh space's ACL. */
+/**
+ * A generic root reserved atomically with a fresh space's ACL. The root lives
+ * at the address `cause` derives in the space. With a `source`, whoever ensures
+ * the space's root creates it from that deployment-local `system:` source.
+ * Without one, the space's creator places the root there itself, and
+ * `sourceRoots` and `argument` are absent too.
+ */
 export type GenesisRoot = {
-  source: string;
+  source?: string;
   sourceRoots?: string[];
   cause: string;
   argument?: Record<string, FabricValue>;

@@ -65,6 +65,18 @@ describe("v2-genesis-root", () => {
             ...commit,
             genesisRoot: { ...root, sourceRoots: ["system:../outside.tsx"] },
           },
+          {
+            ...commit,
+            genesisRoot: { cause: "creator-root", argument: { title: "x" } },
+          },
+          {
+            ...commit,
+            genesisRoot: {
+              cause: "creator-root",
+              sourceRoots: ["system:loom/main.test.tsx"],
+            },
+          },
+          { ...commit, genesisRoot: { cause: "" } },
         ]
       ) {
         engine.database.prepare(
@@ -74,6 +86,33 @@ describe("v2-genesis-root", () => {
           "Invalid genesis receipt",
         );
       }
+    } finally {
+      Engine.close(engine);
+    }
+  });
+
+  it("reads back a creator-placed reservation, which names a cause and no source", async () => {
+    const engine = await Engine.open({
+      url: new URL("memory://creator-placed-genesis-receipt"),
+    });
+    const creatorRoot = { cause: "in-space-root" };
+    try {
+      Engine.applyCommit(engine, {
+        sessionId: "bootstrap",
+        space,
+        principal: space,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          genesisRoot: creatorRoot,
+          operations: [{
+            op: "set",
+            id: `of:${space}`,
+            value: { value: { ["did:key:manager"]: "OWNER" } },
+          }],
+        },
+      });
+      expect(readGenesisRoot(engine)).toEqual(creatorRoot);
     } finally {
       Engine.close(engine);
     }

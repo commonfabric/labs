@@ -177,7 +177,7 @@ export type SpaceRootCreationHooks = {
 export async function createSpaceRootIfAbsent(
   runtime: Runtime,
   space: MemorySpace,
-  config: GenesisRoot,
+  config: GenesisRoot & { source: string },
   hooks: SpaceRootCreationHooks = {},
 ): Promise<{ createdByThisCall: boolean; error?: CommitError }> {
   const timePhase = hooks.timePhase ?? runPhase;
@@ -284,9 +284,14 @@ export async function resolveSpaceRootPattern(
 
 export type EnsureSpaceRootResult = {
   /** How existence was satisfied: the fast path resolved a persisted
-   * root; this call created it; or this call's creation lost the OCC
-   * race and resolved the winner's root. */
-  outcome: "resolved-existing" | "created" | "raced-existing";
+   * root; this call created it; this call's creation lost the OCC race
+   * and resolved the winner's root; or the genesis reservation leaves the
+   * root to the space's creator, who has not placed it yet. */
+  outcome:
+    | "resolved-existing"
+    | "created"
+    | "raced-existing"
+    | "awaiting-creator";
 };
 
 /**
@@ -299,7 +304,9 @@ export type EnsureSpaceRootResult = {
  * A persisted root is resolved and left alone when its address matches any
  * supplied genesis reservation; a different address is a conflict. The memory
  * session separately authenticates the complete immutable creation intent.
- * Following its origin is the
+ * A reservation naming no source leaves creating the root to the space's
+ * creator, so with no root linked this creates nothing. Following its origin
+ * is the
  * ordinary piece reconciliation, which belongs to the user who opens the
  * piece, not to a tenure that opens nothing.
  *
@@ -335,7 +342,13 @@ export async function ensureSpaceRootPattern(
     return { outcome: "resolved-existing" };
   }
 
-  if (!options.isHomeSpace && options.genesisRoot === undefined) {
+  const { genesisRoot } = options;
+  const source = genesisRoot?.source;
+  if (genesisRoot !== undefined && source === undefined) {
+    return { outcome: "awaiting-creator" };
+  }
+
+  if (!options.isHomeSpace && genesisRoot === undefined) {
     // The custom `defaultAppUrl` interim (design §3, open question 3 —
     // UNRULED): a configured custom root source lives in the OWNER's
     // home space, and reading it server-side is the unruled owner-scoped
@@ -353,7 +366,9 @@ export async function ensureSpaceRootPattern(
   const created = await createSpaceRootIfAbsent(
     runtime,
     space,
-    options.genesisRoot ?? spaceRootPatternConfig(options.isHomeSpace),
+    genesisRoot === undefined || source === undefined
+      ? spaceRootPatternConfig(options.isHomeSpace)
+      : { ...genesisRoot, source },
     {
       ...(options.stampCreationTx !== undefined
         ? { stampCreationTx: options.stampCreationTx }
