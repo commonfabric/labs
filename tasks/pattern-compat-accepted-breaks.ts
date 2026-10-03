@@ -955,4 +955,53 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
         "yeah i think we should do 1 now and follow up with 2. please proceed as you suggest, including with the one upgrade test",
     },
   },
+  {
+    // A THIRD entry for home, naming only the baselines recorded under or
+    // after the entry above; the other 23 report the same path and stay with
+    // the two entries that name them, keeping the pairs disjoint.
+    //
+    // Home's default profile moves from a link stored at the root of its own
+    // cell to a link under `profile` in a slot cell (`DefaultProfileSlot`),
+    // because a handle to a cell whose root holds a link denotes the linked
+    // cell and so the picker could not re-point it. The slot is a fresh cell;
+    // the cell the default was kept in stays, as `legacyDefaultProfile`, and
+    // is the default until one is chosen in the slot.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20261001T190916Z-5k9_Adl37zMhsNgG",
+      "20261001T210138Z-P3RELdPaFKfIXROk",
+      "20261002T164437Z-Ppiw9bONPOzUfI_d",
+      "20261003T000427Z-oEfsHL584h6qI8sa",
+      "20261003T003223Z-fDj2SHhwNCXbd-O3",
+    ],
+    paths: ["result.defaultProfile"],
+    reason:
+      "home's default profile moves under `profile` in a fresh slot cell so the picker can re-point it, and a default chosen before stays the default until one is chosen in the slot",
+    record: "docs/history/home-default-profile-slot-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Gideon",
+      on: "2026-10-01",
+      reason:
+        'preserve existing defaults: "i feel like we need to somehow preserve the default profile across this migration", then of the design that keeps the previous cell as the default until the slot holds one, "that sounds good to me. let\'s proceed as you suggest for 8373"',
+    },
+  },
+  {
+    // A THIRD entry for the picker, naming only baselines the two entries
+    // above leave out. The picker's `defaultProfile` argument is home's slot,
+    // which holds the default's link under `profile`, rather than the link.
+    pattern: "system/profile-picker.tsx",
+    baselines: [
+      "20260918T215200Z-jd2IozSP5n9l8UnE",
+      "20260922T062506Z-a2dPgr0XCKC82UO6",
+      "20260922T072811Z-s4HWEqeDMVTSnsl-",
+      "20260922T075652Z-qC_3l84MczfDgjvh",
+      "20260923T173753Z-1_LxUmwIZJz7WCut",
+      "20260923T205258Z-B19D5XwDS0LdQdeY",
+      "20261003T000427Z-YEfgzmp3UjJCJFgP",
+    ],
+    paths: ["argument.defaultProfile"],
+    reason:
+      "the picker's defaultProfile argument is home's slot holding the default's link under `profile`, rather than the link",
+    record: "docs/history/home-default-profile-slot-break.md",
+  },
 ];
