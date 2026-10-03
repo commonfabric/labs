@@ -50,6 +50,10 @@ import {
   PieceSourceChangedError,
 } from "./piece-controller.ts";
 import type { PiecesController } from "./pieces-controller.ts";
+import {
+  type PieceRegistrationEvent,
+  pieceRegistrationEvent,
+} from "./piece-registration.ts";
 import { setCfcTrustSnapshot } from "@commonfabric/runner/cfc/trust-authority";
 
 /** A content-addressed pattern pointer: the closure and the export run. */
@@ -402,7 +406,7 @@ export interface ServedRegistrationPreparation {
   delivery?: {
     root: NormalizedFullLink;
     stream: NormalizedFullLink;
-    piece: ReturnType<Cell<unknown>["getAsLink"]>;
+    payload: PieceRegistrationEvent;
     eventId: string;
     deliveryKey: string;
   };
@@ -520,7 +524,7 @@ export async function prepareServedRegistration(
       delivery: {
         root: root.getAsNormalizedFullLink(),
         stream,
-        piece: piece.getAsLink(),
+        payload: pieceRegistrationEvent(piece, actingUser),
         eventId,
         deliveryKey,
       },
@@ -560,7 +564,7 @@ export async function finishServedRegistration(
       throw new Error("Registration has no delivery plan");
     }
     const root = runtime.getCellFromLink(prepared.delivery.root);
-    const piece = runtime.getCellFromLink(prepared.delivery.piece);
+    const piece = runtime.getCellFromLink(prepared.delivery.payload.piece);
     const registry = root.asSchema({
       type: "object",
       properties: { pieceRegistry: pieceListSchema },
@@ -653,7 +657,7 @@ export async function completeServedRegistration(
       input: {
         stream: NormalizedFullLink;
         eventId: string;
-        piece: Cell<unknown>;
+        payload: PieceRegistrationEvent;
       },
     ) => Promise<void>;
   } = {},
@@ -672,8 +676,7 @@ export async function completeServedRegistration(
   if (prepared.delivery === undefined) {
     return finishServedRegistration(pieces, prepared, actingUser, {});
   }
-  const { stream, eventId, deliveryKey } = prepared.delivery;
-  const piece = runtime.getCellFromLink(prepared.delivery.piece);
+  const { stream, eventId, deliveryKey, payload } = prepared.delivery;
   let terminal = false;
   let observedEntries: Cell<StreamEventsDocValue> | undefined;
   let observedEventId: string | undefined;
@@ -724,7 +727,7 @@ export async function completeServedRegistration(
           });
         });
         await Promise.all([
-          options.append({ stream, eventId, piece }),
+          options.append({ stream, eventId, payload }),
           consequence,
         ]);
       } finally {
@@ -738,7 +741,7 @@ export async function completeServedRegistration(
         throw new Error("The default pattern has no addPiece handler");
       }
       await new Promise<void>((resolve, reject) => {
-        sendEvent(handler, { piece }, (tx) => {
+        sendEvent(handler, payload, (tx) => {
           const status = tx.status();
           if (status.status === "error") {
             reject(new Error(status.error.message));

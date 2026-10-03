@@ -113,6 +113,7 @@ import {
   PieceInputPathError,
 } from "./piece-input-path.ts";
 import { reconcilePieceSource } from "./piece-origin.ts";
+import { pieceRegistrationEvent } from "./piece-registration.ts";
 import { compileProgram } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
@@ -760,6 +761,7 @@ export class PiecesController<T = unknown> {
     });
   }
 
+  /** Registers pieces under the session identity's `addedBy` claim. */
   async add(newPieces: Cell<unknown>[]): Promise<void> {
     const defaultPattern = await timePiecePhase(
       "add.getDefaultPattern",
@@ -803,22 +805,26 @@ export class PiecesController<T = unknown> {
           "add.send",
           () =>
             new Promise<void>((resolve, reject) => {
-              sendEvent(addPieceHandler, { piece }, (tx) => {
-                const txStatus = tx.status();
-                if (txStatus.status === "error") {
-                  console.error(
-                    "Piece registration failed: addPiece transaction error:",
-                    txStatus.error,
-                  );
-                  reject(
-                    new Error(
-                      "Piece registration failed: addPiece transaction aborted after retries",
-                    ),
-                  );
-                } else {
-                  resolve();
-                }
-              });
+              sendEvent(
+                addPieceHandler,
+                pieceRegistrationEvent(piece, this.#session.as.did()),
+                (tx) => {
+                  const txStatus = tx.status();
+                  if (txStatus.status === "error") {
+                    console.error(
+                      "Piece registration failed: addPiece transaction error:",
+                      txStatus.error,
+                    );
+                    reject(
+                      new Error(
+                        "Piece registration failed: addPiece transaction aborted after retries",
+                      ),
+                    );
+                  } else {
+                    resolve();
+                  }
+                },
+              );
             }),
         );
       }

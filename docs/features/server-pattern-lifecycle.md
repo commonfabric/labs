@@ -134,6 +134,13 @@ deterministic piece identity, original pattern, and slug. A legitimate later
 source update can change the piece's current pattern while registration remains
 retryable.
 
+Client and hosted registration use the same `pieceRegistrationEvent` payload:
+the complete piece link and the requesting identity's `addedBy` DID. Hosted
+preparation constructs that payload once; client-event and delegated delivery
+forward it unchanged. A Loom root records this as the panel's adder claim, so
+registration does not depend on the caller having a linked profile. Existing
+registration occurrences retain their attribution when creation is retried.
+
 With `register: true`, the route prepares the default pattern's `addPiece`
 delivery and retains its attempt in a serving wave. It then invokes the stream
 through trusted ingress, retaining the authenticated caller's identity. The

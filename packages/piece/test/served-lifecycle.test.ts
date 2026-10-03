@@ -11,7 +11,6 @@ import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
-  type Cell,
   entityIdFrom,
   getPatternIdentityRef,
   getPieceSourceRevisions,
@@ -27,6 +26,7 @@ import {
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { loadVerifiedSourceClosure } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import type { PieceRegistrationEvent } from "../src/ops/piece-registration.ts";
 import { pieceId } from "../src/piece-id.ts";
 import { resolveSlugTargetCell } from "../src/slugs.ts";
 import {
@@ -370,10 +370,10 @@ export default pattern(() => {
       const events: string[] = [];
       const options = {
         append: async (
-          { stream, eventId, piece }: {
+          { stream, eventId, payload }: {
             stream: NormalizedFullLink;
             eventId: string;
-            piece: Cell<unknown>;
+            payload: PieceRegistrationEvent;
           },
         ) => {
           events.push(eventId);
@@ -382,7 +382,7 @@ export default pattern(() => {
             targetStream: streamEntriesDocId(stream),
             targetStreamLink: stream,
             eventId,
-            payload: { piece: piece.getAsLink() },
+            payload,
             actingPrincipal: aliceSigner.did(),
             actingSession: aliceSigner.did(),
             capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
@@ -443,10 +443,10 @@ export default pattern(() => {
       const events: string[] = [];
       const options = {
         append: async (
-          { stream, eventId, piece }: {
+          { stream, eventId, payload }: {
             stream: NormalizedFullLink;
             eventId: string;
-            piece: Cell<unknown>;
+            payload: PieceRegistrationEvent;
           },
         ) => {
           events.push(eventId);
@@ -455,7 +455,7 @@ export default pattern(() => {
             targetStream: streamEntriesDocId(stream),
             targetStreamLink: stream,
             eventId,
-            payload: { piece: piece.getAsLink() },
+            payload,
             actingPrincipal: aliceSigner.did(),
             actingSession: aliceSigner.did(),
             capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
@@ -528,15 +528,16 @@ export default pattern(() => {
         const rootReceipt = await instantiate({
           program: programOf(`
 import { computed, handler, pattern, Writable } from "commonfabric";
-const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
-  ({piece}, {panels}) => { panels.addUnique(piece); },
+const addPiece = handler<{piece: Writable<unknown>, addedBy?: string}, {panels: Writable<Writable<unknown>[]>, adder: Writable<string>}>(
+  ({piece, addedBy}, {panels, adder}) => { panels.addUnique(piece); adder.set(addedBy ?? ""); },
 );
 const removePiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
   ({piece}, {panels}) => { panels.set(panels.get().filter(member => !member.equals(piece))); },
 );
 export default pattern(() => {
   const panels = new Writable<Writable<unknown>[]>([]);
-  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}), removePiece: removePiece({panels}) };
+  const adder = new Writable<string>("");
+  return { panels, adder, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels, adder}), removePiece: removePiece({panels}) };
 });
 `),
         });
@@ -552,10 +553,10 @@ export default pattern(() => {
         const options = delegated
           ? {
             append: async (
-              { stream, eventId, piece }: {
+              { stream, eventId, payload }: {
                 stream: NormalizedFullLink;
                 eventId: string;
-                piece: Cell<unknown>;
+                payload: PieceRegistrationEvent;
               },
             ) => {
               appends++;
@@ -564,7 +565,7 @@ export default pattern(() => {
                 targetStream: streamEntriesDocId(stream),
                 targetStreamLink: stream,
                 eventId,
-                payload: { piece: piece.getAsLink() },
+                payload,
                 actingPrincipal: aliceSigner.did(),
                 actingSession: aliceSigner.did(),
                 capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
@@ -625,6 +626,12 @@ export default pattern(() => {
             ),
           ),
         ).toBe(true);
+        expect(
+          await root.getCell().asSchema({
+            type: "object",
+            properties: { adder: { type: "string" } },
+          }).key("adder").pull(),
+        ).toBe(aliceSigner.did());
         expect(await pieces.remove(created.pieceId)).toBe(true);
         await panels.pull();
         expect(panels.get().length).toBe(0);

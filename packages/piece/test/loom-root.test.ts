@@ -280,6 +280,18 @@ describe("loom-root", () => {
     await manager.close();
   });
 
+  it("attributes registered panels to the caller's identity", async () => {
+    const target = runtime.getCell(pieces.getSpace(), "registered-panel");
+    await pieces.add([target]);
+    const panels = await root.asSchema(rootSchema).key("panels").pull();
+    expect(panels.length).toBe(1);
+    const panel = await panels[0].asSchema({
+      type: "object",
+      properties: { addedBy: { type: "string" } },
+    }).pull();
+    expect(panel.addedBy).toBe(signer.did());
+  });
+
   it("retains equal document IDs in different spaces and preserves a foreign scope through duplication", async () => {
     const local = runtime.getCell(pieces.getSpace(), { same: "document" });
     const foreign = runtime.getCell(
