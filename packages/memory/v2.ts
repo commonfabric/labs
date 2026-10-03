@@ -621,6 +621,21 @@ export type EventAppendDecl = {
  */
 export const SERVER_EXECUTION_EFFECTS_DOC_ID = "of:server-execution-effects";
 
+/**
+ * Whether `id` names a document the runtime keeps as a channel's own state,
+ * which that channel reads raw and decides entry by entry: the session
+ * effects document, whose entries are a server's intents for its session,
+ * each decided by the client's effects channel on the labels it carries.
+ *
+ * The entries are written by an intent's own commit and carry no labels of
+ * their own, so a reader's measure of them would admit what the channel
+ * withholds. A host's read or render of such a document is therefore
+ * answered as unreadable, by the reader's consumed measure and by the
+ * display fit's view of a cell's own labels.
+ */
+export const isChannelStateDocument = (id: string): boolean =>
+  id === SERVER_EXECUTION_EFFECTS_DOC_ID;
+
 /** The navigation target an intent carries (builtins.md §4): an entity
  * link. `space` is absent for a target within the computing space (the
  * common case). A cross-space TARGET is legal — LT3 defers the

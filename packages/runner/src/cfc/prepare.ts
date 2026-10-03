@@ -40,6 +40,7 @@ import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-pri
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
   type DocumentPath,
+  isChannelStateDocument,
   type NonDocumentPath,
   STREAM_ENTRIES_DOC_PREFIX,
   toDocumentPath,
@@ -73,7 +74,6 @@ import {
   registerSchemaDocument,
 } from "../schema-registry.ts";
 import { storedLabelMapEntries } from "./label-documents.ts";
-import { isChannelStateDocument } from "./channel-state.ts";
 import {
   readBroaderReaderRestrictions,
   readStoredCfcMetadata,

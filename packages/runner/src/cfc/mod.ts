@@ -436,4 +436,4 @@ export {
   renderCfcAtom,
 } from "./refusal-detail.ts";
 
-export { isChannelStateDocument } from "./channel-state.ts";
+export { isChannelStateDocument } from "@commonfabric/memory/v2";
