@@ -1622,8 +1622,12 @@ export class RuntimeProcessor {
   async #settledGet(request: CellGetRequest): Promise<CellGetResponse> {
     const answer = this.handleCellGet(request);
     if (answer.refused === undefined) return answer;
+    // A metadata field is decided on its document's root.
     const settled = await this.#hostReadGate.settle(
       getCell(this.#runtime, request.cell),
+      ...(request.meta === undefined
+        ? []
+        : [getCell(this.#runtime, { ...request.cell, path: [] })]),
     );
     return settled ? this.handleCellGet(request) : answer;
   }
@@ -1979,6 +1983,12 @@ export class RuntimeProcessor {
     session?.subscriptions.add(request.subscriptionId);
     let cancel: Cancel;
     try {
+      // Each update is decided as it arrives, with no wait of its own, so
+      // what those decisions consult is loaded before the first. Held as the
+      // subscription is installed, so an unsubscribe arriving meanwhile is
+      // seen below.
+      await this.#hostReadGate.hold(named);
+      await this.#hostReadGate.hold(field);
       cancel = await capability.subscribeOperationField({
         ...operationFieldAddress(field),
         ...(request.after === undefined ? {} : { after: request.after }),
@@ -2996,7 +3006,7 @@ export class RuntimeProcessor {
     );
     // Synced first, so that the labels it is decided on are the document's.
     await cell.sync();
-    return this.#hostReadGate.slug(cell);
+    return await this.#hostReadGate.slug(cell);
   }
 
   /**

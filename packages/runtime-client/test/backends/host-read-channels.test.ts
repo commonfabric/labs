@@ -28,6 +28,7 @@ import {
   type RuntimeTelemetryMarkerResult,
   slugIdForSpace,
 } from "@commonfabric/runner";
+import type { SpaceMembershipProvider } from "@commonfabric/runner/cfc";
 import { stringSchema } from "@commonfabric/runner/schemas";
 import {
   EmulatedStorageManager,
@@ -407,10 +408,10 @@ describe("HostReadGate, for what crosses beside a value", () => {
     it("refuses a visitor a refused document's slug, and returns its owner the slug", async () => {
       await using docs = await shelf();
 
-      expect(gateFor(docs.runtime, visitor).slug(docs.contacts)).toEqual({
+      expect(await gateFor(docs.runtime, visitor).slug(docs.contacts)).toEqual({
         refused: { refusedBy: "display-ceiling" },
       });
-      expect(gateFor(docs.runtime, owner).slug(docs.contacts)).toEqual({
+      expect(await gateFor(docs.runtime, owner).slug(docs.contacts)).toEqual({
         slug: "contacts-slug",
       });
     });
@@ -604,7 +605,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
         };
         const unloaded = () => reader.getCell(space, "unloaded");
 
-        const slug = gate.slug(unloaded());
+        const slug = await gate.slug(unloaded());
         const metadata = gate.metadataRefusal(unloaded());
         const fromCell = await gate.fromCell(unloaded(), build);
         const fromMetadata = await gate.fromMetadata(unloaded(), build);
@@ -790,6 +791,121 @@ describe("HostReadGate, for what crosses beside a value", () => {
         await writer.dispose();
         await server.close();
       }
+    });
+
+    it("decides a member's slug, metadata and unmeasured reads once the access list they consult loads", async () => {
+      // As above: the visitor may read the owner's space, and its worker has
+      // loaded a document labeled with that space, but not the access list.
+      // Each decision is made on a worker of its own, so that one's load of
+      // the access list does not answer for the next.
+      const server = newLoopbackServer();
+      const writer = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      const readers: Runtime[] = [];
+      const coldReader = async () => {
+        const reader = new Runtime({
+          apiUrl: new URL("http://localhost"),
+          storageManager: EmulatedStorageManager.connectTo(server, {
+            as: visitor,
+          }),
+        });
+        readers.push(reader);
+        const cell = reader.getCell(space, "slugged-for-members");
+        await cell.sync();
+        return { gate: gateFor(reader, visitor), cell };
+      };
+      try {
+        const tx = writer.edit();
+        tx.writeOrThrow({
+          space,
+          id: `of:${space}` as `${string}:${string}`,
+          type: "application/json",
+          path: [],
+        }, { value: { [space]: "OWNER", [visitor.did()]: "READ" } });
+        const labeled = writer.getCell(
+          space,
+          "slugged-for-members",
+          undefined,
+          tx,
+        );
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          space,
+          id: labeled.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { note: "for members of the space" },
+          slug: "for-members",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { confidentiality: [cfcAtom.space(space)] },
+              }],
+            },
+          },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        await writer.storageManager.synced();
+        const build = () => Promise.resolve({ rows: ["built"] });
+
+        const slugged = await coldReader();
+        expect(await slugged.gate.slug(slugged.cell)).toEqual({
+          slug: "for-members",
+        });
+        const unmeasured = await coldReader();
+        expect(await unmeasured.gate.fromCell(unmeasured.cell, build))
+          .toEqual({ rows: ["built"] });
+        const metadata = await coldReader();
+        expect(await metadata.gate.fromMetadata(metadata.cell, build))
+          .toEqual({ rows: ["built"] });
+      } finally {
+        for (const reader of readers) await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
+    it("refuses, rather than fails, a decision whose access list cannot be loaded", async () => {
+      await using docs = await shelf();
+      const member = await docs.write("unloadable-list", { note: "x" }, [[
+        [],
+        [cfcAtom.space(visitor.did())],
+      ]]);
+      const ceiling = defaultRenderConfidentialityCeiling(owner.did());
+      const modulePolicies = renderModulePolicySourceFor(docs.runtime, ceiling);
+      // An access list that never loads.
+      const membership: SpaceMembershipProvider = {
+        readerRole: () => null,
+        subscribe: () => () => {},
+        held: () => false,
+        whenHeld: () => Promise.reject(new Error("the access list is gone")),
+      };
+      const gate = new HostReadGate(rootRenderPolicyFor(ceiling), {
+        resolveConfidentiality: renderConfidentialityResolverFor(
+          docs.runtime,
+          owner,
+          ceiling,
+          owner.did(),
+          membership,
+          modulePolicies,
+        ),
+        membership,
+        modulePolicies,
+      });
+
+      expect(await gate.settle(member)).toBe(false);
+      expect(await gate.fromCell(member, () => Promise.resolve({ rows: [] })))
+        .toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(await gate.slug(member)).toEqual({
+        refused: { refusedBy: "display-ceiling" },
+      });
     });
 
     it("decides a collaborative session on the field it holds, not on where the cell it named now leads", async () => {

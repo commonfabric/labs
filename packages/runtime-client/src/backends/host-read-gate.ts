@@ -313,22 +313,52 @@ export class HostReadGate {
   }
 
   /**
-   * Waits for what a decision on `cell` consults and has not loaded: the
-   * access lists of the spaces its labels name, which a read of the cell
-   * would consult. Says whether it waited for any. A decision made once and
-   * not again, as a host's one-shot read is, refuses a `Space(X)` label while
-   * X's access list has not loaded, and no watch would make it again; one
-   * made after this is made on what the access lists say.
+   * Waits for what a decision on `cells` consults and has not loaded: the
+   * access lists of the spaces their labels name, which a read of them
+   * would consult. Says whether it loaded any, so that a decision made before
+   * is made again. A decision made once and not again, as a host's one-shot
+   * read is, refuses a `Space(X)` label while X's access list has not
+   * loaded, and no watch would make it again; one made after this is made on
+   * what the access lists say. An access list that cannot be loaded leaves
+   * the refusal standing, as a refusal, not an error.
    */
-  async settle(cell: Cell<unknown>): Promise<boolean> {
+  async settle(...cells: Cell<unknown>[]): Promise<boolean> {
+    return (await this.#loadAccessLists(cells)) === "loaded";
+  }
+
+  /**
+   * Loads what a decision on `cell` consults: its document, the one its path
+   * resolves to, and the access lists of the spaces their labels name.
+   * Resolves `false` where an access list could not be loaded, on which a
+   * decision is refused as unreadable. With no policy, nothing is decided,
+   * and nothing is loaded for it.
+   */
+  async hold(cell: Cell<unknown>): Promise<boolean> {
+    if (this.#policy === undefined) return true;
+    await cell.sync();
+    const resolved = cell.resolveAsCell();
+    if (!cellDocumentHeld(resolved)) await resolved.sync();
+    return (await this.#loadAccessLists([cell])) !== "failed";
+  }
+
+  /**
+   * Loads the access lists of the spaces `cells`' labels name that the
+   * replica does not hold: `none` where there were none to load, `loaded`
+   * once they are held, and `failed` where one could not be loaded.
+   */
+  async #loadAccessLists(
+    cells: readonly Cell<unknown>[],
+  ): Promise<"none" | "loaded" | "failed"> {
     const membership = this.#sources.membership;
+    const held = membership?.held?.bind(membership);
+    const whenHeld = membership?.whenHeld?.bind(membership);
     if (
-      this.#policy === undefined || membership?.held === undefined ||
-      membership.whenHeld === undefined
+      this.#policy === undefined || held === undefined ||
+      whenHeld === undefined
     ) {
-      return false;
+      return "none";
     }
-    const labels = [
+    const labels = cells.flatMap((cell) => [
       ...readProjected(cell, hostValueOf).consumed.confidentiality,
       ...(cellLabelSources(cell) ?? []).flatMap((source) =>
         source.view === undefined
@@ -337,13 +367,15 @@ export class HostReadGate {
             entry.label.confidentiality ?? []
           )
       ),
-    ];
+    ]);
     const pending = membershipSpacesInConfidentiality(labels).filter((space) =>
-      !membership.held!(space)
+      !held(space)
     );
-    if (pending.length === 0) return false;
-    await Promise.all(pending.map((space) => membership.whenHeld!(space)));
-    return true;
+    if (pending.length === 0) return "none";
+    const loads = await Promise.allSettled(pending.map(whenHeld));
+    return loads.every((load) => load.status === "fulfilled")
+      ? "loaded"
+      : "failed";
   }
 
   /**
@@ -563,9 +595,11 @@ export class HostReadGate {
 
   /**
    * The slug of the piece `root` is, or the refusal that stands in its
-   * place: a metadata field, decided as {@link readMetadata} decides one.
+   * place: a metadata field, decided as {@link readMetadata} decides one,
+   * once what the decision consults is loaded ({@link hold}).
    */
-  slug(root: Cell<unknown>): SlugResponse {
+  async slug(root: Cell<unknown>): Promise<SlugResponse> {
+    if (!await this.hold(root)) return this.#refuse(UNHELD);
     const refusal = this.metadataRefusal(root);
     if (refusal?.refused !== undefined) return refusal;
     const slug = root.getMetaRaw("slug");
@@ -588,8 +622,7 @@ export class HostReadGate {
       | { refusal: SlugRefusal },
   ): Promise<SlugReferenceResponse> {
     for (const root of walked) {
-      await this.#hold(root);
-      const refusal = this.#cellRefusal(root);
+      const refusal = await this.hold(root) ? this.#cellRefusal(root) : UNHELD;
       if (refusal === undefined) continue;
       const { refusedBy } = this.#refuse(refusal).refused;
       return decided({
@@ -618,7 +651,9 @@ export class HostReadGate {
     root: Cell<unknown>,
     build: (root: Cell<unknown>) => Promise<T>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
-    await this.#hold(root);
+    if (!await this.hold(root)) {
+      return decided({ refused: this.#refuse(UNHELD).refused });
+    }
     const refusal = this.metadataRefusal(root);
     if (refusal?.refused !== undefined) {
       return decided({ refused: refusal.refused });
@@ -644,9 +679,9 @@ export class HostReadGate {
     build: (cell: Cell<unknown>) => Promise<T>,
     named?: Cell<unknown>,
   ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
-    if (named !== undefined) await this.#hold(named);
-    await this.#hold(cell);
-    const refusal = this.#reachedRefusal(cell, named);
+    const held = (named === undefined || await this.hold(named)) &&
+      await this.hold(cell);
+    const refusal = held ? this.#reachedRefusal(cell, named) : UNHELD;
     if (refusal !== undefined) {
       return decided({ refused: this.#refuse(refusal).refused });
     }
@@ -1051,18 +1086,6 @@ export class HostReadGate {
   ): RenderLabelSummary | undefined {
     return (named === undefined ? undefined : this.#cellRefusal(named)) ??
       this.#cellRefusal(cell);
-  }
-
-  /**
-   * Loads `cell`'s document, and the one its path resolves to, so that a
-   * decision on their labels is made on what they hold. With no policy,
-   * nothing is decided, and nothing is loaded for it.
-   */
-  async #hold(cell: Cell<unknown>): Promise<void> {
-    if (this.#policy === undefined) return;
-    await cell.sync();
-    const resolved = cell.resolveAsCell();
-    if (!cellDocumentHeld(resolved)) await resolved.sync();
   }
 
   /**
