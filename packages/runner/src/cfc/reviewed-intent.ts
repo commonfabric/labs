@@ -1188,11 +1188,13 @@ const parseStoredParameters = (
  * runtime enforces writer claims or persists flow labels.
  *
  * The record must also be one `descriptor`, the consumer's own, would have
- * produced: its `endpoint` is the descriptor's digest, its `operation`,
+ * produced: the descriptor names no builtin whose writes a pattern decides;
+ * the record's `endpoint` is the descriptor's digest, its `operation`,
  * `consumer` and `maxAttempts` are the descriptor's, its window is within the
  * descriptor's, and its parameters are exactly the declared keys, each of its
- * kind and within its bounds, each destination's integrity satisfying its
- * parameter's patterns.
+ * kind and within its bounds; and each destination is in the space its
+ * parameter declares, or the subject's home space when it declares none, with
+ * integrity satisfying its parameter's patterns.
  *
  * This verifies authorship, integrity, and agreement with the descriptor.
  * Whether the record is unexpired, its destinations still resolve to what it

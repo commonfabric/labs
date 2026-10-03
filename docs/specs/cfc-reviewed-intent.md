@@ -77,17 +77,19 @@ cell, and a pattern binds that cell. For a messaging consumer:
   takes between `min` and `max` destination cells the pattern binds, and
   `integrity` is a nonempty list of atom patterns each destination's integrity
   must satisfy together, as one conjunction whose variables are shared across
-  the patterns. Each destinations parameter states its own, since a payee and
-  a funding source need different rules. A `text` parameter is text the actor
-  enters on the surface, at most `maxLength` Unicode code points, counted as
-  JSON Schema counts them.
+  the patterns. An optional `space` names the space every destination must be
+  in; absent, it is the subject's home space. Each destinations parameter
+  states its own rules, since a payee and a funding source need different
+  ones. A `text` parameter is text the actor enters on the surface, at most
+  `maxLength` Unicode code points, counted as JSON Schema counts them.
 - `windowMs` is how long after the gesture a record stays good. A record takes
   the smaller of this and ten minutes.
 - `maxAttempts` bounds the delivery attempts a consumer makes on one record.
 
-The example requires that the address book's builtin wrote the destination and
-that nothing has written it since: the `TransformedBy` the runtime derives
-names the one identity that wrote a value, and another writer takes it away.
+The example requires that the address book's builtin wrote the destination in
+the subject's home space, and that nothing has written it since: the
+`TransformedBy` the runtime derives names the one identity that wrote a value,
+and another writer takes it away.
 
 Every member is required, and the descriptor, each parameter, and each kind are
 refused if they carry a member this build does not know. A member it does not
@@ -100,15 +102,29 @@ its own descriptor does not declare. `parseReviewedIntentDescriptor` reads a
 descriptor by these rules, for a host and for a consumer checking the one it
 publishes.
 
-A destination integrity pattern must name an atom type only trusted runtime
-code mints, the families a pattern-authored schema has stripped
-(`isRuntimeMintedIntegrityAtom`), as a literal `type` or a system string atom.
-A descriptor with a pattern any other atom satisfies, such as a plain string, a
-type the pattern leaves open, or a principal claim a pattern mints for its own
-actor, is refused when it is read. Of those families, the runtime derives
-`TransformedBy` and `PolicyCertified` onto the `derived` entries a destination's
-integrity is read from (see [The operation](#the-operation)); a pattern naming
-another family parses and is never satisfied.
+Each destination integrity pattern must be `TransformedBy` with a literal
+`identity` of kind `builtin` and a literal `builtinId`, and nothing beside them
+but an optional `inputWitness`, whose own fields may hold variables. Every
+other pattern is refused when the descriptor is read: a plain string atom, any
+writer's or a verified writer's `TransformedBy` (a pattern's own handler mints
+one on every write after a labeled read), a builtin id left open, and
+`PolicyCertified`, which survives every combination, so a pattern that reads
+only a certified value and writes a constant carries it.
+
+What such a pattern guarantees is narrower than "a trusted source": the value
+at the destination was written, as itself or within a value written whole, by
+a transaction under the named builtin's identity, and nothing has written at,
+above, or below it since. It says nothing about whose data the builtin wrote,
+which is why each destination must also be in the declared space, nor about
+what decided the builtin's inputs. Prepare and verification refuse a builtin
+whose inputs a pattern decides when the runtime can tell: one its module
+registry holds, which pattern code invokes with inputs it chooses (`ifElse`,
+`map`, `fetchText`, `llm`, and the rest), and a host operation that copies a
+value a pattern chose (the snapshot copy, the custody seal, and the reviewed
+intent itself). A builtin the runtime does not know is taken at the
+descriptor's word, so a descriptor's author names a builtin whose writes no
+pattern steers, as an address book's import from a channel the user connected
+is.
 
 A record carries the descriptor's digest as `endpoint`
 (`reviewedIntentEndpoint`), and its parameters' digest as `payloadDigest`.
@@ -133,8 +149,12 @@ authenticated acting principal it:
   runtimes, and a runtime that does not enforce CFC or does not persist flow
   labels, which could write only records that never verify;
 - reads the descriptor and refuses one this build cannot show;
+- refuses a descriptor naming a builtin whose writes a pattern decides, as
+  [The descriptor](#the-descriptor) lists;
 - refuses cells bound for a parameter the descriptor does not declare as
   taking cells, and a number of destinations outside `min` and `max`;
+- refuses a destination whose cell resolves outside the space its parameter
+  names, or the subject's home space when it names none;
 - reads each destination where its cell resolves, as stored. What the surface
   shows of a destination is that stored value and nothing else, never a string
   the pattern supplies. A value holding a link is refused rather than followed,
@@ -268,9 +288,9 @@ record a pattern receives verifies.
 
 ## Verifying a record
 
-`verifyReviewedIntentRecord(record, tx?)` is the check a consumer runs before
-it acts. `record` may be the record or a cell linking to it, such as the
-pattern's result cell. The check, in full:
+`verifyReviewedIntentRecord(record, descriptor, tx?)` is the check a consumer
+runs before it acts, with its own descriptor. `record` may be the record or a
+cell linking to it, such as the pattern's result cell. The check, in full:
 
 1. the cell resolves to the root of a document, not a location inside one;
 2. that root has a label-map entry of origin `derived` whose integrity carries
@@ -278,7 +298,16 @@ pattern's result cell. The check, in full:
 3. the record has exactly the top-level members above, `evidence` is a record,
    and the `parameters` text parses to a record of text and destination lists
    whose digest is `payloadDigest`;
-4. the document is in the home space of the record's `subject`.
+4. the document is in the home space of the record's `subject`;
+5. the descriptor names no builtin whose writes a pattern decides, as
+   [The descriptor](#the-descriptor) lists;
+6. the record is one the descriptor would have produced: its `endpoint` is the
+   descriptor's digest, its `operation`, `consumer` and `maxAttempts` are the
+   descriptor's, its window is within the descriptor's, and its parameters are
+   exactly the declared keys, each of its kind and within its bounds;
+7. each destination's `source.space` is the space its parameter declares, or
+   the record's `subject` when it declares none, and its integrity satisfies
+   its parameter's patterns.
 
 Only the runtime mints a `derived` entry, and only a transaction under the
 builtin's identity mints that atom, so pattern code cannot write a record that
@@ -288,15 +317,15 @@ pattern writes carries the pattern's own `TransformedBy`, and an atom a pattern
 declares in its schema is not persisted. Reads happen in `tx` when one is
 given, so a consumer's transaction conflicts with a change to the record.
 
-The check covers authorship and integrity only. At action time the consumer
-also:
+The check covers authorship, integrity, and agreement with the descriptor. At
+action time the consumer also:
 
-1. checks that `consumer` is itself, that `endpoint` is the digest of its
-   current descriptor, and that `subject` is the principal it acts as;
-2. recomputes `payloadDigest` over exactly what it will send, and refuses any
-   parameter key its descriptor does not declare;
-3. resolves each destination's `source` itself and refuses if what it finds
-   differs from `parameters` (it never substitutes);
+1. checks that the descriptor it passed is its current one, and that `subject`
+   is the principal it acts as;
+2. recomputes `payloadDigest` over exactly what it will send;
+3. resolves each destination's `source` itself, in the space the check
+   confirmed, and refuses if what it finds differs from `parameters` (it never
+   substitutes);
 4. checks the window by `exp`, and by its own first sight of the record;
 5. keys its ledger on `idempotencyKey` or the record's id, not on the cell it
    found the record through: any number of links, in any of the pattern's
@@ -359,8 +388,8 @@ sent records say.
 1. May a first version ship with destination integrity that a deployment
    chooses the atom for, so that consent to the destination is display-only
    until address books carry robust integrity, or must §3.8.4 integrity be
-   strict from the start? The operation enforces whatever the descriptor
-   declares, among the atoms a pattern cannot author.
+   strict from the start? The operation enforces whatever builtin's stamp the
+   descriptor names, among the builtins it does not know a pattern steers.
 2. Ten minutes exceeds §6.4.4's short-intent bound, and §6.4.4 requires a long
    intent to be shown and cancellable. Does the ruling waive both, and does
    removing a record from an outbox count as cancelling it?
