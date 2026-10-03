@@ -27,7 +27,7 @@ import {
   type RenderPolicy,
 } from "@commonfabric/html/worker";
 import type { FabricValue } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/utils/types";
 import {
   type Cancel,
   type Cell,
@@ -96,7 +96,9 @@ function holdsEvents(cell: Cell<unknown>): boolean {
  * where the cell holds no record: nothing, a list, or a single value.
  */
 function fieldNamesOf(value: unknown): string[] | undefined {
-  return isObjectNotArray(value) ? Object.keys(value) : undefined;
+  // A record is a plain object: a class instance such as `FabricBytes` holds
+  // no fields to list, whatever own properties it has.
+  return isPlainObject(value) ? Object.keys(value) : undefined;
 }
 
 /** The label view a read asked for, with each caveat's source redacted. */

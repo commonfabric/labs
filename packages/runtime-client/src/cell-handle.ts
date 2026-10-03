@@ -272,9 +272,14 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * What the handle holds of its cell: the value, or the refusal that stands
-   * in its place. Unlike {@link get}, it does not throw for a refusal, so a
-   * caller that shows the cell can show its placeholder instead.
+   * What the handle holds of its cell: nothing yet (`{ unread: true }`),
+   * before the worker has answered a read of it and before anything was
+   * written through it; the value (`{ value }`), which is `undefined` for a
+   * cell that holds nothing; or the refusal that stands in its place
+   * (`{ refused }`). Unread is not `{ value: undefined }`: a value computed
+   * from it would be computed from nothing the worker said. Unlike
+   * {@link get}, it does not throw for a refusal, so a caller that shows the
+   * cell can show its placeholder instead.
    */
   lastRead(): CellHandleRead<Readonly<T>> {
     if (this.#refusal !== undefined) return { refused: this.#refusal };
@@ -384,6 +389,11 @@ export class CellHandle<T = unknown> {
    * returns the value selected by that transaction. A readable schema fallback
    * does not count as stored. Concurrent initializers converge on one winner
    * instead of replacing it with a blind write.
+   *
+   * It goes through a handle whose read is refused: it stores nothing over a
+   * value the cell holds, and `value` is the caller's default, computed from
+   * nothing the handle read. Its answer is a read of what is stored, which the
+   * worker decides, so only an admitted one ends a refusal.
    *
    * @throws {CellReadRefusedError} When the worker refuses the read of the
    *   value that storage already held, which then stands as the handle's
@@ -577,6 +587,11 @@ export class CellHandle<T = unknown> {
     }
   }
 
+  /**
+   * Sends `event` to the stream this handle names. It goes through a handle
+   * whose read is refused: an event is not computed from what the handle
+   * read, and the worker decides what the stream's handler may do with it.
+   */
   async send(event: T): Promise<void> {
     const serialized = CellHandle.serialize(event as ClientCellValue);
     await this.#enqueueOperation(() => this.#send(serialized));
@@ -1003,7 +1018,7 @@ export class CellHandle<T = unknown> {
         cell: this.ref(),
       })
     );
-    if ("refused" in response) {
+    if (response.refused !== undefined) {
       throw new CellReadRefusedError(response.refused);
     }
     if (response.fields === undefined) return undefined;

@@ -11,6 +11,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { rootRenderPolicyFor } from "@commonfabric/html/worker";
 import { Identity } from "@commonfabric/identity";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
@@ -547,6 +548,8 @@ describe("HostReadGate", () => {
         "a-list": ["first", "second"],
         "a-string": "a string",
         "a-number": 7,
+        // An instance, which holds its bytes in no field.
+        "some-bytes": new FabricBytes(new Uint8Array([1, 2, 3])),
       };
       for (const [id, value] of Object.entries(notRecords)) {
         expect(gate.fields(await docs.write(id, value))).toEqual({});
