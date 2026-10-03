@@ -57,19 +57,22 @@ export type ResourceSnapshot<T> =
 type SnapshotListener<T> = (snapshot: ResourceSnapshot<T>) => void;
 type CellSink<T> = (value: Readonly<T> | undefined) => void | (() => void);
 
-/**
- * Hears an error that stands in place of a sink's value, such as a refusal of
- * the read (`read-refused`).
- */
-type CellSinkError = (error: FabricBridgeError) => void;
+/** How a sink hears what stands in place of the cell's value. */
+export type CellSinkOptions = {
+  /**
+   * Hears a refusal of the cell's read (`read-refused`), which stands in
+   * place of the value: the host may not show it.
+   */
+  onRefused?: (error: FabricBridgeError) => void;
+};
 
 /**
  * One sink: the cleanup its listener returned for the last value, and what
- * hears an error in the value's place.
+ * hears a refusal in the value's place.
  */
 type SinkEntry = {
   cleanup: (() => void) | void;
-  readonly onError: CellSinkError | undefined;
+  readonly onRefused: CellSinkOptions["onRefused"];
 };
 type EncodedBridgeRequest = ReturnType<typeof realmFromFabricValue>;
 
@@ -164,18 +167,21 @@ export class RemoteCell<T = FabricValue> {
    * Calls `listener` synchronously with get(), then again whenever the value
    * changes. A refusal of the read (`read-refused`) stands in place of the
    * value and is never handed to `listener` as one: the cleanup it returned
-   * for the last value runs, and `onError` hears the refusal. A sink added
-   * while a refusal stands hears it at once, through `onError` alone. A
-   * failed write changes no value, so it reaches no sink. The returned
-   * function tears down this sink.
+   * for the last value runs, and `options.onRefused` hears the refusal. A
+   * sink added while a refusal stands hears it at once, through `onRefused`
+   * alone. A failed write changes no value, so it reaches no sink. The
+   * returned function tears down this sink.
    */
-  sink(listener: CellSink<T>, onError?: CellSinkError): () => void {
-    const entry: SinkEntry = { cleanup: undefined, onError };
+  sink(listener: CellSink<T>, options: CellSinkOptions = {}): () => void {
+    const entry: SinkEntry = {
+      cleanup: undefined,
+      onRefused: options.onRefused,
+    };
     this.#sinks.set(listener, entry);
     if (this.#refusal === undefined) {
       entry.cleanup = listener(this.get());
     } else {
-      this.#tellError(entry, this.#refusal);
+      this.#tellRefusal(entry, this.#refusal);
     }
     this.#ensureRemoteSink();
     return () => {
@@ -428,7 +434,7 @@ export class RemoteCell<T = FabricValue> {
    * Records `error`, the failure of a `read` (a pull, an initialization, or
    * the remote sink) or a `write`. A read's refusal (`read-refused`) stands
    * in place of the value, so the value each sink was handed is withdrawn:
-   * its cleanup runs and its `onError` hears the refusal. Any other failure,
+   * its cleanup runs and its `onRefused` hears the refusal. Any other failure,
    * and every failed write, leaves the sinks with what they hold: a write
    * that failed changed nothing the host will deliver again, so a sink
    * withdrawn for it would stay blank.
@@ -451,17 +457,17 @@ export class RemoteCell<T = FabricValue> {
     this.#refusal = bridgeError;
     for (const entry of this.#sinks.values()) {
       this.#runSinkCleanup(entry);
-      this.#tellError(entry, bridgeError);
+      this.#tellRefusal(entry, bridgeError);
     }
   }
 
   /**
-   * Tells `entry`'s `onError` of `error`. One that throws stops neither the
-   * other sinks nor the operation that failed.
+   * Tells `entry`'s `onRefused` of `refusal`. One that throws stops neither
+   * the other sinks nor the operation that was refused.
    */
-  #tellError(entry: SinkEntry, error: FabricBridgeError): void {
+  #tellRefusal(entry: SinkEntry, refusal: FabricBridgeError): void {
     try {
-      entry.onError?.(error);
+      entry.onRefused?.(refusal);
     } catch {
       // As for a broken cleanup: a consumer's failure is its own.
     }

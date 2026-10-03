@@ -115,17 +115,20 @@ readiness probe for that contract.
 
 A read the host may not show is refused, with the `read-refused` error code, and
 is never delivered as `undefined`. `pull()` rejects with it, and a sink hears it
-through its optional second argument, after the cleanup its listener returned
-for the last value runs. A sink added while a refusal stands hears it there at
-once, and its listener is not called until a value arrives. A failed write
-changes no value, so it reaches no sink:
+through the `onRefused` option, after the cleanup its listener returned for the
+last value runs. A sink added while a refusal stands hears it there at once, and
+its listener is not called until a value arrives. A failed write changes no
+value, so it reaches no sink:
 
 ```ts
-const stopSecret = secret.sink(
-  (value) => render(value),
-  (error) => renderHidden(error.code),
-);
+const stopSecret = secret.sink((value) => render(value), {
+  onRefused: (error) => renderHidden(error.code),
+});
 ```
+
+A cell the host has not read yet is loading, not empty: `get()` returns
+`undefined`, its sink hears nothing until the host's read answers, and
+`update()` pulls before it computes.
 
 The host holds the path a guest read to that refusal: `set()` and `push()`
 through the same path reject with `read-refused` until a read of it (a `pull()`,

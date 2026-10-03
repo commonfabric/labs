@@ -223,9 +223,9 @@ describe("Fabric iframe bridge", () => {
       const cancelSink = cell.sink((current) => {
         seen.push(current);
         return () => withdrawn.push(current);
-      }, (error) => errors.push(error.code));
+      }, { onRefused: (error) => errors.push(error.code) });
       // The refusal of the pull above still stands, and the sink hears it
-      // through `onError` alone: nothing is handed to the listener in the
+      // through `onRefused` alone: nothing is handed to the listener in the
       // value's place.
       expect(errors).toEqual([BRIDGE_READ_REFUSED]);
       expect(seen).toStrictEqual([]);
@@ -290,7 +290,7 @@ describe("Fabric iframe bridge", () => {
       const cancel = cell.sink((current) => {
         seen.push(current);
         return () => withdrawn.push(current);
-      }, (error) => errors.push(error.code));
+      }, { onRefused: (error) => errors.push(error.code) });
       await cell.pull();
       const withdrawnBefore = [...withdrawn];
 
@@ -310,7 +310,7 @@ describe("Fabric iframe bridge", () => {
     }
   });
 
-  it("tells every sink of a refusal when one sink's `onError` throws, and keeps the pull's rejection", async () => {
+  it("tells every sink of a refusal when one sink's `onRefused` throws, and keeps the pull's rejection", async () => {
     const bridge = createFabricBridge({
       secret: {
         kind: "cell",
@@ -332,11 +332,15 @@ describe("Fabric iframe bridge", () => {
     try {
       const cell = client.cell<string>("secret");
       const heard: string[] = [];
-      const cancelBroken = cell.sink(() => {}, () => {
-        heard.push("broken");
-        throw new Error("a broken consumer");
+      const cancelBroken = cell.sink(() => {}, {
+        onRefused: () => {
+          heard.push("broken");
+          throw new Error("a broken consumer");
+        },
       });
-      const cancelSound = cell.sink(() => {}, () => heard.push("sound"));
+      const cancelSound = cell.sink(() => {}, {
+        onRefused: () => heard.push("sound"),
+      });
 
       await expect(cell.pull()).rejects.toMatchObject({
         code: BRIDGE_READ_REFUSED,
