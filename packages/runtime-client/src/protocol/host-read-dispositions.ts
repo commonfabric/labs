@@ -124,8 +124,9 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.OperationUnsubscribe]: write,
   [RequestType.OperationSessionClose]: write,
   [RequestType.PresenceJoin]: {
-    kind: "no-cell-value",
-    why: "the records a presence room's members publish",
+    kind: "ungated",
+    why: "the records a presence room's members publish, whose facets are " +
+      "whatever each member chose to share, which may be a cell's contents",
   },
   [RequestType.PresencePublish]: write,
   [RequestType.PresenceLeave]: write,
@@ -258,8 +259,9 @@ export const NOTIFICATION_DISPOSITIONS = {
     why: "a collaborative field's operations and materialized value",
   },
   [NotificationType.PresenceUpdate]: {
-    kind: "no-cell-value",
-    why: "the records a presence room's members publish",
+    kind: "ungated",
+    why: "the records a presence room's members publish, whose facets are " +
+      "whatever each member chose to share, which may be a cell's contents",
   },
   [NotificationType.EventNeedsAttention]: {
     kind: "no-cell-value",

@@ -679,7 +679,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
 
   #handleCellUpdate(message: CellUpdateNotification): void {
     const subscribed = this.#subscribed.get(cellRefToKey(message.cell));
-    if ("refused" in message) {
+    if (message.refused !== undefined) {
       // What each subscriber held of the cell goes, which an `undefined`
       // value below would leave in place.
       for (const instance of subscribed ?? []) {

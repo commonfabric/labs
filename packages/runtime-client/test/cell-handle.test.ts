@@ -925,6 +925,37 @@ describe("cell-handle", () => {
       expect(cell.get()).toBe("the same value");
     });
 
+    it("runs the cleanup a subscriber returned for the value a refusal drops", () => {
+      const cell = new CellHandle<string>(makeRuntime(), ref);
+      const cleaned: string[] = [];
+      cell.subscribe((value) => () => {
+        cleaned.push(value ?? "nothing");
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate]("shown before the seal");
+
+      cell[$onCellRefused](refusal);
+
+      expect(cleaned).toEqual(["nothing", "shown before the seal"]);
+    });
+
+    it("tells its subscribers of an admitted update that ends a refusal, even of a cell that holds nothing", () => {
+      const cell = new CellHandle<string>(makeRuntime(), ref);
+      const heard: unknown[] = [];
+      cell.subscribe((value) => {
+        heard.push({ value });
+      }, { onRefused: (refused) => heard.push(refused) });
+      cell[$onCellRefused](refusal);
+
+      cell[$onCellUpdate](undefined);
+
+      expect(heard).toEqual([
+        { value: undefined },
+        refusal,
+        { value: undefined },
+      ]);
+      expect(cell.refusal).toBeUndefined();
+    });
+
     /** A runtime that keeps every request a handle sends it. */
     const recording = () => {
       const requests: unknown[] = [];
