@@ -1228,6 +1228,18 @@ describe("CFRender variants", () => {
     element.cell = createMockCellHandle({});
     expect(shown()).toContain("cf-loader");
   });
+
+  it("shows its children only while it holds no cell", () => {
+    // The view puts the access placeholder in the element's children while
+    // the cell's space is out of reach, and no cell arrives then.
+
+    const element = new CFRender();
+    const shown = () =>
+      templateText((element as unknown as { render(): unknown }).render());
+    expect(shown()).toContain("<slot></slot>");
+    element.cell = createMockCellHandle({});
+    expect(shown()).not.toContain("<slot>");
+  });
 });
 
 describe("CFRender render-error handling", () => {

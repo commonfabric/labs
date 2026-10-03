@@ -135,6 +135,18 @@ const REFERENCE_BINDING_SINKS: ReadonlyMap<string, ReadonlySet<string>> =
   ]);
 
 /**
+ * `$` bindings whose component shows what the binding names only through
+ * renders mounted from it, and shows the element's children while it holds no
+ * value for the binding. While such a binding is withheld because a space its
+ * read reaches is out of reach, the access placeholder is the element's child.
+ */
+const ACCESS_PLACEHOLDER_BINDINGS: ReadonlyMap<string, ReadonlySet<string>> =
+  new Map([
+    ["cf-render", new Set(["cell"])],
+    ["cf-picker", new Set(["items"])],
+  ]);
+
+/**
  * Props that make the browser load a remote resource once they are set, keyed
  * by tag name in lower case, with `*` for every element. Setting one is
  * network egress, not display, so it is decided under the remote-load policy
@@ -1071,12 +1083,17 @@ export class WorkerReconciler {
    * Elsewhere a nested render root is decided on everything the bound cell
    * reaches. A read that could not complete, one
    * whose space is out of reach or whose labels or links could not be read,
-   * withholds the binding and is never taken for an empty read. `replacing`
-   * says whether the element may hold a binding for `propName` from before.
-   * `read` is the cell whose read decides, when the binding was reached
-   * through a slot whose labels the choice of `cell` carries.
+   * withholds the binding and is never taken for an empty read. While a
+   * binding {@link ACCESS_PLACEHOLDER_BINDINGS} names is withheld because the
+   * space of the read refusing it is out of reach, the element holds the
+   * access placeholder as its child, rendered in `ctx`; a binding withheld for
+   * any other reason leaves the element empty. `replacing` says whether the
+   * element may hold a binding for `propName` from before. `read` is the cell
+   * whose read decides, when the binding was reached through a slot whose
+   * labels the choice of `cell` carries.
    */
   #bindCell(
+    ctx: ReconcileContext,
     state: NodeState,
     propName: string,
     cell: Cell<unknown>,
@@ -1112,9 +1129,25 @@ export class WorkerReconciler {
       ? this.#nestedRenderElements(paths, () => watch.reeval())
       : undefined;
     if (elements !== undefined) addCancel(elements.cancel);
+    // The placeholder is rendered as the element's children are.
+    const childCtx = { ...ctx, emittedSpace: state.childEmittedSpace };
+    const placeholder =
+      ACCESS_PLACEHOLDER_BINDINGS.get(state.tagName)?.has(propName)
+        ? this.#createWrapperState(childCtx, state.nodeId)
+        : undefined;
+    if (placeholder !== undefined) {
+      addCancel(() =>
+        this.#reconcileIntoWrapper(
+          childCtx,
+          placeholder,
+          null,
+          state.childRenderPolicy,
+        )
+      );
+    }
     watch.reeval = () => {
       if (elements?.settling === true) return;
-      shown = this.#admitProp(
+      const decision = this.#admitProp(
         state,
         propName,
         [{ source: read, reads: [consumed] }, ...(elements?.reads() ?? [])],
@@ -1123,7 +1156,22 @@ export class WorkerReconciler {
         bind,
         watch,
       );
+      shown = decision.shown;
       first = false;
+      if (
+        placeholder !== undefined &&
+        (decision.outOfReach !== undefined ||
+          placeholder.currentChild !== null)
+      ) {
+        this.#reconcileIntoWrapper(
+          childCtx,
+          placeholder,
+          decision.outOfReach !== undefined
+            ? this.#accessPlaceholderVNode()
+            : null,
+          state.childRenderPolicy,
+        );
+      }
     };
     // The component reads the binding under the schema the handle it is
     // handed carries, or the one it projects that handle to.
@@ -1306,11 +1354,13 @@ export class WorkerReconciler {
    * consumed the labels they report, as {@link readRefusal} decides for each,
    * and emits only what the decision changes. The policy has to admit every
    * one of them. `shown` says whether the prop may be showing before the
-   * decision, or is undefined when nothing has been shown for it; the result
-   * says whether it may be showing after. `show` runs when the prop is
-   * admitted and either its value `changed` or it was not showing. A refused
-   * prop is removed when it may be showing, and the refusal reported once per
-   * standing block.
+   * decision, or is undefined when nothing has been shown for it; the result's
+   * `shown` says whether it may be showing after, and its `outOfReach`, when
+   * the prop is refused because the space of the read refusing it is out of
+   * reach, is that read's cell. `show` runs when the prop is admitted and
+   * either its value `changed` or it was not showing. A refused prop is
+   * removed when it may be showing, and the refusal reported once per standing
+   * block.
    */
   #admitProp(
     state: NodeState,
@@ -1321,19 +1371,22 @@ export class WorkerReconciler {
     show: () => void,
     watch: FitWatch,
     value: unknown = UNKNOWN_PROP_VALUE,
-  ): boolean {
+  ): { shown: boolean; outOfReach?: Cell<unknown> } {
     const policy = state.renderPolicy;
     // The first read that refuses, with what refused it, and whether its
     // space is in reach: a read whose space is out of reach is refused
     // because it could not complete, which is not a denial to report.
     const firstRefusal = <R>(
       refusalOf: (read: DecidingRead) => R | undefined,
-    ): { refusal: R; reachable: boolean } | undefined => {
+    ):
+      | { refusal: R; source: Cell<unknown>; reachable: boolean }
+      | undefined => {
       for (const read of decidingReads) {
         const refusal = refusalOf(read);
         if (refusal !== undefined) {
           return {
             refusal,
+            source: read.source,
             reachable: this.#cellAccessError(read.source) === undefined,
           };
         }
@@ -1351,7 +1404,7 @@ export class WorkerReconciler {
         : undefined;
     if (refused === undefined && remoteRefused === undefined) {
       if (changed || shown !== true) show();
-      return true;
+      return { shown: true };
     }
     if (shown !== false) {
       if (refused?.reachable === true) {
@@ -1363,7 +1416,11 @@ export class WorkerReconciler {
         this.#queueOps([{ op: "remove-prop", nodeId: state.nodeId, key }]);
       }
     }
-    return false;
+    const refusing = refused ?? remoteRefused;
+    return {
+      shown: false,
+      outOfReach: refusing?.reachable === false ? refusing.source : undefined,
+    };
   }
 
   /**
@@ -2416,7 +2473,7 @@ export class WorkerReconciler {
         () => deliver(value),
         watch,
         value,
-      );
+      ).shown;
     };
     watch.reeval = () => decide(false);
     addCancel(this.#sinkPropValue(cell, (value, source, reads) => {
@@ -2693,7 +2750,7 @@ export class WorkerReconciler {
         this.#updateEventProp(ctx, state, key, value, existingState);
       } else if (isBindingProp(key)) {
         // Bindings - check if Cell is same
-        this.#updateBindingProp(state, key, value, existingState);
+        this.#updateBindingProp(ctx, state, key, value, existingState);
       } else if (isCell(value)) {
         // Reactive prop - check if Cell is same
         if (existingState?.cell && areLinksSame(existingState.cell, value)) {
@@ -2922,6 +2979,7 @@ export class WorkerReconciler {
    * Update a binding prop ($prop).
    */
   #updateBindingProp(
+    ctx: ReconcileContext,
     state: NodeState,
     key: string,
     value: unknown,
@@ -2946,6 +3004,7 @@ export class WorkerReconciler {
       state.propSubscriptions.set(key, {
         cell: value as Cell<unknown>,
         cancel: this.#bindCell(
+          ctx,
           state,
           propName,
           value as Cell<unknown>,
@@ -3131,6 +3190,7 @@ export class WorkerReconciler {
           state.propSubscriptions.set(key, {
             cell: resolvedTarget,
             cancel: this.#bindCell(
+              ctx,
               state,
               getBindingPropName(key),
               resolvedTarget,
@@ -4034,6 +4094,7 @@ export class WorkerReconciler {
           state.propSubscriptions.set(key, {
             cell: value as Cell<unknown>,
             cancel: this.#bindCell(
+              ctx,
               state,
               getBindingPropName(key),
               value as Cell<unknown>,
