@@ -15,23 +15,18 @@
  */
 
 import type { JSONValue } from "@commonfabric/api";
-import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { type Cell, cellRuntime } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
-import type {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "../storage/interface.ts";
-import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   type AtomPattern,
   isAtomPattern,
@@ -39,6 +34,15 @@ import {
   matchAtomPatternConjunction,
 } from "./atom-pattern.ts";
 import type { CfcConfClause } from "./clause.ts";
+import {
+  canonicalJson,
+  evidenceHolds,
+  hasExactKeys,
+  type ReadEvidence,
+  readEvidence,
+  rootWrittenByBuiltin,
+  syncResolved,
+} from "./host-review.ts";
 import { canonicalizeCfcLogicalPath } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
@@ -47,7 +51,7 @@ import {
   isRuntimeMintedIntegrityAtom,
 } from "./prepare.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
-import { isRendererTrustedEvent } from "./ui-contract.ts";
+import { isTrustedGestureOn } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Builtin implementation identity that alone writes reviewed intents. */
@@ -66,12 +70,13 @@ export const REVIEWED_INTENT_COMPONENT = "cf-reviewed-intent";
 export const SHORT_INTENT_WINDOW_MS = 10 * 60 * 1000;
 
 /**
- * The stamp every location a reviewed intent's transaction writes carries,
- * and the one a record's root must carry to verify.
+ * The identity a reviewed intent's transactions write under. Its bare
+ * `TransformedBy` stamps every location the record's transaction writes, and
+ * a record's root must carry it to verify.
  */
-const WRITTEN_BY_REVIEWED_INTENT = deepFreeze({
-  type: CFC_ATOM_TYPE.TransformedBy,
-  identity: { kind: "builtin", builtinId: REVIEWED_INTENT_WRITER },
+const REVIEWED_INTENT_IDENTITY = Object.freeze({
+  kind: "builtin" as const,
+  builtinId: REVIEWED_INTENT_WRITER,
 });
 
 /** A declared parameter whose value is one or more bound destinations. */
@@ -308,12 +313,6 @@ export interface ReviewedIntentResult {
   readonly receipt: Cell<unknown>;
 }
 
-/** A read whose content the record's transaction verifies. */
-interface ReadEvidence {
-  readonly address: IMemorySpaceAddress;
-  readonly digest: string;
-}
-
 /** Everything one inspection establishes. */
 interface Inspection {
   readonly actor: string;
@@ -359,29 +358,6 @@ const RECORD_KEYS = [
   "payloadDigest",
   "subject",
 ] as const;
-
-/** Whether `value` is a record with exactly the keys named. */
-const hasExactKeys = (
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean =>
-  Object.keys(value).length === keys.length &&
-  keys.every((key) => Object.hasOwn(value, key));
-
-/**
- * `value` as JSON text with every object's keys in UTF-8 order, so equal
- * values have equal text.
- */
-const canonicalJson = (value: JSONValue): string =>
-  JSON.stringify(
-    value,
-    (_key, entry: unknown) =>
-      isObjectNotArray(entry)
-        ? Object.fromEntries(
-          utf8SortedKeysOf(entry).map((key) => [key, entry[key]]),
-        )
-        : entry,
-  );
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
@@ -506,29 +482,6 @@ const locationOf = (link: NormalizedFullLink): ReviewedLocation => ({
   path: [...link.path],
 });
 
-/** Records every read of an inspection transaction with its content digest. */
-const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
-  const reads = tx.getReadActivities?.();
-  if (reads === undefined) {
-    throw new Error("Reviewed intent requires a verifiable read journal");
-  }
-  return [...reads].map((read) => {
-    const address: IMemorySpaceAddress = {
-      space: read.space,
-      id: read.id,
-      type: read.type,
-      scope: read.scope,
-      path: [...read.path],
-    };
-    return {
-      address,
-      digest: hashStringOf(
-        tx.readOrThrow(address, { meta: internalVerifierRead }),
-      ),
-    };
-  });
-};
-
 /**
  * `value` as a JSON copy.
  *
@@ -544,16 +497,6 @@ const reviewedJson = (value: unknown, what: string): JSONValue => {
       { cause: error },
     );
   }
-};
-
-/**
- * Loads `cell` and the document it resolves to. A cell a pattern hands the
- * host is often a field of its result that links to the document holding
- * the value.
- */
-const syncResolved = async (cell: Cell<unknown>): Promise<void> => {
-  await cell.sync();
-  await cell.resolveAsCell().sync();
 };
 
 /**
@@ -721,7 +664,7 @@ const inspect = async (
     if (!confidentiality.some((clause) => deepEqual(clause, actorAtom))) {
       confidentiality.push(actorAtom);
     }
-    for (const read of readEvidence(tx)) evidence.push(read);
+    for (const read of readEvidence(tx, "Reviewed intent")) evidence.push(read);
   } finally {
     tx.abort();
   }
@@ -737,13 +680,15 @@ const inspect = async (
       bindings.result.getAsNormalizedFullLink(),
       "writeRedirect",
     );
-    if (writtenByReviewedIntent(resultTx, target)) {
+    if (rootWrittenByBuiltin(resultTx, target, REVIEWED_INTENT_IDENTITY)) {
       throw new Error(
         "Reviewed intent refuses a result cell inside a reviewed intent",
       );
     }
     resultLocation = locationOf(target);
-    for (const read of readEvidence(resultTx)) evidence.push(read);
+    for (const read of readEvidence(resultTx, "Reviewed intent")) {
+      evidence.push(read);
+    }
   } finally {
     resultTx.abort();
   }
@@ -868,23 +813,6 @@ const parametersOf = (
   return parameters;
 };
 
-/** Whether the document at `link`'s root was written by this module. */
-const writtenByReviewedIntent = (
-  tx: IExtendedStorageTransaction,
-  link: Pick<NormalizedFullLink, "space" | "id" | "scope">,
-): boolean =>
-  (readStoredCfcMetadata(tx, {
-    space: link.space,
-    id: link.id,
-    scope: link.scope,
-  })?.labelMap.entries ?? [])
-    .some((entry) =>
-      entry.path.length === 0 && entry.origin === "derived" &&
-      (entry.label.integrity ?? []).some((atom) =>
-        deepEqual(atom, WRITTEN_BY_REVIEWED_INTENT)
-      )
-    );
-
 /**
  * The schema of a document only this module writes, labeled
  * `confidentiality`. A writer claim governs the location it is declared at and
@@ -995,13 +923,7 @@ export async function commitReviewedIntent(
     throw new Error("Reviewed intent consent is unknown or already consumed");
   }
   consents.delete(consent);
-  if (
-    !isRendererTrustedEvent(event) || !isObjectNotArray(event) ||
-    !isObjectNotArray(event.provenance) || event.provenance.origin !== "dom" ||
-    event.provenance.trusted !== true ||
-    !isObjectNotArray(event.provenance.ui) ||
-    event.provenance.ui.pattern !== REVIEWED_INTENT_GESTURE
-  ) {
+  if (!isTrustedGestureOn(event, REVIEWED_INTENT_GESTURE)) {
     throw new Error("Reviewed intent requires a trusted host gesture");
   }
   const parameters = snapshotJsonValue(
@@ -1039,10 +961,7 @@ export async function commitReviewedIntent(
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
-    setCfcImplementationIdentity(receiptTx, {
-      kind: "builtin",
-      builtinId: REVIEWED_INTENT_WRITER,
-    });
+    setCfcImplementationIdentity(receiptTx, REVIEWED_INTENT_IDENTITY);
     receipt = runtime.getCell(
       actor as never,
       { reviewedIntentReceipt: idempotencyKey },
@@ -1074,18 +993,10 @@ export async function commitReviewedIntent(
     // These comparisons bind the reviewed reads to the committing
     // transaction: verifier reads keep their conflict checks without carrying
     // a label of their own into the record.
-    for (const read of current.evidence) {
-      const stored = recordTx.readOrThrow(read.address, {
-        meta: internalVerifierRead,
-      });
-      if (hashStringOf(stored) !== read.digest) {
-        throw new Error("Reviewed intent review changed before commit");
-      }
+    if (!evidenceHolds(recordTx, current.evidence)) {
+      throw new Error("Reviewed intent review changed before commit");
     }
-    setCfcImplementationIdentity(recordTx, {
-      kind: "builtin",
-      builtinId: REVIEWED_INTENT_WRITER,
-    });
+    setCfcImplementationIdentity(recordTx, REVIEWED_INTENT_IDENTITY);
     // The one labeled read in this transaction. `TransformedBy` is minted
     // only over a nonempty flow join, and the receipt's label is never empty,
     // so this read is what stamps every location of the record with this
@@ -1212,7 +1123,7 @@ export function verifyReviewedIntentRecord(
         "Reviewed intent record must be a document root, not a location inside one",
       );
     }
-    if (!writtenByReviewedIntent(reader, link)) {
+    if (!rootWrittenByBuiltin(reader, link, REVIEWED_INTENT_IDENTITY)) {
       throw new Error(
         "Reviewed intent record was not written by the reviewed-intent builtin",
       );
