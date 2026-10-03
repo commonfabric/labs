@@ -35,7 +35,6 @@ import {
   type InitializationData,
   type IPCClientMessage,
   type IPCClientNotification,
-  type IPCRemoteMessage,
   RequestType,
 } from "../../runtime-client/src/protocol/mod.ts";
 import { buildProcessor } from "../../runtime-client/test/backends/build-processor.ts";
