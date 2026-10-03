@@ -665,6 +665,62 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("leaves the record unlinked when the pattern points its result cell elsewhere after the record lands", async () => {
+      const fixture = await setup();
+      const runtime = fixture.runtime;
+      const edit = runtime.edit.bind(runtime);
+      try {
+        const tx = runtime.edit();
+        const first = runtime.getCell(sender.did(), "first-outbox", {
+          type: "object",
+        }, tx);
+        first.set({ slot: null });
+        const second = runtime.getCell(sender.did(), "second-outbox", {
+          type: "object",
+        }, tx);
+        second.set({ slot: null });
+        const alias = runtime.getCell(sender.did(), "outbox-alias", {
+          type: "object",
+        }, tx);
+        alias.set(
+          { slot: first.key("slot").getAsWriteRedirectLink() } as never,
+        );
+        expect((await tx.commit()).error).toBeUndefined();
+        const result = alias.withTx(undefined).key("slot") as Cell<unknown>;
+        const prepared = await prepareReviewedIntent(
+          fixture.bindings({ result }),
+        );
+        // The second transaction that commits is the record's; once it has
+        // landed, the pattern points the result cell at its other outbox.
+        let commits = 0;
+        runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+          const opened = edit(...args);
+          const commit = opened.commit.bind(opened);
+          opened.commit = async () => {
+            const landed = await commit();
+            if (++commits === 2) {
+              runtime.edit = edit;
+              const retarget = edit();
+              alias.withTx(retarget).key("slot").setRaw(
+                second.key("slot").getAsWriteRedirectLink() as never,
+              );
+              expect((await retarget.commit()).error).toBeUndefined();
+            }
+            return landed;
+          };
+          return opened;
+        };
+        await expect(
+          commitReviewedIntent(prepared.consent, trustedClick(), text("Hi")),
+        ).rejects.toThrow(/review is stale/);
+        expect(first.withTx(undefined).key("slot").get()).toBeNull();
+        expect(second.withTx(undefined).key("slot").get()).toBeNull();
+      } finally {
+        runtime.edit = edit;
+        await fixture.dispose();
+      }
+    });
+
     it("refuses a destination changed between its re-read and the record's transaction", async () => {
       const fixture = await setup();
       const runtime = fixture.runtime;
@@ -1006,7 +1062,7 @@ describe("reviewed-intent", () => {
           result: anonymous.getCellFromLink(
             bindings.result.getAsNormalizedFullLink(),
           ),
-        })).rejects.toThrow(/authenticated actor/);
+        })).rejects.toThrow(/requires an authenticated actor/);
         await expect(prepareReviewedIntent(fixture.bindings({
           result: anonymous.getCellFromLink(
             bindings.result.getAsNormalizedFullLink(),
@@ -1195,43 +1251,103 @@ describe("reviewed-intent", () => {
       }
     });
 
+    /**
+     * Stores `value` at `cause` in `space` with the stored label `entry`, as
+     * only the runtime itself can.
+     */
+    const seeded = async (
+      fixture: Awaited<ReturnType<typeof setup>>,
+      space: string,
+      cause: string,
+      value: unknown,
+      entry: Record<string, unknown>,
+    ) => {
+      const tx = fixture.runtime.edit();
+      const cell = fixture.runtime.getCell(
+        space as never,
+        cause,
+        undefined,
+        tx,
+      );
+      writeSeedEnvelopeDoc(tx, space as never);
+      seedStoredEnvelope(tx, {
+        space: space as never,
+        scope: "space",
+        id: cell.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [{ path: [], ...entry }] },
+        },
+      } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell.withTx(undefined);
+    };
+
+    const stampedLabel = {
+      confidentiality: [cfcAtom.user(sender.did())],
+      integrity: [WRITTEN_BY_REVIEWED_INTENT],
+    };
+
     it("refuses the builtin's stamp on a stored entry the runtime did not derive", async () => {
       const fixture = await setup();
       try {
-        const tx = fixture.runtime.edit();
-        const lookalike = fixture.runtime.getCell(
+        const declared = await seeded(
+          fixture,
           sender.did(),
           "declared-stamp",
-          undefined,
-          tx,
+          forged("Send the code"),
+          { label: stampedLabel, origin: "declared" },
         );
-        writeSeedEnvelopeDoc(tx, sender.did());
-        seedStoredEnvelope(tx, {
-          space: sender.did(),
-          scope: "space",
-          id: lookalike.getAsNormalizedFullLink().id,
-          path: [],
-        }, {
-          value: forged("Send the code"),
-          cfc: {
-            version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [{
-                path: [],
-                label: {
-                  confidentiality: [cfcAtom.user(sender.did())],
-                  integrity: [WRITTEN_BY_REVIEWED_INTENT],
-                },
-                origin: "declared",
-              }],
-            },
+        expect(() => verifyReviewedIntentRecord(declared)).toThrow(
+          /not written by the reviewed-intent builtin/,
+        );
+        // The same entry as the runtime derives it verifies, which is what
+        // makes the entry's origin the evidence.
+        const derived = await seeded(
+          fixture,
+          sender.did(),
+          "derived-stamp",
+          forged("Send the code"),
+          { label: stampedLabel, origin: "derived", observes: "value" },
+        );
+        expect(verifyReviewedIntentRecord(derived).parameters.body).toBe(
+          "Send the code",
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a stamped record outside its subject's home space, or whose digest does not match its parameters", async () => {
+      const fixture = await setup();
+      try {
+        const elsewhere = await seeded(
+          fixture,
+          other.did(),
+          "stamped-elsewhere",
+          forged("Send the code"),
+          { label: stampedLabel, origin: "derived", observes: "value" },
+        );
+        expect(() => verifyReviewedIntentRecord(elsewhere)).toThrow(
+          /not in its subject's home space/,
+        );
+        const altered = await seeded(
+          fixture,
+          sender.did(),
+          "stamped-altered",
+          {
+            ...forged("Send the code"),
+            payloadDigest: forged("Something else").payloadDigest,
           },
-        } as never);
-        expect((await tx.commit()).error).toBeUndefined();
-        expect(() => verifyReviewedIntentRecord(lookalike.withTx(undefined)))
-          .toThrow(/not written by the reviewed-intent builtin/);
+          { label: stampedLabel, origin: "derived", observes: "value" },
+        );
+        expect(() => verifyReviewedIntentRecord(altered)).toThrow(
+          /does not match its parameters/,
+        );
       } finally {
         await fixture.dispose();
       }

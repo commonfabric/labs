@@ -868,13 +868,12 @@ export async function commitReviewedIntent(
   );
   const current = await inspect(state.bindings);
   if (
-    current.actor !== state.actor || current.endpoint !== state.endpoint ||
+    current.actor !== state.actor ||
     !deepEqual(current.descriptor, state.descriptor) ||
     !deepEqual(current.descriptorAddress, state.descriptorAddress) ||
     !deepEqual(current.destinations, state.destinations) ||
     !deepEqual(current.destinationAddresses, state.destinationAddresses) ||
-    !deepEqual(current.resultAddress, state.resultAddress) ||
-    !deepEqual(current.confidentiality, state.confidentiality)
+    !deepEqual(current.resultAddress, state.resultAddress)
   ) {
     throw new Error(STALE_REVIEW);
   }
@@ -904,9 +903,6 @@ export async function commitReviewedIntent(
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
-    if (receiptTx.getCfcState().trustSnapshot?.actingPrincipal !== actor) {
-      throw new Error("Reviewed intent actor changed after review");
-    }
     setCfcImplementationIdentity(receiptTx, {
       kind: "builtin",
       builtinId: REVIEWED_INTENT_WRITER,
