@@ -27,6 +27,7 @@ import {
   type CellLinkInput,
   cellOfOpaqueReference,
   cellRuntime,
+  CFC_ATOM_TYPE,
   convertCellsToLinks,
   isCell,
   isStream,
@@ -71,12 +72,11 @@ import {
   canRenderCellUnderPolicy,
   cellLabelRefusal,
   cellLabelSources,
-  CFC_CAVEAT_ATOM_TYPE,
   confidentialityLabels,
   confidentialityLabelsFromCellSchema,
   type DisplayFitSources,
-  integrityLabels,
   type FitWatch,
+  integrityLabels,
   normalizeAtomBound,
   readRefusal,
   type RenderLabelSummary,
@@ -1108,7 +1108,7 @@ export class WorkerReconciler {
   /**
    * Decides whether the node's render policy admits a prop or binding whose
    * value was read from `source` by `reads`, each consuming the labels it
-   * reports, as {@link #readRefusal} decides, and emits only what the decision
+   * reports, as {@link readRefusal} decides, and emits only what the decision
    * changes. `shown` says whether the prop may be showing before the decision,
    * or is undefined when nothing has been shown for it; the result says
    * whether it may be showing after. `show` runs when the prop is admitted and
@@ -1215,7 +1215,7 @@ export class WorkerReconciler {
     reads: readonly (SinkConsumedLabel | undefined)[],
   ): boolean {
     const refusedAtom = (atom: unknown): boolean =>
-      isObjectOrArray(atom) && atom.type === CFC_CAVEAT_ATOM_TYPE &&
+      isObjectOrArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat &&
       typeof atom.kind === "string" &&
       REMOTE_LOAD_REFUSED_CAVEAT_KINDS.has(atom.kind);
     const refused = (clauses: readonly CfcConfClause[]): boolean =>
@@ -1228,7 +1228,7 @@ export class WorkerReconciler {
       if (source.view === undefined) return true;
       if (refused(confidentialityLabels(source.view))) return true;
     }
-    // The schema's atoms, which `#readRefusal` falls back to when the reads
+    // The schema's atoms, which `readRefusal()` falls back to when the reads
     // consumed none.
     return confidentialityLabelsFromCellSchema(cell).some(refusedAtom);
   }
