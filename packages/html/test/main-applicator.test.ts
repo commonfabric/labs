@@ -1127,17 +1127,23 @@ describe("DomApplicator", () => {
           //               data-ui-event-integrity        handler 2
           //       3 cf-button data-ui-action             handler 3
           //       4 cf-submit-input data-ui-action       handler 4
+          //
+          // A wrapper may also copy the surface's markers onto its own
+          // element: node 1 then carries `data-ui-pattern`,
+          // `data-ui-event-integrity` and `data-ui-action` with the surface's
+          // values.
 
           const SURFACE = "TrustedSaveSurface";
           const ACTION = "TrustedSaveTitle";
 
           /**
            * Renders the tree above, each node with a click handler whose id is
-           * the node's own, and returns the applicator with a function
-           * returning the provenance of the event that reached a handler, or
-           * `undefined` if none did.
+           * the node's own, and node 1 with the surface's markers copied onto
+           * it when `forgedWrapper` is set. Returns the applicator with a
+           * function returning the provenance of the event that reached a
+           * handler, or `undefined` if none did.
            */
-          const renderWrappedSurface = () => {
+          const renderWrappedSurface = ({ forgedWrapper = false } = {}) => {
             const events: DomEventMessage[] = [];
             const applicator = new DomApplicator({
               document: createMockDocument(),
@@ -1145,10 +1151,23 @@ describe("DomApplicator", () => {
               onEvent: (msg) => events.push(msg),
               setProp: setDataKeysAsAttributes,
             });
+            const forgedMarkers = forgedWrapper
+              ? ([
+                ["data-ui-pattern", SURFACE],
+                ["data-ui-event-integrity", SURFACE],
+                ["data-ui-action", ACTION],
+              ] as const).map(([key, value]) => ({
+                op: "set-prop" as const,
+                nodeId: 1,
+                key,
+                value,
+              }))
+              : [];
             applicator.applyBatch({
               batchId: 1,
               ops: [
                 { op: "create-element", nodeId: 1, tagName: "div" },
+                ...forgedMarkers,
                 { op: "create-element", nodeId: 2, tagName: "section" },
                 {
                   op: "set-prop",
@@ -1247,6 +1266,33 @@ describe("DomApplicator", () => {
 
                 clickBubbling(applicator.getNode(3), { withComposedPath });
 
+                expect(provenanceFor(3)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                  ui: {
+                    pattern: SURFACE,
+                    eventIntegrity: [SURFACE],
+                    uiContractDataset: { uiAction: ACTION },
+                  },
+                });
+              });
+
+              it("gives a listener on a wrapper carrying the surface's markers no UI provenance from a click inside the surface", () => {
+                // Read from the wrapper's own element, the markers would
+                // match a contract naming the surface. The click landed in
+                // the real surface below the wrapper, and vouches for no
+                // handler above it.
+
+                const { applicator, provenanceFor } = renderWrappedSurface({
+                  forgedWrapper: true,
+                });
+
+                clickBubbling(applicator.getNode(3), { withComposedPath });
+
+                expect(provenanceFor(1)).toStrictEqual({
+                  origin: "dom",
+                  trusted: true,
+                });
                 expect(provenanceFor(3)).toStrictEqual({
                   origin: "dom",
                   trusted: true,
