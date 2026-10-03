@@ -98,9 +98,10 @@ Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
 a random DID owned by the creating user and writable by anyone, since its ACL
 grants the wildcard `"*"` WRITE: a runtime showing a profile writes into the
-profile's space, so a visitor needs more than READ, and the owner protection on
-the profile's fields is what keeps a visitor from changing them (a *named*
-`inSpace(name)` would put every profile created under one name in one space) —
+profile's space, so a visitor needs more than READ. CFC owner-protects the
+profile's data fields, and its view state is per session; nothing else in the
+space is protected from a visitor (a *named* `inSpace(name)` would put every
+profile created under one name in one space) —
 running `/api/patterns/system/profile-home.tsx`; the link
 is appended to `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick

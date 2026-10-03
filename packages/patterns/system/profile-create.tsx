@@ -131,9 +131,9 @@ export const seedProfileName = handler<
 // users read a profile — a lunch poll or a chat room shows its name — and a
 // runtime showing one writes into the profile's space, its per-session state
 // at the least, so the space grants anyone WRITE. What keeps a visitor from
-// changing the profile itself is the owner protection on its fields
-// (profile-home.tsx), not the space's access list. Existing profiles keep
-// their already-baked concrete DID link.
+// changing the profile's data is the owner protection on its fields
+// (profile-home.tsx), not the space's access list; its view state is per
+// session. Existing profiles keep their already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
   {

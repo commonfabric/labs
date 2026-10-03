@@ -2,7 +2,8 @@
  * Creates a profile through the real create pattern on a memory server that
  * enforces access-control lists, then runs that profile from a second user's
  * runtime. A runtime showing a profile writes into the profile's space, so
- * what the space grants a visitor decides whether the visit works at all.
+ * what the space grants a visitor decides whether the visit works at all, and
+ * what the visitor's writes reach decides what the owner sees afterwards.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -12,6 +13,7 @@ import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
@@ -119,7 +121,7 @@ function createEvent(name: string): { name: string } {
 }
 
 describe("profile-space-access", () => {
-  it("creates a profile space whose visitors can run the profile and write to it", async () => {
+  it("creates a profile space a visitor's runtime can write to, keeping the visitor's view state out of the owner's", async () => {
     const server = new MemoryV2Server.Server({
       store: new URL("memory://profile-space-access"),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
@@ -137,6 +139,12 @@ describe("profile-space-access", () => {
     const ownerRuntime = runtimeAs(owner);
     const visitorRuntime = runtimeAs(visitor);
     const readerRuntime = runtimeAs(owner);
+    let ownerDisposed = false;
+    const disposeOwner = async () => {
+      if (ownerDisposed) return;
+      ownerDisposed = true;
+      await ownerRuntime.dispose();
+    };
     try {
       const setupTx = ownerRuntime.edit();
       const host = await ownerRuntime.patternManager.compilePattern(PROGRAM, {
@@ -183,6 +191,11 @@ describe("profile-space-access", () => {
       await ownerRuntime.storageManager.synced();
       await ownerRuntime.idle();
       await ownerRuntime.storageManager.synced();
+      // The owner's runtime is gone before the visitor arrives, so every
+      // commit the profile space takes from here on is the visitor's.
+      await disposeOwner();
+      const profileEngine = await server.engineForSpace(profileSpace);
+      const seqBeforeVisit = Engine.serverSeq(profileEngine);
 
       // The visitor runs the profile and flips its view mode, the one stream
       // of the profile a visitor is free to send to.
@@ -196,19 +209,29 @@ describe("profile-space-access", () => {
       expect((await toggleTx.commit()).error).toBeUndefined();
       await visitorRuntime.idle();
       const booleanSchema = { type: "boolean" } as const;
-      await visited.key("isEditing").asSchema<boolean>(booleanSchema).pull();
+      const visitorIsEditing = visited.key("isEditing").asSchema<boolean>(
+        booleanSchema,
+      );
+      expect(await visitorIsEditing.pull()).toBe(true);
       await visitorRuntime.idle();
       await visitorRuntime.storageManager.synced();
+      expect(Engine.serverSeq(profileEngine)).toBeGreaterThan(seqBeforeVisit);
 
-      // A runtime that has run nothing reads what the visitor's runtime stored.
-      const isEditing = readerRuntime.getCellFromLink(profileLink)
-        .key("isEditing").asSchema<boolean>(booleanSchema);
-      await isEditing.sync();
-      expect(isEditing.get()).toBe(true);
+      // The view state the visitor flipped is the visitor's own, and so is
+      // `isEditing`, which is computed from it: a runtime of the owner's that
+      // has run nothing holds no value for either, and reads the profile as
+      // not being edited through the default the profile declares.
+      const ownerIsEditing = readerRuntime.getCellFromLink(profileLink)
+        .key("isEditing").asSchema<boolean>({
+          ...booleanSchema,
+          default: false,
+        });
+      await ownerIsEditing.sync();
+      expect(ownerIsEditing.get()).toBe(false);
     } finally {
       await readerRuntime.dispose();
       await visitorRuntime.dispose();
-      await ownerRuntime.dispose();
+      await disposeOwner();
       await server.close();
     }
   });

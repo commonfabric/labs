@@ -155,9 +155,10 @@ AND per creation event, and stable across the cross-space-commit retry. The
 profile space grants the wildcard `"*"` WRITE. Other users read a profile's
 name, and a runtime showing a profile writes into the profile's space — its
 per-session state at the least — so a space granting READ alone refuses the
-visit. The space's access list therefore protects nothing in a profile; the
-owner integrity on the profile's fields does ([Authorization](#authorization)).
-The display name is independent of the space identity: it flows to
+visit. The space's access list therefore protects nothing in a profile. The
+owner integrity on the profile's data fields does ([Authorization](#authorization)),
+and the profile's view state is per session, so a visitor's writes reach
+neither. The display name is independent of the space identity: it flows to
 `initialName`, which the profile shows until a name is stored in the profile's
 `name` cell, and into that cell itself at creation. The cell is initialized
 statically so it keeps its identity — and the name saved in it — across
