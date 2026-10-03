@@ -88,13 +88,15 @@ authority, not intent: any pattern a user runs can add a panel for them. A run
 that acts for no one records no adder. The actor is read from the panel
 document's stored label map as for `addedByProfile`: the `authored-by` atom of
 the entry whose path is exactly `["addedBy"]` and whose `origin` is not
-`"link"`, which `principalOf(panel, "authored-by")` returns. `addPanel` without
-`as` links an occurrence a caller made as it is, and an `addedBy` it already
-holds is its writer's claim, which `addPanel` refuses unless it is a DID in W3C
-DID Core syntax of at most 195 characters. The label entry there, when the run
-that wrote the value minted one, names that writer rather than whomever the
-value names. So a reader takes the adder from the label, and from the value
-alone only where no entry exists. A panel with neither field names no adder.
+`"link"`. Patterns read the adder with
+`principalOf(panel.key("addedBy"), "authored-by")`; authorship on another field,
+such as the panel's title, does not name the adder. `addPanel` without `as`
+links an occurrence a caller made as it is, and an `addedBy` it already holds is
+its writer's claim, which `addPanel` refuses unless it is a DID in W3C DID Core
+syntax of at most 195 characters. The label entry there, when the run that wrote
+the value minted one, names that writer rather than whomever the value names. So
+a reader takes the adder from the label, and from the value alone only where no
+entry exists. A panel with neither field names no adder.
 
 The root's own Duplicate button acts under the session's `actingProfile` in
 `viewerState` when it holds one, and otherwise under the viewer's `#profile`;

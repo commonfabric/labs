@@ -330,10 +330,12 @@ export default pattern(() => {
         assertion: assert(() =>
           attributed.panels.length === 2 &&
           attributed.panels[0].get().addedBy === claimedAdder &&
-          principalOf(attributed.panels[0], "authored-by") === me.get() &&
+          principalOf(attributed.panels[0].key("addedBy"), "authored-by") ===
+            me.get() &&
           attributed.panels[1].get().kind === "piece" &&
           attributed.panels[1].get().addedBy === me.get() &&
-          principalOf(attributed.panels[1], "authored-by") === me.get()
+          principalOf(attributed.panels[1].key("addedBy"), "authored-by") ===
+            me.get()
         ),
       },
       // Registering a piece again changes nothing.

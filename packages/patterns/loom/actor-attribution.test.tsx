@@ -6,6 +6,7 @@
 import {
   action,
   assert,
+  type AuthoredByCurrentUser,
   currentPrincipal,
   handler,
   multiUserTest,
@@ -14,6 +15,7 @@ import {
   type Stream,
   TESTS,
   Writable,
+  type WriteAuthorizedBy,
 } from "commonfabric";
 import Loom from "./main.tsx";
 import type { LoomOutput, Panel, PanelAdmission } from "./schemas.tsx";
@@ -22,9 +24,18 @@ interface Setup {
   loom: LoomOutput;
   // A second Loom, into which occurrences of the first are linked.
   elsewhere: LoomOutput;
+  // An occurrence with no adder, whose title another participant may write.
+  unattributed: Writable<Panel>;
 }
 
-export const setup = pattern(() => ({ loom: Loom({}), elsewhere: Loom({}) }));
+export const setup = pattern(() => ({
+  loom: Loom({}),
+  elsewhere: Loom({}),
+  unattributed: new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/title-only-attribution",
+  }),
+}));
 
 /** The occurrence in `panels` that registers `piece`, if there is one. */
 function panelOf(
@@ -44,8 +55,24 @@ function attestedTo(
 ): boolean {
   return panel !== undefined && principal !== "" &&
     panel.get().addedBy === principal &&
-    principalOf(panel, "authored-by") === principal;
+    principalOf(panel.key("addedBy"), "authored-by") === principal;
 }
+
+/** A panel title whose writer is independent of the panel's adder. */
+interface AuthoredTitle {
+  /** Title attributed to the participant editing it. */
+  titleOverride?: AuthoredByCurrentUser<
+    WriteAuthorizedBy<string, typeof retitle>
+  >;
+}
+
+/** Records a participant's title on an existing panel. */
+const retitle = handler<
+  { panel: Writable<AuthoredTitle> },
+  Record<string, never>
+>(({ panel }) => {
+  panel.key("titleOverride").set("Bob's title");
+});
 
 /** Registers `piece` from a handler of the participant's own pattern. */
 const register = handler<
@@ -81,6 +108,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     const own = panelOf(setup.loom.panels, piece);
     if (own) setup.elsewhere.addPanel.send({ panel: own });
   });
+  const linkUnattributed = action(() =>
+    setup.elsewhere.addPanel.send({ panel: setup.unattributed })
+  );
   return {
     // The refused write is reported as a CFC policy warning.
     allowConsoleWarnings: true,
@@ -109,6 +139,14 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
           attestedTo(setup.elsewhere.panels[0], me.get())
         ),
       },
+      { action: linkUnattributed },
+      {
+        assertion: assert(() =>
+          setup.elsewhere.panels.length === 2 &&
+          setup.elsewhere.panels[1].equals(setup.unattributed) &&
+          setup.unattributed.get().addedBy === undefined
+        ),
+      },
       { label: "alice-linked" },
     ],
   };
@@ -119,6 +157,17 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const piece = new Writable({ title: "Bob's target" });
   const recordMe = action(() => me.set(currentPrincipal() ?? ""));
   const registerPiece = register({ addPiece: setup.loom.addPiece, piece });
+  const retitlePanel = retitle({});
+  const retitleUnattributed = action(() =>
+    retitlePanel.send({ panel: setup.unattributed })
+  );
+  const retitleAlices = action(() => {
+    const theirs = setup.loom.panels.find((panel) => {
+      const value = panel.get();
+      return value.addedBy !== undefined && value.addedBy !== me.get();
+    });
+    if (theirs) retitlePanel.send({ panel: theirs });
+  });
   // An occurrence whose attested adder is someone else is not linked: the
   // link would attribute Bob's admission to Alice.
   const linkAlicesElsewhere = action(() => {
@@ -132,7 +181,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   return {
     // The refused link is reported as a runtime error.
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 1,
+    expectRuntimeErrors: 2,
     [TESTS]: [
       { action: recordMe },
       { action: registerPiece },
@@ -147,7 +196,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.panels.length === 3 &&
           setup.loom.panels.every((panel) =>
             panel.get().addedBy !== undefined &&
-            principalOf(panel, "authored-by") === panel.get().addedBy
+            principalOf(panel.key("addedBy"), "authored-by") ===
+              panel.get().addedBy
           ) &&
           setup.loom.panels.filter((panel) => panel.get().addedBy === me.get())
               .length === 1
@@ -155,9 +205,37 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       { action: linkAlicesElsewhere },
       { assertion: assert(() => setup.elsewhere.panels.length === 0) },
+      { action: retitleAlices },
+      {
+        assertion: assert(() => {
+          const theirs = setup.loom.panels.find((panel) => {
+            const value = panel.get();
+            return value.addedBy !== undefined && value.addedBy !== me.get();
+          });
+          return theirs !== undefined &&
+            principalOf(theirs.key("addedBy"), "authored-by") ===
+              theirs.get().addedBy &&
+            principalOf(theirs.key("titleOverride"), "authored-by") ===
+              me.get();
+        }),
+      },
+      // Editing a title leaves the original adder in charge of linking the
+      // occurrence. Alice still links it after Bob's second refused attempt.
+      { action: linkAlicesElsewhere },
+      { assertion: assert(() => setup.elsewhere.panels.length === 0) },
+      { action: retitleUnattributed },
+      {
+        assertion: assert(() =>
+          setup.unattributed.get().addedBy === undefined &&
+          principalOf(
+              setup.unattributed.key("titleOverride"),
+              "authored-by",
+            ) === me.get()
+        ),
+      },
       { label: "bob-linked" },
       { await: "alice-linked" },
-      { assertion: assert(() => setup.elsewhere.panels.length === 1) },
+      { assertion: assert(() => setup.elsewhere.panels.length === 2) },
     ],
   };
 });

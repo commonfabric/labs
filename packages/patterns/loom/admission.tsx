@@ -155,11 +155,12 @@ function adderFields(
 }
 
 /**
- * The principal `panel`'s attested adder names, or `undefined` when its label
- * names no single one.
+ * Returns the principal attested on `panel`'s `addedBy` field, or `undefined`
+ * when that field's label names no single one. Other fields can have their
+ * own authors without changing who added the occurrence.
  */
 function attestedAdder(panel: Writable<Panel>): string | undefined {
-  return principalOf(panel, "authored-by");
+  return principalOf(panel.key("addedBy"), "authored-by");
 }
 
 /** A copy of `source` that keeps its target and title and takes a new adder. */
