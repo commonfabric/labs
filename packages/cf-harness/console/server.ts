@@ -91,6 +91,11 @@ import {
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
 import type { HarnessClientActionOutcomeKind } from "../src/contracts/client-action.ts";
+import {
+  checkHarnessClientProtocol,
+  harnessClientProtocolEcho,
+  readHarnessClientProtocolDeclaration,
+} from "../src/contracts/client-command.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -1758,6 +1763,7 @@ export class ConsoleServer {
     if (request.method === "GET" && url.pathname === "/api/status") {
       return Response.json({
         artifactRoot: this.#config.artifactRoot,
+        protocol: harnessClientProtocolEcho(),
         ...this.#service.status(url.searchParams.get("sessionId") ?? undefined),
       });
     }
@@ -2035,7 +2041,26 @@ export class ConsoleServer {
       loomId?: unknown;
       browserHost?: unknown;
       clientActions?: unknown;
+      protocol?: unknown;
     } = isObjectOrArray(parsed) ? parsed : {};
+    // The host's protocol is checked before anything else is read, so a host
+    // this console cannot serve learns that, and nothing starts.
+    if (body.protocol !== undefined) {
+      const protocolDeclaration = readHarnessClientProtocolDeclaration(
+        body.protocol,
+      );
+      if (protocolDeclaration === undefined) {
+        return Response.json({
+          error:
+            "protocol must be { protocolVersion: integer, requires: feature names }",
+        }, { status: 400 });
+      }
+      const check = checkHarnessClientProtocol(protocolDeclaration);
+      if (!check.ok) {
+        const { message, ...mismatch } = check.mismatch;
+        return Response.json({ error: message, ...mismatch }, { status: 409 });
+      }
+    }
     if (
       body.clientActions !== undefined &&
       typeof body.clientActions !== "boolean"
@@ -2144,6 +2169,7 @@ export class ConsoleServer {
       sessionId,
       turnId: turn.result.turnId,
       ...(browserHostToken !== undefined ? { browserHostToken } : {}),
+      protocol: harnessClientProtocolEcho(),
     });
   }
 
@@ -2605,6 +2631,7 @@ const CHAT_ERROR_STATUS: Readonly<Record<HarnessChatError["code"], number>> = {
   invalid_request: 400,
   unknown_action: 404,
   action_resolved: 409,
+  protocol_mismatch: 409,
   session_exists: 409,
   session_not_found: 404,
   turn_exists: 409,

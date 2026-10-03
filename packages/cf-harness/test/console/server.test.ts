@@ -57,6 +57,7 @@ import {
   type HarnessChatTurnStatus,
 } from "../../src/contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
+import { harnessClientProtocolEcho } from "../../src/contracts/client-command.ts";
 
 /**
  * A loop that answers the task it was given and nothing else. The console
@@ -1455,6 +1456,7 @@ describe("console/server", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         artifactRoot: (await config()).artifactRoot,
+        protocol: harnessClientProtocolEcho(),
         sessions: [],
       });
     });
@@ -2446,6 +2448,46 @@ describe("console/server", () => {
   });
 
   describe("POST /api/task", () => {
+    it("refuses a host whose protocol requires an unserved feature, before any session starts", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "what is on this loom?",
+        protocol: { protocolVersion: 1, requires: ["typed_commands"] },
+      }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: "this console does not serve typed_commands",
+        code: "protocol_mismatch",
+        protocol: harnessClientProtocolEcho(),
+        requestedVersion: 1,
+        missing: ["typed_commands"],
+      });
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("answers 400 for a malformed protocol declaration", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "what is on this loom?",
+        protocol: { protocolVersion: "1", requires: [] },
+      }));
+
+      expect(response.status).toBe(400);
+      expect((await listSessions()).sessions).toEqual([]);
+    });
+
+    it("echoes its protocol on an accepted task", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "track my books",
+        clientActions: true,
+        protocol: { protocolVersion: 1, requires: ["client_actions"] },
+      }));
+
+      expect(response.status).toBe(200);
+      const started = await response.json();
+      expect(started.protocol).toEqual(harnessClientProtocolEcho());
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
     it("starts a follow-up turn in the session the request names", async () => {
       const started = await startTask({ text: "track my books" });
 

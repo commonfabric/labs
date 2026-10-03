@@ -35,6 +35,10 @@ import {
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
+import {
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
+  harnessClientProtocolEcho,
+} from "../src/contracts/client-command.ts";
 import { HarnessChatStoreHeldError } from "../src/session-store.ts";
 import {
   openSqliteHarnessChatSessionStore,
@@ -1933,4 +1937,198 @@ Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its 
       Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", previous);
     }
   }
+});
+
+Deno.test("interactive NDJSON transport refuses a protocol mismatch before the session starts", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "start_session",
+        params: {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+          model: "gpt-test",
+          protocol: { protocolVersion: 2, requires: ["client_actions"] },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+  });
+
+  const envelopes = decodeLines(output);
+  assertEquals(envelopes, [
+    JSON.parse(
+      Deno.readTextFileSync(
+        fromFileUrl(
+          new URL(
+            "./fixtures/client-command-wire/protocol-mismatch-stdio.json",
+            import.meta.url,
+          ),
+        ),
+      ),
+    ),
+  ]);
+});
+
+Deno.test("interactive NDJSON transport starts a session whose protocol it serves and refuses a turn whose protocol it does not", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "start_session",
+        params: {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+          model: "gpt-test",
+          protocol: { protocolVersion: 1, requires: ["client_actions"] },
+        },
+      }),
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-2",
+        method: "start_turn",
+        params: {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Hello" },
+          protocol: { protocolVersion: 1, requires: ["typed_commands"] },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+    createService: (onEvent) => new HarnessInteractiveChatService({ onEvent }),
+  });
+
+  const responses = decodeLines(output).filter((envelope) => "ok" in envelope);
+  assertEquals(
+    responses.map((envelope) =>
+      "ok" in envelope
+        ? [
+          envelope.requestId,
+          envelope.ok,
+          envelope.ok ? undefined : envelope.error.code,
+        ]
+        : undefined
+    ),
+    [["request-1", true, undefined], [
+      "request-2",
+      false,
+      "protocol_mismatch",
+    ]],
+  );
+});
+
+Deno.test("interactive NDJSON transport echoes its client protocol on an accepted session and turn", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "start_session",
+        params: {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+          model: "gpt-test",
+          protocol: { protocolVersion: 1, requires: ["client_actions"] },
+        },
+      }),
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-2",
+        method: "start_turn",
+        params: {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Hello" },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+    createService: (onEvent) =>
+      new HarnessInteractiveChatService({
+        onEvent,
+        createPromptLoop: () => ({
+          runTranscript: (options) => {
+            const finalMessage = {
+              role: "assistant" as const,
+              content: "Hello.",
+            };
+            return Promise.resolve({
+              model: "gpt-test",
+              finalAssistantText: "Hello.",
+              transcript: [...options.transcript, finalMessage],
+              modelTurns: 1,
+              runState: {} as HarnessPromptLoopResult["runState"],
+            });
+          },
+        }),
+      }),
+  });
+
+  const echoes = decodeLines(output).flatMap((envelope) =>
+    "ok" in envelope && envelope.ok
+      ? [[
+        envelope.requestId,
+        (envelope.result as { protocol?: unknown }).protocol,
+      ]]
+      : []
+  );
+  assertEquals(echoes, [
+    ["request-1", harnessClientProtocolEcho()],
+    ["request-2", harnessClientProtocolEcho()],
+  ]);
+  assertEquals(harnessClientProtocolEcho().features, [
+    ...HARNESS_SUPPORTED_CLIENT_FEATURES,
+  ]);
+});
+
+Deno.test("interactive NDJSON transport refuses an answer carrying both an outcome and a typed settlement", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "resolve_client_action",
+        params: {
+          sessionId: "session-1",
+          actionId: "action-1",
+          outcome: "done",
+          settlement: {
+            status: "failed_to_deliver",
+            reason: "the Weaver could not reach the service",
+            landed: "no",
+          },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+    createService: (onEvent) => new HarnessInteractiveChatService({ onEvent }),
+  });
+
+  const [response] = decodeLines(output);
+  assertEquals(
+    "ok" in response && !response.ok ? response.error.code : undefined,
+    "invalid_request",
+  );
 });
