@@ -102,13 +102,15 @@ attention details.
 `RuntimeClient.retrySpaceAccess(space)` asks the memory server once more for a
 space it refused the runtime, and resolves once the server has decided. It is
 for a host with word that the runtime's principal was granted access, such as a
-notice naming the space: the runtime never asks again on its own, since the
-refusal turns on an access list it cannot read. The retry goes through the
-memory server's ordinary session admission, so it can admit only what that
-admission would. An admission clears the refusal, tells the render boundaries
-and every `spaceAccess(target)` computation that read it, and repeats the loads
-the refusal failed. A refusal leaves the space refused, and the call resolves
-all the same; any other failure rejects it. A space the runtime has not opened
-is left alone.
+notice naming the space. The runtime asks again on its own only when the memory
+server tells it, with `session/admissible`, that a grant may admit it, since the
+refusal otherwise turns on an access list it cannot read; a connection the
+runtime closed on its first refusal of a space hears no such word. The retry
+goes through the memory server's ordinary session admission, so it can admit
+only what that admission would. An admission clears the refusal, tells the
+render boundaries and every `spaceAccess(target)` computation that read it, and
+repeats the loads the refusal failed. A refusal leaves the space refused, and
+the call resolves all the same; any other failure rejects it. A space the
+runtime has not opened is left alone.
 [`docs/features/space-access.md`](../../docs/features/space-access.md) says how
 the answer is kept current.
