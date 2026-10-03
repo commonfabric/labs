@@ -3005,31 +3005,48 @@ export class RuntimeProcessor {
   ): Promise<SlugReferenceResponse> {
     const cc = this.#getSpaceCtx(request.space);
     const space = cc.getSpace();
+    // Each document the walk read, at its root: the answer, and a failure's
+    // message, are made from what they hold, so the gate decides it on them.
+    const walked: Cell<unknown>[] = [];
+    const read = (cell: Cell<unknown>) => {
+      const { space, id, scope } = cell.getAsNormalizedFullLink();
+      walked.push(
+        this.#runtime.getCellFromLink({ space, id, scope, path: [] }),
+      );
+    };
     try {
       if (request.member === undefined) {
         const { piece } = await resolveSlugTargetInPiece(
           this.#runtime,
           space,
           request.slug,
+          read,
         );
-        return { piece: this.#hostReadGate.pieceRef(piece), pathAfter: [] };
+        return await this.#hostReadGate.slugReference(walked, {
+          piece,
+          pathAfter: [],
+        });
       }
       const { piece, pathAfter } = await resolveSlugReference(
         this.#runtime,
         space,
         request.slug,
         [request.member],
+        read,
       );
-      return { piece: this.#hostReadGate.pieceRef(piece), pathAfter };
+      return await this.#hostReadGate.slugReference(walked, {
+        piece,
+        pathAfter,
+      });
     } catch (error) {
       // A reference reaching nothing is what the caller asked about, so it
       // comes back as an answer. Everything else — a transport fault, a
       // document that will not decode — stays an error, which is the only
       // way a caller can tell "this name is not bound" from "ask again".
       if (error instanceof SlugResolutionError) {
-        return {
+        return await this.#hostReadGate.slugReference(walked, {
           refusal: { code: error.code ?? "unresolved", message: error.message },
-        };
+        });
       }
       throw error;
     }

@@ -83,6 +83,8 @@ import {
   type OperationUpdateNotification,
   type PieceRef,
   type RuntimeErrorCode,
+  type SlugReferenceResponse,
+  type SlugRefusal,
   type SlugResponse,
   type TelemetryNotification,
   TransportNotificationType,
@@ -535,6 +537,41 @@ export class HostReadGate {
     if (refusal?.refused !== undefined) return refusal;
     const slug = root.getMetaRaw("slug");
     return decided({ slug: typeof slug === "string" ? slug : undefined });
+  }
+
+  /**
+   * The answer to a host's slug reference: where it landed, as a ref to the
+   * piece it reached ({@link pieceRef}), or why it reached nothing, or the
+   * refusal that stands in place of either. A slug is its piece's metadata,
+   * and naming the piece a slug stands for, or why it stands for none, tells
+   * the host what that slug would. So the answer is decided as {@link slug}
+   * decides a slug, on every label each document the walk read stores
+   * (`walked`, each at its root), once each is loaded.
+   */
+  async slugReference(
+    walked: readonly Cell<unknown>[],
+    answer:
+      | { piece: Cell<unknown>; pathAfter: string[] }
+      | { refusal: SlugRefusal },
+  ): Promise<SlugReferenceResponse> {
+    for (const root of walked) {
+      await this.#hold(root);
+      const refusal = this.#cellRefusal(root);
+      if (refusal === undefined) continue;
+      const { refusedBy } = this.#refuse(refusal).refused;
+      return decided({
+        refusal: {
+          code: refusedBy,
+          message: `The worker refused to name what this slug stands for ` +
+            `(${refusedBy}).`,
+        },
+      });
+    }
+    return decided(
+      "refusal" in answer
+        ? { refusal: answer.refusal }
+        : { piece: this.pieceRef(answer.piece), pathAfter: answer.pathAfter },
+    );
   }
 
   /**

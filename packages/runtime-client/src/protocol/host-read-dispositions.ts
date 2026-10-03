@@ -190,7 +190,7 @@ export const REQUEST_DISPOSITIONS = {
       "the redirect decided on its labels as a link's node is",
   },
   [RequestType.PieceGetSlug]: DECIDED,
-  [RequestType.SlugResolve]: reference,
+  [RequestType.SlugResolve]: DECIDED,
   [RequestType.PieceRemove]: write,
   [RequestType.PieceStart]: write,
   [RequestType.PieceStop]: write,

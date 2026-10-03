@@ -3666,7 +3666,8 @@ export type SlugRefusal = {
 
 /**
  * Where a slug reference landed: the piece it reached and the segments the
- * walk did not spend, or the refusal that says it reached nothing.
+ * walk did not spend, or the refusal that says it reached nothing, or that
+ * the display ceiling refused to say (`code: "display-ceiling"`).
  *
  * The two are arms of a union rather than optional fields of one object, so
  * that a response carrying both cannot be built. Written as optionals, the
@@ -3675,35 +3676,38 @@ export type SlugRefusal = {
  * ordinary "no such member".
  */
 export type SlugReferenceResponse =
-  | {
-    /**
-     * The piece the reference reached.
-     */
-    piece: PieceRef;
+  & HostReadDecided
+  & (
+    | {
+      /**
+       * The piece the reference reached.
+       */
+      piece: PieceRef;
 
-    /**
-     * What is left of the reference after the piece. Empty where the member
-     * named a member; the member itself where the slug named a piece at its
-     * root, which spends no segment and leaves the member a cell path the
-     * piece's own address does not include.
-     */
-    pathAfter: string[];
+      /**
+       * What is left of the reference after the piece. Empty where the member
+       * named a member; the member itself where the slug named a piece at its
+       * root, which spends no segment and leaves the member a cell path the
+       * piece's own address does not include.
+       */
+      pathAfter: string[];
 
-    /** Absent, which is what makes this the landing arm. */
-    refusal?: undefined;
-  }
-  | {
-    /** Absent, which is what makes this the refusal arm. */
-    piece?: undefined;
+      /** Absent, which is what makes this the landing arm. */
+      refusal?: undefined;
+    }
+    | {
+      /** Absent, which is what makes this the refusal arm. */
+      piece?: undefined;
 
-    /** Absent with the piece. */
-    pathAfter?: undefined;
+      /** Absent with the piece. */
+      pathAfter?: undefined;
 
-    /**
-     * Why the reference reached nothing.
-     */
-    refusal: SlugRefusal;
-  };
+      /**
+       * Why the reference reached nothing.
+       */
+      refusal: SlugRefusal;
+    }
+  );
 
 /** A piece's slug, `undefined` where the piece has none. */
 export type SlugResponse =

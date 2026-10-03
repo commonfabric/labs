@@ -78,6 +78,14 @@ export interface SlugReferenceTarget<Segment extends string | number> {
 }
 
 /**
+ * Called with each cell a slug's resolution loaded, once it is loaded: the
+ * slug's own document, its target, and each cell the walk followed from
+ * there. A reader deciding what the answer may show decides it on these,
+ * since the answer, and the failure, are made from what they hold.
+ */
+export type SlugWalkRead = (cell: Cell<unknown>) => void;
+
+/**
  * Resolves a slug to the piece its target sits in and the path to the target
  * inside it. Fails with `not-piece` when the target's document is no piece,
  * and as {@link resolveSlugTargetCell} fails when the slug does not resolve.
@@ -86,8 +94,9 @@ export async function resolveSlugTargetInPiece(
   runtime: Runtime,
   space: MemorySpace,
   token: string,
+  read?: SlugWalkRead,
 ): Promise<SlugTargetInPiece> {
-  const target = await resolveSlugTargetCell(runtime, space, token);
+  const target = await resolveSlugTargetCell(runtime, space, token, read);
   if (!isPieceDocument(runtime, target)) {
     throw notPiece(token);
   }
@@ -126,8 +135,9 @@ export async function resolveSlugReference<Segment extends string | number>(
   space: MemorySpace,
   token: string,
   path: readonly Segment[],
+  read?: SlugWalkRead,
 ): Promise<SlugReferenceTarget<Segment>> {
-  const target = await resolveSlugTargetCell(runtime, space, token);
+  const target = await resolveSlugTargetCell(runtime, space, token, read);
   if (isPieceRoot(runtime, target)) {
     return { piece: target, pathAfter: [...path] };
   }
@@ -146,7 +156,7 @@ export async function resolveSlugReference<Segment extends string | number>(
   // collection is reached from the containing piece through a link, and a key
   // read on the unresolved cell would look the member up in the wrong
   // document. The member's own link chain is followed the same way.
-  const map = await followAndLoad(target);
+  const map = await followAndLoad(target, read);
   const member = String(path[0]);
   const held = map.key(member);
   if (held.getRaw() === undefined) {
@@ -155,7 +165,7 @@ export async function resolveSlugReference<Segment extends string | number>(
       "missing-member",
     );
   }
-  const reached = await followAndLoad(held);
+  const reached = await followAndLoad(held, read);
   if (!isPieceRoot(runtime, reached)) {
     throw new SlugResolutionError(
       `"${token}/${member}" does not name a piece.`,
@@ -173,10 +183,14 @@ export async function resolveSlugReference<Segment extends string | number>(
  * following moves nowhere. A cycle of links ends in `resolveAsCell()`'s own
  * refusal.
  */
-async function followAndLoad(cell: Cell<unknown>): Promise<Cell<unknown>> {
+async function followAndLoad(
+  cell: Cell<unknown>,
+  read: SlugWalkRead | undefined,
+): Promise<Cell<unknown>> {
   let current = cell;
   for (;;) {
     await current.sync();
+    read?.(current);
     const next = current.resolveAsCell();
     if (
       areNormalizedLinksSame(
@@ -205,6 +219,7 @@ export async function resolveSlugTargetCell(
   runtime: Runtime,
   space: MemorySpace,
   token: string,
+  read?: SlugWalkRead,
 ): Promise<Cell<unknown>> {
   const slug = validateSlug(token);
   const slugId = slugIdForSpace(space, slug);
@@ -213,6 +228,7 @@ export async function resolveSlugTargetCell(
     entityIdFrom(slugId),
   );
   await slugCell.sync();
+  read?.(slugCell);
   const raw = slugCell.getRaw();
   if (raw === undefined) {
     throw new SlugResolutionError(`Slug "${slug}" not found.`, "missing");
@@ -233,6 +249,7 @@ export async function resolveSlugTargetCell(
     scope: targetLink.scope ?? "space",
   });
   await target.sync();
+  read?.(target);
   return target;
 }
 

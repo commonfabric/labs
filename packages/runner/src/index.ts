@@ -415,6 +415,7 @@ export {
   type SlugReferenceTarget,
   SlugResolutionError,
   type SlugTargetInPiece,
+  type SlugWalkRead,
 } from "./slug-resolution.ts";
 
 export { schemaPathSelection } from "./schema-path.ts";

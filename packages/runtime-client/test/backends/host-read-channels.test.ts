@@ -18,12 +18,14 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import {
   type Cell,
+  entityIdFrom,
   hostValueOf,
   makeAddressKey,
   readProjected,
   Runtime,
   RuntimeTelemetryEvent,
   type RuntimeTelemetryMarkerResult,
+  slugIdForSpace,
 } from "@commonfabric/runner";
 import { stringSchema } from "@commonfabric/runner/schemas";
 import {
@@ -144,6 +146,37 @@ function documentAtIn(runtime: Runtime): DocumentAt {
     });
 }
 
+/** Binds `slug` to `target`, as `set-slug` does. */
+async function pointSlug(
+  runtime: Runtime,
+  slug: string,
+  target: Cell<unknown>,
+): Promise<void> {
+  const slugCell = runtime.getCellFromEntityId(
+    space,
+    entityIdFrom(slugIdForSpace(space, slug)),
+  );
+  await runtime.editWithRetry((tx) => {
+    const slugWithTx = slugCell.withTx(tx);
+    slugWithTx.setRawUntyped(
+      target.withTx(tx).getAsWriteRedirectLink({ base: slugWithTx }),
+    );
+  });
+}
+
+/** A worker for `viewer` that serves slugs of the shelf's space. */
+function slugProcessorFor(runtime: Runtime, viewer: Identity) {
+  return buildProcessor({
+    runtime,
+    cc: { getSpace: () => space },
+    identity: viewer,
+    space,
+    renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+      viewer.did(),
+    ),
+  });
+}
+
 /** The gate a worker builds for `viewer`, under the shell's default ceiling. */
 function gateFor(runtime: Runtime, viewer: Identity): HostReadGate {
   const ceiling = defaultRenderConfidentialityCeiling(viewer.did());
@@ -205,6 +238,120 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(gateFor(docs.runtime, owner).slug(docs.contacts)).toEqual({
         slug: "contacts-slug",
       });
+    });
+
+    it("does not tell a visitor which piece a slug it is refused stands for", async () => {
+      await using docs = await shelf();
+      // A piece only its owner may see, and a slug a visitor could guess.
+      const piece = await docs.write(
+        "credential-piece",
+        { [SECRET_KEY]: SECRET_VALUE },
+        [[[], [ownerOnly]]],
+        {
+          slug: "credential",
+          patternIdentity: { identity: "pattern-credential", symbol: "main" },
+        },
+      );
+      await pointSlug(docs.runtime, "credential", piece);
+      const pieceId = piece.getAsNormalizedFullLink().id;
+      const toVisitor = slugProcessorFor(docs.runtime, visitor);
+      const toOwner = slugProcessorFor(docs.runtime, owner);
+      try {
+        const resolve = {
+          type: RequestType.SlugResolve,
+          space,
+          slug: "credential",
+        } as const;
+        const getSlug = {
+          type: RequestType.PieceGetSlug,
+          space,
+          pieceId: pieceId.replace(/^of:/, ""),
+        } as const;
+
+        const resolved = await toVisitor.handleSlugResolve(resolve);
+        expect(JSON.stringify(resolved)).not.toContain(pieceId);
+        expect(resolved).toEqual({
+          refusal: expect.objectContaining({ code: "display-ceiling" }),
+        });
+        // As the visitor is refused the slug of that piece.
+        expect(await toVisitor.handlePieceGetSlug(getSlug)).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+        expect(await toOwner.handleSlugResolve(resolve)).toEqual({
+          piece: { cell: expect.objectContaining({ id: pieceId, path: [] }) },
+          pathAfter: [],
+        });
+        expect(await toOwner.handlePieceGetSlug(getSlug)).toEqual({
+          slug: "credential",
+        });
+      } finally {
+        await toVisitor.dispose();
+        await toOwner.dispose();
+      }
+    });
+
+    it("decides a slug reference to a member on each document the walk read", async () => {
+      await using docs = await shelf();
+      const pieceMeta = (name: string) => ({
+        patternIdentity: { identity: `pattern-${name}`, symbol: "main" },
+      });
+      const piece = await docs.write(
+        "sealed-member",
+        { [SECRET_KEY]: SECRET_VALUE },
+        [[[], [ownerOnly]]],
+        pieceMeta("sealed-member"),
+      );
+      // A collection anyone may see, holding a piece only its owner may.
+      const board = await docs.write(
+        "open-board",
+        { names: { "1": piece.getAsLink() } },
+        [],
+        pieceMeta("open-board"),
+      );
+      // A collection only its owner may see, down to its members' names.
+      const sealedBoard = await docs.write(
+        "sealed-board",
+        { names: { [SECRET_KEY]: piece.getAsLink() } },
+        [[[], [ownerOnly]]],
+        pieceMeta("sealed-board"),
+      );
+      await pointSlug(docs.runtime, "open-top", board.key("names"));
+      await pointSlug(docs.runtime, "sealed-top", sealedBoard.key("names"));
+      const pieceId = piece.getAsNormalizedFullLink().id;
+      const toVisitor = slugProcessorFor(docs.runtime, visitor);
+      const toOwner = slugProcessorFor(docs.runtime, owner);
+      const resolve = (slug: string, member: string) => ({
+        type: RequestType.SlugResolve,
+        space,
+        slug,
+        member,
+      } as const);
+      try {
+        const refused = {
+          refusal: expect.objectContaining({ code: "display-ceiling" }),
+        };
+        const member = await toVisitor.handleSlugResolve(
+          resolve("open-top", "1"),
+        );
+        expect(JSON.stringify(member)).not.toContain(pieceId);
+        expect(member).toEqual(refused);
+        // A member the collection does not hold is its content as well.
+        expect(await toVisitor.handleSlugResolve(resolve("sealed-top", "2")))
+          .toEqual(refused);
+
+        expect(await toOwner.handleSlugResolve(resolve("open-top", "1")))
+          .toEqual({
+            piece: { cell: expect.objectContaining({ id: pieceId }) },
+            pathAfter: [],
+          });
+        expect(await toOwner.handleSlugResolve(resolve("sealed-top", "2")))
+          .toEqual({
+            refusal: expect.objectContaining({ code: "missing-member" }),
+          });
+      } finally {
+        await toVisitor.dispose();
+        await toOwner.dispose();
+      }
     });
 
     for (const via of ["fromMetadata", "fromCell"] as const) {
