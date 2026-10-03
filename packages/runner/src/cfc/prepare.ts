@@ -5690,20 +5690,40 @@ const previousWriteValueForTarget = (
 ): FabricValue => writeDetailValueForTarget(tx, target, "previousValue");
 
 /**
+ * Where {@link resolveValueThroughLinks} finds the value at an address.
+ * `stored` says whether the walk followed a link this transaction did not
+ * write.
+ */
+type LinkedValue =
+  | {
+    /** The value lives at `held`. */
+    readonly kind: "held";
+    readonly held: CfcAddress;
+    readonly stored: boolean;
+  }
+  | {
+    /** Nothing is there. */
+    readonly kind: "absent";
+  }
+  | {
+    /** The walk follows more links than link resolution follows. */
+    readonly kind: "unfinished";
+    readonly stored: boolean;
+  };
+
+/**
  * Where the value at `address` lives at the end of this transaction: the
  * address reached by reading through every link on the way to it from the
- * root of its document, or `"absent"` where nothing is there. `stored` says
- * whether the walk followed a link this transaction did not write. A link's
- * target path is walked one segment at a time from the root of the document
- * it names, so a link partway along that path is followed too. A link that
- * names its cell relative to the document holding it resolves against that
- * document. A read that fails, and a walk following more links than link
- * resolution follows, return `undefined`.
+ * root of its document. A link's target path is walked one segment at a time
+ * from the root of the document it names, so a link partway along that path
+ * is followed too. A link that names its cell relative to the document
+ * holding it resolves against that document. A read that fails throws, so a
+ * path that could not be read is never taken to hold nothing.
  */
 const resolveValueThroughLinks = (
   tx: IExtendedStorageTransaction,
   address: CfcAddress,
-): { held: CfcAddress; stored: boolean } | "absent" | undefined => {
+): LinkedValue => {
   let document = {
     space: address.space,
     id: address.id as URI,
@@ -5716,17 +5736,14 @@ const resolveValueThroughLinks = (
   // links followed bounds the walk.
   let hops = 0;
   while (true) {
-    let value: FabricValue;
-    try {
-      value = tx.readValueOrThrow({ ...document, path }, {
-        meta: INTERNAL_VERIFIER_META,
-      });
-    } catch {
-      return undefined;
-    }
+    const value = tx.readValueOrThrow({ ...document, path }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
     if (isPrimitiveCellLink(value)) {
-      if (++hops > MAX_PATH_RESOLUTION_LENGTH) return undefined;
       stored ||= !writtenInTransaction(tx, document, path);
+      if (++hops > MAX_PATH_RESOLUTION_LENGTH) {
+        return { kind: "unfinished", stored };
+      }
       const next = parseLink(value, { ...document, path });
       document = { space: next.space, id: next.id, scope: next.scope };
       path = [];
@@ -5735,12 +5752,12 @@ const resolveValueThroughLinks = (
     }
     if (remaining.length === 0) {
       return value === undefined
-        ? "absent"
-        : { held: { ...document, path }, stored };
+        ? { kind: "absent" }
+        : { kind: "held", held: { ...document, path }, stored };
     }
     const [segment, ...rest] = remaining;
     if (!isWalkableObjectOrArray(value) || !Object.hasOwn(value, segment)) {
-      return "absent";
+      return { kind: "absent" };
     }
     path = [...path, segment];
     remaining = rest;
@@ -9930,6 +9947,43 @@ const attemptedWritePathsUnder = (
 };
 
 /**
+ * The integrity a link credits a floor with for the value it brings to the
+ * floored path, the value at `relative` below its source, found where it
+ * lives (`resolveValueThroughLinks()`), or `undefined` where the source holds
+ * nothing there, since absence is not a floored value.
+ *
+ * Through links this transaction wrote, `chain` derives the credit through the
+ * references it stages on the way. Where the walk to the value crosses a link
+ * stored before this transaction, the credit is the label of the document
+ * holding the value, at the value's own position, and that label alone: a
+ * stored link's label describes whatever its target held when the link was
+ * written, which says nothing of the value there now. A walk through such a
+ * link that cannot finish credits nothing (§8.2.6, §8.2.7).
+ */
+const linkedValueCredit = function* (
+  tx: IExtendedStorageTransaction,
+  linkLabels: LinkLabelDeriver,
+  input: LinkWritePolicyInput,
+  relative: readonly string[],
+  chain: () => Generator<void, IFCLabel | undefined>,
+): Generator<void, readonly CfcAtom[] | undefined> {
+  const resolved = resolveValueThroughLinks(tx, {
+    ...input.source,
+    path: [...canonicalizeLogicalPath(input.source.path), ...relative],
+  });
+  switch (resolved.kind) {
+    case "absent":
+      return undefined;
+    case "held":
+      return (yield* (resolved.stored
+        ? linkLabels.labelAt({ ...input, source: resolved.held }, [])
+        : chain()))?.integrity ?? [];
+    case "unfinished":
+      return resolved.stored ? [] : (yield* chain())?.integrity ?? [];
+  }
+};
+
+/**
  * Epic D3 — the write-side `requiredIntegrity` FLOOR (§8.12.4.1 / SC-18),
  * dual of the read-side gate in `verifyInputRequirements`: where that gate
  * quantifies over the transaction's consumed reads, the floor tests the
@@ -9944,8 +9998,11 @@ const attemptedWritePathsUnder = (
  *   `projection` carries, evidence-gated by the write's authoring identity
  *   (a pattern cannot forge runtime-minted evidence to pass its own floor);
  * - each link written at/under the path — the linked source's own label, the
- *   D2 by-reference contract on the write side. Every link must individually
- *   satisfy the floor (one endorsed sibling never launders another);
+ *   D2 by-reference contract on the write side — and each link above it.
+ *   A link above the path, and one the runtime staged, is credited by the
+ *   value it brings, where that value lives (`linkedValueCredit()`). Every
+ *   link must individually satisfy the floor (one endorsed sibling never
+ *   launders another);
  * - the flow hereditary meet, when flow labels are on (`value` contributions
  *   carry the per-tx derived integrity).
  *
@@ -10071,37 +10128,45 @@ const verifyWriteFloor = function* (
     // when plain data was written (crediting the flow meet when available).
     const contributions: (readonly CfcAtom[])[] = [];
     for (const input of linksHere) {
-      const derived = yield* ctx.linkLabels.persisted(input);
       // An underivable link (`reasons` set, `label` undefined) contributes empty
       // integrity — it fails the floor, fail-closed, alongside the persist
       // loop's own missing-source reason (both reject).
-      contributions.push(derived.label?.integrity ?? []);
+      const persisted = function* (): Generator<void, IFCLabel | undefined> {
+        return (yield* ctx.linkLabels.persisted(input)).label;
+      };
+      // A link the runtime staged, a capture or a binding, mints none of the
+      // slot's integrity for its stager, so it is credited by the value it
+      // brings, where that value lives. A link a write sets is credited with
+      // the label this commit persists for it.
+      const staged = pathHoldsStagedReference(
+        tx,
+        {
+          space: input.target.space,
+          id: input.target.id,
+          scope: normalizeCellScope(input.target.scope),
+        },
+        input.target.path,
+      );
+      const credit = staged
+        ? yield* linkedValueCredit(tx, ctx.linkLabels, input, [], persisted)
+        : (yield* persisted())?.integrity ?? [];
+      if (credit !== undefined) contributions.push(credit);
     }
     for (const input of ancestorLinks) {
       // Re-point the derivation at the floor path INSIDE the linked source:
       // the value at the floor path is source.path + (floor − linkPath), so
       // the credit is the source's own label at that nested path (an endorsed
-      // nested value passes; an unendorsed one fails, fail-closed), derived
-      // through the references this transaction stages on the way. Where the
-      // source reaches the value through a link stored before this
-      // transaction, the credit is the label of the document holding the
-      // value, at the value's own position, and that label alone: a stored
-      // link's label describes whatever its target held when the link was
-      // written, which says nothing of the value there now. A source holding
-      // nothing there brings no value to the floor path, and absence is not a
-      // floored value.
+      // nested value passes; an unendorsed one fails, fail-closed).
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
-      const resolved = resolveValueThroughLinks(tx, {
-        ...input.source,
-        path: [...canonicalizeLogicalPath(input.source.path), ...relative],
-      });
-      if (resolved === "absent") continue;
-      contributions.push(
-        (yield* (resolved?.stored === true
-          ? ctx.linkLabels.labelAt({ ...input, source: resolved.held }, [])
-          : ctx.linkLabels.labelAt(input, relative)))?.integrity ?? [],
+      const credit = yield* linkedValueCredit(
+        tx,
+        ctx.linkLabels,
+        input,
+        relative,
+        () => ctx.linkLabels.labelAt(input, relative),
       );
+      if (credit !== undefined) contributions.push(credit);
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
     // A value contribution exists when plain data lands at/under the floor
@@ -10114,9 +10179,10 @@ const verifyWriteFloor = function* (
     //   pure-link or undefined and would otherwise be judged by the link
     //   contributions alone (review). The per-path value probe keeps DELETE
     //   details (no value) out;
-    // - nothing else contributed at all (a value-shaped write with no link
-    //   inputs — e.g. a raw sigil smuggled without link policy inputs), so the
-    //   floor is still evaluated, fail-closed.
+    // - no link input reaches the path at all (a value-shaped write with no
+    //   link inputs — e.g. a raw sigil smuggled without link policy inputs),
+    //   so the floor is still evaluated, fail-closed. A link whose source
+    //   holds nothing there still reaches the path, and contributes nothing.
     const descendantValueWrite = writesUnder.some((writePath) =>
       !linksHere.some((input) =>
         concretePathHasPrefix(
@@ -10137,7 +10203,7 @@ const verifyWriteFloor = function* (
     const valueWritten =
       (written !== undefined && !isPureLinkStructure(written)) ||
       descendantValueWrite ||
-      contributions.length === 0;
+      (linksHere.length === 0 && ancestorLinks.length === 0);
     if (valueWritten) contributions.push(ctx.flowIntegrity);
 
     const misses = contributions.some((extra) =>
