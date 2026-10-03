@@ -103,6 +103,13 @@ const schemaless = (runtime: Runtime, cell: Cell<unknown>): Cell<unknown> => {
   return runtime.getCellFromLink(link);
 };
 
+/** Verifies `record` against `descriptor`, the consumer's own. */
+const verified = (record: Cell<unknown>, descriptor: unknown = DESCRIPTOR) =>
+  verifyReviewedIntentRecord(
+    record,
+    parseReviewedIntentDescriptor(descriptor),
+  );
+
 /** The values a sender types on the surface. */
 const text = (body: string) => ({ body });
 
@@ -331,7 +338,7 @@ describe("reviewed-intent", () => {
           trustedClick(),
           text("See you at noon"),
         );
-        const record = verifyReviewedIntentRecord(committed.record);
+        const record = verified(committed.record);
         const parameters = {
           to: shown(prepared),
           body: "See you at noon",
@@ -375,7 +382,7 @@ describe("reviewed-intent", () => {
           record.id,
           [],
         ]);
-        expect(verifyReviewedIntentRecord(fixture.result).parameters.body)
+        expect(verified(fixture.result).parameters.body)
           .toBe("On my way");
       } finally {
         await fixture.dispose();
@@ -391,7 +398,7 @@ describe("reviewed-intent", () => {
           trustedClick(),
           text("On my way"),
         );
-        const record = verifyReviewedIntentRecord(committed.record);
+        const record = verified(committed.record);
         expect(committed.receipt.getAsNormalizedFullLink().space).toBe(
           sender.did(),
         );
@@ -461,7 +468,10 @@ describe("reviewed-intent", () => {
             trustedClick(),
             text("Running late"),
           );
-          const record = verifyReviewedIntentRecord(committed.record);
+          const record = verified(committed.record, {
+            ...DESCRIPTOR,
+            windowMs,
+          });
           expect(record.exp - record.at).toBe(expected);
         } finally {
           await fixture.dispose();
@@ -482,7 +492,7 @@ describe("reviewed-intent", () => {
           );
           records.push({
             id: committed.record.getAsNormalizedFullLink().id,
-            ...verifyReviewedIntentRecord(committed.record),
+            ...verified(committed.record),
           });
         }
         expect(records[0].id).not.toBe(records[1].id);
@@ -511,7 +521,7 @@ describe("reviewed-intent", () => {
         expect((await tx.commit()).error?.message).toContain(
           "writeAuthorizedBy",
         );
-        expect(verifyReviewedIntentRecord(committed.record).parameters.body)
+        expect(verified(committed.record).parameters.body)
           .toBe("On my way");
       } finally {
         await fixture.dispose();
@@ -618,7 +628,7 @@ describe("reviewed-intent", () => {
           trustedClick(),
           text("🙂".repeat(40)),
         );
-        expect(verifyReviewedIntentRecord(committed.record).parameters.body)
+        expect(verified(committed.record).parameters.body)
           .toBe("🙂".repeat(40));
       } finally {
         await fixture.dispose();
@@ -1022,8 +1032,9 @@ describe("reviewed-intent", () => {
           trustedClick(),
           text("Hi"),
         );
-        expect(verifyReviewedIntentRecord(committed.record).parameters.to)
-          .toEqual(shown(witnessed));
+        expect(
+          verified(committed.record, withIntegrity([WITNESSED])).parameters.to,
+        ).toEqual(shown(witnessed));
 
         // A variable shared across patterns binds once: the writer and the
         // writer it witnesses must be the same, and here they are not.
@@ -1517,7 +1528,7 @@ describe("reviewed-intent", () => {
           "writeAuthorizedBy",
         );
         for (const cell of [fixture.result, lookalike.withTx(undefined)]) {
-          expect(() => verifyReviewedIntentRecord(cell)).toThrow(
+          expect(() => verified(cell)).toThrow(
             /not written by the reviewed-intent builtin/,
           );
         }
@@ -1549,7 +1560,7 @@ describe("reviewed-intent", () => {
         copy.set(genuine as never);
         expect((await tx.commit()).error).toBeUndefined();
         expect(copy.withTx(undefined).get()).toEqual(genuine as never);
-        expect(() => verifyReviewedIntentRecord(copy.withTx(undefined)))
+        expect(() => verified(copy.withTx(undefined)))
           .toThrow(/not written by the reviewed-intent builtin/);
       } finally {
         await fixture.dispose();
@@ -1576,7 +1587,7 @@ describe("reviewed-intent", () => {
         );
         lookalike.set(forged("Send the code") as never);
         expect((await tx.commit()).error).toBeUndefined();
-        expect(() => verifyReviewedIntentRecord(lookalike.withTx(undefined)))
+        expect(() => verified(lookalike.withTx(undefined)))
           .toThrow(/not written by the reviewed-intent builtin/);
       } finally {
         await fixture.dispose();
@@ -1634,7 +1645,7 @@ describe("reviewed-intent", () => {
           forged("Send the code"),
           { label: stampedLabel, origin: "declared" },
         );
-        expect(() => verifyReviewedIntentRecord(declared)).toThrow(
+        expect(() => verified(declared)).toThrow(
           /not written by the reviewed-intent builtin/,
         );
         // The same entry as the runtime derives it verifies, which is what
@@ -1646,7 +1657,7 @@ describe("reviewed-intent", () => {
           forged("Send the code"),
           { label: stampedLabel, origin: "derived", observes: "value" },
         );
-        expect(verifyReviewedIntentRecord(derived).parameters.body).toBe(
+        expect(verified(derived).parameters.body).toBe(
           "Send the code",
         );
       } finally {
@@ -1664,7 +1675,7 @@ describe("reviewed-intent", () => {
           forged("Send the code"),
           { label: stampedLabel, origin: "derived", observes: "value" },
         );
-        expect(() => verifyReviewedIntentRecord(elsewhere)).toThrow(
+        expect(() => verified(elsewhere)).toThrow(
           /not in its subject's home space/,
         );
         const altered = await seeded(
@@ -1677,7 +1688,7 @@ describe("reviewed-intent", () => {
           },
           { label: stampedLabel, origin: "derived", observes: "value" },
         );
-        expect(() => verifyReviewedIntentRecord(altered)).toThrow(
+        expect(() => verified(altered)).toThrow(
           /does not match its parameters/,
         );
         // A destination whose location names no path to resolve it at again.
@@ -1700,7 +1711,7 @@ describe("reviewed-intent", () => {
           },
           { label: stampedLabel, origin: "derived", observes: "value" },
         );
-        expect(() => verifyReviewedIntentRecord(unplaced)).toThrow(
+        expect(() => verified(unplaced)).toThrow(
           /`parameters` are malformed/,
         );
       } finally {
@@ -1718,10 +1729,77 @@ describe("reviewed-intent", () => {
           text("Genuine"),
         );
         expect(() =>
-          verifyReviewedIntentRecord(
+          verified(
             committed.record.key("parameters") as Cell<unknown>,
           )
         ).toThrow(/document root/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a record checked against another descriptor, or one its descriptor would not have produced", async () => {
+      const fixture = await setup();
+      try {
+        const prepared = await prepareReviewedIntent(fixture.bindings());
+        const committed = await commitReviewedIntent(
+          prepared.consent,
+          trustedClick(),
+          text("Genuine record"),
+        );
+        expect(() =>
+          verified(committed.record, {
+            ...DESCRIPTOR,
+            endpointName: "Another endpoint",
+          })
+        ).toThrow(/not for this descriptor/);
+        // Stamped records the commit never writes: what is checked beyond the
+        // digest holds for every record the builtin writes.
+        const destination = JSON.parse(forged("x").parameters).to[0];
+        for (
+          const [cause, change, refusal] of [
+            ["long-window", { exp: 1_700_000_000_000 + 120_000 }, /window/],
+            ["extra-key", {
+              parameters: { body: "x", cc: "y", to: [destination] },
+            }, /parameters/],
+            ["long-body", {
+              parameters: { body: "x".repeat(41), to: [destination] },
+            }, /parameters/],
+            [
+              "other-integrity",
+              {
+                parameters: {
+                  body: "x",
+                  to: [{
+                    ...destination,
+                    integrity: [WRITTEN_BY_REVIEWED_INTENT],
+                  }],
+                },
+              },
+              /parameters/,
+            ],
+          ] as const
+        ) {
+          const base = forged("x");
+          const parameters = "parameters" in change
+            ? change.parameters
+            : undefined;
+          const record = await seeded(
+            fixture,
+            sender.did(),
+            `stamped-${cause}`,
+            {
+              ...base,
+              ...change,
+              ...(parameters === undefined ? {} : {
+                parameters: JSON.stringify(parameters),
+                payloadDigest: hashStringOf(parameters as never),
+              }),
+            },
+            { label: stampedLabel, origin: "derived", observes: "value" },
+          );
+          expect(() => verified(record)).toThrow(refusal);
+        }
       } finally {
         await fixture.dispose();
       }
@@ -1758,7 +1836,7 @@ describe("reviewed-intent", () => {
             "writeAuthorizedBy",
           );
         }
-        expect(verifyReviewedIntentRecord(committed.record).parameters.body)
+        expect(verified(committed.record).parameters.body)
           .toBe("Genuine");
       } finally {
         await fixture.dispose();

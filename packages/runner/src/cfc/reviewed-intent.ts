@@ -1016,7 +1016,7 @@ export async function commitReviewedIntent(
   }
   // A runtime that does not persist flow labels writes no stamp, and a record
   // without one is never linked: every record a pattern receives verifies.
-  verifyReviewedIntentRecord(recordCell as Cell<unknown>);
+  verifyReviewedIntentRecord(recordCell as Cell<unknown>, descriptor);
 
   const linkTx = runtime.edit();
   try {
@@ -1110,8 +1110,16 @@ const parseStoredParameters = (
  * a record and leave the stamp in place; the check holds while every such
  * runtime enforces writer claims or persists flow labels.
  *
- * This verifies authorship and integrity only. Whether the record is the
- * consumer's, unexpired, and not yet acted on is the consumer's to check.
+ * The record must also be one `descriptor`, the consumer's own, would have
+ * produced: its `endpoint` is the descriptor's digest, its `operation`,
+ * `consumer` and `maxAttempts` are the descriptor's, its window is within the
+ * descriptor's, and its parameters are exactly the declared keys, each of its
+ * kind and within its bounds, each destination's integrity satisfying its
+ * parameter's patterns.
+ *
+ * This verifies authorship, integrity, and agreement with the descriptor.
+ * Whether the record is unexpired, its destinations still resolve to what it
+ * names, and it has not been acted on is the consumer's to check.
  *
  * Reads happen in `tx` when given, so that a consumer's transaction conflicts
  * with a change to the record; otherwise in a transaction of its own. The
@@ -1121,6 +1129,7 @@ const parseStoredParameters = (
  */
 export function verifyReviewedIntentRecord(
   record: Cell<unknown>,
+  descriptor: ReviewedIntentDescriptor,
   tx?: IExtendedStorageTransaction,
 ): ReviewedIntentRecord {
   const reader = tx ?? cellRuntime(record).edit();
@@ -1164,11 +1173,62 @@ export function verifyReviewedIntentRecord(
         "Reviewed intent record is not in its subject's home space",
       );
     }
-    return deepFreeze({
+    const verified = deepFreeze({
       ...value,
       parameters,
     }) as unknown as ReviewedIntentRecord;
+    checkAgainstDescriptor(verified, descriptor);
+    return verified;
   } finally {
     if (tx === undefined) reader.abort();
   }
 }
+
+/**
+ * Refuses a record that `descriptor` would not have produced: one for another
+ * descriptor, or whose parameters, window, or attempt bound it does not
+ * allow.
+ */
+const checkAgainstDescriptor = (
+  record: ReviewedIntentRecord,
+  descriptor: ReviewedIntentDescriptor,
+): void => {
+  if (
+    record.endpoint !== reviewedIntentEndpoint(descriptor) ||
+    record.operation !== descriptor.operation ||
+    record.consumer !== descriptor.consumer ||
+    record.maxAttempts !== descriptor.maxAttempts
+  ) {
+    throw new Error("Reviewed intent record is not for this descriptor");
+  }
+  if (
+    record.exp < record.at ||
+    record.exp - record.at >
+      Math.min(descriptor.windowMs, SHORT_INTENT_WINDOW_MS)
+  ) {
+    throw new Error("Reviewed intent record's window exceeds its descriptor's");
+  }
+  const declared = Object.entries(descriptor.parameters);
+  if (
+    !hasExactKeys(record.parameters, declared.map(([key]) => key)) ||
+    !declared.every(([key, parameter]) => {
+      const value = record.parameters[key];
+      if (parameter.kind === "text") {
+        return typeof value === "string" &&
+          [...value].length <= parameter.maxLength;
+      }
+      return Array.isArray(value) && value.length >= parameter.min &&
+        value.length <= parameter.max &&
+        value.every((destination) =>
+          matchAtomPatternConjunction(
+            parameter.integrity,
+            destination.integrity,
+          ).length > 0
+        );
+    })
+  ) {
+    throw new Error(
+      "Reviewed intent record's parameters do not satisfy its descriptor",
+    );
+  }
+};
