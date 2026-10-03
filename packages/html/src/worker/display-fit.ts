@@ -32,6 +32,7 @@ import {
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
+  isChannelStateDocument,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
@@ -291,14 +292,22 @@ export function cellLabelRefusal(
  * there, which reflects every link the resolution followed (spec §8.2.7).
  * {@link cellLabelRefusal} fits each separately, so integrity evidence in one
  * does not discharge a clause of the other. Undefined when the labels cannot
- * be read, as when the resolution throws.
+ * be read, as when the resolution throws, or where either place is in a
+ * channel's own state (`isChannelStateDocument()`), which carries no labels
+ * a display could be decided on.
  */
 export function cellLabelSources(
   cell: Cell<unknown>,
 ): CfcLabelViewSource[] | undefined {
   try {
-    const own = cfcLabelViewSourceForCell(cell);
     const resolved = cell.resolveAsCell();
+    if (
+      isChannelStateDocument(cell.getAsNormalizedFullLink().id) ||
+      isChannelStateDocument(resolved.getAsNormalizedFullLink().id)
+    ) {
+      return undefined;
+    }
+    const own = cfcLabelViewSourceForCell(cell);
     return sameCell(cell, resolved)
       ? [own]
       : [own, cfcLabelViewSourceForCell(resolved)];

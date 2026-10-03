@@ -435,3 +435,5 @@ export {
   describeRefusalInputs,
   renderCfcAtom,
 } from "./refusal-detail.ts";
+
+export { isChannelStateDocument } from "./channel-state.ts";

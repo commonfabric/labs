@@ -73,6 +73,7 @@ import {
   registerSchemaDocument,
 } from "../schema-registry.ts";
 import { storedLabelMapEntries } from "./label-documents.ts";
+import { isChannelStateDocument } from "./channel-state.ts";
 import {
   readBroaderReaderRestrictions,
   readStoredCfcMetadata,
@@ -191,6 +192,7 @@ import {
 } from "./input-witness.ts";
 import {
   atomsOutsideCeiling,
+  CFC_LABEL_READ_FAILED_ATOM,
   type CfcFloorTrustContext,
   cfcIntegritySatisfiesFloor,
   cfcIntegritySatisfiesFloorCoherently,
@@ -9441,6 +9443,15 @@ const collectConsumedLabelImpl = (
           { space: read.space, id: read.id, scope, type },
           { meta: INTERNAL_VERIFIER_META },
         )),
+        // A channel's own state answers a reader as unreadable: its channel
+        // decides each entry, and the entries carry no labels to decide a
+        // host's read of them on.
+        ...(readerLabels !== undefined && isChannelStateDocument(read.id)
+          ? [{
+            path: [],
+            label: { confidentiality: [CFC_LABEL_READ_FAILED_ATOM] },
+          }]
+          : []),
       ];
       labelIndexes.set(
         metadataKey,

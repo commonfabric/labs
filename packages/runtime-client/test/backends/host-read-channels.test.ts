@@ -12,7 +12,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
-import { rootRenderPolicyFor } from "@commonfabric/html/worker";
+import {
+  cellLabelSources,
+  rootRenderPolicyFor,
+} from "@commonfabric/html/worker";
 import { createSession, Identity } from "@commonfabric/identity";
 import { SERVER_EXECUTION_EFFECTS_DOC_ID } from "@commonfabric/memory/v2";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -1846,6 +1849,66 @@ describe("HostReadGate, for what crosses beside a value", () => {
         expect.objectContaining({ type: NotificationType.NavigateRequest }),
       ]);
       expect(toOwner.acks).toEqual({ [nonce]: true });
+    });
+
+    it("answers a host's read of the session effects document as unreadable", async () => {
+      await using docs = await shelf();
+      const effects = docs.runtime.getCellFromLink({
+        space,
+        id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+        scope: "session",
+        path: [],
+      });
+      const target = "of:target-chosen-from-a-seal";
+      const tx = docs.runtime.edit();
+      effects.withTx(tx).setRawUntyped({
+        entries: [{
+          nonce: "nav:withheld",
+          kind: "navigate",
+          args: {
+            target: { id: target, path: [] },
+            chosenFrom: {
+              confidentiality: [ownerOnly],
+              integrity: [],
+              modulePolicySpaces: {},
+            },
+          },
+          issuedIn: null,
+        }],
+      });
+      expect((await tx.commit()).ok).toBeDefined();
+      // A record that links to the entry, as a pattern can mint one.
+      const outer = await docs.write("links-to-an-intent", {
+        intent: {
+          "/": {
+            "link@1": {
+              id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+              path: ["entries", "0"],
+              scope: "session",
+            },
+          },
+        },
+      });
+      const refused = { refused: { refusedBy: "display-ceiling" } };
+
+      for (const viewer of [visitor, owner]) {
+        const gate = gateFor(docs.runtime, viewer);
+        // The channel decides each intent itself; a host is told none of
+        // them, nor the labels they carry.
+        expect(gate.read(effects.key("entries"))).toEqual(refused);
+        expect(gate.read(effects)).toEqual(refused);
+        expect(holds(gate.read(outer), target)).toBe(false);
+        expect(holds(gate.read(outer), "chosenFrom")).toBe(false);
+        expect(
+          await gate.fromCell(
+            effects,
+            () => Promise.resolve({ rows: [target] }),
+          ),
+        ).toEqual(refused);
+      }
+      // A decision on the document's own labels, as a render boundary makes
+      // one without a read, finds none it may decide on.
+      expect(cellLabelSources(effects.key("entries"))).toBeUndefined();
     });
 
     it("decides a navigation as it decides what an action logged", async () => {
