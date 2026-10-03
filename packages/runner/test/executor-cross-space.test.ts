@@ -60,6 +60,9 @@ import {
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
+import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
+import { IN_SPACE_ROOT_CAUSE } from "../src/runner.ts";
+import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import { parseLink } from "../src/link-utils.ts";
 import {
   newSharedServer,
@@ -69,6 +72,9 @@ import {
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.
 const SIDECAR_ROUTE = "/api/patterns/system/profile-create.tsx";
+
+// The route the toolshed serves the system default root from.
+const DEFAULT_APP_ROUTE = "/api/patterns/system/default-app.tsx";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(
@@ -2291,5 +2297,98 @@ export default pattern<
     expect(parseLink(stored.links[0])).toMatchObject({
       id: later.getAsNormalizedFullLink().id,
     });
+  });
+
+  it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {
+    // The default root is servable, so the room space's own serving ensure
+    // can create one there if it reaches the space before the child.
+    const defaultAppSource = [
+      "import { pattern } from 'commonfabric';",
+      "export default pattern<Record<string, never>, { marker: string }>(",
+      "  () => ({ marker: 'default-app' }),",
+      ");",
+    ].join("\n");
+    const defaultAppIdentity = await resolveEntryIdentity(
+      DEFAULT_APP_ROUTE,
+      () => Promise.resolve(defaultAppSource),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: Request | URL | string) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return Promise.resolve(
+        url.pathname !== DEFAULT_APP_ROUTE
+          ? new Response("not found", { status: 404 })
+          : url.searchParams.has("identity")
+          ? new Response(defaultAppIdentity, { status: 200 })
+          : new Response(defaultAppSource, { status: 200 }),
+      );
+    }) as typeof fetch;
+    try {
+      clientManager = SharedServerStorageManager.connectTo(server, {
+        as: aliceSigner,
+      });
+      clientRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: clientManager,
+        experimental: { serverExecution: true },
+      });
+      const compiled = await clientRuntime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import { action, pattern, type Stream, type Writable } from "commonfabric";
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+export default pattern<
+  { rooms: Writable<unknown[]> },
+  { create: Stream<{ title: string }> }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace(undefined, { root: true })({ title }));
+  }),
+}));`,
+        }],
+      }, { space: homeSpace });
+      const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+        homeSpace,
+        "in-space-root-argument",
+      );
+      const result = clientRuntime.getCell<{ create: unknown }>(
+        homeSpace,
+        "in-space-root-result",
+        compiled.resultSchema,
+      );
+      await Promise.all([argument.sync(), result.sync()]);
+      const seed = clientRuntime.edit();
+      argument.withTx(seed).set({ rooms: [] });
+      clientRuntime.run(seed, compiled, argument, result);
+      expect((await seed.commit()).error).toBeUndefined();
+      await clientManager.synced();
+      host = newHost();
+
+      result.key("create").send({ title: "lobby" });
+      await clientManager.synced();
+      const engine = await server.engineForSpace(homeSpace);
+      const rooms = (): unknown[] =>
+        (readDoc(engine, { id: argument.getAsNormalizedFullLink().id })
+          ?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+      await awaitAdmitted(server, () => rooms().length > 0);
+      const roomSpace = parseLink(rooms()[0])!.space! as MemorySpace;
+      expect(roomSpace).not.toBe(homeSpace);
+      expect(readGenesisRoot(await server.engineForSpace(roomSpace))).toEqual({
+        cause: IN_SPACE_ROOT_CAUSE,
+      });
+      const root = await resolveSpaceRootPattern(clientRuntime, roomSpace);
+      expect(
+        root?.equals(clientRuntime.getCell(roomSpace, IN_SPACE_ROOT_CAUSE)),
+      ).toBe(true);
+      expect(
+        await root!.key("title").asSchema({ type: "string" }).pull(),
+      ).toBe("lobby");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -1061,12 +1061,33 @@ export type CommitPrecondition =
     valueHash: string | null;
   };
 
-/** A generic root reserved atomically with a fresh space's ACL. */
-export type GenesisRoot = {
+/**
+ * A generic root reserved atomically with a fresh space's ACL. The root lives
+ * at the address `cause` derives in the space. Whether the reservation names a
+ * `source` says who creates it.
+ */
+export type GenesisRoot = SourcedGenesisRoot | CreatorPlacedGenesisRoot;
+
+/**
+ * A root reservation whoever ensures the space's root creates from a
+ * deployment-local `system:` source.
+ */
+export type SourcedGenesisRoot = {
   source: string;
   sourceRoots?: string[];
   cause: string;
   argument?: Record<string, FabricValue>;
+};
+
+/**
+ * A root reservation the space's creator places itself, so it names nothing to
+ * create the root from.
+ */
+export type CreatorPlacedGenesisRoot = {
+  source?: undefined;
+  sourceRoots?: undefined;
+  cause: string;
+  argument?: undefined;
 };
 
 export type ClientCommit = {
