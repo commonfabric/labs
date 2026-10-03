@@ -205,6 +205,33 @@ describe("fvj1-conformance", () => {
       ).toThrow("declares a divergence, but this implementation does what");
     });
 
+    it("throws given a case both divergent and unspecified", () => {
+      expect(() =>
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "both",
+            section: "s",
+            text: 'fvj1:{"/BigInt@1":"AAA"}',
+            divergence: "note",
+            unspecified: "note",
+          },
+        ])
+      ).toThrow("declares a divergence from what it says the spec leaves open");
+    });
+
+    it("records an unspecified case's note beside this package's outcome", () => {
+      const text = fvj1ConformanceFixtureTextForTestingOnly([
+        { name: "open", section: "s", text: "fvj1:1", unspecified: "note" },
+      ]);
+      expect(JSON.parse(text).cases).toEqual([{
+        name: "open",
+        section: "s",
+        decode: { text: "fvj1:1", value: 1 },
+        encode: { value: 1, text: "fvj1:1" },
+        unspecified: "note",
+      }]);
+    });
+
     it("throws given a value encoded unlike its computed spec text, with no divergence", () => {
       expect(() =>
         fvj1ConformanceFixtureTextForTestingOnly([

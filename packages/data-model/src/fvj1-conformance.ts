@@ -13,9 +13,10 @@
  *
  * Where the formal spec says outright that this package falls short of it, the
  * case says so: the fixture records the spec's outcome, and this package's
- * beside it as a divergence. Generating the fixture fails
- * when a case's declared divergence does not hold, so that a fix here retires
- * the mark rather than leaving it to mislead.
+ * beside it as a divergence. Where the spec does not settle a case, the case
+ * records this package's outcome as unspecified: an answer, not a requirement.
+ * Generating the fixture fails when a case's declared divergence does not
+ * hold, so that a fix here retires the mark rather than leaving it to mislead.
  *
  * This is reached through `for-testing-only.ts` and has no place in any
  * barrel.
@@ -100,12 +101,17 @@ export type Fvj1DecodeOutcome =
  * only be declared for a value that function writes. For a text, it is that
  * the text is refused, the format refusing every text this package
  * over-accepts.
+ *
+ * `unspecified` is a note on what the spec leaves open, for a case whose
+ * outcome is this package's, recorded without being claimed as required. A
+ * case is not both: a divergence is measured against what the spec settles.
  */
 export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
     readonly divergence?: string;
+    readonly unspecified?: string;
   }
   & (
     | { readonly make: () => FabricValue }
@@ -160,6 +166,48 @@ const SECTION_UNKNOWN = "3-json-encoding.md section 8";
 const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
+const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
+const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
+const SECTION_LINK = "3-json-encoding.md section 3, `Link@1`";
+const SECTION_REGEXP = "3-json-encoding.md section 3, `RegExp@1`";
+const SECTION_UNAVAILABLE = "3-json-encoding.md section 3, `Unavailable@1`";
+
+/**
+ * The integers at and just past the edges of a signed 64-bit integer, and a
+ * pair far past them. The format bounds none of them, and an implementation
+ * that holds these counts in an `int64` meets its edges here.
+ */
+const WIDE_INTEGERS: readonly (readonly [string, bigint])[] = [
+  ["2^63 - 1", 2n ** 63n - 1n],
+  ["-2^63", -(2n ** 63n)],
+  ["2^63", 2n ** 63n],
+  ["-2^63 - 1", -(2n ** 63n) - 1n],
+  ["2^100", 2n ** 100n],
+  ["-2^100", -(2n ** 100n)],
+];
+
+/**
+ * The temporal classes, each holding one bigint count, by tag name, each with
+ * a state for it that is not minimal: a redundant leading `0x00` or `0xff`
+ * byte over a value that needs none.
+ */
+const TEMPORAL_CLASSES = [
+  ["EpochNsec", FabricEpochNsec, "AAA"],
+  ["EpochDay", FabricEpochDay, "__8"],
+  ["DurationNsec", FabricDurationNsec, "AH8"],
+  ["DurationDay", FabricDurationDay, "_4A"],
+] as const;
+
+/** Note shared by the cases with a padded base64url state. */
+const PADDING_NOTE = "Section 3 has a decoder accept padded and unpadded " +
+  "states without saying which padding counts: whether it must be RFC " +
+  "4648's, which pads to a multiple of four characters with exactly the `=` " +
+  "the last group lacks, or whether fewer or more `=` are accepted too.";
+
+/** Note shared by the cases with a state that is not minimal. */
+const NON_MINIMAL_NOTE = "A state with a redundant leading `0x00` or " +
+  "`0xff` byte is refused. This implementation reads it as the value it " +
+  "stands for.";
 
 /** Why the classes whose codecs are stubs have no cases. */
 const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
@@ -333,6 +381,18 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => ({ constructor: 1 }),
     divergence: RESERVED_KEY_NOTE,
   },
+  {
+    name: "record with key __proto__ nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: JSON.parse('{"__proto__":1}') }),
+    divergence: RESERVED_KEY_NOTE,
+  },
+  {
+    name: "record with key constructor nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: { constructor: 1 } }),
+    divergence: RESERVED_KEY_NOTE,
+  },
 
   // Arrays, holes, and `undefined`.
   { name: "empty array", section: SECTION_HOLES, make: () => [] },
@@ -414,6 +474,51 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_ESCAPES,
     text: 'fvj1:{"/quote":[1,{"/hole":1}]}',
   },
+  {
+    name: "slash key that is a tag, over a literal",
+    section: SECTION_ESCAPES,
+    make: () => ({ "/Bytes@1": "AQ" }),
+  },
+  {
+    name: "quote escape nested in an object escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/a":{"/quote":{"/b":1}}}}',
+  },
+  {
+    name: "object escape nested in a quote escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/object":{"/x":1}}}',
+  },
+  {
+    name: "object escape over the empty record",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{}}',
+  },
+  {
+    name: "quote escape over the empty record",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{}}',
+  },
+  {
+    name: "quote escape over an undefined",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/Undefined@1":null}}',
+  },
+  {
+    name: "quote escape over a key that is not a tag",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/bytes@1":1}}',
+  },
+  {
+    name: "object escape over a key that is an escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/quote":1}}',
+  },
+  {
+    name: "object escape over slash and plain keys",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/x":1,"y":2}}',
+  },
 
   // Symbols and bigints.
   {
@@ -457,9 +562,33 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bigint state not minimal",
     section: SECTION_BIGINT,
     text: 'fvj1:{"/BigInt@1":"AAA"}',
-    divergence: "A state with a redundant leading `0x00` or `0xff` byte is " +
-      "refused. This implementation reads it as the value it stands for.",
+    divergence: NON_MINIMAL_NOTE,
   },
+  // `0xff 0xff`, `0x00 0x7f` and `0xff 0x80`: sign-extended.
+  ...["__8", "AH8", "_4A"].map((state): Fvj1ConformanceCase => ({
+    name: `bigint state sign-extended, ${JSON.stringify(state)}`,
+    section: SECTION_BIGINT,
+    text: `fvj1:{"/BigInt@1":${JSON.stringify(state)}}`,
+    divergence: NON_MINIMAL_NOTE,
+  })),
+  ...TEMPORAL_CLASSES.map(([tag, , state]): Fvj1ConformanceCase => ({
+    name: `${tag} state not minimal`,
+    section: SECTION_TEMPORAL,
+    text: `fvj1:{"/${tag}@1":${JSON.stringify(state)}}`,
+    divergence: NON_MINIMAL_NOTE,
+  })),
+  ...WIDE_INTEGERS.map(([label, count]): Fvj1ConformanceCase => ({
+    name: `bigint ${label}`,
+    section: SECTION_BIGINT,
+    make: () => count,
+  })),
+  ...TEMPORAL_CLASSES.flatMap(([tag, temporalClass]) =>
+    WIDE_INTEGERS.map(([label, count]): Fvj1ConformanceCase => ({
+      name: `${tag} of ${label}`,
+      section: SECTION_TEMPORAL,
+      make: () => new temporalClass(count),
+    }))
+  ),
   {
     name: "bigint state of no bytes",
     section: SECTION_BIGINT,
@@ -495,6 +624,14 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
       "not all zero is refused. This implementation ignores them, reading " +
       "`AR` as the byte `AQ` writes.",
   },
+  ...["AAA=", "AA=", "AAA==", "AAAA=", "=="].map((
+    state,
+  ): Fvj1ConformanceCase => ({
+    name: `bytes state with padding ${JSON.stringify(state)}`,
+    section: SECTION_BASE64,
+    text: `fvj1:{"/Bytes@1":${JSON.stringify(state)}}`,
+    unspecified: PADDING_NOTE,
+  })),
 
   // Nesting, and values beyond the class examples.
   {
@@ -508,7 +645,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
   {
     name: "error with every field",
-    section: "3-json-encoding.md section 3, `Error@1`",
+    section: SECTION_ERROR,
     make: () =>
       new FabricError({
         type: "TypeError",
@@ -521,17 +658,48 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
   {
     name: "link with a payload of arbitrary fields",
-    section: "3-json-encoding.md section 3, `Link@1`",
+    section: SECTION_LINK,
     make: () => new FabricLink({ kind: "example", targets: [1, 2] }),
   },
   {
+    name: "error with extras of every primitive kind",
+    section: SECTION_ERROR,
+    make: () =>
+      new FabricError({
+        type: "Error",
+        name: null,
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+        extras: {
+          bigint: 2n,
+          boolean: true,
+          null: null,
+          number: -1.5,
+          string: "s",
+          symbol: Symbol.for("key"),
+          undefined: undefined,
+        },
+      }),
+  },
+  {
+    name: "link with a payload key that is an escape",
+    section: SECTION_LINK,
+    make: () => new FabricLink({ "/quote": { "/Link@1": { id: "x" } } }),
+  },
+  {
+    name: "link with a payload key that is a tag, over a bigint",
+    section: SECTION_LINK,
+    make: () => new FabricLink({ "/Bytes@1": 1n }),
+  },
+  {
     name: "unavailable with an error kind and no message",
-    section: "3-json-encoding.md section 3, `Unavailable@1`",
+    section: SECTION_UNAVAILABLE,
     make: () => new FabricUnavailable("error", "network"),
   },
   {
     name: "regular expression of another flavor",
-    section: "3-json-encoding.md section 3, `RegExp@1`",
+    section: SECTION_REGEXP,
     make: () => new FabricRegExp("other", "(?<", ""),
   },
   {
@@ -648,18 +816,187 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
   {
     name: "regular expression that does not construct",
-    section: "3-json-encoding.md section 3, `RegExp@1`",
+    section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"("}}',
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
-    section: "3-json-encoding.md section 3, `Unavailable@1`",
+    section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"errorKind":"general","reason":"pending"}}',
   },
   {
     name: "problematic value with no state",
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","tag":"x"}}',
+  },
+  {
+    name: "hole run of a negative number",
+    section: SECTION_HOLES,
+    text: 'fvj1:[{"/hole":-1}]',
+  },
+  {
+    name: "hole run past the greatest array length",
+    section: SECTION_HOLES,
+    text: 'fvj1:[{"/hole":4294967296}]',
+    unspecified: "The spec sets no greatest array length. This " +
+      "implementation refuses a run past the 2^32 - 1 elements a JavaScript " +
+      "array can hold.",
+  },
+  {
+    name: "object escape beside a plain key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/object":{"a":1},"b":2}',
+  },
+  {
+    name: "quote escape beside a plain key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/quote":1,"a":1}',
+  },
+  {
+    name: "link payload with a bare slash key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/Link@1":{"/x":1}}',
+  },
+  {
+    name: "error with a string state",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":"boom"}',
+  },
+  {
+    name: "error with a numeric type",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,"type":7}}',
+  },
+  {
+    name: "error with a numeric name",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":1,"type":"Error"}}',
+  },
+  {
+    name: "error with a numeric stack",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,"stack":5,' +
+      '"type":"Error"}}',
+  },
+  {
+    name: "error with no message",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"name":null,"type":"Error"}}',
+    divergence: "A state missing a field the type requires is refused, and " +
+      "`message` is not optional. This implementation reads the message as " +
+      "empty.",
+  },
+  {
+    name: "error with no type",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null}}',
+    divergence: "A state missing a field the type requires is refused, and " +
+      "`type` is not optional. This implementation reads the type as " +
+      "`Error`.",
+  },
+  {
+    name: "unavailable with a string state",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":"pending"}',
+  },
+  {
+    name: "unavailable with an unknown reason",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"reason":"gone"}}',
+  },
+  {
+    name: "unavailable error with no kind",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"reason":"error"}}',
+  },
+  {
+    name: "unavailable error with an unknown kind",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"nope","reason":"error"}}',
+  },
+  {
+    name: "unavailable error with a numeric message",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+      '"reason":"error"}}',
+  },
+  {
+    name: "unavailable error with a null message",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":null,"reason":"error"}}',
+  },
+  {
+    name: "unavailable pairing a message with a transient reason",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+  },
+  {
+    name: "regular expression with a string state",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":"a"}',
+  },
+  {
+    name: "regular expression with a numeric source",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":1}}',
+  },
+  {
+    name: "regular expression with a numeric flavor",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":1,"source":"a"}}',
+  },
+  {
+    name: "regular expression with a flag es2025 lacks",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
+  },
+  {
+    name: "regular expression with no flags",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flavor":"es2025","source":"a"}}',
+    divergence: "A state missing a field the type requires is refused, and " +
+      "`flags` is not optional. This implementation reads the flags as " +
+      "empty.",
+  },
+  {
+    name: "regular expression with no flavor",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
+    unspecified: "The spec calls `es2025` the default flavor without saying " +
+      "whether a state may leave the flavor out. This implementation reads " +
+      "such a state as `es2025`.",
+  },
+  {
+    name: "tag with no version",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/EpochNsec":"AA"}',
+  },
+  {
+    name: "special number with a numeric state",
+    section: SECTION_NUMBERS,
+    text: 'fvj1:{"/SpecialNumber@1":0}',
+  },
+  {
+    name: "error with a type that is not a string",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,' +
+      '"type":{"/Undefined@1":null}}}',
+  },
+  {
+    name: "link with a numeric payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":5}',
+  },
+  {
+    name: "link with an array payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":[]}',
+  },
+  {
+    name: "link with the empty record as payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":{}}',
   },
 ];
 
@@ -684,22 +1021,22 @@ const PRIMITIVE_CLASS_NOTES: {
 } = {
   FabricBytes: { section: "3-json-encoding.md section 3, `Bytes@1`" },
   FabricDurationDay: {
-    section: "3-json-encoding.md section 3, temporal quantities",
+    section: SECTION_TEMPORAL,
   },
   FabricDurationNsec: {
-    section: "3-json-encoding.md section 3, temporal quantities",
+    section: SECTION_TEMPORAL,
   },
   FabricEpochDay: {
-    section: "3-json-encoding.md section 3, temporal quantities",
+    section: SECTION_TEMPORAL,
   },
   FabricEpochNsec: {
-    section: "3-json-encoding.md section 3, temporal quantities",
+    section: SECTION_TEMPORAL,
   },
   FabricHash: { section: "3-json-encoding.md section 3, `Hash@1`" },
   FabricKeyPair: { section: "3-json-encoding.md section 3, `KeyPair@1`" },
-  FabricRegExp: { section: "3-json-encoding.md section 3, `RegExp@1`" },
+  FabricRegExp: { section: SECTION_REGEXP },
   FabricUnavailable: {
-    section: "3-json-encoding.md section 3, `Unavailable@1`",
+    section: SECTION_UNAVAILABLE,
   },
 };
 
@@ -707,8 +1044,8 @@ const PRIMITIVE_CLASS_NOTES: {
 const INSTANCE_CLASS_NOTES: {
   readonly [Name in keyof FabricInstanceClassesByName]: ClassCaseNotes;
 } = {
-  FabricError: { section: "3-json-encoding.md section 3, `Error@1`" },
-  FabricLink: { section: "3-json-encoding.md section 3, `Link@1`" },
+  FabricError: { section: SECTION_ERROR },
+  FabricLink: { section: SECTION_LINK },
   FabricMap: { excluded: STUB_CODEC_EXCLUSION },
   FabricSet: { excluded: STUB_CODEC_EXCLUSION },
   ProblematicValue: {
@@ -836,7 +1173,12 @@ function refusalOrRethrow<Refusal>(
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
 ): Record<string, Fvj1Descriptor> {
-  const { name, section, divergence } = conformanceCase;
+  const { name, section, divergence, unspecified } = conformanceCase;
+  if (divergence !== undefined && unspecified !== undefined) {
+    throw new Error(
+      `${name}: declares a divergence from what it says the spec leaves open.`,
+    );
+  }
   const entry: Record<string, Fvj1Descriptor> = { name, section };
   const implementation: Record<string, Fvj1Descriptor> = {};
 
@@ -907,6 +1249,9 @@ function fixtureEntryOf(
       );
     }
     entry.divergence = { note: divergence, ...implementation };
+  }
+  if (unspecified !== undefined) {
+    entry.unspecified = unspecified;
   }
 
   return entry;
