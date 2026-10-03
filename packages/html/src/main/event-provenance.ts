@@ -22,26 +22,27 @@ const UI_CONTRACT_DATASET_KEYS = [
 ] as const;
 
 /**
- * The provenance of `event` as a listener on `currentTarget` receives it, or
- * `undefined` when the browser did not mark the event trusted.
+ * Returns the provenance of `event` as the listener bound on `boundNode`
+ * receives it, or `undefined` when the browser did not mark the event trusted.
  *
- * The UI provenance is read from `currentTarget` and the nodes above it, and
- * never from the nodes between `currentTarget` and the event's target. So a
- * trusted surface's markers vouch for a click only to the handlers bound on the
- * surface or inside it: a listener on an ancestor outside the surface, which
- * the same click reaches as it bubbles, finds none of them on its own path.
- * Without a `currentTarget`, the event carries no UI provenance.
+ * The UI provenance is read from `boundNode` and the nodes above it, and never
+ * from the nodes between `boundNode` and the event's target. So a trusted
+ * surface's markers vouch for a click only to the handlers bound on the surface
+ * or inside it: a listener on an ancestor outside the surface, which the same
+ * click reaches as it bubbles, finds none of them on its own path. Without a
+ * `boundNode`, the event carries no UI provenance.
  */
 export const getEventProvenance = (
   event: EventLike,
-  currentTarget?: EventTarget,
+  boundNode?: EventTarget,
 ): EventProvenance | undefined => {
   if (event.isTrusted) {
     const provenance: EventProvenance = {
       origin: "dom",
       trusted: true,
     };
-    const ui = currentTarget && getEventUiProvenance(event, currentTarget);
+    const ui = boundNode &&
+      getEventUiProvenance(getBoundNodePath(event, boundNode));
     if (ui) {
       provenance.ui = ui;
     }
@@ -50,11 +51,14 @@ export const getEventProvenance = (
   return undefined;
 };
 
-export const getEventUiContractDataset = (
-  event: { composedPath?: () => readonly unknown[] },
-  currentTarget: EventTarget,
+export const getEventTargetDataset = (
+  target?: EventTarget | null,
+): Record<string, string> | undefined => readDataset(target);
+
+const getEventUiContractDataset = (
+  path: readonly unknown[],
 ): Record<string, string> | undefined => {
-  for (const node of getCurrentTargetPath(event, currentTarget)) {
+  for (const node of path) {
     const dataset = readDataset(node);
     const uiContractDataset = dataset && pickUiContractDataset(dataset);
     if (uiContractDataset) {
@@ -64,18 +68,13 @@ export const getEventUiContractDataset = (
   return undefined;
 };
 
-export const getEventTargetDataset = (
-  target?: EventTarget | null,
-): Record<string, string> | undefined => readDataset(target);
-
 const getEventUiProvenance = (
-  event: { composedPath?: () => readonly unknown[] },
-  currentTarget: EventTarget,
+  path: readonly unknown[],
 ): EventUiProvenance | undefined => {
   let pattern: string | undefined;
   const eventIntegrity = new Set<string>();
-  const uiContractDataset = getEventUiContractDataset(event, currentTarget);
-  for (const current of getCurrentTargetPath(event, currentTarget)) {
+  const uiContractDataset = getEventUiContractDataset(path);
+  for (const current of path) {
     const dataset = readDataset(current);
     if (dataset) {
       if (
@@ -107,24 +106,26 @@ const getEventUiProvenance = (
 };
 
 /**
- * `currentTarget` and the nodes above it: the part of the event's composed path
- * that starts at `currentTarget`, which crosses shadow boundaries as the event
- * does, or else the chain of parent nodes from `currentTarget`.
+ * Returns `boundNode` and the nodes above it: the part of the event's composed
+ * path that starts at `boundNode`, which crosses shadow boundaries as the event
+ * does. When the composed path does not hold `boundNode`, returns the chain of
+ * parent nodes from `boundNode` instead, which ends at the first shadow root it
+ * reaches.
  */
-const getCurrentTargetPath = (
+const getBoundNodePath = (
   event: { composedPath?: () => readonly unknown[] },
-  currentTarget: EventTarget,
+  boundNode: EventTarget,
 ): readonly unknown[] => {
   if (typeof event.composedPath === "function") {
     const path = event.composedPath();
-    const start = Array.isArray(path) ? path.indexOf(currentTarget) : -1;
+    const start = Array.isArray(path) ? path.indexOf(boundNode) : -1;
     if (start >= 0) {
       return path.slice(start);
     }
   }
 
   const path: unknown[] = [];
-  let current: unknown = currentTarget;
+  let current: unknown = boundNode;
   while (current && typeof current === "object") {
     path.push(current);
     current = "parentNode" in current ? current.parentNode : undefined;

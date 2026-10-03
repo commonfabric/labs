@@ -330,7 +330,11 @@ The dataset attributes and type metadata must agree:
 - `data-ui-event-integrity` should include the event-integrity labels required
   by the output contract.
 - `data-ui-action` should equal the action string in the `TrustedActionWrite`
-  type.
+  type, and sit on the element that carries the handler, as `cf-button` does
+  above. A click's UI provenance is read from the element the handler is bound
+  to and its ancestors only, so a handler on an element above the control does
+  not get the control's `data-ui-action`, and a handler bound outside the
+  surface gets no UI provenance at all.
 
 Use generic names and neutral copy. A trusted surface may say what operation it
 performs, such as "publish" or "confirm recipient", but it should not mention a

@@ -1027,11 +1027,11 @@ Implementation notes for spec update:
 - [x] Event-integrity labels are collected from the UI ancestry, so a trusted
       pattern can later bind rendered integrity-bearing data into the event
       attestation without introducing a parallel helper-specific policy
-- [x] That ancestry, for all of a trusted event's UI provenance, starts at the
-      element the handler is bound to, never at the event target below it: a
-      click on a trusted surface vouches only for the handlers bound on or
-      inside that surface, and not for a listener on an ancestor outside it
-      that the same click bubbles to
+- [x] All of a trusted event's UI provenance is read from the element the
+      handler is bound to and its ancestors, never from nodes between it and the
+      event target: a click on a trusted surface vouches only for handlers bound
+      on or inside it, and a handler above the clicked control gets the
+      surface's pattern and labels but not the control's `data-ui-action`
 - [x] Render-time label disclosure now has a generic `cf-cfc-label` UI
       primitive: it takes a bound `$value` and optional `atom`/`kind` filters,
       asks the trusted runtime IPC layer for that cell's CFC label view, and

@@ -200,22 +200,22 @@ const TARGET_PROPERTY_SCALARS = {
 } as const satisfies Partial<Record<keyof SerializedEventTarget, DomScalar>>;
 
 /**
- * Serialize a DOM event for IPC transmission.
- * This creates a plain object with only safe, serializable properties.
+ * Serializes a DOM event for IPC transmission, as a plain object holding only
+ * safe, serializable properties.
  *
- * `currentTarget` is the node whose listener is serializing the event. A
- * trusted event's UI provenance is read from it and the nodes above it, as
+ * `boundNode` is the node the serializing listener is bound on. A trusted
+ * event's UI provenance is read from it and the nodes above it, as
  * {@link getEventProvenance} describes, and an event serialized without one
  * carries none.
  */
 export function serializeEvent(
   event: Event,
-  currentTarget?: EventTarget,
+  boundNode?: EventTarget,
 ): SerializedEvent {
   const serialized: SerializedEvent = {
     type: event.type,
   };
-  const provenance = getEventProvenance(event, currentTarget);
+  const provenance = getEventProvenance(event, boundNode);
   if (provenance) {
     serialized.provenance = provenance;
   }
