@@ -15,6 +15,7 @@
 import { isDeepFrozen } from "@commonfabric/data-model";
 import type { URI } from "@commonfabric/memory/interface";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { CellScope } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
@@ -426,6 +427,72 @@ export const readStoredCfcMetadata = (
   return stored === undefined
     ? undefined
     : resolveStoredCfcMetadata(tx, target.space, stored, policy);
+};
+
+/** The labels {@link readStoredCfcLabelsForReader} answers with. */
+export type StoredCfcLabels = Pick<CfcMetadata, "labelMap">;
+
+/**
+ * The instances of a document broader than an instance of each scope: a user
+ * instance's space instance, and a session instance's user and space ones.
+ */
+const BROADER_SCOPES: Readonly<Record<CellScope, readonly CellScope[]>> = {
+  space: [],
+  user: ["space"],
+  session: ["user", "space"],
+};
+
+/** `entry` without its integrity, or nothing where it holds no confidentiality. */
+const confidentialityOfEntry = (entry: LabelMapEntry): LabelMapEntry[] =>
+  entry.label.confidentiality === undefined ||
+    entry.label.confidentiality.length === 0
+    ? []
+    : [{ ...entry, label: { confidentiality: entry.label.confidentiality } }];
+
+/**
+ * The labels a reader of `target`'s instance answers to: the envelope that
+ * instance stores, with the confidentiality of each broader instance of the
+ * same document joined in. `undefined` where none of them stores a label.
+ *
+ * The space, user and session instances of one id are instances of one cell
+ * (`docs/specs/scoped-cell-instances.md`), each holding a value and an
+ * envelope of its own. A write that narrows a slot's content into a scoped
+ * instance leaves the label the schema declares on the broader slot, beside a
+ * redirect to that content, and an instance written before narrowed writes
+ * stamped its own envelope stores no label at all. The broader slot's
+ * confidentiality is a floor on the position, so a reader that reaches the
+ * scoped instance directly answers to it too, as one following the redirect
+ * does.
+ *
+ * Integrity is the instance's own. It speaks for whoever wrote the value, and
+ * whoever wrote the broader instance did not write this one: a claim stored
+ * there would otherwise vouch for a later, less trusted write here.
+ *
+ * Paths line up across the instances, since narrowed content sits at the path
+ * of the slot that redirects to it. Each envelope is read as
+ * {@link readStoredCfcMetadata} reads it, so one this build cannot interpret,
+ * on any of the instances, fails the read. A space-scoped target answers with
+ * its own envelope, unchanged. This is a reader's answer, not an envelope:
+ * what merges into or rewrites an instance's envelope reads that envelope
+ * alone, through {@link readStoredCfcMetadata}.
+ */
+export const readStoredCfcLabelsForReader = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+): StoredCfcLabels | undefined => {
+  const own = readStoredCfcMetadata(tx, target);
+  const broader = BROADER_SCOPES[normalizeCellScope(target.scope)].flatMap(
+    (scope) =>
+      readStoredCfcMetadata(tx, { ...target, scope })?.labelMap.entries
+        .flatMap(confidentialityOfEntry) ?? [],
+  );
+  if (broader.length === 0) return own;
+  return {
+    labelMap: {
+      version: 1,
+      entries: [...(own?.labelMap.entries ?? []), ...broader],
+    },
+  };
 };
 
 /**

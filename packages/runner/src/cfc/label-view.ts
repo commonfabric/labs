@@ -11,8 +11,10 @@ import {
   parseLink,
 } from "../link-utils.ts";
 import { resolveLink } from "../link-resolution.ts";
-import { readStoredCfcMetadata } from "./metadata.ts";
-import type { CfcMetadata } from "./types.ts";
+import {
+  readStoredCfcLabelsForReader,
+  type StoredCfcLabels,
+} from "./metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./observation.ts";
 import {
   type CfcLabelView,
@@ -41,7 +43,7 @@ type LabelQueryableCell = {
 };
 
 type LinkedValueMetadata = {
-  metadata: CfcMetadata;
+  metadata: StoredCfcLabels;
   path: readonly string[];
   space: string;
 };
@@ -50,7 +52,7 @@ type LinkedValueMetadata = {
 // cleanly-absent label (`readOrThrow` already maps NotFound/TypeMismatch to
 // undefined without throwing, so those are NOT failures).
 type StoredMetadataResult = {
-  metadata: CfcMetadata | undefined;
+  metadata: StoredCfcLabels | undefined;
   readFailed: boolean;
 };
 
@@ -84,10 +86,11 @@ const storedMetadataForCell = (
   }
   try {
     return {
-      metadata: readStoredCfcMetadata(
+      // A scoped instance of a document holds labels of its own, as it
+      // holds a value of its own, and answers to its broader instances'
+      // confidentiality besides.
+      metadata: readStoredCfcLabelsForReader(
         cellRuntime(cell).readTx(cellTx(cell)),
-        // A scoped instance of a document holds labels of its own, as it
-        // holds a value of its own.
         { space: link.space, id: link.id, scope: link.scope },
       ),
       readFailed: false,
@@ -114,7 +117,7 @@ const linkedValueMetadataForCell = (
     if (target?.id === undefined || target.space === undefined) {
       return { linkedValue: undefined, readFailed: false };
     }
-    const metadata = readStoredCfcMetadata(tx, {
+    const metadata = readStoredCfcLabelsForReader(tx, {
       space: target.space,
       id: target.id,
       scope: target.scope,
@@ -256,7 +259,7 @@ const resolvedMetadataForCell = (
         : {}),
     });
     return {
-      metadata: readStoredCfcMetadata(tx, {
+      metadata: readStoredCfcLabelsForReader(tx, {
         space: resolved.space,
         id: resolved.id,
         scope: resolved.scope,

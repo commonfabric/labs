@@ -1,7 +1,11 @@
 import type { NonDocumentPath } from "@commonfabric/memory/v2";
 
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
+import {
+  readStoredCfcMetadata,
+  type StoredCfcLabels,
+  StoredCfcMetadataError,
+} from "./metadata.ts";
 import { entryObservationClass } from "./observation-classes.ts";
 import { PathPrefixIndex } from "./path-prefix-index.ts";
 import type { CfcAddress, CfcDereferenceTrace, CfcMetadata } from "./types.ts";
@@ -39,7 +43,7 @@ export {
  * each carrying its effective observation class.
  */
 const cfcLabelViewEntriesFromMetadata = (
-  metadata: CfcMetadata,
+  metadata: StoredCfcLabels,
 ): CfcLabelViewEntry[] =>
   metadata.labelMap.entries.flatMap((entry) => {
     // The view carries the EFFECTIVE class: the persisted
@@ -64,7 +68,8 @@ const cfcLabelViewEntriesFromMetadata = (
   });
 
 export const cfcLabelViewFromMetadata = (
-  metadata: CfcMetadata | undefined,
+  // A stored envelope, or a reader's labels without the envelope around them.
+  metadata: CfcMetadata | StoredCfcLabels | undefined,
   path: NonDocumentPath,
 ): CfcLabelView | undefined => {
   if (!metadata) {
