@@ -1117,11 +1117,38 @@ describe("reviewed-intent", () => {
           );
           expect((await added.commit()).error).toBeUndefined();
         }
+        // In a book a pattern made, the address book's stamp on one entry it
+        // wrote does not cover the pattern's entry beside it.
+        const shared = await fixture.entry("pattern-book", {}, {
+          writer: PATTERN,
+        });
+        const written = runtime.edit();
+        setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
+        fixture.notes.withTx(written).get();
+        schemaless(runtime, shared).withTx(written).key("alice" as never).set(
+          "tel:+15550100" as never,
+        );
+        expect((await written.commit()).error).toBeUndefined();
+        const own = runtime.edit();
+        setCfcImplementationIdentity(own, PATTERN);
+        fixture.bob.withTx(own).get();
+        schemaless(runtime, shared).withTx(own).key("mallory" as never).set(
+          "tel:+15550666" as never,
+        );
+        expect((await own.commit()).error).toBeUndefined();
+        expect(
+          shown(
+            await prepareReviewedIntent(
+              fixture.bindings(entryIn(shared, "alice")),
+            ),
+          )[0].address,
+        ).toBe("tel:+15550100");
         for (
           const [book, key] of [
             [books[0], "mallory"],
             [books[1], "mallory"],
             [books[1], "alice"],
+            [shared, "mallory"],
           ] as const
         ) {
           await expect(
@@ -1627,7 +1654,7 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("refuses a stamped record outside its subject's home space, or whose digest does not match its parameters", async () => {
+    it("refuses a stamped record outside its subject's home space, whose digest does not match its parameters, or whose destination has no location", async () => {
       const fixture = await setup();
       try {
         const elsewhere = await seeded(
@@ -1652,6 +1679,29 @@ describe("reviewed-intent", () => {
         );
         expect(() => verifyReviewedIntentRecord(altered)).toThrow(
           /does not match its parameters/,
+        );
+        // A destination whose location names no path to resolve it at again.
+        const parameters = {
+          body: "Send the code",
+          to: [{
+            address: "tel:+15550199",
+            integrity: [WRITTEN_BY_ADDRESS_BOOK],
+            source: { space: sender.did(), id: "of:forged-contact" },
+          }],
+        };
+        const unplaced = await seeded(
+          fixture,
+          sender.did(),
+          "stamped-unplaced",
+          {
+            ...forged("Send the code"),
+            parameters: JSON.stringify(parameters),
+            payloadDigest: hashStringOf(parameters as never),
+          },
+          { label: stampedLabel, origin: "derived", observes: "value" },
+        );
+        expect(() => verifyReviewedIntentRecord(unplaced)).toThrow(
+          /`parameters` are malformed/,
         );
       } finally {
         await fixture.dispose();
