@@ -12,6 +12,7 @@ import {
 import {
   clearRuntimeDebugGlobals,
   type CommonfabricDebugState,
+  createDebugUtils,
   createViewSettled,
   exposeCommonfabricGlobals,
   summarizeDebugValue,
@@ -308,5 +309,40 @@ describe("runtime debug globals", () => {
     const global: Globals = {};
     clearRuntimeDebugGlobals(global);
     expect(global.commonfabric).toBeUndefined();
+  });
+});
+
+describe("readCell", () => {
+  it("rejects with the refusal when the worker refuses a metadata read", async () => {
+    const requests: unknown[] = [];
+    const runtime = {
+      [$conn]: () => ({
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ refused: { refusedBy: "display-ceiling" } });
+        },
+      }),
+    } as unknown as RuntimeClient;
+    const { readCell } = createDebugUtils(
+      () => "did:key:z6Mk-debug-utils-space",
+      () => runtime,
+    );
+
+    const log = stub(console, "log", () => {});
+    try {
+      const read = readCell({ id: "of:debug-utils-piece", meta: "slug" });
+      await expect(read).rejects.toThrow(CellReadRefusedError);
+      await read.catch((error: CellReadRefusedError) => {
+        expect(error.refusal).toEqual({ refusedBy: "display-ceiling" });
+      });
+    } finally {
+      log.restore();
+    }
+    expect(requests).toEqual([
+      expect.objectContaining({
+        cell: expect.objectContaining({ id: "of:debug-utils-piece", path: [] }),
+        meta: "slug",
+      }),
+    ]);
   });
 });
