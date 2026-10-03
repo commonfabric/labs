@@ -124,7 +124,9 @@ an integrity atom's field.
 
 `principalOf()`, `principalsOf()` and `inspectConfLabel()` are the
 pattern-facing surfaces for label metadata. All read inside the observing
-transaction and take their target as a cell.
+transaction and take the cell whose label they read as their target;
+`principalOf()` and `principalsOf()` also accept a target of `undefined`, for
+which they return `undefined`.
 
 ## What the DID can and cannot do
 

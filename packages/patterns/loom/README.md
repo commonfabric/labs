@@ -71,15 +71,18 @@ occurrence another Loom holds keeps the adder it shows there. `addPanel` without
 profile: its label names whoever added it then, to this Loom or to another, and
 linking it would attribute this admission to them. For the same reason it
 refuses one whose `addedBy` label names a principal other than the one the event
-acts for, names more than one, or holds a claim in a form no runtime mints; the
-principal named there alone may link it. So a removed occurrence that names a
-profile, or another principal's adder, is added back by adding a new occurrence,
-with `as` or through `addPiece`; `duplicatePanel` copies only an occurrence
-still in the Loom. The runtime links an unlabeled document passed as `as` into
-the field when the panel's document holds no stored write contract yet, as when
-the write creates the panel: it checks a new link's source only under a write
-contract outside a union branch, and this one sits inside each of `Panel`'s
-branches. That does not change whose principal the label names.
+acts for, names more than one, or holds a claim in a form no runtime mints. It
+links one whose `addedBy` label names only the principal the event acts for, and
+one whose `addedBy` label names nobody (`principalsOf` returns `[]`), which
+holds its adder, if any, only as its writer's claim. So a removed occurrence
+that names a profile, another principal's adder, several adders, or an adder in
+a form no runtime mints is added back by adding a new occurrence, with `as` or
+through `addPiece`; `duplicatePanel` copies only an occurrence still in the
+Loom. The runtime links an unlabeled document passed as `as` into the field when
+the panel's document holds no stored write contract yet, as when the write
+creates the panel: it checks a new link's source only under a write contract
+outside a union branch, and this one sits inside each of `Panel`'s branches.
+That does not change whose principal the label names.
 
 `addedBy` is the DID of the principal who added the panel. On an occurrence
 `admitPanel` creates without `as`, through `addPiece` or `duplicatePanel`, it is
