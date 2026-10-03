@@ -9,39 +9,55 @@ import {
   canRenderConfidentialityAtom,
   confidentialityLabels,
 } from "../src/worker/display-fit.ts";
+import type { RenderPolicy } from "../src/worker/types.ts";
 
 const secret = cfcAtom.builtin("secret");
 const other = cfcAtom.builtin("other");
 const caveat = cfcAtom.caveat("derived-from", cfcAtom.builtin("source"));
 
+/** A render policy with nothing declassified and the given bounds. */
+const policyWith = (bounds: Partial<RenderPolicy>): RenderPolicy => ({
+  declassifyConfidentiality: [],
+  ...bounds,
+});
+
 Deno.test("display fit - canRenderConfidentialityAtom", async (t) => {
   await t.step("admits any atom where no ceiling is active", () => {
-    assertEquals(canRenderConfidentialityAtom(secret, {}), true);
+    assertEquals(canRenderConfidentialityAtom(secret, policyWith({})), true);
   });
 
   await t.step("admits an atom the ceiling lists, and no other", () => {
-    const policy = { maxConfidentiality: [secret] };
+    const policy = policyWith({ maxConfidentiality: [secret] });
     assertEquals(canRenderConfidentialityAtom(secret, policy), true);
     assertEquals(canRenderConfidentialityAtom(other, policy), false);
   });
 
   await t.step("admits a caveat only of a kind the allowance lists", () => {
     assertEquals(
-      canRenderConfidentialityAtom(caveat, {
-        maxConfidentiality: [],
-        caveatKindAllow: ["derived-from"],
-      }),
+      canRenderConfidentialityAtom(
+        caveat,
+        policyWith({
+          maxConfidentiality: [],
+          caveatKindAllow: ["derived-from"],
+        }),
+      ),
       true,
     );
     assertEquals(
-      canRenderConfidentialityAtom(caveat, {
-        maxConfidentiality: [],
-        caveatKindAllow: ["other-kind"],
-      }),
+      canRenderConfidentialityAtom(
+        caveat,
+        policyWith({
+          maxConfidentiality: [],
+          caveatKindAllow: ["other-kind"],
+        }),
+      ),
       false,
     );
     assertEquals(
-      canRenderConfidentialityAtom(caveat, { maxConfidentiality: [] }),
+      canRenderConfidentialityAtom(
+        caveat,
+        policyWith({ maxConfidentiality: [] }),
+      ),
       false,
     );
   });
