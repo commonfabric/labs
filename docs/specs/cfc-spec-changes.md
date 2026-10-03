@@ -1798,8 +1798,9 @@ default) and carry, on a label entry the runtime derived, the `TransformedBy`
 of a builtin the descriptor names outright: evidence that the builtin wrote
 the value and nothing has written it since, not that no pattern chose what the
 builtin wrote. The runner refuses builtins whose writes it knows a pattern
-decides (those pattern code invokes, and host operations that copy a value a
-pattern chose); for any other, the descriptor's author vouches. After a
+decides (those pattern code invokes, host operations that copy a value a
+pattern chose, and the compile cache); for any other, the descriptor's author
+vouches. After a
 renderer-trusted gesture on the host's own surface, a builtin writes a record
 of the operation, the descriptor's digest, the consumer, the subject, the
 parameters and their digest, a random idempotency key, `at`, `exp`,
@@ -1820,8 +1821,10 @@ space; a stored writer claim is not evidence) and the consumer's checks
 space, payload digest over what is sent, destination resolved again and never
 substituted, window, a ledger keyed on the record and made of cells the
 consumer wrote). §3.8.4's integrity for a destination would gain the same
-caveat: a writer's identity is not the provenance of what it wrote. Six points need the spec
-owner's ruling, recorded as open questions in
+caveat: a writer's identity is not the provenance of what it wrote, and the
+space a destination lives in vouches for it only as far as the consumer
+trusts every writer of that space. Six points need the spec owner's ruling,
+recorded as open questions in
 [reviewed intents](./cfc-reviewed-intent.md#open-questions-for-the-cfc-author):
 whether destination integrity may start as a deployment-chosen atom; whether
 the ten-minute ruling waives §6.4.4's short bound and its display and

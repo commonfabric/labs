@@ -115,13 +115,16 @@ What such a pattern guarantees is narrower than "a trusted source": the value
 at the destination was written, as itself or within a value written whole, by
 a transaction under the named builtin's identity, and nothing has written at,
 above, or below it since. It says nothing about whose data the builtin wrote,
-which is why each destination must also be in the declared space, nor about
-what decided the builtin's inputs. Prepare and verification refuse a builtin
-whose inputs a pattern decides when the runtime can tell: one its module
-registry holds, which pattern code invokes with inputs it chooses (`ifElse`,
-`map`, `fetchText`, `llm`, and the rest), and a host operation that copies a
-value a pattern chose (the snapshot copy, the custody seal, and the reviewed
-intent itself). A builtin the runtime does not know is taken at the
+which is why each destination must also be in the declared space; that answers
+whose data it is only when the consumer trusts every writer of that space,
+since anyone who can write the space can run the same builtin there. Nor does
+it say what decided the builtin's inputs. Prepare and verification refuse a
+builtin whose inputs a pattern decides when the runtime can tell: one its
+module registry holds, which pattern code invokes with inputs it chooses
+(`ifElse`, `map`, `fetchText`, `llm`, and the rest), a host operation that
+copies a value a pattern chose (the snapshot copy, the custody seal, and the
+reviewed intent itself), and the compile cache, which writes what
+`compileAndRun` compiled from source a pattern can supply. A builtin the runtime does not know is taken at the
 descriptor's word, so a descriptor's author names a builtin whose writes no
 pattern steers, as an address book's import from a channel the user connected
 is.

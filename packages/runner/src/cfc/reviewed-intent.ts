@@ -101,7 +101,8 @@ export interface ReviewedIntentDestinationsParameter {
    * own address book lives in. Absent, it is the subject's home space. A
    * builtin's stamp says which code wrote a value, not whose data it is, so
    * the same builtin running for another principal stamps that principal's
-   * values the same way.
+   * values the same way; the space answers whose data it is only as far as
+   * the consumer trusts every writer of that space.
    */
   readonly space?: string;
 }
