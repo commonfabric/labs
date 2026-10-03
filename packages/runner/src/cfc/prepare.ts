@@ -5676,9 +5676,11 @@ const previousWriteValueForTarget = (
 /**
  * Where the value at `address` lives at the end of this transaction: the
  * address reached by reading through every link on the way to it from the
- * root of its document, or `"absent"` where nothing is there. A link that
- * names its cell relative to the document holding it resolves against that
- * document. A read that fails, and a chain longer than link resolution
+ * root of its document, or `"absent"` where nothing is there. A link's target
+ * path is walked one segment at a time from the root of the document it
+ * names, so a link partway along that path is followed too. A link that names
+ * its cell relative to the document holding it resolves against that
+ * document. A read that fails, and a walk longer than link resolution
  * follows, return `undefined`.
  */
 const resolveValueThroughLinks = (
@@ -5692,7 +5694,8 @@ const resolveValueThroughLinks = (
   };
   let path: string[] = [];
   let remaining: readonly string[] = canonicalizeLogicalPath(address.path);
-  for (let step = 0; step < MAX_PATH_RESOLUTION_LENGTH; step++) {
+  const steps = MAX_PATH_RESOLUTION_LENGTH + remaining.length;
+  for (let step = 0; step < steps; step++) {
     let value: FabricValue;
     try {
       value = tx.readValueOrThrow({ ...document, path }, {
@@ -5704,7 +5707,8 @@ const resolveValueThroughLinks = (
     if (isPrimitiveCellLink(value)) {
       const next = parseLink(value, { ...document, path });
       document = { space: next.space, id: next.id, scope: next.scope };
-      path = next.path.map(String);
+      path = [];
+      remaining = [...next.path.map(String), ...remaining];
       continue;
     }
     if (remaining.length === 0) {
@@ -9996,20 +10000,15 @@ const verifyWriteFloor = function* (
       };
       const held = resolveValueThroughLinks(tx, nested);
       if (held === "absent") continue;
-      const credit = [
-        ...(yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [],
-      ];
-      if (
-        held !== undefined &&
-        (targetKey(held) !== targetKey(nested) ||
-          !arraysEqual(held.path, nested.path))
-      ) {
-        credit.push(
-          ...(yield* ctx.linkLabels.labelAt({ ...input, source: held }, []))
-            ?.integrity ?? [],
-        );
-      }
-      contributions.push(credit);
+      const credit =
+        (yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [];
+      const heldCredit = held !== undefined &&
+          (targetKey(held) !== targetKey(nested) ||
+            !arraysEqual(held.path, nested.path))
+        ? (yield* ctx.linkLabels.labelAt({ ...input, source: held }, []))
+          ?.integrity ?? []
+        : [];
+      contributions.push([...credit, ...heldCredit]);
     }
     const written = writeValueForTarget(tx, { ...target, path: entry.path });
     // A value contribution exists when plain data lands at/under the floor

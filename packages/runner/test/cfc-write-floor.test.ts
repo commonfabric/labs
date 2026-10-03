@@ -870,6 +870,84 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
+  it("an ancestor link cannot smuggle an unendorsed value reached through a link inside another link's target path", async () => {
+    // Floor at /out/secret; /out links to a source whose `secret` is a link to
+    // `ptr/secret` in a middle document, and `ptr` is itself a link to the
+    // document holding the unendorsed value. Reaching the value means
+    // following the link at `ptr`, partway along the first link's target
+    // path; a walk that read that path whole would find nothing there and
+    // take the floor as not applying.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      // Each document carries stored labels, none of them the floor's atom.
+      const linkTo = (id: string, path: string[] = []) => {
+        let cell = runtime.getCell<unknown>(signer.did(), id);
+        for (const segment of path) {
+          cell = (cell as unknown as { key(k: string): typeof cell }).key(
+            segment,
+          );
+        }
+        return cell.getAsLink() as unknown as FabricValue;
+      };
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-leaf",
+        { secret: "unendorsed" },
+        {},
+      );
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-middle",
+        { ptr: linkTo("wf-hop-leaf") },
+        {},
+      );
+      await seedLabeledDoc(
+        runtime,
+        "wf-hop-source",
+        { secret: linkTo("wf-hop-middle", ["ptr", "secret"]) },
+        {},
+      );
+      const nestedFloor = {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              secret: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "wf-hop-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-hop-sink",
+        nestedFloor,
+        tx,
+      );
+      sink.set({ out: source as unknown as { secret: string } });
+      tx.prepareCfc();
+      const result = await tx.commit();
+      expect(String((result.error as Error | undefined)?.message)).toContain(
+        "write floor failed at /out/secret",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("an ancestor link whose source carries the nested floor atom passes", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
