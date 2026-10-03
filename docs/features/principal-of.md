@@ -64,6 +64,23 @@ make a labeled document read as an unlabeled one; the read's error propagates.
 A `kind` other than the two above, or a `target` that is neither a cell nor
 `undefined`, throws too.
 
+## Every principal a label attests
+
+`principalsOf(target, kind)`, exported beside `principalOf()`, reads the same
+claims in the same places and returns all of them: `[]` when the label attests
+none of `kind`, and the DIDs it attests, in the order they first appear, when it
+attests one or more. It returns `undefined` where `principalOf()` does for a
+claim in any other form and for a `target` of `undefined`, and it throws where
+`principalOf()` throws. It can be called where `principalOf()` can, and reads
+what `principalOf()` reads.
+
+`principalOf()` returns `undefined` both for a label attesting no principal and
+for one attesting several, which suits a caller that refuses whatever needs a
+verified principal. A caller that must admit a value nobody attests and refuse
+one somebody else does reads `principalsOf()` instead, so that a contested
+label is refused rather than admitted as an unattested one. The Loom root's
+`addPanel` reads its occurrence's `addedBy` field that way.
+
 ## Where it can be called
 
 | Where the call runs | Result |
@@ -105,9 +122,9 @@ classed a claim's subject as anything but public, `principalOf()` would throw
 rather than return an unlabeled copy of it, since nothing carries a label for
 an integrity atom's field.
 
-`principalOf()` and `inspectConfLabel()` are the pattern-facing surfaces for
-label metadata. Both read inside the observing transaction and take their
-target as a cell.
+`principalOf()`, `principalsOf()` and `inspectConfLabel()` are the
+pattern-facing surfaces for label metadata. All read inside the observing
+transaction and take their target as a cell.
 
 ## What the DID can and cannot do
 

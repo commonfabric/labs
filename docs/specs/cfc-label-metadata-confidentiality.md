@@ -129,9 +129,9 @@ revisited when invariant 12 is implemented." This is that revisit:
 
 1. **Close the raw seam.** `meta: "cfc"` over IPC either returns the same
    redacted view as `getCfcLabel` or is removed (no callers today — remove).
-2. **`inspectConfLabel` and `principalOf` are the only pattern-facing
-   surfaces**, both reading inside the observing transaction and taking their
-   target as a cell. `inspectConfLabel` is implemented per
+2. **`inspectConfLabel`, `principalOf` and `principalsOf` are the only
+   pattern-facing surfaces**, all reading inside the observing transaction and
+   taking their target as a cell. `inspectConfLabel` is implemented per
    §4.6.4.1: equality predicates only; result is a runtime-labeled value
    whose label joins the consumed metadata observations + query-input
    confidentiality + PC; `notAvailable` normalization for unobservable /
@@ -258,9 +258,9 @@ consumes inbound views, redacting the outbound copies is safe.
   pattern-facing surfaces are the `inspectConfLabel` BUILTIN
   (`runner/src/builtins/inspect-conf-label.ts`, exposed as
   `commonfabric.inspectConfLabel`), whose node runs inside the observing
-  transaction, and `principalOf`, a plain function
-  (`runner/src/builder/principal-of.ts`) that reads through the calling
-  handler's or computation's own transaction; both take their target as a
+  transaction, and `principalOf` and `principalsOf`, plain functions
+  (`runner/src/builder/principal-of.ts`) that read through the calling
+  handler's or computation's own transaction; all take their target as a
   cell, so inspecting a label never reads the labeled payload; the display
   path (`getCfcLabel`) is untouched.
   Consumption is a `labelMetadata` observation class beside

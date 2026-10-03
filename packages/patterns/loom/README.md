@@ -71,14 +71,15 @@ occurrence another Loom holds keeps the adder it shows there. `addPanel` without
 profile: its label names whoever added it then, to this Loom or to another, and
 linking it would attribute this admission to them. For the same reason it
 refuses one whose `addedBy` label names a principal other than the one the event
-acts for; the principal named there may link it. So a removed occurrence that
-names a profile, or another principal's adder, is added back by adding a new
-occurrence, with `as` or through `addPiece`; `duplicatePanel` copies only an
-occurrence still in the Loom. The runtime links an unlabeled document passed as
-`as` into the field when the panel's document holds no stored write contract
-yet, as when the write creates the panel: it checks a new link's source only
-under a write contract outside a union branch, and this one sits inside each of
-`Panel`'s branches. That does not change whose principal the label names.
+acts for, names more than one, or holds a claim in a form no runtime mints; the
+principal named there alone may link it. So a removed occurrence that names a
+profile, or another principal's adder, is added back by adding a new occurrence,
+with `as` or through `addPiece`; `duplicatePanel` copies only an occurrence
+still in the Loom. The runtime links an unlabeled document passed as `as` into
+the field when the panel's document holds no stored write contract yet, as when
+the write creates the panel: it checks a new link's source only under a write
+contract outside a union branch, and this one sits inside each of `Panel`'s
+branches. That does not change whose principal the label names.
 
 `addedBy` is the DID of the principal who added the panel. On an occurrence
 `admitPanel` creates without `as`, through `addPiece` or `duplicatePanel`, it is
@@ -90,14 +91,16 @@ is longer than 195 characters, the bound every `addedBy` is held to, is refused.
 The actor is read from the panel document's stored label map as for
 `addedByProfile`: the `authored-by` atom of the entry whose path is exactly
 `["addedBy"]` and whose `origin` is not `"link"`. Patterns read the adder with
-`principalOf(panel.key("addedBy"), "authored-by")`; authorship on another field,
-such as the panel's title, does not name the adder. `addPanel` without `as`
-links an occurrence a caller made as it is, and an `addedBy` it already holds is
-its writer's claim, which `addPanel` refuses unless it is a DID in W3C DID Core
-syntax of at most 195 characters. The label entry there, when the run that wrote
-the value minted one, names that writer rather than whomever the value names. So
-a reader takes the adder from the label, and from the value alone only where no
-entry exists. A panel with neither field names no adder.
+`principalOf(panel.key("addedBy"), "authored-by")`, and every principal the
+field attests with `principalsOf`, which tells a contested field from an
+unattested one; authorship on another field, such as the panel's title, does not
+name the adder. `addPanel` without `as` links an occurrence a caller made as it
+is, and an `addedBy` it already holds is its writer's claim, which `addPanel`
+refuses unless it is a DID in W3C DID Core syntax of at most 195 characters. The
+label entry there, when the run that wrote the value minted one, names that
+writer rather than whomever the value names. So a reader takes the adder from
+the label, and from the value alone only where no entry exists. A panel with
+neither field names no adder.
 
 The root's own Duplicate button acts under the session's `actingProfile` in
 `viewerState` when it holds one, and otherwise under the viewer's `#profile`;
