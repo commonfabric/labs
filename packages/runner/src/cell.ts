@@ -199,6 +199,7 @@ import {
   writeDestinationRead,
 } from "./storage/reactivity-log.ts";
 import { fromURI, toURI } from "./uri-utils.ts";
+import { canCarryFabricInstanceWhole } from "./whole-instance.ts";
 
 ensureNotRenderThread();
 
@@ -5509,7 +5510,9 @@ function convertOneToLinks(
         return layer;
       } else if (layer instanceof FabricInstance) {
         // Not a leaf: a container reached by its codec contents, which this
-        // walk cannot do.
+        // walk cannot descend. It leaves whole when there is nothing inside
+        // for the walk to convert, and is refused otherwise.
+        if (canCarryFabricInstanceWhole(layer)) return layer;
         refuseFabricInstance(layer, "when converting cells to links");
       }
 

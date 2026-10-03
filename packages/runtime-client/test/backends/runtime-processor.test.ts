@@ -5,11 +5,12 @@ import { stub } from "@std/testing/mock";
 import type { CellScope } from "@commonfabric/api";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import {
+  deepFreeze,
   type FabricValue,
   isValidFabricValue,
   taggedHashStringOf,
 } from "@commonfabric/data-model";
-import { entityRefFrom } from "@commonfabric/data-model/cell-rep";
+import { entityRefFrom, linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   fabricFromRealmValue,
   realmFromFabricValue,
@@ -5384,10 +5385,61 @@ describe("runtime-processor", () => {
       ).toBe(bytes);
     });
 
+    it("returns a deep-frozen `FabricInstance` holding only data whole", () => {
+      // Nothing inside it to map, and the record branch would rebuild it as
+      // `{}`.
+
+      const error = deepFreeze(FabricError.fromNativeError(new Error("boom")));
+
+      expect(mapCellRefsToSigilLinks(error)).toBe(error);
+      expect((mapCellRefsToSigilLinks({ e: error }) as { e: unknown }).e)
+        .toBe(error);
+    });
+
+    it("refuses a `FabricInstance` holding a link", () => {
+      const error = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: linkRefFrom({ id: "of:fid1:linked", path: [] }),
+        }),
+      );
+
+      expect(() => mapCellRefsToSigilLinks({ e: error })).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`) when mapping " +
+          "cell refs to sigil links.",
+      );
+    });
+
+    it("refuses a `FabricInstance` holding a `CellRef`", () => {
+      // This walk maps a `CellRef` record as well as a link, so an instance
+      // holding one has something inside it this walk would have converted.
+      const error = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: {
+            id: "of:fid1:referenced",
+            space: "did:key:z6Mkreferenced",
+            scope: "space",
+            path: [],
+          },
+        }),
+      );
+
+      expect(() => mapCellRefsToSigilLinks({ e: error })).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`) when mapping " +
+          "cell refs to sigil links.",
+      );
+    });
+
     it("refuses a `FabricInstance`, naming the class and the situation", () => {
       // A tripwire, not a limitation to route around: an instance's codec
-      // contents can hold a link that this walk cannot reach, so refusing beats
-      // the `{}` the record branch would otherwise produce.
+      // contents can hold a link that this walk cannot reach, and one that is
+      // not deep-frozen may hold anything, so refusing beats the `{}` the
+      // record branch would otherwise produce.
 
       const error = FabricError.fromNativeError(new Error("boom"));
       const message =

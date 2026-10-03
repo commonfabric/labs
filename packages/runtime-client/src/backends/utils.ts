@@ -24,6 +24,7 @@ import {
   linkRefFrom,
   refuseFabricInstance,
 } from "@commonfabric/runner/shared";
+import { canCarryFabricInstanceWhole } from "@commonfabric/runner/whole-instance";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import type { LoggerFlagsBreakdown } from "@commonfabric/utils/logger";
 
@@ -42,7 +43,15 @@ import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
  * closes. A subtree reachable from two positions is shared rather than
  * cyclic, and is walked at each.
  *
- * @throws If the value contains a cycle, or a `FabricInstance`.
+ * A `FabricInstance` is carried whole when it is deep-frozen and nothing
+ * inside it needs mapping -- its codec contents are fabric data, none of it a
+ * link or a `CellRef` (`canCarryFabricInstanceWhole()`) -- and refused
+ * otherwise, so an instance holding only data is still refused until it is
+ * deep-frozen.
+ *
+ * @throws If the value contains a cycle, or a `FabricInstance` that is not
+ *   carried whole. An instance of a class whose freeze or codec is not yet
+ *   implemented throws that class's own error from the check instead.
  */
 export function mapCellRefsToSigilLinks(value: FabricValue): FabricValue {
   return mapOne(value, [], new IndexTrackingStack<object>());
@@ -86,27 +95,21 @@ function mapOne(
     // place of the value.
     return value;
   } else if (value instanceof FabricInstance) {
-    // A `FabricInstance` is refused. Its codec contents can carry a link, and
-    // those contents are not reachable by property name -- so the record
-    // branch below would rebuild one from enumerable own properties it does
-    // not have, yielding `{}` and losing whatever it holds, and passing it
-    // through whole would leave any link inside it unmapped.
+    // A container reached by its codec contents rather than by property name,
+    // which this walk cannot descend: the record branch below would rebuild
+    // one from enumerable own properties it does not have, yielding `{}`. It
+    // crosses whole when it is deep-frozen and holds nothing this walk would
+    // map -- no link, and no `CellRef` record -- and is refused otherwise,
+    // since either would cross unmapped.
     //
-    // Nothing reaches this in production today, de facto rather than by
-    // construction: no flag gates it. What keeps it unreachable is the
-    // refusal at the other end of the same crossing -- `CellHandle.serialize()`
-    // in `../cell-handle.ts` refuses a `FabricInstance` before the value is
-    // sent, so neither caller here can be handed one. The transport does not
-    // stop an instance: the envelope's encoding carries one across with its
-    // class.
-    //
-    // The two refusals are a matched pair and move together, along with
-    // `convertCellsToLinks()`'s in `@commonfabric/runner`, which is the same
-    // refusal on the outbound side. Lifting one alone would leave an instance
-    // able to reach a walk that cannot descend it.
+    // The same rule holds at each end of the crossing -- `CellHandle`'s
+    // `serialize()`, `deserialize()` and `applyValue()` in `../cell-handle.ts`,
+    // and `convertCellsToLinks()` in `@commonfabric/runner` on the outbound
+    // side -- so an instance one side carries is one the other side accepts.
     //
     // TODO(danfuzz): descend by codec-mediated traversal into instance state,
-    // at which point this becomes a walk rather than a refusal.
+    // at which point a link inside one is mapped rather than refused.
+    if (canCarryFabricInstanceWhole(value, isCellRef)) return value;
     refuseFabricInstance(value, "when mapping cell refs to sigil links");
   } else if (typeof value === "object" && value) {
     // A container. It goes onto `ancestors` for as long as the walk is inside

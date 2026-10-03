@@ -9,10 +9,12 @@
  * schema expects a container yields `undefined` per key and contributes
  * nothing, which is the right answer: a leaf holds no link to find.
  *
- * A `FabricInstance` is a different case and both walks refuse one. A link in
- * its codec contents is unreachable by property name, so passing it through
- * _misses_ that link -- and over-collection is these walkers' safe direction,
- * which makes a miss the unsafe one.
+ * A `FabricInstance` is a different case. A link in its codec contents is
+ * unreachable by property name, so passing one through would _miss_ that link
+ * -- and over-collection is these walkers' safe direction, which makes a miss
+ * the unsafe one -- so both walks refuse an instance that may hold one. One
+ * that is deep-frozen and holds nothing but fabric data holds no link, and
+ * contributes nothing, as a `FabricPrimitive` does.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -20,7 +22,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import type { FabricValue } from "@commonfabric/data-model";
+import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
@@ -96,14 +98,20 @@ describe("runner-argument-walks", () => {
 
   /** The same link, wrapped where a schema expects a container. */
   function wrapped(link: unknown) {
-    return new FabricError({
-      type: "Error",
-      message: "boom",
-      stack: undefined,
-      cause: undefined,
-      extras: { inner: link as FabricValue },
-    });
+    return deepFreeze(
+      new FabricError({
+        type: "Error",
+        message: "boom",
+        stack: undefined,
+        cause: undefined,
+        extras: { inner: link as FabricValue },
+      }),
+    );
   }
+
+  /** A deep-frozen `FabricError` holding nothing but fabric data. */
+  const dataOnlyError = () =>
+    deepFreeze(FabricError.fromNativeError(new Error("boom")));
 
   describe("collectArgumentSchedulerReadLinks", () => {
     it("throws for a `FabricError` rather than missing a link inside it", () => {
@@ -132,6 +140,19 @@ describe("runner-argument-walks", () => {
         "Cannot yet handle `FabricError` (a `FabricInstance`) when " +
           "collecting scheduler read links from an argument.",
       );
+    });
+
+    it("collects a sibling write-redirect link past a deep-frozen `FabricError` holding only data", () => {
+      const { resultCell, value } = fixture();
+
+      const links = runtime.runner.accessForTestingOnly
+        .collectArgumentSchedulerReadLinks(
+          argumentSchema,
+          { ...value, payload: dataOnlyError() },
+          resultCell,
+        );
+
+      expect(links.length).toBe(1);
     });
 
     it("collects a sibling write-redirect link past a `FabricBytes`", () => {
@@ -209,6 +230,19 @@ describe("runner-argument-walks", () => {
 
       const links = runtime.runner.accessForTestingOnly
         .collectWritableCellArgumentLinks(argumentSchema, value, resultCell);
+
+      expect(links.length).toBe(1);
+    });
+
+    it("collects a sibling write-redirect link past a deep-frozen `FabricError` holding only data", () => {
+      const { resultCell, value } = fixture();
+
+      const links = runtime.runner.accessForTestingOnly
+        .collectWritableCellArgumentLinks(
+          argumentSchema,
+          { ...value, payload: dataOnlyError() },
+          resultCell,
+        );
 
       expect(links.length).toBe(1);
     });

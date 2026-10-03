@@ -59,6 +59,7 @@ import {
   internalVerifierRead,
   machineryRead,
 } from "./storage/reactivity-log.ts";
+import { canCarryFabricInstanceWhole } from "./whole-instance.ts";
 
 type SendValueToBindingOptions = {
   narrowestReadScope?: CellScope;
@@ -659,13 +660,15 @@ export function unwrapOneLevelAndBindToDoc(
    * would yield a bare `{}`. Returning it as-is preserves it, and skips an
    * `Object.entries()` call that can only ever come back empty.
    *
-   * A `FabricInstance` leaves next, by throwing. It is NOT a leaf: it is a
-   * container holding other `FabricValue`s, so it does need descending into,
-   * but by its codec contents rather than by property name — which this walk
-   * has no way to do. The alternative to throwing is to hand one back whole,
-   * which reads as success while leaving any bound alias in its contents
-   * silently unbound. Neither disposition is correct, so this one takes the
-   * one that reports itself, and names the class and the work it needs.
+   * A `FabricInstance` leaves next. It is NOT a leaf: it is a container
+   * holding other `FabricValue`s, so it does need descending into, but by its
+   * codec contents rather than by property name — which this walk has no way
+   * to do. One holding nothing but fabric data leaves whole: an alias is bound
+   * into a pattern only where a cell stood, and a deep-frozen instance holds
+   * no cell, so there is nothing in it to rebind, and a record in it shaped
+   * like an alias is data. Any other instance throws rather than leave an
+   * alias in its contents silently unbound, and names the class and the work
+   * it needs.
    *
    * TODO(danfuzz): descend a `FabricInstance` by its codec contents, at which
    * point the throw becomes a rebind. The two sibling walks in this file carry
@@ -782,6 +785,7 @@ export function unwrapOneLevelAndBindToDoc(
     } else if (binding instanceof FabricPrimitive) {
       return binding;
     } else if (binding instanceof FabricInstance) {
+      if (canCarryFabricInstanceWhole(binding)) return binding;
       throw new Error(
         `Cannot yet handle \`${binding.constructor.name}\` (a ` +
           "`FabricInstance`) as a pattern binding.",

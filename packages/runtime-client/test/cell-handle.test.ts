@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { deepFreeze } from "@commonfabric/data-model";
 import {
   fabricFromRealmValue,
   realmFromFabricValue,
@@ -1348,9 +1349,8 @@ describe("cell-handle", () => {
 
     it("refuses a `FabricInstance` rather than apply one", () => {
       // A tripwire: the transport delivers a fabric class whole, so what keeps
-      // an instance out of a cell is this refusal rather than a lossy arrival.
-      // It is `applyValue()`'s, and it runs first, which is why the comparison
-      // after it needs no arm of its own.
+      // an instance holding a link out of a cell is this refusal rather than a
+      // lossy arrival. A `FabricLink` is itself a link.
 
       const cell = new CellHandle<unknown>(makeRuntime(), ref);
       cell.subscribe(() => {}, { onRefused: () => {} });
@@ -1361,6 +1361,48 @@ describe("cell-handle", () => {
       expect(() => cell[$onCellUpdate](link)).toThrow(
         "Cannot yet handle `FabricLink` (a `FabricInstance`)",
       );
+    });
+
+    it("applies a deep-frozen `FabricInstance` holding only data whole", () => {
+      const cell = new CellHandle<unknown>(makeRuntime(), ref);
+      const calls: Array<unknown> = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      });
+      const error = deepFreeze(FabricError.fromNativeError(new Error("boom")));
+
+      cell[$onCellUpdate](error);
+
+      expect(calls.at(-1)).toBe(error);
+    });
+
+    it("notifies when a delivered instance's contents change, and only then", () => {
+      // An instance's state is private, as a primitive's is, so a walk over
+      // enumerable own properties sees `{}` on both sides and would call two
+      // errors with different messages equal.
+
+      const cell = new CellHandle<unknown>(makeRuntime(), ref);
+      const calls: Array<unknown> = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      });
+      // No stack, which would differ between two errors built on two lines.
+      const frozenError = (message: string) =>
+        deepFreeze(
+          new FabricError({
+            type: "Error",
+            message,
+            stack: undefined,
+            cause: undefined,
+          }),
+        );
+
+      cell[$onCellUpdate](frozenError("first"));
+      const after = calls.length;
+      cell[$onCellUpdate](frozenError("first"));
+      expect(calls.length).toBe(after);
+      cell[$onCellUpdate](frozenError("second"));
+      expect(calls.length).toBe(after + 1);
     });
 
     it("notifies when a handle is replaced by a record", () => {
@@ -2871,10 +2913,25 @@ describe("cell-handle", () => {
       ).toBe(bytes);
     });
 
+    it("hydrates a deep-frozen `FabricInstance` holding only data as itself", () => {
+      // As the connection delivers one: the realm encoding carries the class,
+      // and what it decodes is deep-frozen.
+
+      const sent = deepFreeze(FabricError.fromNativeError(new Error("boom")));
+      const delivered = fabricFromRealmValue(
+        structuredClone(realmFromFabricValue(sent)),
+      );
+
+      const hydrated = CellHandle.deserialize(makeHandle(), { e: delivered });
+
+      expect((hydrated as { e: unknown }).e).toBe(delivered);
+      expect((delivered as FabricError).message).toBe("boom");
+    });
+
     it("refuses a `FabricInstance` rather than hydrate one", () => {
       // A container, reached by its codec contents rather than by property
       // name, so a sigil link can sit inside one where this walk cannot see
-      // it. Nothing delivers one today; this is the tripwire.
+      // it, and a `FabricLink` is itself a link. This is the tripwire.
 
       const link = new FabricLink(
         Object.freeze({ id: "of:fid1:hydration-refusal", path: [] }),
@@ -2892,8 +2949,9 @@ describe("cell-handle", () => {
     // What this pins is that `serialize()` hands a `FabricPrimitive` on WHOLE
     // rather than walking it: rebuilding one from its enumerable own
     // properties would put `{}` on the wire in place of the bytes, which is
-    // what the ordering of the checks prevents. A `FabricInstance` is refused
-    // instead, being a container this walk cannot descend.
+    // what the ordering of the checks prevents. A `FabricInstance` is a
+    // container this walk cannot descend, so it is handed on whole only when
+    // nothing inside it would need converting, and refused otherwise.
 
     const makeRuntime = () =>
       ({
@@ -2968,12 +3026,69 @@ describe("cell-handle", () => {
       expect(hydrated.c[0]).toBe(bytes);
     });
 
+    it("returns a deep-frozen `FabricInstance` holding only data as itself in either direction", () => {
+      const error = deepFreeze(FabricError.fromNativeError(new Error("boom")));
+      const handle = new CellHandle(makeRuntime(), makeRef());
+
+      expect(CellHandle.serialize(error)).toBe(error);
+      expect((CellHandle.serialize({ e: error }) as { e: unknown }).e).toBe(
+        error,
+      );
+      expect(CellHandle.deserialize(handle, error)).toBe(error);
+    });
+
+    it("refuses a `FabricInstance` holding a link in either direction", () => {
+      // Passing one through would send a link where the wire wants a
+      // reference, or hand back a link where a handle belongs.
+
+      const error = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: linkRefFrom({ id: "of:fid1:linked", path: [] }),
+        }),
+      );
+      const handle = new CellHandle(makeRuntime(), makeRef());
+
+      expect(() => CellHandle.serialize(error)).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`)",
+      );
+      expect(() => CellHandle.deserialize(handle, error)).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`)",
+      );
+    });
+
+    it("refuses to send a `FabricInstance` holding a `CellRef`", () => {
+      // The worker's inbound walk would map the `CellRef` record, and cannot
+      // reach it inside an instance; refused here, before this handle caches
+      // a value the worker would refuse.
+      const error = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: {
+            id: "of:fid1:referenced",
+            space: "did:key:z6Mkreferenced",
+            scope: "space",
+            path: [],
+          },
+        }),
+      );
+
+      expect(() => CellHandle.serialize(error)).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`)",
+      );
+    });
+
     it("refuses a `FabricInstance` in either direction", () => {
       // A primitive is a leaf, so a walk that stops at it has lost nothing.
       // An instance is a container reached by its codec contents rather than
       // by property name, so a cell can sit inside one where these walks
-      // cannot see it -- passing one through would send a handle unconverted,
-      // or hand back a link where a handle belongs. Death before confusion.
+      // cannot see it -- passing one holding a link through would send a
+      // handle unconverted, or hand back a link where a handle belongs, and a
+      // `FabricLink` is itself a link. Death before confusion.
 
       const link = new FabricLink(
         Object.freeze({ id: "of:fid1:instance-refusal", path: [] }),
@@ -2999,12 +3114,14 @@ describe("cell-handle", () => {
     });
 
     it("refuses a `FabricInstance` with the whole of the shared message", () => {
-      // A primitive crosses whole, as the tests above pin. What is left is the
-      // instance, refused because this walk cannot descend one to find a
-      // handle inside -- a reason about the walk rather than about the wire,
-      // so it survives a connection that carries the class. Pinned to the
-      // whole message, situation string included, which is what says the
-      // refusal goes through the shared helper every other site uses.
+      // A primitive crosses whole, as the tests above pin. What is left is an
+      // instance that may hold something to convert -- here one that is not
+      // deep-frozen, so what it holds may still change -- refused because this
+      // walk cannot descend one to find a handle inside: a reason about the
+      // walk rather than about the wire, so it survives a connection that
+      // carries the class. Pinned to the whole message, situation string
+      // included, which is what says the refusal goes through the shared
+      // helper every other site uses.
 
       expect(() =>
         CellHandle.serialize(FabricError.fromNativeError(new Error("boom")))
