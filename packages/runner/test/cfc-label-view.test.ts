@@ -484,7 +484,13 @@ describe("CFC label view helpers", () => {
 
   describe("a scoped instance's stored labels", () => {
     type Scope = "space" | "user" | "session";
-    type Instance = { value: FabricValue; label?: IFCLabel; version?: number };
+    type Instance = {
+      value: FabricValue;
+      label?: IFCLabel;
+      /** A label on the pointer the instance holds at `notes`. */
+      pointer?: IFCLabel;
+      version?: number;
+    };
 
     /**
      * Runs `body` with a runtime whose storage holds the given instances of
@@ -508,24 +514,32 @@ describe("CFC label view helpers", () => {
           runtime.getCell(space, "scoped-label", undefined, tx).getAsLink(),
         ).id!;
         writeSeedEnvelopeDoc(tx, space);
-        for (const [scope, instance] of Object.entries(instances)) {
+        for (const scope of ["space", "user", "session"] as const) {
+          const instance = instances[scope];
           if (instance === undefined) continue;
+          const entries = [
+            ...(instance.label === undefined
+              ? []
+              : [{ path: ["notes"], label: instance.label }]),
+            ...(instance.pointer === undefined ? [] : [{
+              path: ["notes"],
+              label: instance.pointer,
+              origin: "link" as const,
+            }]),
+          ];
           seedStoredEnvelope(tx, {
             space,
             id,
-            scope: scope as Scope,
+            scope,
             type: "application/json",
             path: [],
           }, {
             value: instance.value,
-            ...(instance.label !== undefined && {
+            ...(entries.length > 0 && {
               cfc: {
                 version: instance.version ?? 1,
                 schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-                labelMap: {
-                  version: 1,
-                  entries: [{ path: ["notes"], label: instance.label }],
-                },
+                labelMap: { version: 1, entries },
               },
             }),
           });
@@ -578,6 +592,25 @@ describe("CFC label view helpers", () => {
         expect(labelsAt(cellAt("user")).confidentiality).toEqual(["mine"]);
         expect(cfcLabelViewSourceForCell(cellAt("space")).view)
           .toBeUndefined();
+      });
+    });
+
+    it("leaves out what its broader instance stores for the pointer it holds", async () => {
+      // The broader slot's link entry labels the redirect it holds, which a
+      // reader of the content behind it does not observe.
+      await withInstances({
+        space: {
+          value: { notes: "slot" },
+          label: { confidentiality: ["secret"] },
+          pointer: { confidentiality: ["pointer"] },
+        },
+        user: { value: { notes: "hi" } },
+      }, (cellAt) => {
+        expect(labelsAt(cellAt("user")).confidentiality).toEqual(["secret"]);
+        expect(labelsAt(cellAt("space")).confidentiality).toEqual([
+          "pointer",
+          "secret",
+        ]);
       });
     });
 
@@ -652,7 +685,7 @@ describe("CFC label view helpers", () => {
       });
     });
 
-    it("reads the label a narrowing write declares, without the broader slot's integrity", async () => {
+    it("reads the label a narrowing write declares, without the broader slot's pointer labels", async () => {
       const signer = await Identity.fromPassphrase("cfc label view narrowed");
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
@@ -676,11 +709,11 @@ describe("CFC label view helpers", () => {
         runtime.prepareTxForCommit(tx);
         expect((await tx.commit()).ok).toBeDefined();
 
-        // The broader slot holds a redirect, whose link entry carries a
-        // reference integrity atom about that pointer.
-        expect(
-          labelsAt(runtime.getCell(space, "narrowed-label")).integrity,
-        ).not.toEqual([]);
+        // The broader slot holds a redirect, whose link entry labels that
+        // pointer, reference integrity atom included.
+        const slot = labelsAt(runtime.getCell(space, "narrowed-label"));
+        expect(slot.confidentiality).toEqual(["secret", "secret"]);
+        expect(slot.integrity).not.toEqual([]);
         const scoped = labelsAt(
           runtime.getCell(
             space,
@@ -690,8 +723,9 @@ describe("CFC label view helpers", () => {
             "user",
           ),
         );
-        expect([...new Set(scoped.confidentiality)]).toEqual(["secret"]);
-        expect(scoped.integrity).toEqual([]);
+        // The declared label, from the instance's own envelope and the
+        // broader slot's alike, and nothing of the redirect's link entry.
+        expect(scoped).toEqual({ confidentiality: ["secret"], integrity: [] });
       } finally {
         await runtime.dispose();
         await storageManager.close();

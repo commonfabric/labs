@@ -15,6 +15,7 @@ import {
   type CfcLabelViewEntry,
   cfcLabelViewOriginSpaces,
   cfcLabelViewPathKey,
+  confidentialityOnly,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
   withCfcLabelViewOrigins,
@@ -241,11 +242,14 @@ export const referenceRestrictionsOf = (
   view === undefined ? undefined : withCfcLabelViewOrigins(
     mergeCfcLabelViews([{
       version: 1,
-      entries: view.entries.flatMap(({ path, label }) =>
-        path.length === 0 && label.confidentiality !== undefined
-          ? [{ path: [], label: { confidentiality: label.confidentiality } }]
-          : []
-      ),
+      entries: view.entries.flatMap(({ path, label }) => {
+        const restriction = path.length === 0
+          ? confidentialityOnly(label)
+          : undefined;
+        return restriction === undefined
+          ? []
+          : [{ path: [], label: restriction }];
+      }),
     }]),
     cfcLabelViewOriginSpaces(view),
   );
