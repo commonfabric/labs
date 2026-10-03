@@ -188,6 +188,7 @@ import type {
   IMemorySpaceAddress,
   IReadOptions,
   Metadata,
+  PendingCommitDocument,
 } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
@@ -1699,6 +1700,43 @@ export class CellImpl<T extends FabricValue>
    * @returns The cell's reactive value after the selected readiness barrier.
    */
   pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
+    return this.#pullWithBarrier(() =>
+      options.awaitDurability === true
+        ? this.#runtime.scheduler.idleWithPendingCommits()
+        : this.#runtime.scheduler.idle()
+    );
+  }
+
+  /** Demands the value through work that can change its backing-value choice. */
+  pullForInitialization(): Promise<Readonly<T>> {
+    return this.#pullWithBarrier(async () => {
+      await this.#runtime.scheduler.idle();
+      await this.#runtime.scheduler.idleWithPendingCommits(
+        () => this.#initializationDocuments(),
+      );
+    });
+  }
+
+  #initializationDocuments(): readonly PendingCommitDocument[] | undefined {
+    const tx = this.#runtime.edit();
+    try {
+      this.withTx(tx).getRaw({ lastNode: "writeRedirect" });
+      const log = tx.getReactivityLog?.();
+      if (log === undefined) return undefined;
+      const documents = [
+        this.getAsNormalizedFullLink(),
+        ...log.reads,
+        ...log.shallowReads,
+      ];
+      return this.#runtime.scheduler.getPendingCommitReadinessDocuments(
+        documents,
+      );
+    } finally {
+      tx.abort("Initialization readiness probe complete");
+    }
+  }
+
+  #pullWithBarrier(idle: () => Promise<void>): Promise<Readonly<T>> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -1725,7 +1763,7 @@ export class CellImpl<T extends FabricValue>
     const needsTraversal = schema === undefined ||
       ContextualFlowControl.isTrueSchema(schema);
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const action: Action = (tx) => {
         // Read the value inside the effect - this ensures dependencies are pulled
         const value = validateAndTransform(this.#runtime, tx, this.#viewRef);
@@ -1750,11 +1788,6 @@ export class CellImpl<T extends FabricValue>
         noDebounce: true,
       });
 
-      const idle = () =>
-        options.awaitDurability === true
-          ? this.#runtime.scheduler.idleWithPendingCommits()
-          : this.#runtime.scheduler.idle();
-
       // Wait for the scheduler to process all pending work, then resolve.
       // If the read kicked async loads of absent link targets (cross-space,
       // or same-space docs a fresh replica never pulled), await them and
@@ -1763,25 +1796,30 @@ export class CellImpl<T extends FabricValue>
       // rounds is bounded by the reachable-doc depth; the fixed cap is only
       // a backstop against a pathological graph. Pulls that kicked nothing
       // take the zero-iteration path and keep their previous timing.
-      idle().then(async () => {
-        const storage = this.#runtime.storageManager;
-        // The pending pool is manager-global (same semantics as `synced()`):
-        // this pull may also wait on loads kicked by concurrent readers.
-        let round = 0;
-        for (; round < 100; round++) {
-          if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
-          await (storage.crossSpaceSettled?.() ?? Promise.resolve());
+      const ready = async () => {
+        try {
           await idle();
+          const storage = this.#runtime.storageManager;
+          // The pending pool is manager-global (same semantics as `synced()`):
+          // this pull may also wait on loads kicked by concurrent readers.
+          let round = 0;
+          for (; round < 100; round++) {
+            if ((storage.pendingCrossSpacePromiseCount?.() ?? 0) === 0) break;
+            await (storage.crossSpaceSettled?.() ?? Promise.resolve());
+            await idle();
+          }
+          if (
+            round === 100 &&
+            (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0
+          ) {
+            logger.warn("pull", () => [
+              "pull() convergence bound exhausted with link-target loads still",
+              `pending: ${this.sourceURI}`,
+            ]);
+          }
+        } finally {
+          cancel?.();
         }
-        if (
-          round === 100 && (storage.pendingCrossSpacePromiseCount?.() ?? 0) > 0
-        ) {
-          logger.warn("pull", () => [
-            "pull() convergence bound exhausted with link-target loads still",
-            `pending: ${this.sourceURI}`,
-          ]);
-        }
-        cancel?.();
         // The effect above exists to drive the scheduler: it reads inside its
         // own transaction so the dependencies get registered and the
         // computations they gate run. That transaction has committed by the
@@ -1793,8 +1831,9 @@ export class CellImpl<T extends FabricValue>
         // holding a long-lived open transaction has snapshots in it from
         // before the computations this pull just drove, so reading through it
         // would hand back exactly the stale values pull() exists to avoid.
-        resolve(validateAndTransform(this.#runtime, undefined, this.#viewRef));
-      });
+        return validateAndTransform(this.#runtime, undefined, this.#viewRef);
+      };
+      ready().then(resolve, reject);
     });
   }
 
@@ -4503,6 +4542,11 @@ function frozenLink(link: NormalizedLink): NormalizedLink {
       ? link
       : { ...link, path: Object.freeze([...link.path]) },
   );
+}
+
+/** Pulls a cell through pending work that can affect an initialization decision. */
+export function pullForInitialization(cell: Cell<unknown>): Promise<unknown> {
+  return requireCellImpl(cell).pullForInitialization();
 }
 
 /** Returns what `cellImplOf()` does, and throws for anything but a cell. */

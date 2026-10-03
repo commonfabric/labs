@@ -188,7 +188,9 @@ The Cell contract matches the rest of Common Fabric:
   rather than the whole root value.
 - `initialize(defaultValue)` atomically stores a first-use default only while
   the Cell has no backing value, then returns the value that won. A schema
-  fallback visible through `get()` does not count as stored.
+  fallback visible through `get()` does not count as stored. Initialization
+  retains demand through relevant pending writes and producer work; unrelated
+  ordinary commits can remain pending.
 - `set(value)` replaces a value. `update(fn)` queues a read-modify-write against
   other operations on the same remote Cell in this guest; it is not a
   transaction across users, sessions, or resources.
@@ -217,7 +219,7 @@ needs its parent object to exist, call `initialize()` after the
 pull, await it, and then use the narrow child operation. Call it even when
 `get()` exposes the compiled schema fallback: initialization is idempotent and
 materializes that fallback before the child write.
-The runtime adapter keeps the cell demanded through pending commits before
+The runtime adapter keeps the cell demanded through relevant pending commits and producer lifecycle work before
 choosing the initializer, including commits that install its producer.
 
 ```typescript

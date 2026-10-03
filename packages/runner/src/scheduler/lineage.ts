@@ -1,4 +1,8 @@
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import {
+  commitSettlementOf,
+  declareGlobalCommit,
+} from "../storage/commit-readiness.ts";
 import type { QueuedEvent } from "./types.ts";
 
 export type OriginStatus = "pending" | "confirmed" | "failed";
@@ -64,11 +68,11 @@ export class SpeculationLineage {
       this.#byOrigin.set(origin, record);
       if (record.status !== "pending") return record;
 
-      origin.addCommitCallback((_tx, result) => {
+      const onSettled = (failed: boolean) => {
         const settled = this.#byOrigin.get(origin);
         if (!settled) return;
-        settled.status = result.error ? "failed" : "confirmed";
-        if (result.error) {
+        settled.status = failed ? "failed" : "confirmed";
+        if (failed) {
           for (const event of settled.events) {
             try {
               this.#hooks.dropQueuedEvent(
@@ -101,7 +105,21 @@ export class SpeculationLineage {
           }
         }
         this.#hooks.queueExecution();
-      });
+      };
+      const completion = originStatus === "pending"
+        ? commitSettlementOf(origin)
+        : undefined;
+      if (completion !== undefined) {
+        declareGlobalCommit(origin.tx);
+        void completion.then(
+          (result) => onSettled(result.error !== undefined),
+          () => onSettled(true),
+        );
+      } else {
+        origin.addCommitCallback((_tx, result) =>
+          onSettled(result.error !== undefined)
+        );
+      }
     }
     return record;
   }

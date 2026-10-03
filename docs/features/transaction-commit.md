@@ -42,10 +42,23 @@ install a lazy producer that the pull then computes, and includes the writes
 that computation produces. The barrier also covers pending pattern work.
 `RuntimeClient.idle()` crosses the same barrier without adding a cell demand.
 Hosts use pending-write notifications to guard teardown independently of reads.
-Bridge `initialize()` keeps that demand through the commit-aware barrier before
-atomically selecting an existing value or storing the default. It can therefore
-initialize a cell whose producer is being installed without replacing the value
-that producer supplies.
+Bridge `initialize()` keeps the target demanded before atomically selecting an
+existing backing value or storing the default. It first establishes current
+scheduler reads, then waits for pending commits that intersect the backing-value
+check or any installed action's scheduling reads. The backing-value check follows
+read links and the final write redirect, including cross-space targets. Commit
+footprints include every read, write, and document precondition in every space,
+so delayed later-space writes and rejection repair remain covered.
+
+Only ordinary extended storage commits with known document effects can be
+excluded. Raw or unclassified work, callbacks, post-commit effects, SQLite
+operations, genuine or unclassified seals, and pattern lifecycle work retain the
+full wait. Overlay's ordinary store-forwarding path uses the same document
+footprint as direct storage commits. Unknown
+scheduler dependencies also select the full barrier. Read dependencies are
+recomputed after each readiness wait; declared output surfaces do not justify
+excluding a commit. This lets initialization proceed during disjoint plain writes
+while retaining demand for producers a pending commit installs.
 
 Observe `receipt.verdict` when the next step requires knowing the commit's
 fate. Use `receipt.settled` when a retry needs the repaired read basis, when a
@@ -82,3 +95,11 @@ accepts no stage-selection options.
 Each receipt belongs to its own invocation. Starting a second commit on a
 transaction that is already pending or complete returns that invocation's
 completion error on both stages, even when the original commit succeeded.
+
+Commit callbacks, verdict callbacks, and post-commit effects must be registered
+while the underlying transaction is ready, before storage starts. Once storage
+starts, readiness can rely on the commit's recorded effect scope; later hook
+registration throws.
+Runtime-owned lineage can observe an already-started transaction's original
+storage or seal completion without adding a public hook. This observation precedes
+inline effects, so an effect can wait for the work it launches to be released.

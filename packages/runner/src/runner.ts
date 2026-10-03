@@ -176,6 +176,7 @@ import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
+import { declareGlobalCommit } from "./storage/commit-readiness.ts";
 import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
@@ -3711,6 +3712,7 @@ export class Runner {
     validationOptions: SetupValidationOptions = {},
   ): SetupResult<R> {
     const tx = providedTx ?? this.#runtime.edit();
+    declareGlobalCommit(tx.tx);
 
     logger.debug("cell-info", () => [
       `resultCell: ${resultCell.getAsNormalizedFullLink().id}`,
@@ -4856,6 +4858,7 @@ export class Runner {
               teardownRegistrationIfCurrent();
             }
           };
+          declareGlobalCommit(actualTx.tx);
           const commitWork = actualTx.commit().then(async ({ error }) => {
             if (error !== undefined) {
               // A lost manifest install recovers in every posture, for the
@@ -5005,6 +5008,7 @@ export class Runner {
               resultCell,
             );
             this.#runtime.prepareTxForCommit(setupTx);
+            declareGlobalCommit(setupTx.tx);
             setupTx.commit();
           } catch (error) {
             logger.error(
@@ -5042,6 +5046,7 @@ export class Runner {
               resultCell,
             );
             this.#runtime.prepareTxForCommit(setupTx);
+            declareGlobalCommit(setupTx.tx);
             const committed = await setupTx.commit();
             if (committed.error !== undefined) {
               logger.error(
@@ -5257,6 +5262,7 @@ export class Runner {
               ) {
                 const revertRef = revertTarget;
                 const rollForward = this.#runtime.editWithRetry((tx) => {
+                  declareGlobalCommit(tx.tx);
                   // Async pointer repair from the meta watcher's load
                   // promise — no scheduler run stamps it; bookkeeping
                   // per serving-loop.md §3d.
@@ -6083,6 +6089,7 @@ export class Runner {
     resultCell: Cell<any>,
   ): Promise<Result<Unit, CommitError>> {
     const committer = this.#deferredStartCommitter;
+    declareGlobalCommit(tx.tx);
     const commit: DeferredStartCommit = () => tx.commit();
     return committer === undefined
       ? commit()
@@ -7482,6 +7489,7 @@ export class Runner {
       );
       if (!providedTx) {
         this.#runtime.prepareTxForCommit(tx);
+        declareGlobalCommit(tx.tx);
         tx.commit();
       }
       return { resultCell, cancelDeferredStart };
@@ -7563,6 +7571,7 @@ export class Runner {
 
     if (!providedTx) {
       this.#runtime.prepareTxForCommit(tx);
+      declareGlobalCommit(tx.tx);
       tx.commit();
     }
 
@@ -8375,6 +8384,7 @@ export class Runner {
           }
         }
         const outcome = await this.#runtime.editWithRetry((tx) => {
+          declareGlobalCommit(tx.tx);
           if (!isCurrent()) {
             defaultsPrepared = false;
             return;

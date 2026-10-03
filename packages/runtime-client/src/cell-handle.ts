@@ -237,8 +237,9 @@ export class CellHandle<T = unknown> {
   /**
    * Atomically stores `value` only if the cell has no backing value, then
    * returns the value selected by that transaction. A readable schema fallback
-   * does not count as stored. Pending producers settle before choosing the
-   * default. Concurrent initializers converge on one winner
+   * does not count as stored. Relevant pending writes and producer work settle
+   * before choosing the default; disjoint ordinary commits can remain pending.
+   * Concurrent initializers converge on one winner
    * instead of replacing it with a blind write.
    */
   async initialize(value: T): Promise<Readonly<T>> {

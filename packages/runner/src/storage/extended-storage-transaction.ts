@@ -31,6 +31,11 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
+  declareDocumentLocalCommit,
+  declareGlobalCommit,
+  rememberCommitSettlement,
+} from "./commit-readiness.ts";
+import {
   type AttemptedWrite,
   canonicalizeDocumentPath,
   canonicalizeLogicalPath,
@@ -2395,6 +2400,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   enqueuePostCommitEffect(effect: PostCommitSideEffect): void {
+    this.#assertCommitRegistrationOpen("enqueuePostCommitEffect()");
     const key = effect.idempotencyKey ?? effect.id;
     if (this.#outboxIdempotencyKeys.has(key)) {
       this.#cfcInstrumentation.onSinkDedupHit?.(key);
@@ -2402,6 +2408,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     this.#outboxIdempotencyKeys.add(key);
     this.#cfcState.outbox.push(effect);
+    declareGlobalCommit(this.tx);
   }
 
   hasPendingPostCommitEffects(): boolean {
@@ -3886,9 +3893,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // channel, AFTER the callbacks and side effects here observed "ok" —
     // the serving loop (stage F) and the effect channel (stage G) must
     // consume dispositions from the wave outcome, never from this result.
+    if (this.#sealDestination === undefined) {
+      declareDocumentLocalCommit(this.tx);
+    }
     const promise = this.#sealDestination !== undefined
       ? this.#sealDestination.seal(this)
       : this.tx.commit(options);
+    rememberCommitSettlement(this, promise);
 
     // Two callback layers with two timelines (CT-1950):
     //
@@ -4003,6 +4014,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return result;
   }
 
+  #assertCommitRegistrationOpen(method: string): void {
+    this.#assertWritable(method);
+    if (this.tx.status().status !== "ready") {
+      throw new Error(`${method} must be registered before starting commit`);
+    }
+  }
+
   /**
    * Add a callback to be called when the transaction commit completes.
    * The callback receives the transaction as a parameter and is called
@@ -4019,8 +4037,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       result: Result<Unit, CommitError>,
     ) => void,
   ): void {
-    this.#assertWritable("addCommitCallback()");
+    this.#assertCommitRegistrationOpen("addCommitCallback()");
     this.#commitCallbacks.add(callback);
+    declareGlobalCommit(this.tx);
   }
 
   addVerdictCallback(
@@ -4029,8 +4048,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       result: Result<Unit, CommitError>,
     ) => void,
   ): void {
-    this.#assertWritable("addVerdictCallback()");
+    this.#assertCommitRegistrationOpen("addVerdictCallback()");
     this.#verdictCallbacks.add(callback);
+    declareGlobalCommit(this.tx);
   }
 
   abandonStagedWork(error: CommitError): void {
