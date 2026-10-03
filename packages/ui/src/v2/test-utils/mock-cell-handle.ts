@@ -99,8 +99,11 @@ class MockCellNetwork {
     const root = this.#roots.get(this.#rootKey(cellRef));
     if (!root || cellRef.path.length === 0) return;
 
-    // Reconstruct the root's full value with the nested path updated
-    const rootValue = root.get();
+    // Reconstruct the root's full value with the nested path updated. A root
+    // whose read is refused holds nothing to reconstruct it from.
+    const rootRead = root.lastRead();
+    if ("refused" in rootRead) return;
+    const rootValue = rootRead.value;
     if (!isObjectOrArray(rootValue)) return;
 
     const updated = deepSet(

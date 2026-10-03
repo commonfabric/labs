@@ -10,7 +10,7 @@ import {
   MentionableArraySchema,
   MentionableSchema,
 } from "./mentionable.ts";
-import { shownValue } from "./shown-value.ts";
+import { valueForDisplay } from "./value-for-display.ts";
 
 /**
  * Configuration for the MentionController
@@ -154,7 +154,7 @@ export class MentionController implements ReactiveController {
     }
 
     // A list the worker refuses offers no mentions.
-    const mentionableArray = shownValue(handle);
+    const mentionableArray = valueForDisplay(handle);
     if (!Array.isArray(mentionableArray) || mentionableArray.length === 0) {
       return [];
     }
@@ -421,7 +421,7 @@ export class MentionController implements ReactiveController {
     }
 
     // A list the worker refuses offers no mentions.
-    const mentionableArray = shownValue(handle);
+    const mentionableArray = valueForDisplay(handle);
     if (!Array.isArray(mentionableArray) || mentionableArray.length === 0) {
       return [];
     }

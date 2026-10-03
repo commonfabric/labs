@@ -4,7 +4,7 @@ import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { shownValue } from "../../core/shown-value.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import {
   applyThemeToElement,
   type CFTheme,
@@ -20,7 +20,7 @@ export function unwrapThemeCellValues(
   if (isCellHandle(value)) {
     // A theme value the worker will not show is left out, so the default
     // takes its place.
-    return shownValue(value);
+    return valueForDisplay(value);
   }
 
   if (!value || typeof value !== "object") {

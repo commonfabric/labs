@@ -75,7 +75,7 @@ import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
-import { shownValue } from "../../core/shown-value.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   dedupeByDestination,
@@ -566,9 +566,33 @@ export class CFCodeEditor extends BaseElement {
     return !!this.references;
   }
 
-  /** The reference map's current contents. */
+  /**
+   * Whether a new mention may take the reference form: there is a map to mint
+   * it into, and the worker admits the map's read. A key minted against a map
+   * the editor cannot see may name an entry already in it, so while the map
+   * is refused a new mention takes the wiki-link form, which needs no entry.
+   */
+  private get _mintsRefs(): boolean {
+    return !!this.references && this.references.refusal === undefined;
+  }
+
+  /**
+   * Whether the worker refuses a read that `$mentioned` is computed from:
+   * `$mentionable`, which resolves a wiki-link's id to its piece,
+   * `$references`, which resolves a reference's key to its destination, or
+   * `$mentioned` itself, which the editor compares what it would write
+   * against. A refused read holds nothing, so a `$mentioned` computed from it
+   * would lose every mention it resolves.
+   */
+  private get _mentionReadsRefused(): boolean {
+    return this.mentionable?.refusal !== undefined ||
+      this.references?.refusal !== undefined ||
+      this.mentioned?.refusal !== undefined;
+  }
+
+  /** The reference map's current contents, for display. */
   private _refMap(): MentionRefMap {
-    return ((this.references ? shownValue(this.references) : undefined) ??
+    return ((this.references ? valueForDisplay(this.references) : undefined) ??
       {}) as MentionRefMap;
   }
 
@@ -761,7 +785,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return [];
 
-    const rows = (shownValue(handle) ?? []) as MentionableArray;
+    const rows = (valueForDisplay(handle) ?? []) as MentionableArray;
     const matches: Array<[CellHandle<Mentionable>, number, string]> = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -825,7 +849,7 @@ export class CFCodeEditor extends BaseElement {
       return [];
     }
 
-    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     if (mentionableData.length === 0) {
       return [];
@@ -873,7 +897,7 @@ export class CFCodeEditor extends BaseElement {
     match: "contains" | "exact" = "contains",
   ): boolean {
     const mentionableData =
-      ((this.mentionable ? shownValue(this.mentionable) : undefined) ??
+      ((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
         []) as MentionableArray;
     const queryLower = query.toLowerCase();
     return mentionableData.some((mention, index) => {
@@ -929,7 +953,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     const queryLower = query.toLowerCase();
 
@@ -949,6 +973,10 @@ export class CFCodeEditor extends BaseElement {
 
   /** Completes an exact mention or creates when no exact row is present. */
   private _completeBacklinkQuery(view: EditorView, text: string): void {
+    // A universe the worker refuses says nothing of which pieces exist, so a
+    // query it might have answered is no reason to create one: the query
+    // stays as typed.
+    if (this.mentionable?.refusal !== undefined) return;
     const exactMatch = this._findExactMentionable(text);
     if (exactMatch) {
       const [matchCell, matchIndex] = exactMatch;
@@ -973,7 +1001,7 @@ export class CFCodeEditor extends BaseElement {
     }
 
     if (!this.pattern) return;
-    if (this._refMode) {
+    if (this._mintsRefs) {
       this._createMentionRefFromPattern(view, text);
     } else {
       this._completeBacklinkText(view);
@@ -1064,7 +1092,7 @@ export class CFCodeEditor extends BaseElement {
    */
   private _writeRefEntry(destination: CellHandle<unknown>): string | null {
     const map = this.references;
-    if (!map) return null;
+    if (!map || !this._mintsRefs) return null;
 
     const key = mintRefKey(this._takenRefKeys());
     map.key(key).set(
@@ -1520,7 +1548,7 @@ export class CFCodeEditor extends BaseElement {
     const handle = this.mentionable;
     if (!handle) return null;
 
-    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     if (mentionableData.length === 0) return null;
 
@@ -1557,7 +1585,7 @@ export class CFCodeEditor extends BaseElement {
    */
   private _isIndexRow(index: number): boolean {
     const item =
-      (((this.mentionable ? shownValue(this.mentionable) : undefined) ??
+      (((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
         []) as MentionableArray)[index];
     return item != null && Object.hasOwn(item, "piece");
   }
@@ -1599,7 +1627,7 @@ export class CFCodeEditor extends BaseElement {
 
     this._mentionResolutionPending = true;
 
-    const mentionableData = (shownValue(handle) ?? []) as MentionableArray;
+    const mentionableData = (valueForDisplay(handle) ?? []) as MentionableArray;
 
     // Keep a reference to the current mentionable to detect a rebind, and a
     // generation to detect a newer pass over the SAME handle: contents can
@@ -2227,7 +2255,8 @@ export class CFCodeEditor extends BaseElement {
     // this.mentionable is already wrapped with asSchema(MentionableArraySchema)
     // in willUpdate, so the runtime resolves @link indirection before
     // delivering values to subscribers.
-    // A refused list reads as one with nothing in it.
+    // A refused list offers nothing to complete or resolve, and `$mentioned`
+    // is not written from it (`_mentionReadsRefused`).
     const resolve = () => {
       // Clear stale resolved IDs and re-resolve asynchronously. The
       // $mentioned reconciliation waits for the resolution pass (which
@@ -2257,9 +2286,21 @@ export class CFCodeEditor extends BaseElement {
     // this.mentioned is already wrapped with asSchema(MentionableArraySchema)
     // in willUpdate.
     // Re-sync piece name subscriptions when mentioned list changes externally,
-    // or is refused, which reads as a list with nothing in it.
-    const resync = () => this._setupPieceNameSubscriptions();
-    const unsubscribe = this.mentioned.subscribe(resync, { onRefused: resync });
+    // or is refused, which subscribes to no piece's name. Reconciliation
+    // passed over while the list was refused runs once it is admitted again.
+    let refused = false;
+    const unsubscribe = this.mentioned.subscribe(() => {
+      this._setupPieceNameSubscriptions();
+      if (refused) {
+        refused = false;
+        this._updateMentionedFromContent();
+      }
+    }, {
+      onRefused: () => {
+        refused = true;
+        this._setupPieceNameSubscriptions();
+      },
+    });
     this._mentionedUnsub = unsubscribe;
   }
 
@@ -2277,7 +2318,8 @@ export class CFCodeEditor extends BaseElement {
     if (!this.references) return;
     // this.references is already wrapped with asSchema(MentionRefMapSchema)
     // in willUpdate.
-    // A refused map reads as one that resolves no key.
+    // A refused map resolves no key, and nothing the editor writes is
+    // computed from it (`_mintsRefs`, `_mentionReadsRefused`).
     const sync = () => {
       this._publishKnownRefKeys();
       // A reference the map has just made visible was not there to be tracked
@@ -2995,7 +3037,7 @@ export class CFCodeEditor extends BaseElement {
    * rewrite that already exists for a rename does this too.
    */
   private _handleUrlPaste(event: ClipboardEvent, view: EditorView): boolean {
-    if (!this._refMode || !this.pattern) return false;
+    if (!this._mintsRefs || !this.pattern) return false;
 
     const text = event.clipboardData?.getData("text/plain")?.trim();
     if (!text || /\s/.test(text)) return false;
@@ -3165,6 +3207,9 @@ export class CFCodeEditor extends BaseElement {
    */
   private _updateMentionedFromContent(content?: string): void {
     if (!this.mentioned) return;
+    // Left as it is while a read it is computed from is refused. The read's
+    // admission runs this again.
+    if (this._mentionReadsRefused) return;
     content ??= this._editorView?.state.doc.toString() ?? this.getValue() ?? "";
     if (this._mentionResolutionPending) {
       this._deferredMentionedContent = content;
@@ -3266,13 +3311,13 @@ export class CFCodeEditor extends BaseElement {
     if (!mentionedHandle) return curIds;
 
     const currentSource =
-      (shownValue(mentionedHandle) ?? []) as MentionableArray;
+      (valueForDisplay(mentionedHandle) ?? []) as MentionableArray;
 
     const mentionableHandle = this.mentionable;
     if (!mentionableHandle) return curIds;
 
     const mentionableData =
-      (shownValue(mentionableHandle) ?? []) as MentionableArray;
+      (valueForDisplay(mentionableHandle) ?? []) as MentionableArray;
 
     // For each current mentioned value, find its ID by matching in mentionable
     for (const mentionedValue of currentSource) {
@@ -3466,7 +3511,10 @@ export class CFCodeEditor extends BaseElement {
    */
   private _detectRefLabelChanges(): void {
     const map = this.references;
-    if (!map) return;
+    // A refused map says nothing of which labels the user has claimed, and
+    // its admission finds a label edited meanwhile still differing from the
+    // last one recorded.
+    if (!map || map.refusal !== undefined) return;
 
     const entries = this._refMap();
     const current = new Map<string, string>();
@@ -3518,7 +3566,10 @@ export class CFCodeEditor extends BaseElement {
    */
   private _collectUnreferencedRefEntries(): void {
     const map = this.references;
-    if (!map || this._refKeysAtLoad === null || !this._editorView) return;
+    if (
+      !map || map.refusal !== undefined || this._refKeysAtLoad === null ||
+      !this._editorView
+    ) return;
 
     const doc = this._editorView.state.doc.toString();
     // A document that has not loaded names nothing, which is not the same as
@@ -3650,7 +3701,7 @@ export class CFCodeEditor extends BaseElement {
     if (!this.references) return {};
 
     const rows =
-      ((this.mentionable ? shownValue(this.mentionable) : undefined) ??
+      ((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
         []) as MentionableArray;
     const namesByPiece = new Map<string, string>();
     for (let index = 0; index < rows.length; index++) {
@@ -3733,7 +3784,11 @@ export class CFCodeEditor extends BaseElement {
         !this._editorView
       ) return;
     }
-    if (this._refMap()[key]?.modifiedTitle) return;
+    // A refused map says nothing of whether the user claimed this label.
+    if (
+      this.references?.refusal !== undefined ||
+      this._refMap()[key]?.modifiedTitle
+    ) return;
 
     const ref = this._documentRefs().find((candidate) => candidate.key === key);
     if (!ref || ref.label === labelForToken(name)) return;

@@ -11,9 +11,14 @@ import { EditorState, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { NAME } from "@commonfabric/runner/shared";
 import { type CellHandle, type CellRef } from "@commonfabric/runtime-client";
-import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
+import {
+  createMockCellHandle,
+  pushRefusal,
+  writesSent,
+} from "../../test-utils/mock-cell-handle.ts";
 import type { MentionRefMap } from "../../core/mention-refs.ts";
 import type { Mentionable, MentionableArray } from "../../core/mentionable.ts";
+import { backlinkField } from "./features/backlinks.ts";
 import {
   mentionRefField,
   refShortNameField,
@@ -372,6 +377,19 @@ describe("CFCodeEditor pasted-mention decision", () => {
   it("leaves every paste alone without a reference map", () => {
     const fakeThis = pasteThis();
     fakeThis.references = null;
+    const result = paste(fakeThis, `/of:fid1:${HASH}`);
+    expect(result.handled).toBe(false);
+    expect(result.prevented).toBe(false);
+  });
+
+  it("leaves every paste alone while the worker refuses the reference map", () => {
+    // A key minted against a map the editor cannot see may name an entry
+    // already in it.
+    const fakeThis = pasteThis();
+    fakeThis.references = {
+      get: () => ({}),
+      refusal: { refusedBy: "display-ceiling" },
+    };
     const result = paste(fakeThis, `/of:fid1:${HASH}`);
     expect(result.handled).toBe(false);
     expect(result.prevented).toBe(false);
@@ -1451,5 +1469,191 @@ describe("CFCodeEditor mention short names", () => {
 
       expect(refShortNames(view.state)).toEqual({});
     });
+  });
+});
+
+describe("CFCodeEditor while the worker refuses a read its mentions are made from", () => {
+  // `$mentioned` is computed from the document and from what `$mentionable`
+  // and `$references` resolve its mentions to. A refused read holds nothing,
+  // so a write computed from it would name none of the mentions the document
+  // holds and erase `$mentioned`, which the host was never shown. While
+  // either is refused the editor writes nothing it would compute from it.
+
+  type RefusalInternals = {
+    mentionable: CellHandle<MentionableArray> | null;
+    mentioned?: CellHandle<MentionableArray>;
+    pattern: CellHandle<string>;
+    _editorView: EditorView | undefined;
+    _resolvePieceIds(): Promise<void>;
+    _completeBacklinkQuery(view: EditorView, text: string): void;
+    _writeRefEntry(destination: CellHandle<unknown>): string | null;
+    willUpdate(changedProperties: Map<string, unknown>): void;
+  };
+
+  const KEY = "a3f9zz";
+
+  /**
+   * `handle`, which binding it under the editor's schema hands back as it is,
+   * so that a refusal pushed to it reaches the subscription the binding opens.
+   */
+  function bound<T>(handle: CellHandle<T>): CellHandle<T> {
+    Object.defineProperty(handle, "asSchema", { value: () => handle });
+    return handle;
+  }
+
+  /** A view stub over `doc`, carrying the mention state the editor reads. */
+  function viewOver(doc: string, refKeys: string[] = []) {
+    const view = {
+      state: EditorState.create({
+        doc,
+        extensions: [backlinkField, mentionRefField, refShortNameField],
+      }),
+      dispatch(spec: TransactionSpec) {
+        this.state = this.state.update(spec).state;
+      },
+    };
+    view.dispatch({ effects: setKnownRefKeys.of(refKeys) });
+    return view;
+  }
+
+  /**
+   * Binds `changed` as property changes do, and returns the resolution passes
+   * the binding starts, which later changes to the universe add to.
+   */
+  function bind(
+    element: RefusalInternals,
+    changed: string[],
+  ): Promise<void>[] {
+    const passes: Promise<void>[] = [];
+    const resolvePieceIds = element._resolvePieceIds.bind(element);
+    Object.defineProperty(element, "_resolvePieceIds", {
+      value: () => {
+        const pass = resolvePieceIds();
+        passes.push(pass);
+        return pass;
+      },
+    });
+    element.willUpdate(new Map(changed.map((name) => [name, null])));
+    return passes;
+  }
+
+  it("leaves `$mentioned` as it is when `$mentionable` is refused", async () => {
+    const element = new CFCodeEditor() as unknown as RefusalInternals;
+    const universe = bound(
+      createMockCellHandle<MentionableArray>([{ [NAME]: "Direct" }], {
+        id: "of:direct" as CellRef["id"],
+      }),
+    );
+    const mentioned = bound(
+      createMockCellHandle<MentionableArray>([], {
+        id: "of:mentioned" as CellRef["id"],
+      }),
+    );
+    element.mentionable = universe;
+    element.mentioned = mentioned;
+    element._editorView = viewOver(
+      "See [[Direct (direct)]].",
+    ) as unknown as EditorView;
+    const passes = bind(element, ["mentionable", "mentioned"]);
+    await Promise.all(passes);
+    // The admitted universe resolves the one mention.
+    expect(writesSent(mentioned)).toHaveLength(1);
+    expect(mentioned.get()).toHaveLength(1);
+
+    pushRefusal(universe);
+    await Promise.all(passes);
+
+    expect(writesSent(mentioned)).toHaveLength(1);
+    expect(mentioned.get()).toHaveLength(1);
+  });
+
+  it("leaves `$mentioned` as it is when `$references` is refused", async () => {
+    const element = new CFCodeEditor() as unknown as RefusalInternals;
+    const destination = createMockCellHandle<Record<string, unknown>>(
+      { [NAME]: "Second item" },
+      { id: "of:item-42" as CellRef["id"] },
+    );
+    const references = bound(
+      createMockCellHandle<MentionRefMap>(
+        { [KEY]: { destination, modifiedTitle: false } } as MentionRefMap,
+        { id: "of:references" as CellRef["id"] },
+      ),
+    );
+    const mentioned = bound(
+      createMockCellHandle<MentionableArray>([], {
+        id: "of:mentioned" as CellRef["id"],
+      }),
+    );
+    element.mentionable = bound(
+      createMockCellHandle<MentionableArray>([], {
+        id: "of:universe" as CellRef["id"],
+      }),
+    );
+    element.mentioned = mentioned;
+    // Defined rather than assigned, so Lit's reactive property setter does
+    // not run against an element with no editor behind it.
+    Object.defineProperty(element, "references", {
+      value: references,
+      writable: true,
+    });
+    element._editorView = viewOver(
+      `See [Second item][${KEY}].`,
+      [KEY],
+    ) as unknown as EditorView;
+    const passes = bind(element, ["mentionable", "mentioned", "references"]);
+    await Promise.all(passes);
+    // The admitted map resolves the one reference.
+    expect(writesSent(mentioned)).toHaveLength(1);
+    expect(mentioned.get()).toHaveLength(1);
+
+    pushRefusal(references);
+    await Promise.all(passes);
+
+    expect(writesSent(mentioned)).toHaveLength(1);
+    expect(mentioned.get()).toHaveLength(1);
+  });
+
+  it("creates no piece for a query a refused universe might have answered", () => {
+    const element = new CFCodeEditor() as unknown as RefusalInternals;
+    const universe = createMockCellHandle<MentionableArray>([
+      { [NAME]: "Existing Topic", title: "Existing Topic" },
+    ]);
+    element.mentionable = universe;
+    element.pattern = createMockCellHandle("pattern");
+    let creations = 0;
+    Object.defineProperty(element, "createBacklinkFromPattern", {
+      value: () => {
+        creations++;
+        return Promise.resolve();
+      },
+    });
+    const view = viewOver("[[Existing Topic");
+    element._editorView = view as unknown as EditorView;
+    pushRefusal(universe);
+
+    element._completeBacklinkQuery(
+      view as unknown as EditorView,
+      "Existing Topic",
+    );
+
+    expect(creations).toBe(0);
+    expect(view.state.doc.toString()).toBe("[[Existing Topic");
+  });
+
+  it("mints no key into a refused reference map", () => {
+    const element = new CFCodeEditor() as unknown as RefusalInternals;
+    const references = createMockCellHandle<MentionRefMap>({});
+    Object.defineProperty(element, "references", {
+      value: references,
+      writable: true,
+    });
+    pushRefusal(references);
+
+    const key = element._writeRefEntry(
+      createMockCellHandle<unknown>({ [NAME]: "Second item" }),
+    );
+
+    expect(key).toBeNull();
+    expect(writesSent(references)).toEqual([]);
   });
 });

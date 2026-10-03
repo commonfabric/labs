@@ -20,7 +20,7 @@ import {
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { shownValue } from "../../core/shown-value.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 
 /** Capability kind assigned to a named context child. */
 export type CellContextResourceKind =
@@ -356,7 +356,7 @@ function cellContextResources(
   // A context whose read is refused names the resources its schema declares,
   // each of which answers for its own reads.
   const names = (): Set<string> => {
-    const current = shownValue(root);
+    const current = valueForDisplay(root);
     return new Set([
       ...Object.keys(schemaProperties(root.ref().schema)),
       ...(current && typeof current === "object" ? Object.keys(current) : []),
@@ -364,7 +364,7 @@ function cellContextResources(
   };
   const resource = (name: string): BridgeResource | undefined => {
     const properties = schemaProperties(root.ref().schema);
-    const current = shownValue(root);
+    const current = valueForDisplay(root);
     if (
       !Object.hasOwn(properties, name) &&
       !(current && Object.hasOwn(current, name))

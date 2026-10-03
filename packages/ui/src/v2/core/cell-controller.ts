@@ -7,7 +7,7 @@ import {
   type JSONSchema,
 } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import { shownValue } from "./shown-value.ts";
+import { valueForDisplay } from "./value-for-display.ts";
 import {
   InputTimingController,
   type InputTimingOptions,
@@ -251,7 +251,7 @@ export class CellController<T> implements ReactiveController {
     if (
       !this._bindingHydrated &&
       isCellHandle(this._currentValue) &&
-      shownValue(this._currentValue as CellHandle<T>) === undefined &&
+      valueForDisplay(this._currentValue as CellHandle<T>) === undefined &&
       this._lastKnownValue !== undefined
     ) {
       return this._lastKnownValue as Readonly<T>;
@@ -399,7 +399,7 @@ export class CellController<T> implements ReactiveController {
 
   private defaultGetValue(value: CellHandle<T> | T): T {
     if (isCellHandle(value)) {
-      const cellValue = shownValue(value as CellHandle<T>);
+      const cellValue = valueForDisplay(value as CellHandle<T>);
       return cellValue === undefined ? (cellValue as T) : cellValue;
     }
     return value as T;
@@ -608,7 +608,7 @@ export class StringCellController extends CellController<string> {
       ...options,
       getValue: options.getValue || ((value) => {
         if (isCellHandle(value)) {
-          return shownValue(value as CellHandle<string>) || "";
+          return valueForDisplay(value as CellHandle<string>) || "";
         }
         // Handle empty strings explicitly - don't treat them as falsy
         return value === undefined || value === null ? "" : value as string;
@@ -630,7 +630,7 @@ export class BooleanCellController extends CellController<boolean> {
       ...options,
       getValue: options.getValue || ((value) => {
         if (isCellHandle(value)) {
-          return shownValue(value as CellHandle<boolean>) ?? false;
+          return valueForDisplay(value as CellHandle<boolean>) ?? false;
         }
         return value as boolean || false;
       }),
@@ -658,7 +658,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
       ...options,
       getValue: options.getValue || ((value) => {
         if (isCellHandle(value)) {
-          return shownValue(value as CellHandle<T[]>) || [];
+          return valueForDisplay(value as CellHandle<T[]>) || [];
         }
         return value as T[] || [];
       }),
