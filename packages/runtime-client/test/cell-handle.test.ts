@@ -1103,15 +1103,18 @@ describe("cell-handle", () => {
       expect(cell.lastRead()).toEqual({ value: undefined });
     });
 
-    it("hands a subscriber the first answer for a handle that held nothing yet, even one holding nothing", () => {
-      const cell = new CellHandle<string>(makeRuntime(), ref);
+    it("hands a subscriber the answer a read gives a handle that held nothing yet, even one holding nothing", async () => {
+      const cell = new CellHandle<string>(
+        makeRuntime({ value: undefined }),
+        ref,
+      );
       const values: Array<string | undefined> = [];
       cell.subscribe((value) => {
         values.push(value);
       }, { onRefused: () => {} });
       const echoed = values.length;
 
-      cell[$onCellUpdate](undefined);
+      await cell.sync();
 
       expect(values.length).toBe(echoed + 1);
       expect(cell.lastRead()).toEqual({ value: undefined });

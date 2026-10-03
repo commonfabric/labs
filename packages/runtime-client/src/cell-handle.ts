@@ -771,8 +771,11 @@ export class CellHandle<T = unknown> {
    * the handle's last read, `onRefused` with the refusal and `callback` not
    * at all. A handle that has read nothing yet calls `callback` with
    * `undefined` as well; {@link lastRead} tells that apart from a cell that
-   * holds nothing, and the first answer for it reaches `callback` whatever it
-   * holds. After that, `callback` is called whenever the value changes, and
+   * holds nothing. A read that answers it ({@link sync}, {@link pull})
+   * reaches `callback` whatever it holds, as does an update the connection
+   * delivers; the connection delivers no update that holds nothing (the
+   * worker sends one for a document it has not loaded too), so a handle on a
+   * cell that holds nothing stays unread until a read answers it. After that, `callback` is called whenever the value changes, and
    * `onRefused` with each refusal. The callback's return value, if a Cancel
    * function, is called before the next value, when a refusal drops the value
    * it was given, and when the subscription is cancelled.
@@ -1170,9 +1173,9 @@ export class CellHandle<T = unknown> {
     labelUpdate?: { cfcLabel: CfcLabelView | undefined },
   ): void {
     this.#updateGeneration++;
-    // A value admitted after a refusal, or the first for a handle that held
-    // nothing yet, is news to the subscribers, even one equal to what the
-    // handle held.
+    // A value admitted after a refusal, or the first delivered to a handle
+    // that held nothing yet, is news to the subscribers, even one equal to
+    // what the handle held.
     const isNews = this.#refusal !== undefined || this.#unread;
     this.#refusal = undefined;
     this.#unread = false;

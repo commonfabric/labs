@@ -266,6 +266,9 @@ describe("connection", () => {
       path: [],
     };
     const refusal = { refusedBy: "display-ceiling" } as const;
+    /** The runtime a handle reaches `connection` through. */
+    const runtimeOf = (connection: RuntimeConnection) =>
+      ({ [$conn]: () => connection }) as unknown as RuntimeClient;
     const posted = (message: Record<string, FabricValue>) => {
       const arrived = fabricFromRealmValue(
         structuredClone(realmFromFabricValue({
@@ -283,7 +286,7 @@ describe("connection", () => {
     it("hands each subscriber the refusal, and drops what it held", async () => {
       const transport = new FakeTransport();
       const connection = await initializedConnection(transport);
-      const runtime = { [$conn]: () => connection } as unknown as RuntimeClient;
+      const runtime = runtimeOf(connection);
       const first = new CellHandle<string>(runtime, ref);
       const second = new CellHandle<string>(runtime, ref);
       const heard: unknown[] = [];
@@ -303,7 +306,7 @@ describe("connection", () => {
     it("hands a later subscriber the refusal, once, rather than nothing", async () => {
       const transport = new FakeTransport();
       const connection = await initializedConnection(transport);
-      const runtime = { [$conn]: () => connection } as unknown as RuntimeClient;
+      const runtime = runtimeOf(connection);
       const first = new CellHandle<string>(runtime, ref);
       first.subscribe(() => {}, { onRefused: () => {} });
       transport.emit("message", posted({ refused: refusal }));
@@ -319,6 +322,23 @@ describe("connection", () => {
       // One refusal stands, so the subscriber hears it once.
       expect(heard).toEqual([refusal]);
       expect(values).toEqual([]);
+      await connection.dispose();
+    });
+
+    it("ends no refusal a later subscriber holds with a value another holds", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const first = new CellHandle<string>(runtime, ref);
+      first.subscribe(() => {}, { onRefused: () => {} });
+      transport.emit("message", posted({ value: "held by another" }));
+
+      // What the other holds may be a write it made, or a copy it was made
+      // with; only a read of the later one ends its refusal.
+      const later = new CellHandle<string>(runtime, ref, { refused: refusal });
+      later.subscribe(() => {}, { onRefused: () => {} });
+
+      expect(later.lastRead()).toEqual({ refused: refusal });
       await connection.dispose();
     });
   });
