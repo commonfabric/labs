@@ -122,6 +122,16 @@ Deno.test("keying - generateKey", async (t) => {
     assertEquals(generateKey({ n: new Map() }), generateKey({ n: new Map() }));
   });
 
+  await t.step("tells apart coarse keys of arrays by their length", () => {
+    // An array the keyer cannot hash keys by its length, so siblings of
+    // differing length still key apart.
+    assertNotEquals(
+      generateKey([new Map()]),
+      generateKey([new Map(), new Map()]),
+    );
+    assertEquals(generateKey([new Map()]), generateKey([new Map()]));
+  });
+
   //
   // A hole and a cycle
   //
