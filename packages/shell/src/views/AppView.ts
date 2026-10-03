@@ -15,7 +15,7 @@ import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type Cancel,
   type CellHandleRead,
-  type ErrorNotification,
+  type ErrorReport,
   type FavoritePieceAddress,
   NAME,
   PieceHandle,
@@ -324,7 +324,7 @@ export class XAppView extends BaseView {
   accessor spaceLoadError: LoadError | undefined = undefined;
 
   @property({ attribute: false })
-  accessor runtimeLoadErrors: readonly ErrorNotification[] = [];
+  accessor runtimeLoadErrors: readonly ErrorReport[] = [];
 
   @property({ attribute: false })
   accessor preserveRuntimeErrorsForNextViewChange: (() => void) | undefined =
@@ -1099,7 +1099,7 @@ export class XAppView extends BaseView {
     };
   }
 
-  #runtimeErrorMatchesView(event: ErrorNotification): boolean {
+  #runtimeErrorMatchesView(event: ErrorReport): boolean {
     if (!event.space || event.space !== this.space) return false;
 
     const isDefaultView = isViewingDefaultPatternView(this.app.view);

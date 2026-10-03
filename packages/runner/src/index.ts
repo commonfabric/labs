@@ -30,6 +30,7 @@ export type {
   RuntimeOptions,
   SpaceCellContents,
 } from "./runtime.ts";
+export { NavigationWithheldError } from "./navigation-withheld.ts";
 export type { EventIntentOutcome } from "./speculation/overlay-destination.ts";
 export {
   ADOPT_SERVER_FLAGS_ENV,
@@ -118,6 +119,7 @@ export {
   type TransactionSummary,
 } from "./storage/transaction-summary.ts";
 export {
+  cellDocumentHeld,
   type CellLinkInput,
   cellRuntime,
   cellTx,
@@ -414,6 +416,7 @@ export {
   type SlugReferenceTarget,
   SlugResolutionError,
   type SlugTargetInPiece,
+  type SlugWalkRead,
 } from "./slug-resolution.ts";
 
 export { schemaPathSelection } from "./schema-path.ts";
@@ -437,3 +440,4 @@ export {
 } from "./cell-reference.ts";
 
 export { scopeCallerEventId } from "./scheduler/event-identity.ts";
+export { makeAddressKey, parseAddressKey } from "./scheduler/diagnosis.ts";

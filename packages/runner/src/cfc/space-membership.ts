@@ -9,7 +9,7 @@ import {
 } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import type { Cancel } from "../cancel.ts";
-import type { Cell } from "../cell.ts";
+import { type Cell, cellDocumentHeld } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 
 /**
@@ -99,6 +99,20 @@ export interface SpaceMembershipProvider {
    * arrives (and a revoke re-blocks).
    */
   subscribe(space: string, onChange: () => void): Cancel;
+
+  /**
+   * Whether the local replica holds `space`'s ACL doc, or its confirmed
+   * absence, so that `readerRole` answers from what the ACL says rather than
+   * from its not having loaded yet. A provider that cannot say leaves it out.
+   */
+  held?(space: string): boolean;
+
+  /**
+   * Resolves once the local replica holds `space`'s ACL doc, or its confirmed
+   * absence. A decision made once and not again, which no `subscribe` will
+   * make again, waits on this before it is made on an ACL that has not loaded.
+   */
+  whenHeld?(space: string): Promise<void>;
 }
 
 /**
@@ -155,6 +169,12 @@ export const createRuntimeSpaceMembershipProvider = (
       if (serviceDids.includes(actingPrincipal)) return "owner";
       const acl = aclCellFor(runtime, cells, space).get() as ACL | undefined;
       return spaceReaderRole(acl, actingPrincipal, serviceDids);
+    },
+    held(space) {
+      return cellDocumentHeld(aclCellFor(runtime, cells, space));
+    },
+    async whenHeld(space) {
+      await aclCellFor(runtime, cells, space).sync();
     },
     subscribe(space, onChange) {
       // `Cell.sink` runs its action once synchronously at subscribe time (the

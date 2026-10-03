@@ -33,7 +33,7 @@ import type {
 } from "@commonfabric/runner/shared";
 import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 
-import { CellHandle } from "./cell-handle.ts";
+import { CellHandle, CellReadRefusedError } from "./cell-handle.ts";
 import {
   InitializedRuntimeConnection,
   type PendingRequestDiagnostic,
@@ -45,10 +45,11 @@ import { EventEmitter } from "./client/emitter.ts";
 import { RuntimeTransport } from "./client/transport.ts";
 import { PieceHandle } from "./piece-handle.ts";
 import {
+  type CellReadRefusal,
   type CellRef,
   ConsoleMessage,
   type CustodySealPreview,
-  ErrorNotification,
+  ErrorReport,
   type EventAttentionListResponse,
   type EventAttentionNotice,
   type EventAttentionResolveResponse,
@@ -68,7 +69,7 @@ import {
   type PieceSourceAction,
   type PieceSourceRevisionSourceView,
   type PieceSourceView,
-  type PieceUpdateSourceResponse,
+  type PieceUpdateSourceResult,
   type PresenceJoinResponse,
   type PresenceUpdateNotification,
   type PresenceWireEvent,
@@ -154,7 +155,7 @@ export interface RuntimeAttachOptions extends
 export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
-  error: [ErrorNotification];
+  error: [ErrorReport];
   spaceaccesslost: [{ space: DID }];
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
@@ -368,7 +369,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   #pendingWrites = false;
   #operationSubscriptions = new Map<
     string,
-    (field: OperationFieldSnapshot) => void
+    {
+      callback: (field: OperationFieldSnapshot) => void;
+      onRefused: (refusal: CellReadRefusal) => void;
+    }
   >();
 
   /** Joined rooms by their key. */
@@ -465,18 +469,29 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return this.#pendingWrites;
   }
 
-  /** Prepares the snapshot and audience the trusted host asks the user to share. */
+  /**
+   * Prepares the snapshot and audience the trusted host asks the user to share.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses the host a read of
+   *   the source, whose value the preview would show.
+   */
   async prepareSnapshotShare(
     source: CellRef,
     audience: SnapshotShareAudienceRef,
     appendBooksTo?: { recommended: CellRef; received: CellRef },
   ): Promise<SnapshotSharePreview> {
-    return await this.#conn.request<RequestType.SnapshotSharePrepare>({
+    const response = await this.#conn.request<
+      RequestType.SnapshotSharePrepare
+    >({
       type: RequestType.SnapshotSharePrepare,
       source,
       audience,
       appendBooksTo,
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
+    return response;
   }
 
   /** Commits a preview after the trusted host receives the user's confirmation. */
@@ -613,6 +628,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ...(operationSessionId === undefined ? {} : { operationSessionId }),
       ...(after === undefined ? {} : { after }),
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return response.field;
   }
 
@@ -634,17 +652,30 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ...operation,
       payload: operation.payload,
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return response.resolution;
   }
 
+  /**
+   * Subscribes `callback` to a collaborative field's updates after `after`,
+   * and `onRefused` to each refusal of them, which stands in place of an
+   * update and carries nothing of the field. Every subscriber gives one, so
+   * that each says what it does once the field is withheld.
+   */
   async subscribeOperationField<T>(
     cell: CellHandle<T>,
     callback: (field: OperationFieldSnapshot) => void,
-    after?: OpCursor,
-    operationSessionId?: string,
+    options: {
+      after?: OpCursor;
+      operationSessionId?: string;
+      onRefused: (refusal: CellReadRefusal) => void;
+    },
   ): Promise<() => void> {
+    const { after, operationSessionId, onRefused } = options;
     const subscriptionId = crypto.randomUUID();
-    this.#operationSubscriptions.set(subscriptionId, callback);
+    this.#operationSubscriptions.set(subscriptionId, { callback, onRefused });
     try {
       const response = await this.#conn.request<
         RequestType.OperationSubscribe
@@ -1121,6 +1152,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space,
       scope,
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return response.source;
   }
 
@@ -1140,6 +1174,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       revisionId,
       scope,
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return response.source;
   }
 
@@ -1173,8 +1210,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     space: DID,
     action: PieceSourceAction,
     options: { confirmationToken?: string; scope?: CellScope } = {},
-  ): Promise<PieceUpdateSourceResponse> {
-    return await this.#conn.request<RequestType.PieceUpdateSource>({
+  ): Promise<PieceUpdateSourceResult> {
+    const response = await this.#conn.request<RequestType.PieceUpdateSource>({
       type: RequestType.PieceUpdateSource,
       pieceId,
       space,
@@ -1184,6 +1221,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         ? {}
         : { confirmationToken: options.confirmationToken }),
     });
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
+    return response;
   }
 
   /** Read a space's ACL and whether the active principal may change it. */
@@ -1234,7 +1275,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space,
       scope,
     });
-    return response.slug;
+    // A slug the worker will not show is not offered: a slug only ever
+    // stands in for the id an address already holds.
+    return "refused" in response ? undefined : response.slug;
   }
 
   /**
@@ -1741,7 +1784,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     });
   };
 
-  #onError = (data: ErrorNotification): void => {
+  #onError = (data: ErrorReport): void => {
     this.emit("error", data);
   };
 
@@ -1767,9 +1810,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   };
 
   #onOperationUpdate = (data: OperationUpdateNotification): void => {
-    this.#operationSubscriptions.get(data.subscriptionId)?.(
-      data.field,
-    );
+    const subscription = this.#operationSubscriptions.get(data.subscriptionId);
+    if ("refused" in data) subscription?.onRefused(data.refused);
+    else subscription?.callback(data.field);
   };
 
   #onPresenceUpdate = (data: PresenceUpdateNotification): void => {

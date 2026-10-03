@@ -14,6 +14,7 @@ import {
 } from "../storage/transaction-inspection.ts";
 import { ignoreReadForScheduling } from "../storage/reactivity-log.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";
+import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   CycleReport,
@@ -68,8 +69,34 @@ export interface SchedulerDiagnosisControlState {
   readonly runAction: (action: Action) => Promise<unknown>;
 }
 
+/**
+ * The key a diagnosis names an address by: `space/id/path`, with the id
+ * prefixed by its scope, as `user:of:…` or `session:of:…`, for a scoped
+ * instance of a document, which holds values of its own. No document id
+ * starts with a scope's name, so the prefix reads back unambiguously
+ * ({@link parseAddressKey}).
+ */
 export function makeAddressKey(addr: IMemorySpaceAddress): string {
-  return `${addr.space}/${addr.id}/${addr.path.join("/")}`;
+  const scope = normalizeCellScope(addr.scope);
+  const id = scope === "space" ? addr.id : `${scope}:${addr.id}`;
+  return `${addr.space}/${id}/${addr.path.join("/")}`;
+}
+
+/**
+ * The document a key {@link makeAddressKey} made names: its space, id and
+ * scope, or `undefined` for a string that is no such key.
+ */
+export function parseAddressKey(
+  key: string,
+): { space: string; id: string; scope: CellScope } | undefined {
+  const [space, scoped] = key.split("/", 2);
+  if (space === undefined || scoped === undefined) return undefined;
+  for (const scope of ["user", "session"] as const) {
+    if (scoped.startsWith(`${scope}:`)) {
+      return { space, id: scoped.slice(scope.length + 1), scope };
+    }
+  }
+  return { space, id: scoped, scope: "space" };
 }
 
 function unwrapTransactionDetailValue(
@@ -135,6 +162,7 @@ export function captureCommittedReads(
         {
           space: read.space,
           id: read.id,
+          ...(read.scope === undefined ? {} : { scope: read.scope }),
           path: [...read.path],
         },
         { meta: ignoreReadForScheduling },

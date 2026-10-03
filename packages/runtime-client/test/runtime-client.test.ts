@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 
+import { CellReadRefusedError } from "@/cell-handle.ts";
 import { attachOptionsFrom, RuntimeClient } from "@/runtime-client.ts";
 import { findKeyMaterial } from "@/shared/key-material.ts";
 import {
@@ -659,6 +660,38 @@ describe("RuntimeClient", () => {
       }]);
       // The response is unwrapped: callers get the source state, not the envelope.
       expect(result).toBe(source);
+    });
+  });
+
+  describe("a piece's metadata the worker refuses", () => {
+    const refusingClient = () => {
+      const conn = {
+        on: () => {},
+        request: () =>
+          Promise.resolve({ refused: { refusedBy: "display-ceiling" } }),
+      } as unknown as never;
+      return new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+    };
+    const space = "did:key:z6Mk-runtime-client-source" as never;
+
+    it("offers no slug, a slug standing in only for the id it names", async () => {
+      await expect(refusingClient().getPieceSlug("fid1:piece", space))
+        .resolves.toBeUndefined();
+    });
+
+    it("rejects a refused source read, revision, or update with the refusal", async () => {
+      const client = refusingClient();
+
+      await expect(client.getPieceSource("fid1:piece", space)).rejects
+        .toThrow(CellReadRefusedError);
+      await expect(
+        client.getPieceSourceRevision("fid1:piece", space, "revision-1"),
+      ).rejects.toThrow(CellReadRefusedError);
+      await expect(
+        client.updatePieceSource("fid1:piece", space, { kind: "detach" }),
+      ).rejects.toThrow(CellReadRefusedError);
     });
   });
 

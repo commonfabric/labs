@@ -28,12 +28,16 @@ import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcLabelView,
+  cfcLabelViewOriginSpaces,
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
+  isChannelStateDocument,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
+  redactCaveatSourcesForDisplay,
+  redactEntryPathsForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -117,11 +121,15 @@ export function admitsEverything(policy: RenderPolicy): boolean {
 /**
  * The label that keeps `policy` from admitting what `reads` of `cell` show,
  * or undefined when the policy admits it. The policy has to admit both the
- * cell's labels, as {@link cellLabelRefusal} fits them, and the labels the
- * reads consumed, which reach every document a read passed through,
- * including one behind a link crossed part way along the path. A read that
- * reports no consumed labels counts as consuming the marker no policy admits,
- * and reads that consumed none are fitted by the cell's schema.
+ * labels the reads consumed, which reach every document a read passed
+ * through, including one behind a link crossed part way along the path, and
+ * the labels at `cell`'s own node, as {@link cellLabelRefusal} fits them,
+ * which include those its ancestors' labels cover (see {@link atNode}). What
+ * lies below `cell` is fitted as the reads consumed it, so a read that stops
+ * short of a labeled field is not refused for that field, and one that
+ * reaches it is. A read that reports no consumed labels counts as consuming
+ * the marker no policy admits, and reads that consumed none are fitted by the
+ * cell's schema.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -151,8 +159,63 @@ export function readRefusal(
       watch,
     );
   return admitted
-    ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
+    ? cellLabelRefusal(
+      cell,
+      cellLabelSources(cell)?.map(atNode),
+      policy,
+      sources,
+      watch,
+    )
     : { labelSource: "consumed", confidentiality, integrity };
+}
+
+/**
+ * `source`, with its view narrowed to the entries at the node it was read
+ * at. A cell's label view holds an entry for each labeled path at or below
+ * the cell, and folds what its ancestors' labels cover into the entries at
+ * the node itself, so these are the labels of the node and of every
+ * ancestor, and none of what lies below it. A view whose entries all lie
+ * below the node narrows to an empty one, not to none: the cell is labeled,
+ * at its fields, and what a read takes in of those is fitted as the read
+ * consumed it, not by the schema a cell with no label falls back to.
+ */
+function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
+  if (source.view === undefined) return source;
+  return {
+    ...source,
+    view: {
+      ...source.view,
+      entries: source.view.entries.filter((entry) => entry.path.length === 0),
+    },
+  };
+}
+
+/**
+ * The label view a host is shown for `cell`, whose view is `view`: with each
+ * caveat's source redacted, and, where `policy` refuses `cell`'s labels, as
+ * {@link cellLabelRefusal} fits them, joined at its root, since the path an
+ * entry sits at names a field, which is part of what the record holding it
+ * holds (§4.6.4.1). Fitting the cell as a whole is stricter than deciding a
+ * name on the record's node alone, as a host's list of a record's fields is
+ * decided: a view can withhold a name that list shows. Every view the worker
+ * hands a host, on a ref, a link in a value or a binding, is made here, so a
+ * channel added later that carries one is held to the same display form.
+ */
+export function displayLabelView(
+  cell: Cell<unknown>,
+  view: CfcLabelView,
+  policy: RenderPolicy | undefined,
+  sources: DisplayFitSources,
+): CfcLabelView {
+  const shown = redactCaveatSourcesForDisplay(view);
+  if (policy === undefined || admitsEverything(policy)) return shown;
+  const refusal = cellLabelRefusal(
+    cell,
+    [{ view, readFailed: false, spaces: cfcLabelViewOriginSpaces(view) }],
+    policy,
+    sources,
+  );
+  return refusal === undefined ? shown : redactEntryPathsForDisplay(shown);
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */
@@ -229,14 +292,22 @@ export function cellLabelRefusal(
  * there, which reflects every link the resolution followed (spec §8.2.7).
  * {@link cellLabelRefusal} fits each separately, so integrity evidence in one
  * does not discharge a clause of the other. Undefined when the labels cannot
- * be read, as when the resolution throws.
+ * be read, as when the resolution throws, or where either place is in a
+ * channel's own state (`isChannelStateDocument()`), which carries no labels
+ * a display could be decided on.
  */
 export function cellLabelSources(
   cell: Cell<unknown>,
 ): CfcLabelViewSource[] | undefined {
   try {
-    const own = cfcLabelViewSourceForCell(cell);
     const resolved = cell.resolveAsCell();
+    if (
+      isChannelStateDocument(cell.getAsNormalizedFullLink().id) ||
+      isChannelStateDocument(resolved.getAsNormalizedFullLink().id)
+    ) {
+      return undefined;
+    }
+    const own = cfcLabelViewSourceForCell(cell);
     return sameCell(cell, resolved)
       ? [own]
       : [own, cfcLabelViewSourceForCell(resolved)];

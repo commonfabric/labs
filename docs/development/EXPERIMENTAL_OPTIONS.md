@@ -1490,7 +1490,13 @@ the per-epic implementation notes).
   in and verifying its digest; a delegate's access to the session workspace
   requires its own membership evidence. Confidentiality the ceiling does not
   satisfy stays blocked, and author-supplied render-boundary declassification
-  is denied.
+  is denied. The worker decides a host's reads of cells under the same
+  ceiling: a read, a subscription, a binding, and what crosses beside them
+  (label views, a piece's slug and source, slug references, SQLite and
+  collaborative-field reads, telemetry, the trigger trace, diagnosis runs,
+  console arguments, error reports and navigation requests), so what the
+  ceiling refuses reaches the main thread neither as a render nor as a value
+  a host component shows.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the

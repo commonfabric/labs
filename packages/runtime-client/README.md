@@ -29,19 +29,76 @@ host could not make never reads as a cell that holds nothing.
 
 A handle holds a refusal in place of a value. `refusal` and `lastRead()` report
 it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()` and `initialize()`
-reject with it. A subscriber hears each refusal through the `onRefused` option
-of `subscribe()`, which runs at once for a handle already refused, and its value
-callback never receives one. The next admitted value, or a value the host
-writes, ends the refusal.
+reject with it. Every subscriber passes `onRefused` to `subscribe()`, and hears
+each refusal there, at once for a handle already refused; its value callback
+never receives one. A write through a refused handle is refused: `set()` and
+`push()` log it, and the strict variants reject with it. The next admitted value
+ends the refusal.
 
-The worker builds its gate with no display ceiling, so it refuses no read.
+The worker builds its gate from the display ceiling it renders with
+(`renderConfidentialityCeiling` in its initialization data), with the resolver
+and the providers every render is given, so a host's read is decided under the
+same root policy, by the same fit, as a render of the same cell. With no
+ceiling, the gate refuses nothing.
+
+The gate also decides what crosses beside a value:
+
+- **Label views.** A label read, and the view a ref or a link inside a value
+  carries, is joined at its root where the ceiling refuses the cell, since the
+  paths its entries sit at name fields, and a field's name is part of what the
+  record holding it holds. A record's field list is decided on the record's
+  node, so it can name a field whose label view is joined: the view is the
+  stricter of the two. A ref carries a view only where the gate gave it one.
+- **Metadata.** A piece's slug and source are decided as metadata, on every
+  label its document stores. A refused source is neither read nor changed
+  through the host, and a refused slug is not offered. A slug reference is
+  decided the same way, on every document its resolution read, so a guessed slug
+  is not resolved to a piece whose slug would be refused.
+- **Reads the gate cannot measure.** A SQLite query is decided on the database
+  cell's labels. A collaborative field's query, operation and each update are
+  decided on the field the session holds, and on the cell the host named to
+  reach it. Each such decision, and a slug's, waits for the documents and the
+  access lists it consults (`hold()`); an access list that cannot be loaded is a
+  refusal.
+- **Reads of scoped instances.** What a read consumed is measured for a reader
+  (`collectReaderConsumedLabel()`): a read of a user- or session-scoped instance
+  also answers to its broader instances' confidentiality, so a record whose link
+  reaches such an instance is decided as a read of it is.
+- **Diagnostics.** Telemetry `cell.update` markers, the trigger trace, and
+  `DetectNonIdempotent` name a document the ceiling refuses alone, with the
+  placeholder in place of its values and paths. A telemetry marker's error or
+  rejection message, and a refused commit's reasons, are decided on the labels
+  of the transaction it reports on, and withheld where it carries none. Nothing
+  records what a program was made from, so under a ceiling the live patterns'
+  sources are refused and the scheduler graph's function previews are dropped.
+- **What an action says.** A pattern's `console` arguments, a runtime error's
+  message and stack, and where a pattern asks the host to navigate, are decided
+  on the labels of everything the action had read; where those are refused, or
+  it carries none, the placeholder stands in their place. A withheld navigation
+  throws (`NavigationWithheldError`), so the effects channel does not ack a
+  server's intent it did not enact. A server's intent carries the labels of what
+  chose its target (`chosenFrom`), and is decided on them.
 
 Every request and notification the worker sends is classified in
 `REQUEST_DISPOSITIONS` and `NOTIFICATION_DISPOSITIONS`: decided by the gate,
 rendered, carrying no cell value, a reference, a trusted operation, or ungated.
 The answers of the channels marked as decided carry a mark only the gate gives
 them, and a type-level check holds the tables to it, so a new channel fails to
-type-check until it says how it stands.
+type-check until it says how it stands. The ungated channels are a space's
+access list, which the space's own access rules govern; a presence room's
+records, which carry what each member chose to share; and the action-run trace
+and the write-stack trace, which carry addresses, field paths included, and no
+values. The scheduler graph is decided: under a ceiling its nodes carry no
+function previews, and an address in a document the ceiling refuses names the
+document alone. Telemetry markers' addresses name no scope, so under a ceiling
+each names its document alone. A storage error's conflict set and a refused
+commit's inputs still carry addresses with field paths, and no values.
+
+Two things fall outside the tables:
+
+- A failed request's message, which a handler raises and which names the failure
+  rather than a cell's contents.
+- The worker's own console, which runs in the runtime's own context.
 
 ## Diagnosing pending writes
 

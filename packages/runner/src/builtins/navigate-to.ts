@@ -2,7 +2,8 @@ import {
   effectIntentNonce,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
 } from "@commonfabric/memory/v2";
-import { type Cell, createCell } from "../cell.ts";
+import { type Cell, createCell, type SinkConsumedLabel } from "../cell.ts";
+import { collectReaderConsumedLabel } from "../cfc/prepare.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
 import { type RawBuiltinResult } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
@@ -18,6 +19,27 @@ import { navigateEventContextOf } from "./navigate-context.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 
 const logger = getLogger("navigate-to", { enabled: true, level: "warn" });
+
+/**
+ * The labels `tx` has consumed, as a reader of what it chose answers to them,
+ * read now, while it is open, for a decision made after it has closed, as a
+ * navigation is released after its commit. Labels that cannot be read are
+ * not: asking for them raises the failure.
+ */
+function consumedSoFar(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+): () => SinkConsumedLabel {
+  let read: SinkConsumedLabel;
+  try {
+    read = collectReaderConsumedLabel(tx, runtime.readTx());
+  } catch (error) {
+    return () => {
+      throw error;
+    };
+  }
+  return () => read;
+}
 
 export function navigateTo(
   inputsCell: Cell<any>,
@@ -138,7 +160,7 @@ export function navigateTo(
    * actor — and set the (session-scoped) result cell in the same
    * transaction. No local enactment: the session's client enacts. */
   function servedNavigate(
-    _tx: IExtendedStorageTransaction,
+    tx: IExtendedStorageTransaction,
     target: Cell<any>,
   ): void {
     const context = navigateEventContextOf(action);
@@ -201,6 +223,26 @@ export function navigateTo(
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
     const targetLink = resolvedTarget.getAsNormalizedFullLink();
+    // What chose the target, which the session's client decides whether its
+    // host may be told the target on. The intent is written in a transaction
+    // of its own, which carries none of this run's reads, so the labels ride
+    // with the intent. Labels that cannot be read are left off, and a client
+    // withholds an intent that carries none under a ceiling.
+    let chosenFrom: Record<string, unknown> | undefined;
+    try {
+      const read = collectReaderConsumedLabel(tx, runtime.readTx());
+      chosenFrom = {
+        confidentiality: [...read.confidentiality],
+        integrity: [...read.integrity],
+        modulePolicySpaces: Object.fromEntries(
+          [...read.modulePolicySpaces].map((
+            [key, spaces],
+          ) => [key, [...spaces]]),
+        ),
+      };
+    } catch {
+      chosenFrom = undefined;
+    }
 
     // NO closure bookkeeping on the served arm (independent review M2):
     // `navigated` is never consulted by a served run — the store owns
@@ -251,6 +293,7 @@ export function navigateTo(
             ? { scope: targetLink.scope }
             : {}),
         },
+        ...(chosenFrom === undefined ? {} : { chosenFrom }),
       },
       // The engine stamps the issuing commit's seq at apply
       // (protocol.md §5's issuedIn; the stream-entry seq precedent).
@@ -384,6 +427,7 @@ export function navigateTo(
     const navigateCallback = runtime.navigateCallback;
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
+    const consumed = consumedSoFar(runtime, tx);
 
     const previousNavigated = navigated;
     const thisAttempt = ++navigationAttempt;
@@ -417,7 +461,7 @@ export function navigateTo(
       flush: async () => {
         if (navigationAttempt !== thisAttempt) return;
         const work = Promise.resolve().then(() =>
-          navigateCallback(resolvedTarget)
+          navigateCallback(resolvedTarget, consumed)
         );
         runtime.trackAsyncWork(work, parentCell);
         // Failure PROPAGATES (owner review P1-1, unlike the OFF arm's
@@ -448,6 +492,7 @@ export function navigateTo(
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
     const navigateCallback = runtime.navigateCallback;
+    const consumed = consumedSoFar(runtime, tx);
 
     const previousNavigated = navigated;
     const thisAttempt = ++navigationAttempt;
@@ -478,7 +523,7 @@ export function navigateTo(
       flush: async () => {
         if (navigationAttempt !== thisAttempt) return;
         const work = Promise.resolve().then(() =>
-          navigateCallback(resolvedTarget)
+          navigateCallback(resolvedTarget, consumed)
         );
         runtime.trackAsyncWork(work, parentCell);
         try {

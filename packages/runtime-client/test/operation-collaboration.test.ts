@@ -8,7 +8,7 @@ import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import type { CellHandle } from "@/cell-handle.ts";
+import { type CellHandle, CellReadRefusedError } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
 import { buildProcessor } from "./backends/build-processor.ts";
@@ -155,8 +155,7 @@ describe("RuntimeClient operation collaboration", () => {
     const unsubscribe = await client.subscribeOperationField(
       cell,
       (field) => delivered.push(field),
-      undefined,
-      operationSessionId,
+      { operationSessionId, onRefused: () => {} },
     );
     const subscribe = requests.at(-1) as {
       type: RequestType;
@@ -197,6 +196,66 @@ describe("RuntimeClient operation collaboration", () => {
     ).toBe(true);
   });
 
+  it("answers a refused query, operation, or update as a refusal, never as a field", async () => {
+    const refusal = { refusedBy: "display-ceiling" } as const;
+    const cellRef: CellRef = {
+      space: "did:key:z6Mk-operation-client" as CellRef["space"],
+      id: "of:operation-client",
+      path: ["content"],
+      scope: "space",
+    };
+    const handlers = new Map<string, (data: unknown) => void>();
+    const requests: Array<{ type: RequestType; subscriptionId?: string }> = [];
+    const conn = {
+      signal: new AbortController().signal,
+      on: (event: string, handler: (data: unknown) => void) => {
+        handlers.set(event, handler);
+      },
+      request: (request: { type: RequestType; subscriptionId?: string }) => {
+        requests.push(request);
+        return Promise.resolve(
+          request.type === RequestType.OperationSubscribe
+            ? { value: true }
+            : { refused: refusal },
+        );
+      },
+    } as unknown as never;
+    const client = new (RuntimeClient as unknown as {
+      new (conn: never, options: unknown): RuntimeClient;
+    })(conn, {});
+    const cell = { ref: () => cellRef } as CellHandle<unknown>;
+
+    await expect(client.queryOperationField(cell)).rejects.toThrow(
+      CellReadRefusedError,
+    );
+    await expect(
+      client.applyOperation(cell, {
+        codec: "codemirror-changeset@1",
+        submissionId: "submission-1",
+        base: null,
+        payload: { updates: [] },
+      }),
+    ).rejects.toThrow(CellReadRefusedError);
+
+    const delivered: unknown[] = [];
+    const refused: unknown[] = [];
+    const unsubscribe = await client.subscribeOperationField(
+      cell,
+      (field) => delivered.push(field),
+      { onRefused: (heard) => refused.push(heard) },
+    );
+    const subscription = requests.at(-1)!.subscriptionId!;
+    handlers.get("operationupdate")!({
+      type: NotificationType.OperationUpdate,
+      subscriptionId: subscription,
+      refused: refusal,
+    });
+    unsubscribe();
+
+    expect(delivered).toEqual([]);
+    expect(refused).toEqual([refusal]);
+  });
+
   it("compensates when the worker loses a subscribe response", async () => {
     const requests: Array<{ type: RequestType; subscriptionId?: string }> = [];
     const conn = {
@@ -225,7 +284,7 @@ describe("RuntimeClient operation collaboration", () => {
     } as unknown as CellHandle<unknown>;
 
     await expect(
-      client.subscribeOperationField(cell, () => {}),
+      client.subscribeOperationField(cell, () => {}, { onRefused: () => {} }),
     ).rejects.toThrow("subscribe response lost");
     expect(requests.map(({ type }) => type)).toEqual([
       RequestType.OperationSubscribe,
@@ -263,7 +322,9 @@ describe("RuntimeClient operation collaboration", () => {
       ref: () => ({ id: "of:x", path: [] }),
     } as unknown as CellHandle<unknown>;
 
-    await expect(client.subscribeOperationField(cell, () => {})).rejects
+    await expect(
+      client.subscribeOperationField(cell, () => {}, { onRefused: () => {} }),
+    ).rejects
       .toThrow("not installed");
     await expect(client.releaseOperationField(
       cell,
@@ -273,7 +334,9 @@ describe("RuntimeClient operation collaboration", () => {
 
     subscribeAccepted = true;
     releaseAccepted = true;
-    const unsubscribe = await client.subscribeOperationField(cell, () => {});
+    const unsubscribe = await client.subscribeOperationField(cell, () => {}, {
+      onRefused: () => {},
+    });
     unsubscribe();
     unsubscribe();
     await Promise.resolve();
@@ -342,6 +405,7 @@ describe("RuntimeClient operation collaboration", () => {
     const queried = await processor.handleOperationQuery(
       { type: RequestType.OperationQuery, cell } as never,
     );
+    if ("refused" in queried) throw new Error("The query was refused.");
     expect(
       (queried.field.materialized as FabricBytes).slice(),
     ).toEqual(new Uint8Array([1, 2, 3]));
@@ -355,6 +419,7 @@ describe("RuntimeClient operation collaboration", () => {
         payload: bytes,
       } as never,
     );
+    if ("refused" in applied) throw new Error("The operation was refused.");
     expect((receivedPayload as FabricBytes).slice()).toEqual(
       new Uint8Array([1, 2, 3]),
     );
@@ -694,9 +759,11 @@ describe("RuntimeClient operation collaboration", () => {
     };
     const runtime = {
       getCellFromLink: () => ({
-        resolveAsCell: () => ({
-          getAsNormalizedFullLink: () => resolved,
-        }),
+        // A resolved cell keeps the address it resolved to, as a cell does.
+        resolveAsCell: () => {
+          const link = resolved;
+          return { getAsNormalizedFullLink: () => link };
+        },
       }),
       storageManager: {
         open: () => ({ ...capability, replica: capability }),
@@ -809,6 +876,7 @@ describe("RuntimeClient operation collaboration", () => {
       const field = await processor.handleOperationQuery({
         cell: alias.getAsNormalizedFullLink() as unknown as CellRef,
       } as never);
+      if ("refused" in field) throw new Error("The query was refused.");
 
       expect(field.field.id).toBe(targetId);
       expect(field.field.materialized).toBe("value");

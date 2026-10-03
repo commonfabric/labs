@@ -26,6 +26,7 @@ import {
 } from "./label-view-state.ts";
 
 export type { CfcLabelView, CfcLabelViewEntry };
+export { cfcLabelViewOriginSpaces };
 export {
   cfcLabelViewForAddress,
   cfcLabelViewForDereference,
@@ -36,7 +37,10 @@ export {
   rebaseCfcLabelView,
 } from "./label-view-state.ts";
 export { getCarriedCfcLabelView } from "../cell.ts";
-export { redactCaveatSourcesForDisplay } from "./label-view-core.ts";
+export {
+  redactCaveatSourcesForDisplay,
+  redactEntryPathsForDisplay,
+} from "./label-view-core.ts";
 
 type LabelQueryableCell = {
   getAsNormalizedFullLink(): NormalizedFullLink;

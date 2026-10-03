@@ -11,6 +11,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime, RuntimeTelemetry } from "@commonfabric/runner";
 import { RuntimeProcessor } from "@/backends/runtime-processor.ts";
+import type { InitializationData } from "@/protocol/mod.ts";
 
 /** The signer a processor acts as when a test supplies no identity. */
 const standInSigner = await Identity.fromPassphrase(
@@ -33,6 +34,9 @@ export function buildProcessor(parts: {
   space?: MemorySpace;
   identity?: unknown;
   telemetry?: RuntimeTelemetry;
+  renderConfidentialityCeiling?: InitializationData[
+    "renderConfidentialityCeiling"
+  ];
 } = {}): RuntimeProcessor {
   const space = parts.space ?? standInSigner.did();
   const identity = (parts.identity ?? standInSigner) as Identity;
@@ -47,5 +51,6 @@ export function buildProcessor(parts: {
       apiUrl: "http://localhost/",
       spaceDid: space,
     },
+    { renderConfidentialityCeiling: parts.renderConfidentialityCeiling },
   );
 }

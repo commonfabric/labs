@@ -4,7 +4,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 
 import {
-  type ErrorNotification,
+  type ErrorReport,
   type IPCClientMessage,
   type IPCClientNotification,
   type IPCRemoteMessage,
@@ -87,12 +87,15 @@ export class MessagePortRuntimeTransport
       // successful encode, so nothing undecodable should arrive. When one
       // does, losing the message loudly beats an exception leaving this
       // listener, which would take the connection's whole dispatch with it.
-      this.emit("message", {
-        type: NotificationType.ErrorReport,
-        message: `Undecodable message from the worker: ${
-          describeFailure(error)
-        }`,
-      } as ErrorNotification);
+      this.emit(
+        "message",
+        {
+          type: NotificationType.ErrorReport,
+          message: `Undecodable message from the worker: ${
+            describeFailure(error)
+          }`,
+        } satisfies ErrorReport,
+      );
       return;
     }
 

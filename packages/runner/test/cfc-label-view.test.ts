@@ -34,6 +34,7 @@ import {
   type IFCLabel,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
+  redactEntryPathsForDisplay,
   withCfcLabelViewOrigins,
 } from "../src/cfc/label-view-core.ts";
 import { stripSigilCfcLabelViews } from "../src/cfc/link-label-view.ts";
@@ -123,6 +124,39 @@ describe("CFC label view helpers", () => {
     expect(cfcLabelViewOriginSpaces(bare)).toEqual([]);
     expect(JSON.stringify(fromS)).toEqual(JSON.stringify(bare));
     expect(cfcLabelViewsEqual(fromS, bare)).toBe(true);
+  });
+
+  it("joins a view at its root with every part's confidentiality and only the integrity every part carries", () => {
+    const joined = redactEntryPathsForDisplay({
+      version: 1,
+      entries: [
+        {
+          path: [],
+          label: {
+            confidentiality: ["root-secret"],
+            integrity: ["authored-by-alice", "signed-release"],
+          },
+        },
+        {
+          path: ["note"],
+          label: {
+            confidentiality: ["note-secret"],
+            integrity: ["signed-release", "authored-by-mallory"],
+          },
+        },
+      ],
+    });
+
+    expect(joined).toEqual({
+      version: 1,
+      entries: [{
+        path: [],
+        label: {
+          confidentiality: ["root-secret", "note-secret"],
+          integrity: ["signed-release"],
+        },
+      }],
+    });
   });
 
   it("collects labels that apply to a logical value path", () => {

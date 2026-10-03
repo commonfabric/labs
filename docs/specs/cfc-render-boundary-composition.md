@@ -35,12 +35,20 @@ the same fit (`canRenderLabelUnderPolicy`). The fit is a set of functions in
 decision consults (the exchange-rule resolver, and the membership and
 module-policy providers a decision watches), so that every display sink in
 the worker decides by the same code. Each read that a value reaches the
-page through is decided on the labels of the cell the read starts from and on
-the labels the read consumed, and the ceiling has to admit each. The cell's
-labels are its own, which include a label its handle carries, and, when its
-path resolves through links to another place, the label there, which gathers
-every link the resolution followed (spec §8.2.7). A label that cannot be read
-is refused. The consumed labels are those of
+page through is decided on the labels at the node of the cell the read starts
+from and on the labels the read consumed, and the ceiling has to admit each.
+The node's labels are the cell's own at its path, which fold in what its
+ancestors' labels cover and include a label its handle carries, and, when its
+path resolves through links to another place, the label at that place, which
+gathers every link the resolution followed (spec §8.2.7). What lies below the
+node is decided as the read consumed it, so a read that stops short of a
+labeled field is not refused for that field, and one that reaches it is. A
+cell labeled only below its node has no label at the node to fit, which is
+not a cell with no label: only one with none anywhere is fitted by its
+schema's information-flow atoms. A label that cannot be read is refused. A
+decision made on a cell without a read of it, as a render boundary's protected
+value is, still covers every label inside the cell. The consumed labels are
+those of
 every document the read passed through, including one behind a link crossed
 part way along the path and one a link inside the value leads to, and those of
 each slot holding a link the read followed, which a dereference retains
@@ -64,17 +72,18 @@ each slot holding a link the read followed, which a dereference retains
   inline in a view built outside a cell sends a cell it holds as a link, not as
   the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
-  the bound cell, under the cell's schema; a nested render root is decided on
+  the bound cell, under the cell's schema, measured on the value as the
+  worker hands it to a host, so that a field the schema leaves untyped is
+  read as the host's reads take it in; a nested render root is decided on
   the reads its component makes instead, as the nested-render paragraphs
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
   of reach: a read that cannot complete is never taken for an empty one. The
-  binding hands the host a live
-  handle, and the worker answers the host's reads through it without the
-  ceiling: a read that follows a link the worker's read did not, and the
-  host's own subscription to the cell, which can deliver the write that causes
-  a removal before the removal arrives.
+  binding hands the host a live handle, and the worker decides every read the
+  host makes through it, and every update of its subscription, under the
+  same ceiling (the host-read gate in `packages/runtime-client`), so a write
+  that causes a removal reaches the host as a refusal, not as a value.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a
@@ -171,7 +180,9 @@ The exceptions hold for every reference a nested render root decides:
   caveated view inside the piece would load from loading, as opening the piece
   does.
 - The component's own reads through the bound handle, such as the piece menu's
-  Data panel, are answered without the ceiling, as for every binding.
+  Data panel, are decided under the root ceiling, as for every binding. The
+  Data panel reads a refused piece field by field, showing what the ceiling
+  admits and marking each field it refuses.
 
 Regression guards: `test/worker-reconciler-cfc-nested-render.test.ts`.
 

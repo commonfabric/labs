@@ -56,12 +56,17 @@
 // probe, no scheduler node, no demand edge. The reconcile itself is
 // unchanged.
 
+import type { CfcJsonValue } from "@commonfabric/api/cfc";
+import { isDID } from "@commonfabric/identity";
 import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type SessionEffectsDocValue,
 } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { SinkConsumedLabel } from "../cell.ts";
+import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { NavigationWithheldError } from "../navigation-withheld.ts";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
@@ -70,6 +75,116 @@ const logger = getLogger("effects-channel", {
   enabled: true,
   level: "warn",
 });
+
+/** `value` as a JSON value, the form a label's atom takes, or `undefined`. */
+function cfcJsonOf(value: unknown): CfcJsonValue | undefined {
+  if (
+    value === null || typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const items: CfcJsonValue[] = [];
+    for (const item of value) {
+      const json = cfcJsonOf(item);
+      if (json === undefined) return undefined;
+      items.push(json);
+    }
+    return items;
+  }
+  if (!isObjectNotArray(value)) return undefined;
+  const fields: Record<string, CfcJsonValue> = {};
+  for (const [key, field] of Object.entries(value)) {
+    const json = cfcJsonOf(field);
+    if (json === undefined) return undefined;
+    fields[key] = json;
+  }
+  return fields;
+}
+
+/** `value` as a list of a label's atoms or clauses, or `undefined`. */
+function atomsOf(value: unknown): CfcJsonValue[] | undefined {
+  const json = cfcJsonOf(value);
+  return Array.isArray(json) ? [...json] : undefined;
+}
+
+/**
+ * The labels an intent carries of what chose its target
+ * (`EffectIntentLabels`), in the form a navigation is decided on
+ * (`NavigateCallback`'s `consumed`), or `undefined` where it carries none
+ * this build can read, which is decided as a navigation made with no labels.
+ */
+function chosenFromOf(value: unknown): (() => SinkConsumedLabel) | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const confidentiality = atomsOf(value.confidentiality);
+  const integrity = atomsOf(value.integrity);
+  if (confidentiality === undefined || integrity === undefined) {
+    return undefined;
+  }
+  const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
+  const byArtifact = value.modulePolicySpaces;
+  if (!isObjectNotArray(byArtifact)) return undefined;
+  for (const [key, spaces] of Object.entries(byArtifact)) {
+    if (!Array.isArray(spaces)) return undefined;
+    const set = new Set<MemorySpace>();
+    for (const space of spaces) {
+      if (!isDID(space)) return undefined;
+      set.add(space);
+    }
+    modulePolicySpaces.set(key, set);
+  }
+  const read: SinkConsumedLabel = {
+    confidentiality,
+    integrity,
+    modulePolicySpaces,
+    sources: [],
+  };
+  return () => read;
+}
+
+/**
+ * The labels an intent is decided on: what chose its target, as the intent
+ * says (`chosenFrom`), joined with the labels stored where the intent sits
+ * (`stored`). An entry the server wrote stores none, so the join is the
+ * intent's own; one something else wrote stores the labels of what that
+ * write was made from, which the intent's own claim does not lower.
+ *
+ * Integrity is evidence an exchange rule can discharge confidentiality on,
+ * such as a `HasRole` fact. The claim is data the entry's writer chose, so
+ * its integrity is taken only where nothing is stored, where it can speak
+ * only to its own claim; where labels are stored, the stored integrity is
+ * taken instead. Either one failing to read fails the join.
+ */
+function joinedLabels(
+  chosenFrom: () => SinkConsumedLabel,
+  stored: () => SinkConsumedLabel,
+): () => SinkConsumedLabel {
+  return () => {
+    const claimed = chosenFrom();
+    const held = stored();
+    const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
+    for (
+      const [key, spaces] of [
+        ...claimed.modulePolicySpaces,
+        ...held.modulePolicySpaces,
+      ]
+    ) {
+      const set = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+      for (const space of spaces) set.add(space);
+      modulePolicySpaces.set(key, set);
+    }
+    const holdsLabels = held.confidentiality.length > 0 ||
+      held.integrity.length > 0;
+    return {
+      confidentiality: [...claimed.confidentiality, ...held.confidentiality],
+      integrity: holdsLabels ? held.integrity : claimed.integrity,
+      modulePolicySpaces,
+      sources: [],
+    };
+  };
+}
 
 export class EffectsChannel {
   readonly #runtime: Runtime;
@@ -101,6 +216,15 @@ export class EffectsChannel {
   readonly #acking = new Set<string>();
 
   #warnedNoNavigate = false;
+
+  /** Withheld intents, by intent and outcome, each reported once. */
+  readonly #reportedWithheld = new Set<string>();
+
+  /**
+   * Intents withheld definitively and acked as done for this session. Not
+   * enacted, so they are kept apart from {@link #enacted}.
+   */
+  readonly #withheldForSession = new Set<string>();
   #closed = false;
 
   constructor(runtime: Runtime) {
@@ -154,7 +278,9 @@ export class EffectsChannel {
       if (inFlight === undefined) break;
       if (await inFlight) return true;
     }
-    if (this.#enacted.has(nonce)) return true;
+    if (this.#enacted.has(nonce) || this.#withheldForSession.has(nonce)) {
+      return true;
+    }
     return await this.#beginEnactment(nonce, work);
   }
 
@@ -246,6 +372,19 @@ export class EffectsChannel {
     this.#enacted.add(nonce);
     const started = Promise.withResolvers<unknown>();
     const settled = started.promise.then(() => true, (error) => {
+      if (error instanceof NavigationWithheldError) {
+        // Withheld, and not retired here: an undecidable intent waits for a
+        // delivery that can be decided, and an optimistic flush leaves the
+        // server's intent to decide. Reported once.
+        this.#reportWithheld(
+          nonce,
+          error.definitive
+            ? "on labels this viewer is refused; the server's intent decides " +
+              "whether it retires"
+            : "with nothing it can yet be decided on; left unacked",
+        );
+        return false;
+      }
       logger.warn("enact-failed", () => [
         `navigate enactment for ${nonce} failed; left unacked — a ` +
         "later delivery retries",
@@ -254,7 +393,9 @@ export class EffectsChannel {
       return false;
     }).then((ok) => {
       this.#enactInFlight.delete(nonce);
-      if (!ok) this.#enacted.delete(nonce);
+      if (!ok || this.#withheldForSession.has(nonce)) {
+        this.#enacted.delete(nonce);
+      }
       return ok;
     });
     this.#enactInFlight.set(nonce, settled);
@@ -264,6 +405,44 @@ export class EffectsChannel {
       started.reject(error);
     }
     return settled;
+  }
+
+  /**
+   * The labels stored where the intent at `index` of `space`'s session
+   * instance sits, read now through a transaction that never commits, for a
+   * decision made later. Labels that cannot be read are not: asking for
+   * them raises the failure.
+   */
+  #storedLabels(space: MemorySpace, index: number): () => SinkConsumedLabel {
+    let read: SinkConsumedLabel;
+    try {
+      const tx = this.#runtime.readTx();
+      this.#runtime.getCellFromLink({
+        space,
+        id: SERVER_EXECUTION_EFFECTS_DOC_ID as URI,
+        scope: "session",
+        path: ["entries", String(index)],
+      }).withTx(tx).getRaw();
+      read = collectConsumedLabel(tx);
+    } catch (error) {
+      return () => {
+        throw error;
+      };
+    }
+    return () => read;
+  }
+
+  /**
+   * Reports that an intent was withheld and how, once per intent and
+   * outcome in this life.
+   */
+  #reportWithheld(nonce: string, how: string): void {
+    const key = `${nonce}\0${how}`;
+    if (this.#reportedWithheld.has(key)) return;
+    this.#reportedWithheld.add(key);
+    logger.warn("enact-withheld", () => [
+      `navigate intent ${nonce} withheld by the display ceiling ${how}`,
+    ]);
   }
 
   /** ONE listener per channel (design (e) item 13): wants the session
@@ -315,7 +494,7 @@ export class EffectsChannel {
     if (!isObjectOrArray(value)) return;
     const entries = Array.isArray(value.entries) ? value.entries : [];
     const acks = isObjectNotArray(value.acks) ? value.acks : {};
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
       if (
         !isObjectOrArray(entry) ||
         typeof entry.nonce !== "string"
@@ -336,7 +515,7 @@ export class EffectsChannel {
         });
         continue;
       }
-      if (!this.#enacted.has(nonce)) {
+      if (!this.#enacted.has(nonce) && !this.#withheldForSession.has(nonce)) {
         if (entry.kind !== "navigate") {
           // A kind this client does not ship (protocol.md §5's closed
           // set): leave it unacked — acking would claim an enactment
@@ -373,8 +552,34 @@ export class EffectsChannel {
             scope: (target.scope ?? "space") as never,
             path: [...(target.path ?? [])],
           });
+          // What chose the target, as the server measured it, joined with
+          // the labels stored where the intent sits: the navigation is
+          // decided on them as one this runtime's own run chose is.
+          const chosenFrom = chosenFromOf(entry.args?.chosenFrom);
+          const decidedOn = chosenFrom === undefined
+            ? undefined
+            : joinedLabels(chosenFrom, this.#storedLabels(space, index));
           work = () => {
-            const enacting = Promise.resolve().then(() => navigate(targetCell));
+            const enacting = Promise.resolve().then(() =>
+              navigate(targetCell, decidedOn)
+            ).catch((error: unknown) => {
+              // Withheld on labels this viewer is refused: the intent is
+              // done for this session, as it would be refused again, so it
+              // is acked rather than left to pile up. Withheld for want of
+              // labels, it stays pending (`#beginEnactment`).
+              if (
+                error instanceof NavigationWithheldError && error.definitive
+              ) {
+                this.#withheldForSession.add(nonce);
+                this.#reportWithheld(
+                  nonce,
+                  "on labels this viewer is refused; acked as done for this " +
+                    "session",
+                );
+                return;
+              }
+              throw error;
+            });
             this.#runtime.trackAsyncWork(enacting);
             return enacting;
           };
@@ -394,9 +599,13 @@ export class EffectsChannel {
         // Record BEFORE the (deferred) callback can run — a re-entrant
         // delivery converges on the in-flight record instead of
         // double-enacting — and chain the ack on SUCCESS only.
-        void this.#beginEnactment(nonce, work).then((ok) => {
-          if (ok && !this.#closed) this.#ack(space, nonce);
-        });
+        // Tracked through its ack, so that a caller waiting for the runtime
+        // to settle sees the intent acked or left pending, not in between.
+        this.#runtime.trackAsyncWork(
+          this.#beginEnactment(nonce, work).then((ok) => {
+            if (ok && !this.#closed) this.#ack(space, nonce);
+          }),
+        );
         continue;
       }
       // A settled-successful record (this life enacted it, or the

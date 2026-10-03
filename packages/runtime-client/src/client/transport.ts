@@ -1,12 +1,18 @@
 import { EventEmitter } from "./emitter.ts";
 import {
+  type ErrorReport,
   IPCClientMessage,
   IPCClientNotification,
   IPCRemoteMessage,
 } from "@/protocol/mod.ts";
 
+/**
+ * What a transport hands the connection: what the worker posted, or a report
+ * of the transport's own failure, which no worker made and so no host-read
+ * gate decided, in the host-side shape `ErrorReport`.
+ */
 export type RuntimeTransportEvents = {
-  message: [IPCRemoteMessage];
+  message: [IPCRemoteMessage | ErrorReport];
 };
 
 export interface RuntimeTransport extends EventEmitter<RuntimeTransportEvents> {

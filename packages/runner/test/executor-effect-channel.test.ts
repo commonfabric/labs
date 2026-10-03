@@ -435,6 +435,9 @@ describe("Phase 4 client-effect channel", () => {
     expect(intent.kind).toBe("navigate");
     expect(typeof intent.nonce).toBe("string");
     expect(intent.args?.target?.id).toBeDefined();
+    // What chose the target rides with the intent, for the client to decide
+    // the navigation on: the served run read no labeled value here.
+    expect(intent.args?.chosenFrom?.confidentiality).toEqual([]);
     expect(typeof intent.issuedIn).toBe("number");
     const issuedRow = engine.database.prepare(
       `SELECT class FROM "commit" WHERE seq = :seq`,

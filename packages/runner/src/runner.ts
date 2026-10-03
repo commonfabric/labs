@@ -1987,6 +1987,21 @@ type ScopedPieceRegistration = PieceRegistration & {
   wake(): void;
 };
 
+/**
+ * Marks `error` as raised by the run in `frame`, so that the scheduler's
+ * report of it carries the labels that run read (`ErrorWithContext.consumed`).
+ * A thrown value that cannot carry a mark is returned as it is.
+ */
+function raisedIn(error: unknown, frame: Frame): unknown {
+  if (
+    error !== null &&
+    (typeof error === "object" || typeof error === "function")
+  ) {
+    (error as Error & { frame?: Frame }).frame = frame;
+  }
+  return error;
+}
+
 /** A node group's local ownership within a shared piece registration. */
 type PieceVariantRegistration = {
   registrations: Map<string, PieceRegistration>;
@@ -11358,7 +11373,13 @@ export class Runner {
         };
 
         const postRunResult = result instanceof Promise
-          ? result.then(postRun)
+          // An async body that throws after an `await` rejects, past the
+          // synchronous catch below. Its error is marked with this run's
+          // frame as a synchronous one is, so that a report of it carries the
+          // labels the run read.
+          ? result.then(postRun, (error: unknown) => {
+            throw raisedIn(error, frame);
+          })
           : postRun(result);
         if (postRunResult instanceof Promise) {
           popFrameAfterReturn = false;
@@ -11377,8 +11398,7 @@ export class Runner {
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
             .finally(() => popFrame(frame));
         }
-        (error as Error & { frame?: Frame }).frame = frame;
-        throw error;
+        throw raisedIn(error, frame);
       } finally {
         if (popFrameAfterReturn) popFrame(frame);
       }
@@ -11593,12 +11613,7 @@ export class Runner {
         // untouched so the scheduler re-runs the action instead of writing an
         // error result into the binding.
         if (error instanceof RetryImmediately) throw error;
-        if (
-          error !== null &&
-          (typeof error === "object" || typeof error === "function")
-        ) {
-          (error as Error & { frame?: Frame }).frame = frame;
-        }
+        raisedIn(error, frame);
         try {
           sendValueToBinding(
             tx,

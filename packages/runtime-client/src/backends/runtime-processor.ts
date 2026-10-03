@@ -18,6 +18,7 @@ import {
   normalizeRenderDeclassificationPolicy,
   type RenderConfidentialityCeiling,
   type RenderDeclassificationPolicy,
+  rootRenderPolicyFor,
   type SpaceAccessProvider,
   WorkerReconciler,
 } from "@commonfabric/html/worker";
@@ -40,6 +41,7 @@ import {
   type EventAttentionIndexValue,
   type OperationFieldAddress,
   resolveScopeKey,
+  scopeOfScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type SqliteDbRef,
   type StreamEventsDocValue,
@@ -95,13 +97,11 @@ import {
   SpaceHostValidationError,
 } from "@commonfabric/runner";
 import {
-  cfcLabelViewForResolvedCell,
   type CfcModulePolicySource,
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
-  redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
   stripSigilCfcLabelViews,
@@ -143,17 +143,16 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
-import { HostReadGate } from "./host-read-gate.ts";
+import {
+  type DocumentAt,
+  type GraphDocumentAt,
+  HostReadGate,
+} from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
-import {
-  postContextualRuntimeError,
-  runtimeErrorPost,
-} from "./runtime-error.ts";
+import { runtimeErrorReport } from "./runtime-error.ts";
 import {
   assertFabricLoggerFlags,
-  createCellRef,
-  createPieceRef,
   getCell,
   mapCellRefsToSigilLinks,
 } from "./utils.ts";
@@ -177,6 +176,7 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
+  type CellResolveResponse,
   CellResponse,
   type CellSendRequest,
   type CellSetRequest,
@@ -185,6 +185,7 @@ import {
   type CellValueResponse,
   type CfcLabelViewResponse,
   ClientNotificationType,
+  type CommandResponse,
   type CreateSpaceRequest,
   type CustodyAnswerPublishRequest,
   type CustodyAnswerPublishResponse,
@@ -222,6 +223,7 @@ import {
   type LoggerCountsResponse,
   type LoggerMetadata,
   type LogLevel,
+  type NavigateRequestNotification,
   NotificationType,
   type OperationApplyRequest,
   type OperationApplyResponse,
@@ -252,6 +254,7 @@ import {
   type PieceSyncedRequest,
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
+  type PieceUpdateSourceResult,
   type PresenceJoinRequest,
   type PresenceJoinResponse,
   type PresenceLeaveRequest,
@@ -282,7 +285,7 @@ import {
   type SlugResponse,
   type SnapshotShareCommitRequest,
   type SnapshotSharePrepareRequest,
-  type SnapshotSharePreview,
+  type SnapshotSharePrepareResponse,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
   type SpaceHostRegistrationResponse,
@@ -772,18 +775,66 @@ export function renderSpaceAccessProviderFor(
 }
 
 /**
- * Where a mount's render errors go: the client that mounted it, and no other.
+ * Where a pattern's navigation requests go: to `post`, as `gate()`, the
+ * worker's gate when each is decided, decides them, in the order they were
+ * issued, a later one never overtaken by an earlier one.
+ *
+ * Most navigations are decided at once, and are posted in the order they
+ * were issued. One the gate refused at first, on a space whose access list
+ * had not loaded, waits for the list and is decided again, and a navigation
+ * issued after it may have been posted meanwhile. A user who asked to go
+ * somewhere and then somewhere else expects to end up at the second, so a
+ * navigation decided after a later one was posted is dropped, as is one
+ * decided after the worker was disposed (`disposed()`). A dropped navigation
+ * returns normally: it is done, superseded, not withheld. A withheld one
+ * rejects, as the gate rejects it.
+ */
+export function navigationPoster(
+  gate: () => HostReadGate,
+  post: (request: NavigateRequestNotification) => void,
+  disposed: () => boolean,
+): NonNullable<BrowserWorkerPresetParams["navigateCallback"]> {
+  let issued = 0;
+  let posted = 0;
+  return async (target, consumed) => {
+    const order = ++issued;
+    const link = parseLink(target.getAsLink()) as NormalizedFullLink;
+    const request = await gate().navigate(link, consumed);
+    if (order < posted || disposed()) return;
+    posted = order;
+    post(request);
+  };
+}
+
+/**
+ * Where a mount's render errors go: the client that mounted it, and no other,
+ * as `gate()`, the worker's gate when the error is raised, decides them.
  *
  * A render error belongs to the document showing the tree rather than to
  * whichever client happens to own the worker, and a reconciler reports one
  * from deep inside a render. Named here so that rule is one a test can state,
  * the render failures that raise it being reachable only through a pattern.
+ *
+ * The renderer's own message (`raisedBy: "renderer"`) is made from no cell's
+ * contents, and is shown as the runtime's. A handler a pattern handed the
+ * renderer ran outside any transaction, and a view's failure was raised
+ * running the view, so neither carries labels to decide it on, and under a
+ * policy their message and stack are withheld, as such an error's are.
  */
 export function mountErrorSink(
   client: WorkerClient,
-): (error: Error) => void {
-  return (error) => {
-    client.post(runtimeErrorPost(error));
+  gate: () => HostReadGate,
+): (error: Error, raisedBy?: "renderer" | "handler") => void {
+  return (error, raisedBy) => {
+    const report = runtimeErrorReport(error);
+    client.post(
+      raisedBy === "renderer"
+        ? gate().runtimeError({
+          message: report.message,
+          ...(report.code === undefined ? {} : { code: report.code }),
+        })
+        : gate().error(report),
+    );
   };
 }
 
@@ -857,8 +908,22 @@ type PendingCustodySeal = {
 
 type RuntimeOperationTarget = {
   capability: IOperationStorageCapability;
-  address: OperationFieldAddress;
+
+  /**
+   * The collaborative field the operations read and change: the cell the
+   * host named, resolved through its links when the target was made, and
+   * held for a session's life. Every answer is decided on this cell, and an
+   * operation is addressed by the cell decided on
+   * ({@link operationFieldAddress}).
+   */
+  field: Cell<unknown>;
 };
+
+/** Where the collaborative field `field` is, as the storage addresses it. */
+function operationFieldAddress(field: Cell<unknown>): OperationFieldAddress {
+  const link = field.getAsNormalizedFullLink();
+  return { id: link.id, scope: link.scope, path: toValuePath(link.path) };
+}
 
 /**
  * One client's membership in one presence room, keyed by the subscription
@@ -893,6 +958,34 @@ type RuntimeOperationSession = {
    */
   clientId: ClientId;
 };
+
+/** The render policy a processor is built with, as the host configures it. */
+type RenderPolicyConfiguration = Pick<
+  InitializationData,
+  "renderDeclassificationPolicy" | "renderConfidentialityCeiling"
+>;
+
+/**
+ * `answer`, as the answer to a request of type `type`. Each of the
+ * dispatcher's cases answers through this, so that a case whose answer is
+ * not of the type its own request's answer is, such as an answer the
+ * host-read gate did not build where the request's answer carries its mark,
+ * fails to type-check, rather than passing as some other request's answer.
+ */
+function answering<K extends RequestType>(
+  _type: K,
+  answer: AnswerTo<K> | Promise<AnswerTo<K>>,
+): AnswerTo<K> | Promise<AnswerTo<K>> {
+  return answer;
+}
+
+/**
+ * The answer to a request of type `K`, as a handler gives it: a request whose
+ * answer is empty is answered by a handler that returns nothing.
+ */
+type AnswerTo<K extends RequestType> = [CommandResponse<K>] extends [undefined]
+  ? CommandResponse<K> | void
+  : CommandResponse<K>;
 
 /**
  * The worker side of a runtime client connection. An instance owns the
@@ -1011,10 +1104,18 @@ export class RuntimeProcessor {
   #renderModulePolicySource?: CfcModulePolicySource;
 
   /**
-   * What builds every answer to a host's read of a cell. It is built with no
-   * ceiling, so it returns every read as read.
+   * What builds every answer to a host's read of a cell, deciding it under
+   * the ceiling every mount's root renders with, with the resolver and the
+   * providers every mount is given. Built by the constructor from the render
+   * policy it is given, so no answer is ever built by a gate that has not
+   * been, and rebuilt whenever the render policy is configured; with no
+   * ceiling it returns every read as read, as a root with none renders
+   * everything.
    */
-  #hostReadGate = new HostReadGate(undefined, {});
+  #hostReadGate: HostReadGate;
+
+  /** The session's workspace, which the exchange rules resolve against. */
+  readonly #workspace: DID;
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -1024,12 +1125,15 @@ export class RuntimeProcessor {
     identity: Identity,
     telemetry: RuntimeTelemetry,
     securityContext: RuntimeSecurityContext,
+    renderPolicy: RenderPolicyConfiguration,
     clients: () => Iterable<WorkerClient> = () => [ownerClient],
   ) {
     this.#runtime = runtime;
     this.#cc = cc;
+    this.#workspace = initSpace;
     this.#spaces.set(initSpace, cc);
     this.#identity = identity;
+    this.#hostReadGate = this.#configureRenderPolicy(renderPolicy);
     this.#telemetry = telemetry;
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
@@ -1135,7 +1239,10 @@ export class RuntimeProcessor {
         return outerThis.#renderConfidentialityCeiling;
       },
       set renderConfidentialityCeiling(value) {
-        outerThis.#renderConfidentialityCeiling = value;
+        outerThis.#configureRenderPolicy({
+          renderDeclassificationPolicy: outerThis.#renderDeclassificationPolicy,
+          renderConfidentialityCeiling: value,
+        });
       },
       get renderDeclassificationPolicy() {
         return outerThis.#renderDeclassificationPolicy;
@@ -1553,10 +1660,29 @@ export class RuntimeProcessor {
     if (request.awaitDurability !== false || holdsNoValue(cell)) {
       await this.#runtime.scheduler.idleWithPendingCommits();
     }
-    return this.handleCellGet({
+    return await this.#settledGet({
       type: RequestType.CellGet,
       cell: request.cell,
     });
+  }
+
+  /**
+   * {@link handleCellGet}, made once more where its answer was a refusal
+   * made before the access lists it consulted had loaded, once they have
+   * (`HostReadGate.settle()`). A one-shot read has no watch to make it again,
+   * and the refusal would otherwise stand on the host's handle.
+   */
+  async #settledGet(request: CellGetRequest): Promise<CellGetResponse> {
+    const answer = this.handleCellGet(request);
+    if (answer.refused === undefined) return answer;
+    // A metadata field is decided on its document's root.
+    const settled = await this.#hostReadGate.settle(
+      getCell(this.#runtime, request.cell),
+      ...(request.meta === undefined
+        ? []
+        : [getCell(this.#runtime, { ...request.cell, path: [] })]),
+    );
+    return settled ? this.handleCellGet(request) : answer;
   }
 
   /** Atomically stores a default only while the target has no backing value. */
@@ -1674,9 +1800,10 @@ export class RuntimeProcessor {
       }
       return { ...existing.target, sessionKey, session: existing };
     }
-    const link = getCell(this.#runtime, cell).resolveAsCell()
-      .getAsNormalizedFullLink();
-    const provider = this.#runtime.storageManager.open(link.space);
+    const field = getCell(this.#runtime, cell).resolveAsCell();
+    const provider = this.#runtime.storageManager.open(
+      field.getAsNormalizedFullLink().space,
+    );
     const capability = hasOperationStorageCapability(provider)
       ? provider
       : provider.replica;
@@ -1685,14 +1812,7 @@ export class RuntimeProcessor {
         "runtime storage does not support collaborative operations",
       );
     }
-    const target = {
-      capability,
-      address: {
-        id: link.id,
-        scope: link.scope,
-        path: toValuePath(link.path),
-      },
-    };
+    const target = { capability, field };
     if (sessionKey === undefined) {
       return { ...target, sessionKey: undefined, session: undefined };
     }
@@ -1839,39 +1959,51 @@ export class RuntimeProcessor {
     request: OperationQueryRequest,
     client: WorkerClient = ownerClient,
   ): Promise<OperationFieldResponse> {
-    const { capability, address } = this.#operationTarget(
+    const { capability, field } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
-    const field = await capability.queryOperationField({
-      ...address,
-      ...(request.after === undefined ? {} : { after: request.after }),
-    });
-    return { field: field };
+    return await this.#hostReadGate.fromCell(
+      field,
+      async (decided) => ({
+        field: await capability.queryOperationField({
+          ...operationFieldAddress(decided),
+          ...(request.after === undefined ? {} : { after: request.after }),
+        }),
+      }),
+      getCell(this.#runtime, request.cell),
+    );
   }
 
   async handleOperationApply(
     request: OperationApplyRequest,
     client: WorkerClient = ownerClient,
   ): Promise<OperationApplyResponse> {
-    const { capability, address } = this.#operationTarget(
+    const { capability, field } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
-    const resolution = await capability.applyOperation({
-      op: "apply-op",
-      ...address,
-      codec: request.codec,
-      submissionId: request.submissionId,
-      base: request.base,
-      ...(request.baselineHash === undefined
-        ? {}
-        : { baselineHash: request.baselineHash }),
-      payload: request.payload,
-    });
-    return { resolution: resolution };
+    // An operation on a field the host may not see is not applied: what it
+    // was made from was not shown, and its resolution would show the field.
+    return await this.#hostReadGate.fromCell(
+      field,
+      async (decided) => ({
+        resolution: await capability.applyOperation({
+          op: "apply-op",
+          ...operationFieldAddress(decided),
+          codec: request.codec,
+          submissionId: request.submissionId,
+          base: request.base,
+          ...(request.baselineHash === undefined
+            ? {}
+            : { baselineHash: request.baselineHash }),
+          payload: request.payload,
+        }),
+      }),
+      getCell(this.#runtime, request.cell),
+    );
   }
 
   async handleOperationSubscribe(
@@ -1881,11 +2013,12 @@ export class RuntimeProcessor {
     if (this.#operationSubscriptions.has(request.subscriptionId)) {
       return { value: false };
     }
-    const { capability, address, sessionKey, session } = this.#operationTarget(
+    const { capability, field, sessionKey, session } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
+    const named = getCell(this.#runtime, request.cell);
     // A subscription id is a UUID the client mints, so two clients never
     // collide on one. What the owning client settles is where an update goes,
     // and what a departing client takes with it.
@@ -1903,20 +2036,29 @@ export class RuntimeProcessor {
     session?.subscriptions.add(request.subscriptionId);
     let cancel: Cancel;
     try {
+      // Each update is decided as it arrives, with no wait of its own, so
+      // what those decisions consult is loaded before the first. Held as the
+      // subscription is installed, so an unsubscribe arriving meanwhile is
+      // seen below.
+      await this.#hostReadGate.hold(named);
+      await this.#hostReadGate.hold(field);
       cancel = await capability.subscribeOperationField({
-        ...address,
+        ...operationFieldAddress(field),
         ...(request.after === undefined ? {} : { after: request.after }),
-      }, (field) => {
+      }, (snapshot) => {
         if (
           this.#operationSubscriptions.get(request.subscriptionId) !==
             subscription
         ) return;
         queueMicrotask(() =>
-          client.post({
-            type: NotificationType.OperationUpdate,
-            subscriptionId: request.subscriptionId,
-            field: field,
-          })
+          client.post(
+            this.#hostReadGate.operationUpdate(
+              field,
+              request.subscriptionId,
+              snapshot,
+              named,
+            ),
+          )
         );
       });
     } catch (error) {
@@ -1950,14 +2092,14 @@ export class RuntimeProcessor {
     request: OperationReleaseRequest,
     client: WorkerClient = ownerClient,
   ): Promise<BooleanResponse> {
-    const { capability, address } = this.#operationTarget(
+    const { capability, field } = this.#operationTarget(
       request.cell,
       request.operationSessionId,
       client,
     );
     await capability.releaseOperationField({
       op: "release-op-field",
-      ...address,
+      ...operationFieldAddress(field),
       codec: request.codec,
       cursor: request.cursor,
     });
@@ -2110,10 +2252,14 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResolveResponse {
     const cell = getCell(this.#runtime, request.cell);
+    const answer = this.#hostReadGate.resolveAsCell(cell);
+    if ("refused" in answer) return answer;
     const resolved = cell.resolveAsCell();
-    const ref = createCellRef(resolved);
+    const ref = answer.cell;
     if (
       ref.schema && typeof ref.schema === "object" &&
       !Array.isArray(ref.schema)
@@ -2130,16 +2276,14 @@ export class RuntimeProcessor {
         : { type: "object" as const };
       ref.schema = { ...schema, asCell: ["sqlite"] as const };
     }
-    return {
-      cell: ref,
-    };
+    return answer;
   }
 
   /** Keeps release authority in this backend while the host shows a preview. */
   async handleSnapshotSharePrepare(
     request: SnapshotSharePrepareRequest,
     client: WorkerClient = ownerClient,
-  ): Promise<SnapshotSharePreview> {
+  ): Promise<SnapshotSharePrepareResponse> {
     if (this.#isDisposed || this.#detachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
@@ -2164,17 +2308,26 @@ export class RuntimeProcessor {
       appendBooksTo?.recommended.sync(),
       appendBooksTo?.received.sync(),
     ]);
-    if (this.#isDisposed || this.#detachedClients.has(client)) {
-      throw new Error("Snapshot sharing is unavailable");
-    }
-    const prepared = prepareSnapshotShare(
-      source,
-      "user" in audience ? { user: audienceCell } : { space: audienceCell },
-      appendBooksTo,
-    );
-    const id = crypto.randomUUID();
-    this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
-    return { id, value: prepared.value, audience: prepared.audience };
+    // The preview shows the host the source's value, so it is decided as an
+    // answer built from the source is, and no consent is kept for one the
+    // display ceiling refuses.
+    return await this.#hostReadGate.fromCell(source, (decided) => {
+      if (this.#isDisposed || this.#detachedClients.has(client)) {
+        throw new Error("Snapshot sharing is unavailable");
+      }
+      const prepared = prepareSnapshotShare(
+        decided,
+        "user" in audience ? { user: audienceCell } : { space: audienceCell },
+        appendBooksTo,
+      );
+      const id = crypto.randomUUID();
+      this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
+      return Promise.resolve({
+        id,
+        value: prepared.value,
+        audience: prepared.audience,
+      });
+    });
   }
 
   /** Consumes one preview through the dedicated trusted host transport. */
@@ -2198,7 +2351,7 @@ export class RuntimeProcessor {
     };
     markRendererTrustedEvent(event);
     const shared = await commitSnapshotShare(consent, event);
-    return { cell: createCellRef(shared) };
+    return { cell: this.#hostReadGate.ref(shared) };
   }
 
   /**
@@ -2286,8 +2439,8 @@ export class RuntimeProcessor {
         signal: commit.signal,
       });
       return {
-        receipt: createCellRef(sealed.receipt),
-        box: createCellRef(sealed.box),
+        receipt: this.#hostReadGate.ref(sealed.receipt),
+        box: this.#hostReadGate.ref(sealed.box),
         instance: sealed.instance,
       };
     } finally {
@@ -2365,17 +2518,11 @@ export class RuntimeProcessor {
     // That covers a document the store has not loaded as well as a cell with
     // no label. Keeping the cell current is the caller's job. A caller that
     // needs the label as it changes subscribes with `includeCfcLabel`, and
-    // each update then carries the label as read for that update. We redact
-    // `Caveat.source` from the label for display.
+    // each update then carries the label as read for that update. The gate
+    // redacts `Caveat.source` from the label for display, and joins its
+    // entries at the root where the display ceiling refuses the cell.
     const totalStart = performance.now();
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
-      kickCrossSpaceTargets: false,
-    });
-    const response = {
-      cfcLabel: cfcLabel === undefined
-        ? undefined
-        : redactCaveatSourcesForDisplay(cfcLabel),
-    };
+    const response = this.#hostReadGate.label(cell);
     cfcLabelLogger.time(totalStart, "total");
     return response;
   }
@@ -2384,6 +2531,19 @@ export class RuntimeProcessor {
     request: SqliteQueryRequest,
   ): Promise<SqliteQueryResponse> {
     const cell = getCell(this.#runtime, request.cell);
+    // Decided on the database handle's labels: the rows are reached through
+    // it, and not through a read the gate can measure.
+    return await this.#hostReadGate.fromCell(
+      cell,
+      (decided) => this.#querySqlite(decided, request),
+    );
+  }
+
+  /** Helper for {@link handleSqliteQuery}, once the read is admitted. */
+  async #querySqlite(
+    cell: Cell<unknown>,
+    request: SqliteQueryRequest,
+  ): Promise<{ rows: { [key: string]: FabricValue }[] }> {
     const db = await this.#pullSqliteDbRef(cell);
     // A direct IPC query has no runner result cell on which to persist the
     // label derived from result-column provenance. Refuse that database shape
@@ -2514,14 +2674,14 @@ export class RuntimeProcessor {
     );
 
     return {
-      cell: createCellRef(cell, request.schema),
+      cell: this.#hostReadGate.ref(cell, request.schema),
     };
   }
 
   handleGetHomeSpaceCell(_request: GetHomeSpaceCellRequest): CellResponse {
     const homeSpaceCell = this.#runtime.getHomeSpaceCell();
     return {
-      cell: createCellRef(homeSpaceCell),
+      cell: this.#hostReadGate.ref(homeSpaceCell),
     };
   }
 
@@ -2542,7 +2702,7 @@ export class RuntimeProcessor {
     // nothing else heals the root — so no fast path belongs in front of the
     // controller.
     const homePattern = await this.#ensureHomePattern();
-    return { cell: createCellRef(homePattern) };
+    return { cell: this.#hostReadGate.ref(homePattern) };
   }
 
   /**
@@ -2721,7 +2881,7 @@ export class RuntimeProcessor {
       start: request.run ?? true,
     }, request.cause);
     return {
-      piece: createPieceRef(piece.getCell()),
+      piece: this.#hostReadGate.pieceRef(piece.getCell()),
     };
   }
 
@@ -2739,11 +2899,11 @@ export class RuntimeProcessor {
         reconcile: true,
         start: false,
       });
-      if (stored) return { piece: createPieceRef(stored) };
+      if (stored) return { piece: this.#hostReadGate.pieceRef(stored) };
     }
     const piece = await cc.ensureDefaultPattern();
     return {
-      piece: createPieceRef(piece.getCell()),
+      piece: this.#hostReadGate.pieceRef(piece.getCell()),
     };
   }
 
@@ -2753,7 +2913,7 @@ export class RuntimeProcessor {
     const cc = this.#getSpaceCtx(request.space);
     const piece = await cc.recreateDefaultPattern();
     return {
-      piece: createPieceRef(piece.getCell()),
+      piece: this.#hostReadGate.pieceRef(piece.getCell()),
     };
   }
 
@@ -2803,6 +2963,16 @@ export class RuntimeProcessor {
       requestedCell.getAsNormalizedFullLink(),
     );
     if (redirect?.overwrite === "redirect") {
+      // Where a redirect leads is what its document holds, so it is decided
+      // as the node holding a link is: a host refused it is told so, and not
+      // where it leads.
+      const refused = this.#hostReadGate.linkRefusal(requestedCell);
+      if (refused !== undefined) {
+        throw new Error(
+          `The worker refused to name where this redirect leads ` +
+            `(${refused.refused.refusedBy}).`,
+        );
+      }
       const target = this.#runtime.getCellFromLink({
         ...redirect,
         space: redirect.space ?? cc.getSpace(),
@@ -2829,9 +2999,9 @@ export class RuntimeProcessor {
       if (viewScoped && (!hasPattern || targetLink.path.length > 0)) {
         const pieceCell = target.asSchema(viewPieceSchema);
         await pieceCell.pull();
-        return { piece: createPieceRef(pieceCell) };
+        return { piece: this.#hostReadGate.pieceRef(pieceCell) };
       }
-      if (!hasPattern) return { piece: createPieceRef(target) };
+      if (!hasPattern) return { piece: this.#hostReadGate.pieceRef(target) };
       if (targetLink.path.length > 0) {
         // The schema a cell inside a piece is read under: what the links
         // along its path carry, as `getPieceCell()` resolves a piece cell
@@ -2842,10 +3012,14 @@ export class RuntimeProcessor {
         const inside = landing.key(...targetLink.path);
         const linked = inside.asSchemaFromLinks();
         if (linked.getAsNormalizedFullLink().schema !== undefined) {
-          return { piece: createPieceRef(linked) };
+          return { piece: this.#hostReadGate.pieceRef(linked) };
         }
         if (targetLink.schema !== undefined) {
-          return { piece: createPieceRef(inside.asSchema(targetLink.schema)) };
+          return {
+            piece: this.#hostReadGate.pieceRef(
+              inside.asSchema(targetLink.schema),
+            ),
+          };
         }
         const resultSchema = landing.getMetaRaw("schema") as
           | JSONSchema
@@ -2853,10 +3027,10 @@ export class RuntimeProcessor {
         const cell = resultSchema === undefined ? inside : inside.asSchema(
           ContextualFlowControl.schemaAtPath(resultSchema, targetLink.path),
         );
-        return { piece: createPieceRef(cell) };
+        return { piece: this.#hostReadGate.pieceRef(cell) };
       }
       const cell = await cc.getPieceCell(landing, request.runIt ?? false);
-      return { piece: createPieceRef(cell) };
+      return { piece: this.#hostReadGate.pieceRef(cell) };
     }
 
     const cell = await cc.getPieceCell(
@@ -2867,7 +3041,7 @@ export class RuntimeProcessor {
     );
 
     return {
-      piece: createPieceRef(cell),
+      piece: this.#hostReadGate.pieceRef(cell),
     };
   }
 
@@ -2883,9 +3057,9 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
+    // Synced first, so that the labels it is decided on are the document's.
     await cell.sync();
-    const slug = cell.getMetaRaw("slug");
-    return { slug: typeof slug === "string" ? slug : undefined };
+    return await this.#hostReadGate.slug(cell);
   }
 
   /**
@@ -2914,31 +3088,48 @@ export class RuntimeProcessor {
   ): Promise<SlugReferenceResponse> {
     const cc = this.#getSpaceCtx(request.space);
     const space = cc.getSpace();
+    // Each document the walk read, at its root: the answer, and a failure's
+    // message, are made from what they hold, so the gate decides it on them.
+    const walked: Cell<unknown>[] = [];
+    const read = (cell: Cell<unknown>) => {
+      const { space, id, scope } = cell.getAsNormalizedFullLink();
+      walked.push(
+        this.#runtime.getCellFromLink({ space, id, scope, path: [] }),
+      );
+    };
     try {
       if (request.member === undefined) {
         const { piece } = await resolveSlugTargetInPiece(
           this.#runtime,
           space,
           request.slug,
+          read,
         );
-        return { piece: createPieceRef(piece), pathAfter: [] };
+        return await this.#hostReadGate.slugReference(walked, {
+          piece,
+          pathAfter: [],
+        });
       }
       const { piece, pathAfter } = await resolveSlugReference(
         this.#runtime,
         space,
         request.slug,
         [request.member],
+        read,
       );
-      return { piece: createPieceRef(piece), pathAfter };
+      return await this.#hostReadGate.slugReference(walked, {
+        piece,
+        pathAfter,
+      });
     } catch (error) {
       // A reference reaching nothing is what the caller asked about, so it
       // comes back as an answer. Everything else — a transport fault, a
       // document that will not decode — stays an error, which is the only
       // way a caller can tell "this name is not bound" from "ask again".
       if (error instanceof SlugResolutionError) {
-        return {
+        return await this.#hostReadGate.slugReference(walked, {
           refusal: { code: error.code ?? "unresolved", message: error.message },
-        };
+        });
       }
       throw error;
     }
@@ -2979,7 +3170,7 @@ export class RuntimeProcessor {
     const pieces = this.#getSpaceCtx(request.space);
     const piecesCell = await pieces.getPieceRegistry();
     return {
-      cell: createCellRef(piecesCell),
+      cell: this.#hostReadGate.ref(piecesCell),
     };
   }
 
@@ -3001,8 +3192,12 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
-    const state = await readPieceSourceState(this.#runtime, cell);
-    return { source: { ...state, space: state.space as DID } };
+    // Synced first, so that the labels it is decided on are the document's.
+    await cell.sync();
+    return await this.#hostReadGate.fromMetadata(cell, async (decided) => {
+      const state = await readPieceSourceState(this.#runtime, decided);
+      return { source: { ...state, space: state.space as DID } };
+    });
   }
 
   async handlePieceGetSourceRevision(
@@ -3017,13 +3212,14 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
-    return {
+    await cell.sync();
+    return await this.#hostReadGate.fromMetadata(cell, async (decided) => ({
       source: await readPieceSourceRevision(
         this.#runtime,
-        cell,
+        decided,
         request.revisionId,
       ),
-    };
+    }));
   }
 
   /** Clone a source piece into another space. */
@@ -3042,7 +3238,7 @@ export class RuntimeProcessor {
       this.#getSpaceCtx(request.destinationSpace),
       { copyData: request.copyData === true },
     );
-    return { piece: createPieceRef(clone.getCell()) };
+    return { piece: this.#hostReadGate.pieceRef(clone.getCell()) };
   }
 
   async handlePieceUpdateSource(
@@ -3089,6 +3285,31 @@ export class RuntimeProcessor {
       undefined,
       request.scope,
     );
+    // A piece whose source the display ceiling keeps from the host is not
+    // changed through it: decided on the piece's metadata, once synced, before
+    // anything is changed.
+    await cell.sync();
+    return await this.#hostReadGate.fromMetadata(
+      cell,
+      (decided) =>
+        this.#changePieceSource(
+          pieces,
+          decided,
+          request,
+          confirmationKey,
+          confirmedChange,
+        ),
+    );
+  }
+
+  /** Helper for {@link handlePieceUpdateSource}, once the read is admitted. */
+  async #changePieceSource(
+    pieces: PiecesController,
+    cell: Cell<unknown>,
+    request: PieceUpdateSourceRequest,
+    confirmationKey: string,
+    confirmedChange: PreparedPieceSourceChange | undefined,
+  ): Promise<PieceUpdateSourceResult> {
     const controller = new PieceController(pieces, cell);
     const result = await controller.changeSource(request.action, {
       confirmedChange,
@@ -3219,7 +3440,10 @@ export class RuntimeProcessor {
   }
 
   getGraphSnapshot(_: GetGraphSnapshotRequest): GraphSnapshotResponse {
-    return { snapshot: this.#runtime.scheduler.getGraphSnapshot() };
+    return this.#hostReadGate.graphSnapshot(
+      this.#runtime.scheduler.getGraphSnapshot(),
+      this.#graphDocumentAt,
+    );
   }
 
   getLoggerCounts(_: GetLoggerCountsRequest): LoggerCountsResponse {
@@ -3291,16 +3515,53 @@ export class RuntimeProcessor {
 
   #onTelemetry = (event: Event) => {
     if (!this.#telemetryEnabled) return;
-    const marker = (event as RuntimeTelemetryEvent).marker;
-    postToClient({
-      type: NotificationType.Telemetry,
-      marker,
-    });
+    const { marker, consumed } = event as RuntimeTelemetryEvent;
+    postToClient(
+      this.#hostReadGate.telemetry(
+        marker,
+        this.#documentAt,
+        consumed,
+        this.#graphDocumentAt,
+      ),
+    );
   };
+
+  /**
+   * The document a graph address names, placed by its scope key: the space
+   * instance, or this runtime's own user or session instance. Another
+   * principal's instance is not placed.
+   */
+  #graphDocumentAt: GraphDocumentAt = (space, id, scopeKey) => {
+    const scope = scopeOfScopeKey(scopeKey);
+    let own: string;
+    try {
+      own = resolveScopeKey(
+        scope,
+        this.#runtime.storageManager.scopeKeyIdentity(),
+      );
+    } catch {
+      return undefined;
+    }
+    return own === scopeKey ? this.#documentAt(space, id, scope) : undefined;
+  };
+
+  /** The root of the document a diagnostic names, which it is decided on. */
+  #documentAt: DocumentAt = (space, id, scope) =>
+    this.#runtime.getCellFromLink({
+      space: space as DID,
+      id: id as `${string}:${string}`,
+      path: [],
+      ...(scope === undefined ? {} : { scope }),
+    });
 
   getPatternSources(
     _request: GetPatternSourcesRequest,
   ): PatternSourcesResponse {
+    return this.#hostReadGate.patternSources(() => this.#livePatternSources());
+  }
+
+  /** The authored files of every live pattern, for {@link getPatternSources}. */
+  #livePatternSources(): PatternSourceInfo[] {
     const snapshot = this.#runtime.scheduler.getGraphSnapshot();
     const seen = new Set<string>();
     const patterns: PatternSourceInfo[] = [];
@@ -3331,7 +3592,7 @@ export class RuntimeProcessor {
         });
       }
     }
-    return { patterns };
+    return patterns;
   }
 
   setBreakpoints(request: SetBreakpointsRequest): void {
@@ -3397,7 +3658,7 @@ export class RuntimeProcessor {
     const result = await this.#runtime.scheduler.runDiagnosis(
       request.durationMs,
     );
-    return { result };
+    return this.#hostReadGate.diagnosis(result, this.#documentAt);
   }
 
   getPatternCoverage(_: GetPatternCoverageRequest): PatternCoverageResponse {
@@ -3443,9 +3704,10 @@ export class RuntimeProcessor {
   getTriggerTrace(
     _request: GetTriggerTraceRequest,
   ): TriggerTraceResponse {
-    return {
-      trace: this.#runtime.scheduler.getTriggerTrace(),
-    };
+    return this.#hostReadGate.triggerTrace(
+      this.#runtime.scheduler.getTriggerTrace(),
+      this.#documentAt,
+    );
   }
 
   setTriggerTraceEnabled(
@@ -3474,189 +3736,420 @@ export class RuntimeProcessor {
   ): Promise<RemoteResponse | void> {
     switch (request.type) {
       case RequestType.Dispose:
-        return await this.dispose();
+        return answering(RequestType.Dispose, await this.dispose());
       case RequestType.CellGet:
-        return this.handleCellGet(request);
+        return answering(RequestType.CellGet, await this.#settledGet(request));
       case RequestType.CellPull:
-        return await this.handleCellPull(request);
+        return answering(
+          RequestType.CellPull,
+          await this.handleCellPull(request),
+        );
       case RequestType.CellInitialize:
-        return await this.handleCellInitialize(request);
+        return answering(
+          RequestType.CellInitialize,
+          await this.handleCellInitialize(request),
+        );
       case RequestType.CellSet:
-        return this.handleCellSet(request);
+        return answering(RequestType.CellSet, this.handleCellSet(request));
       case RequestType.CellPush:
-        return this.handleCellPush(request);
+        return answering(RequestType.CellPush, this.handleCellPush(request));
       case RequestType.CellSend:
-        return this.handleCellSend(request);
+        return answering(RequestType.CellSend, this.handleCellSend(request));
       case RequestType.CellSubscribe:
-        return this.handleCellSubscribe(request, client);
+        return answering(
+          RequestType.CellSubscribe,
+          this.handleCellSubscribe(request, client),
+        );
       case RequestType.CellUnsubscribe:
-        return this.handleCellUnsubscribe(request, client);
+        return answering(
+          RequestType.CellUnsubscribe,
+          this.handleCellUnsubscribe(request, client),
+        );
       case RequestType.CellResolveAsCell:
-        return this.handleCellResolveAsCell(request);
+        return answering(
+          RequestType.CellResolveAsCell,
+          this.handleCellResolveAsCell(request),
+        );
       case RequestType.CellGetCfcLabel:
-        return await this.handleCellGetCfcLabel(request);
+        return answering(
+          RequestType.CellGetCfcLabel,
+          await this.handleCellGetCfcLabel(request),
+        );
       case RequestType.CellFields:
-        return await this.handleCellFields(request);
+        return answering(
+          RequestType.CellFields,
+          await this.handleCellFields(request),
+        );
       case RequestType.SnapshotSharePrepare:
-        return await this.handleSnapshotSharePrepare(request, client);
+        return answering(
+          RequestType.SnapshotSharePrepare,
+          await this.handleSnapshotSharePrepare(request, client),
+        );
       case RequestType.SnapshotShareCommit:
-        return await this.handleSnapshotShareCommit(request, client);
+        return answering(
+          RequestType.SnapshotShareCommit,
+          await this.handleSnapshotShareCommit(request, client),
+        );
       case RequestType.SnapshotShareCancel:
         this.#snapshotShares.delete(clientScopedKey(client, request.id));
         return;
       case RequestType.CustodySealPrepare:
-        return await this.handleCustodySealPrepare(request, client);
+        return answering(
+          RequestType.CustodySealPrepare,
+          await this.handleCustodySealPrepare(request, client),
+        );
       case RequestType.CustodySealCommit:
-        return await this.handleCustodySealCommit(request, client);
+        return answering(
+          RequestType.CustodySealCommit,
+          await this.handleCustodySealCommit(request, client),
+        );
       case RequestType.CustodySealCancel:
         this.#custodySeals.delete(clientScopedKey(client, request.id));
         return;
       case RequestType.CustodyAnswerPublish:
-        return await this.handleCustodyAnswerPublish(request);
+        return answering(
+          RequestType.CustodyAnswerPublish,
+          await this.handleCustodyAnswerPublish(request),
+        );
       case RequestType.CustodyAnswerRead:
-        return await this.handleCustodyAnswerRead(request);
+        return answering(
+          RequestType.CustodyAnswerRead,
+          await this.handleCustodyAnswerRead(request),
+        );
       case RequestType.OperationQuery:
-        return await this.handleOperationQuery(request, client);
+        return answering(
+          RequestType.OperationQuery,
+          await this.handleOperationQuery(request, client),
+        );
       case RequestType.OperationCapabilities:
-        return await this.handleOperationCapabilities(request, client);
+        return answering(
+          RequestType.OperationCapabilities,
+          await this.handleOperationCapabilities(request, client),
+        );
       case RequestType.OperationApply:
-        return await this.handleOperationApply(request, client);
+        return answering(
+          RequestType.OperationApply,
+          await this.handleOperationApply(request, client),
+        );
       case RequestType.OperationRelease:
-        return await this.handleOperationRelease(request, client);
+        return answering(
+          RequestType.OperationRelease,
+          await this.handleOperationRelease(request, client),
+        );
       case RequestType.OperationSubscribe:
-        return await this.handleOperationSubscribe(request, client);
+        return answering(
+          RequestType.OperationSubscribe,
+          await this.handleOperationSubscribe(request, client),
+        );
       case RequestType.OperationUnsubscribe:
-        return this.handleOperationUnsubscribe(request, client);
+        return answering(
+          RequestType.OperationUnsubscribe,
+          this.handleOperationUnsubscribe(request, client),
+        );
       case RequestType.OperationSessionClose:
-        return this.handleOperationSessionClose(request, client);
+        return answering(
+          RequestType.OperationSessionClose,
+          this.handleOperationSessionClose(request, client),
+        );
       case RequestType.PresenceJoin:
-        return await this.handlePresenceJoin(request, client);
+        return answering(
+          RequestType.PresenceJoin,
+          await this.handlePresenceJoin(request, client),
+        );
       case RequestType.PresencePublish:
-        return this.handlePresencePublish(request, client);
+        return answering(
+          RequestType.PresencePublish,
+          this.handlePresencePublish(request, client),
+        );
       case RequestType.PresenceLeave:
-        return await this.handlePresenceLeave(request, client);
+        return answering(
+          RequestType.PresenceLeave,
+          await this.handlePresenceLeave(request, client),
+        );
       case RequestType.SqliteQuery:
-        return await this.handleSqliteQuery(request);
+        return answering(
+          RequestType.SqliteQuery,
+          await this.handleSqliteQuery(request),
+        );
       case RequestType.SqliteExec:
-        return await this.handleSqliteExec(request);
+        return answering(
+          RequestType.SqliteExec,
+          await this.handleSqliteExec(request),
+        );
       case RequestType.GetCell:
-        return this.handleGetCell(request);
+        return answering(RequestType.GetCell, this.handleGetCell(request));
       case RequestType.GetHomeSpaceCell:
-        return this.handleGetHomeSpaceCell(request);
+        return answering(
+          RequestType.GetHomeSpaceCell,
+          this.handleGetHomeSpaceCell(request),
+        );
       case RequestType.EnsureHomePatternRunning:
-        return await this.handleEnsureHomePatternRunning(request);
+        return answering(
+          RequestType.EnsureHomePatternRunning,
+          await this.handleEnsureHomePatternRunning(request),
+        );
       case RequestType.Idle:
-        return await this.handleIdle();
+        return answering(RequestType.Idle, await this.handleIdle());
       case RequestType.ListEventAttention:
-        return await this.handleListEventAttention(request);
+        return answering(
+          RequestType.ListEventAttention,
+          await this.handleListEventAttention(request),
+        );
       case RequestType.ResolveEventAttention:
-        return await this.handleResolveEventAttention(request);
+        return answering(
+          RequestType.ResolveEventAttention,
+          await this.handleResolveEventAttention(request),
+        );
       case RequestType.FlushCompileCacheWrites:
-        return await this.handleFlushCompileCacheWrites();
+        return answering(
+          RequestType.FlushCompileCacheWrites,
+          await this.handleFlushCompileCacheWrites(),
+        );
       case RequestType.PieceCreate:
-        return await this.handlePieceCreate(
-          request,
+        return answering(
+          RequestType.PieceCreate,
+          await this.handlePieceCreate(
+            request,
+          ),
         );
       case RequestType.GetSpaceRootPattern:
-        return await this.handleGetSpaceRootPattern(
-          request,
+        return answering(
+          RequestType.GetSpaceRootPattern,
+          await this.handleGetSpaceRootPattern(
+            request,
+          ),
         );
       case RequestType.RecreateSpaceRootPattern:
-        return await this.handleRecreateSpaceRootPattern(
-          request,
+        return answering(
+          RequestType.RecreateSpaceRootPattern,
+          await this.handleRecreateSpaceRootPattern(
+            request,
+          ),
         );
       case RequestType.PieceGet:
-        return await this.handlePieceGet(request);
+        return answering(
+          RequestType.PieceGet,
+          await this.handlePieceGet(request),
+        );
       case RequestType.PieceGetSlug:
-        return await this.handlePieceGetSlug(request);
+        return answering(
+          RequestType.PieceGetSlug,
+          await this.handlePieceGetSlug(request),
+        );
       case RequestType.SlugResolve:
-        return await this.handleSlugResolve(request);
+        return answering(
+          RequestType.SlugResolve,
+          await this.handleSlugResolve(request),
+        );
       case RequestType.PieceRemove:
-        return await this.handlePieceRemove(request);
+        return answering(
+          RequestType.PieceRemove,
+          await this.handlePieceRemove(request),
+        );
       case RequestType.PieceStart:
-        return await this.handlePieceStart(request);
+        return answering(
+          RequestType.PieceStart,
+          await this.handlePieceStart(request),
+        );
       case RequestType.PieceStop:
-        return await this.handlePieceStop(request);
+        return answering(
+          RequestType.PieceStop,
+          await this.handlePieceStop(request),
+        );
       case RequestType.PieceGetAll:
-        return await this.handlePieceGetAll(request);
+        return answering(
+          RequestType.PieceGetAll,
+          await this.handlePieceGetAll(request),
+        );
       case RequestType.PieceGetSource:
-        return await this.handlePieceGetSource(request);
+        return answering(
+          RequestType.PieceGetSource,
+          await this.handlePieceGetSource(request),
+        );
       case RequestType.PieceGetSourceRevision:
-        return await this.handlePieceGetSourceRevision(request);
+        return answering(
+          RequestType.PieceGetSourceRevision,
+          await this.handlePieceGetSourceRevision(request),
+        );
       case RequestType.PieceClone:
-        return await this.handlePieceClone(request);
+        return answering(
+          RequestType.PieceClone,
+          await this.handlePieceClone(request),
+        );
       case RequestType.PieceUpdateSource:
-        return await this.handlePieceUpdateSource(request);
+        return answering(
+          RequestType.PieceUpdateSource,
+          await this.handlePieceUpdateSource(request),
+        );
       case RequestType.SpaceGetAcl:
-        return await this.handleSpaceGetAcl(request);
+        return answering(
+          RequestType.SpaceGetAcl,
+          await this.handleSpaceGetAcl(request),
+        );
       case RequestType.SpaceSetAclEntry:
-        return await this.handleSpaceSetAclEntry(request);
+        return answering(
+          RequestType.SpaceSetAclEntry,
+          await this.handleSpaceSetAclEntry(request),
+        );
       case RequestType.SpaceRemoveAclEntry:
-        return await this.handleSpaceRemoveAclEntry(request);
+        return answering(
+          RequestType.SpaceRemoveAclEntry,
+          await this.handleSpaceRemoveAclEntry(request),
+        );
       case RequestType.PieceSynced:
-        return await this.handlePieceSynced(request);
+        return answering(
+          RequestType.PieceSynced,
+          await this.handlePieceSynced(request),
+        );
       case RequestType.RuntimeSynced:
-        return await this.handleRuntimeSynced();
+        return answering(
+          RequestType.RuntimeSynced,
+          await this.handleRuntimeSynced(),
+        );
       case RequestType.CreateSpace:
-        return await this.handleCreateSpace(request);
+        return answering(
+          RequestType.CreateSpace,
+          await this.handleCreateSpace(request),
+        );
       case RequestType.RegisterSpaceHost:
-        return this.handleRegisterSpaceHost(request);
+        return answering(
+          RequestType.RegisterSpaceHost,
+          this.handleRegisterSpaceHost(request),
+        );
       case RequestType.RegisterSpaceHostDetailed:
-        return this.handleRegisterSpaceHostDetailed(request);
+        return answering(
+          RequestType.RegisterSpaceHostDetailed,
+          this.handleRegisterSpaceHostDetailed(request),
+        );
       case RequestType.RetrySpaceAccess:
-        return await this.handleRetrySpaceAccess(request);
+        return answering(
+          RequestType.RetrySpaceAccess,
+          await this.handleRetrySpaceAccess(request),
+        );
       case RequestType.GetGraphSnapshot:
-        return this.getGraphSnapshot(request);
+        return answering(
+          RequestType.GetGraphSnapshot,
+          this.getGraphSnapshot(request),
+        );
       case RequestType.GetStorageDiagnostics:
-        return {
+        return answering(RequestType.GetStorageDiagnostics, {
           diagnostics: this.#runtime.storageManager.getDiagnostics?.() ?? null,
-        };
+        });
       case RequestType.GetLoggerCounts:
-        return this.getLoggerCounts(request);
+        return answering(
+          RequestType.GetLoggerCounts,
+          this.getLoggerCounts(request),
+        );
       case RequestType.GetPatternCoverage:
-        return this.getPatternCoverage(request);
+        return answering(
+          RequestType.GetPatternCoverage,
+          this.getPatternCoverage(request),
+        );
       case RequestType.SetLoggerLevel:
-        return this.setLoggerLevel(request);
+        return answering(
+          RequestType.SetLoggerLevel,
+          this.setLoggerLevel(request),
+        );
       case RequestType.SetLoggerEnabled:
-        return this.setLoggerEnabled(request);
+        return answering(
+          RequestType.SetLoggerEnabled,
+          this.setLoggerEnabled(request),
+        );
       case RequestType.SetTelemetryEnabled:
-        return this.setTelemetryEnabled(request);
+        return answering(
+          RequestType.SetTelemetryEnabled,
+          this.setTelemetryEnabled(request),
+        );
       case RequestType.SetReadStatsEnabled:
-        return this.setReadStatsEnabled(request);
+        return answering(
+          RequestType.SetReadStatsEnabled,
+          this.setReadStatsEnabled(request),
+        );
       case RequestType.SetMemoryMessageCompression:
-        return await this.setMemoryMessageCompression(request);
+        return answering(
+          RequestType.SetMemoryMessageCompression,
+          await this.setMemoryMessageCompression(request),
+        );
       case RequestType.ResetLoggerBaselines:
-        return this.resetLoggerBaselines(request);
+        return answering(
+          RequestType.ResetLoggerBaselines,
+          this.resetLoggerBaselines(request),
+        );
       case RequestType.GetSettleStats:
-        return this.getSettleStats(request);
+        return answering(
+          RequestType.GetSettleStats,
+          this.getSettleStats(request),
+        );
       case RequestType.GetSettleStatsHistory:
-        return this.getSettleStatsHistory(request);
+        return answering(
+          RequestType.GetSettleStatsHistory,
+          this.getSettleStatsHistory(request),
+        );
       case RequestType.SetSettleStatsEnabled:
-        return this.setSettleStatsEnabled(request);
+        return answering(
+          RequestType.SetSettleStatsEnabled,
+          this.setSettleStatsEnabled(request),
+        );
       case RequestType.GetActionRunTrace:
-        return this.getActionRunTrace(request);
+        return answering(
+          RequestType.GetActionRunTrace,
+          this.getActionRunTrace(request),
+        );
       case RequestType.SetActionRunTraceEnabled:
-        return this.setActionRunTraceEnabled(request);
+        return answering(
+          RequestType.SetActionRunTraceEnabled,
+          this.setActionRunTraceEnabled(request),
+        );
       case RequestType.GetTriggerTrace:
-        return this.getTriggerTrace(request);
+        return answering(
+          RequestType.GetTriggerTrace,
+          this.getTriggerTrace(request),
+        );
       case RequestType.SetTriggerTraceEnabled:
-        return this.setTriggerTraceEnabled(request);
+        return answering(
+          RequestType.SetTriggerTraceEnabled,
+          this.setTriggerTraceEnabled(request),
+        );
       case RequestType.GetWriteStackTrace:
-        return this.getWriteStackTrace(request);
+        return answering(
+          RequestType.GetWriteStackTrace,
+          this.getWriteStackTrace(request),
+        );
       case RequestType.SetWriteStackTraceMatchers:
-        return this.setWriteStackTraceMatchers(request);
+        return answering(
+          RequestType.SetWriteStackTraceMatchers,
+          this.setWriteStackTraceMatchers(request),
+        );
       case RequestType.DetectNonIdempotent:
-        return await this.detectNonIdempotent(request);
+        return answering(
+          RequestType.DetectNonIdempotent,
+          await this.detectNonIdempotent(request),
+        );
       case RequestType.GetPatternSources:
-        return this.getPatternSources(request);
+        return answering(
+          RequestType.GetPatternSources,
+          this.getPatternSources(request),
+        );
       case RequestType.SetBreakpoints:
-        return this.setBreakpoints(request);
+        return answering(
+          RequestType.SetBreakpoints,
+          this.setBreakpoints(request),
+        );
       case RequestType.UploadBlob:
-        return await this.handleUploadBlob(request);
+        return answering(
+          RequestType.UploadBlob,
+          await this.handleUploadBlob(request),
+        );
       case RequestType.VDomMount:
-        return this.handleVDomMount(request, client);
+        return answering(
+          RequestType.VDomMount,
+          this.handleVDomMount(request, client),
+        );
       case RequestType.VDomUnmount:
-        return this.handleVDomUnmount(request, client);
+        return answering(
+          RequestType.VDomUnmount,
+          this.handleVDomUnmount(request, client),
+        );
       default:
         throw new Error(`Unknown message type: ${(request as any).type}`);
     }
@@ -3720,6 +4213,53 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Takes the render policy from `data`: the declassification policy and the
+   * ceiling, each normalized, and the membership provider, module-policy
+   * source and resolver derived from them. Every mount's reconciler is built
+   * from these, and so is the host-read gate, which is why it is rebuilt
+   * here: a host's read is decided under the same root policy, by the same
+   * fit, as a render of the same cell, so the two never disagree about what
+   * the host may see.
+   */
+  #configureRenderPolicy(data: RenderPolicyConfiguration): HostReadGate {
+    // InitializationData crosses postMessage with no runtime validation, so a
+    // typo'd host config or version-skewed peer must fail CLOSED, not open:
+    // any present-but-unknown value becomes "deny"; absent stays "allow".
+    this.#renderDeclassificationPolicy = normalizeRenderDeclassificationPolicy(
+      data.renderDeclassificationPolicy,
+    );
+    this.#renderConfidentialityCeiling = normalizeRenderConfidentialityCeiling(
+      data.renderConfidentialityCeiling,
+    );
+    this.#renderMembershipProvider = renderMembershipProviderFor(
+      this.#runtime,
+      this.#identity,
+      this.#renderConfidentialityCeiling,
+    );
+    this.#renderModulePolicySource = renderModulePolicySourceFor(
+      this.#runtime,
+      this.#renderConfidentialityCeiling,
+    );
+    this.#renderConfidentialityResolver = renderConfidentialityResolverFor(
+      this.#runtime,
+      this.#identity,
+      this.#renderConfidentialityCeiling,
+      this.#workspace,
+      this.#renderMembershipProvider,
+      this.#renderModulePolicySource,
+    );
+    this.#hostReadGate = new HostReadGate(
+      rootRenderPolicyFor(this.#renderConfidentialityCeiling),
+      {
+        resolveConfidentiality: this.#renderConfidentialityResolver,
+        membership: this.#renderMembershipProvider,
+        modulePolicies: this.#renderModulePolicySource,
+      },
+    );
+    return this.#hostReadGate;
+  }
+
+  /**
    * Handle a request to start VDOM rendering for a cell.
    * Creates a WorkerReconciler, subscribes to the cell, and sends VDomBatch notifications.
    */
@@ -3765,7 +4305,7 @@ export class RuntimeProcessor {
         });
         return batchId;
       },
-      onError: mountErrorSink(client),
+      onError: mountErrorSink(client, () => this.#hostReadGate),
     });
 
     let active = true;
@@ -3789,7 +4329,7 @@ export class RuntimeProcessor {
     return this.#runtime.viewReplication.mount(
       rawCell,
       key,
-      mountErrorSink(client),
+      mountErrorSink(client, () => this.#hostReadGate),
     ).then((cancel) => {
       if (!active) cancel?.();
       else cancelView = cancel;
@@ -3852,6 +4392,7 @@ export class RuntimeProcessor {
       identity: Identity,
       telemetry: RuntimeTelemetry,
       securityContext: RuntimeSecurityContext,
+      renderPolicy?: RenderPolicyConfiguration,
     ): RuntimeProcessor;
   } {
     return {
@@ -3862,6 +4403,7 @@ export class RuntimeProcessor {
         identity,
         telemetry,
         securityContext,
+        renderPolicy = {},
       ) =>
         new RuntimeProcessor(
           runtime,
@@ -3870,6 +4412,7 @@ export class RuntimeProcessor {
           identity,
           telemetry,
           securityContext,
+          renderPolicy,
         ),
     };
   }
@@ -3932,6 +4475,16 @@ export class RuntimeProcessor {
 
     let homePieces: PiecesController | undefined = undefined;
     let processor: RuntimeProcessor | undefined = undefined;
+    // What decides a console call or an error report the runtime raises
+    // before the processor, and its gate, exist: the configured ceiling, with
+    // none of the resolver and providers that admit a space's members, so
+    // that it refuses what the processor's gate might admit and admits
+    // nothing it would refuse.
+    const earlyGate = HostReadGate.forConfiguredCeiling(
+      data.renderConfidentialityCeiling,
+    );
+    const gate = () =>
+      processor === undefined ? earlyGate : processor.#hostReadGate;
     // Everything below goes through the browserWorker preset: host-decided
     // data via the params mapper, plus this worker's declared deltas (the
     // postMessage bridges for console/navigate/piece/errors).
@@ -3941,23 +4494,28 @@ export class RuntimeProcessor {
         storageManager,
         telemetry,
       ),
-      consoleHandler: ({ metadata, method, args }) => {
-        postToClient({
-          type: NotificationType.ConsoleMessage,
-          metadata,
-          method,
-          args: args.map((arg) => toConsoleDebugValue(arg)),
-        });
+      consoleHandler: ({ metadata, method, args, consumed }) => {
+        // The arguments reach the host as the gate decides, on what the
+        // action that logged had read. The worker's own console, in the
+        // runtime's own context, is handed them as they are.
+        postToClient(
+          gate().console(
+            { metadata, method },
+            args.map((arg) => toConsoleDebugValue(arg)),
+            consumed,
+          ),
+        );
         return args;
       },
 
-      navigateCallback: (target) => {
-        const link = parseLink(target.getAsLink()) as NormalizedFullLink;
-        postToClient({
-          type: NotificationType.NavigateRequest,
-          targetCellRef: link,
-        });
-      },
+      // Where to go is what the run that asked chose, from what it had read,
+      // so the gate decides the request on that. A withheld request rejects,
+      // so neither a flush nor the effects channel records it as made.
+      navigateCallback: navigationPoster(
+        gate,
+        postToClient,
+        () => processor !== undefined && processor.#isDisposed,
+      ),
 
       pieceCreatedCallback: (piece) => {
         const writeContext = runtime.getWriteDebugContext();
@@ -3980,7 +4538,12 @@ export class RuntimeProcessor {
         });
       },
 
-      errorHandlers: [postContextualRuntimeError],
+      errorHandlers: [
+        (error) =>
+          postToClient(
+            gate().error(runtimeErrorReport(error), error.consumed),
+          ),
+      ],
     }));
 
     assertServerExecutionPostureAgreement(data.experimental, runtime);
@@ -4009,6 +4572,7 @@ export class RuntimeProcessor {
       identity,
       telemetry,
       securityContextFrom(data, identity.did()),
+      data,
       clients,
     );
     processor.#health = health;
@@ -4021,38 +4585,15 @@ export class RuntimeProcessor {
       void health.then((healthy) => {
         if (healthy || built.#isDisposed) return;
         for (const client of clients()) {
-          client.post({
-            type: NotificationType.ErrorReport,
-            code: RuntimeErrorCode.HostUnreachable,
-            message: unreachableHostMessage(data),
-          });
+          client.post(
+            gate().runtimeError({
+              code: RuntimeErrorCode.HostUnreachable,
+              message: unreachableHostMessage(data),
+            }),
+          );
         }
       });
     }
-    // InitializationData crosses postMessage with no runtime validation, so a
-    // typo'd host config or version-skewed peer must fail CLOSED, not open:
-    // any present-but-unknown value becomes "deny"; absent stays "allow".
-    processor.#renderDeclassificationPolicy =
-      normalizeRenderDeclassificationPolicy(data.renderDeclassificationPolicy);
-    processor.#renderConfidentialityCeiling =
-      normalizeRenderConfidentialityCeiling(data.renderConfidentialityCeiling);
-    processor.#renderMembershipProvider = renderMembershipProviderFor(
-      runtime,
-      identity,
-      processor.#renderConfidentialityCeiling,
-    );
-    processor.#renderModulePolicySource = renderModulePolicySourceFor(
-      runtime,
-      processor.#renderConfidentialityCeiling,
-    );
-    processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
-      runtime,
-      identity,
-      processor.#renderConfidentialityCeiling,
-      space,
-      processor.#renderMembershipProvider,
-      processor.#renderModulePolicySource,
-    );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
       undefined,

@@ -595,6 +595,7 @@ describe("refusal-detail", () => {
     let storageManager: ReturnType<typeof StorageManager.emulate>;
     let runtime: Runtime;
     let markers: PrepareRejectMarker[];
+    let consumedConfidentiality: unknown[][];
 
     beforeEach(() => {
       storageManager = StorageManager.emulate({ as: signer });
@@ -605,9 +606,16 @@ describe("refusal-detail", () => {
         cfcSinkMaxConfidentiality: { fetchText: [] },
       });
       markers = [];
+      consumedConfidentiality = [];
       runtime.telemetry.addEventListener("telemetry", (event) => {
-        const marker = (event as RuntimeTelemetryEvent).marker;
-        if (marker.type === "cfc.prepare-reject") markers.push(marker);
+        const { marker, consumed } = event as RuntimeTelemetryEvent;
+        if (marker.type !== "cfc.prepare-reject") return;
+        markers.push(marker);
+        // Read during the dispatch, as a listener deciding the reasons on
+        // them does.
+        if (consumed !== undefined) {
+          consumedConfidentiality.push([...consumed().confidentiality]);
+        }
       });
     });
 
@@ -664,6 +672,13 @@ describe("refusal-detail", () => {
       expect(detail!.sink).toBe("fetchText");
       expect(detail!.offendingAtoms).toContain(MEDICAL);
       expect(detail!.attribution).toBe("complete");
+    });
+
+    it("carries the labels the refused transaction read, which its reasons are decided on", async () => {
+      await refuseWithSink("marker-consumed-secret");
+
+      expect(markers.length).toBe(1);
+      expect(consumedConfidentiality).toEqual([["medical"]]);
     });
 
     it("describes only the pass it ran, when one transaction prepares twice", async () => {

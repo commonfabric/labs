@@ -2,9 +2,11 @@
 // to record events that can be subscribed to in other
 // contexts to visualize or log events inside the runtime.
 
+import type { SinkConsumedLabel } from "./cell.ts";
 import type { CfcRefusalDetail } from "./cfc/refusal-detail.ts";
 import type { ReadAttemptCounts } from "./read-stats.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 
 import { IMemoryChange } from "./storage/interface.ts";
 
@@ -287,6 +289,9 @@ export type RuntimeTelemetryMarker = {
   workSetSize: number;
 } | {
   type: "cell.update";
+
+  /** The space whose document changed. */
+  space: MemorySpace;
   change: IMemoryChange;
   error?: string;
 } | {
@@ -465,18 +470,40 @@ export class RuntimeTelemetryEvent
   extends CustomEvent<{ marker: RuntimeTelemetryMarker }> {
   readonly marker: RuntimeTelemetryMarkerResult;
 
-  constructor(marker: RuntimeTelemetryMarker) {
+  /**
+   * The labels of everything the transaction the marker reports on had read:
+   * what the text it carries, such as an error's message, can quote, and so
+   * what a reader of that text is to be decided on. Called while the marker
+   * is dispatched, which `submit()` does before it returns, while the
+   * transaction still holds its reads. Absent for a marker made outside a
+   * transaction, or after its transaction closed.
+   */
+  readonly consumed?: () => SinkConsumedLabel;
+
+  constructor(
+    marker: RuntimeTelemetryMarker,
+    consumed?: () => SinkConsumedLabel,
+  ) {
     super("telemetry", {
       detail: {
         marker,
       },
     });
     this.marker = { ...marker, timeStamp: this.timeStamp };
+    if (consumed !== undefined) this.consumed = consumed;
   }
 }
 
 export class RuntimeTelemetry extends EventTarget {
-  submit(marker: RuntimeTelemetryMarker) {
-    this.dispatchEvent(new RuntimeTelemetryEvent(marker));
+  /**
+   * Dispatches `marker` to every listener before returning. `consumed` is
+   * the labels the transaction it reports on had read, which a listener
+   * calls during the dispatch ({@link RuntimeTelemetryEvent.consumed}).
+   */
+  submit(
+    marker: RuntimeTelemetryMarker,
+    consumed?: () => SinkConsumedLabel,
+  ) {
+    this.dispatchEvent(new RuntimeTelemetryEvent(marker, consumed));
   }
 }

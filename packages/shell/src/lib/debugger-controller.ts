@@ -465,7 +465,10 @@ export class DebuggerController implements ReactiveController {
     if (!rt) return;
     try {
       const response = await rt.getPatternSources();
-      this.#patternSources = response.patterns;
+      // Under a display ceiling the worker refuses the list, since nothing
+      // measured what a live pattern's program was made from; the browser
+      // then shows none.
+      this.#patternSources = "refused" in response ? [] : response.patterns;
       this.#patternSourcesVersion++;
       this.#host.requestUpdate();
     } catch (e) {

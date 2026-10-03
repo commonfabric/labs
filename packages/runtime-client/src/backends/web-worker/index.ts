@@ -15,6 +15,7 @@ import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import {
   TransportNotificationType,
   WORKER_CONSOLE_LEVELS,
+  type WorkerConsoleForward,
   WorkerConsoleLevel,
 } from "@/protocol/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
@@ -49,6 +50,10 @@ type ConsoleMethod = (...args: unknown[]) => void;
 // forwarding adds no per-log cost.
 let savedConsole: Record<WorkerConsoleLevel, ConsoleMethod> | undefined;
 
+// What the bridge posts for each line while it is installed: the notification
+// the host-read gate built, or nothing where it forwards none.
+let forwardLine: WorkerConsoleForward | undefined;
+
 function formatConsoleArg(arg: unknown): string {
   if (typeof arg === "string") return arg;
   // Errors serialize to `{}` under JSON.stringify (message/stack are
@@ -63,10 +68,11 @@ function formatConsoleArg(arg: unknown): string {
 }
 
 /**
- * Patch the worker's `console.log`/`warn`/`error` so each call also posts a
- * `WorkerConsoleNotification` that the web-worker transport re-emits on the
- * page console. The original method is called first, so nothing is lost in the
- * worker's own console. No-op if already installed.
+ * Patch the worker's `console.log`/`warn`/`error` so each call also posts the
+ * `WorkerConsoleNotification` `forwardLine` builds for it, which the web-worker
+ * transport re-emits on the page console, or nothing where it builds none. The
+ * original method is called first, so nothing is lost in the worker's own
+ * console. No-op if already installed.
  */
 function installWorkerConsoleBridge(): void {
   if (savedConsole) return;
@@ -81,11 +87,8 @@ function installWorkerConsoleBridge(): void {
     console[level] = (...args: unknown[]) => {
       saved[level].apply(console, args);
       try {
-        postToClient({
-          type: TransportNotificationType.WorkerConsole,
-          level,
-          text: args.map(formatConsoleArg).join(" "),
-        });
+        const line = forwardLine?.(level, args.map(formatConsoleArg).join(" "));
+        if (line !== undefined) postToClient(line);
       } catch {
         // A non-cloneable payload or a closed channel must not break the
         // logging call itself.
@@ -106,8 +109,11 @@ function uninstallWorkerConsoleBridge(): void {
   savedConsole = undefined;
 }
 
-function setWorkerConsoleBridge(enabled: boolean): void {
-  if (enabled) installWorkerConsoleBridge();
+function setWorkerConsoleBridge(
+  forward: WorkerConsoleForward | undefined,
+): void {
+  forwardLine = forward;
+  if (forward !== undefined) installWorkerConsoleBridge();
   else uninstallWorkerConsoleBridge();
 }
 

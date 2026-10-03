@@ -1029,7 +1029,10 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           "a public piece": decided(1),
           "a piece holding a sealed entry": decided(1),
           "a sealed piece": decided(0),
-          "a piece with a sealed field": decided(0),
+          // The reference's read stops at the piece's node, and a field
+          // below it is decided by the render mounted from it, when that
+          // render reads the field.
+          "a piece with a sealed field": decided(1),
           "a sealed link to a public piece": decided(0),
           "a link to a sealed piece": decided(0),
           "a piece written into the list": decided(1),
@@ -1087,8 +1090,11 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
       "removes `cf-picker`'s binding when a write leaves an item refused, as it removes `cf-render`'s, whatever schema the list's links store",
       async () => {
         // Each item is a piece reached through a link of its own. A label
-        // written after the binding is made, on the piece's own document, on
-        // a field of that document, or on the link to it, refuses the item.
+        // written after the binding is made on the piece's own document, or
+        // on the link to it, refuses the item. One written on a field of the
+        // document does not: the reference's read stops at the piece's node,
+        // and the field is decided by the render mounted from it, when that
+        // render reads the field.
 
         const value = {
           [NAME]: "Relabeled shelf",
@@ -1152,7 +1158,10 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         }
         expect(outcomes).toEqual(
           Object.fromEntries(
-            Object.keys(outcomes).map((id) => [id, { bound: 1, removed: 1 }]),
+            Object.keys(outcomes).map((id) => [id, {
+              bound: 1,
+              removed: id.startsWith("a field of the piece") ? 0 : 1,
+            }]),
           ),
         );
         expect(Object.keys(outcomes)).toHaveLength(12);
