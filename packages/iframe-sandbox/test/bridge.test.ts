@@ -673,6 +673,44 @@ describe("Fabric iframe bridge", () => {
     }
   });
 
+  it("tells nothing to a sink a snapshot listener tears down on a refusal", async () => {
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          sink: () => () => {},
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("secret");
+      let refusals = 0;
+      const cancelSink = cell.sink(() => {}, { onRefused: () => refusals++ });
+      const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
+        if (snapshot.status === "error") cancelSink();
+      });
+
+      await expect(cell.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(refusals).toBe(0);
+      cancelSnapshot();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
   it("keeps no sink whose listener throws as it is added", async () => {
     let deliver: ((value: FabricValue | undefined) => void) | undefined;
     const bridge = createFabricBridge({
