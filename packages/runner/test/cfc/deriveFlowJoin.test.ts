@@ -147,11 +147,16 @@ describe("deriveFlowJoin()", () => {
         "followRef",
         "labelMetadata",
       ] as const;
+      // A stored entry of the label-metadata origin is a template: keyed
+      // under the label subtree and observed by the `labelMetadata` class.
+      // Any other spelling of that origin makes the envelope unreadable.
       const entries: LabelMapEntry[] = paths.flatMap((path, index) =>
         origins.map((origin, offset): LabelMapEntry => ({
-          path,
+          path: origin === "label-metadata" ? ["cfc", "labels", ...path] : path,
           origin,
-          observes: classes[(index + offset) % classes.length],
+          observes: origin === "label-metadata"
+            ? "labelMetadata"
+            : classes[(index + offset) % classes.length],
           label: {
             confidentiality: ["shared", `entry-${index}-${offset}`],
             integrity: [
