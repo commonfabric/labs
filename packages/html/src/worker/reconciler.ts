@@ -1160,12 +1160,15 @@ export class WorkerReconciler {
       first = false;
       if (
         placeholder !== undefined &&
-        (decision.outOfReach || placeholder.currentChild !== null)
+        (decision.outOfReach !== undefined ||
+          placeholder.currentChild !== null)
       ) {
         this.#reconcileIntoWrapper(
           childCtx,
           placeholder,
-          decision.outOfReach ? this.#accessPlaceholderVNode() : null,
+          decision.outOfReach !== undefined
+            ? this.#accessPlaceholderVNode()
+            : null,
           state.childRenderPolicy,
         );
       }
@@ -1352,11 +1355,12 @@ export class WorkerReconciler {
    * and emits only what the decision changes. The policy has to admit every
    * one of them. `shown` says whether the prop may be showing before the
    * decision, or is undefined when nothing has been shown for it; the result's
-   * `shown` says whether it may be showing after, and its `outOfReach` that
+   * `shown` says whether it may be showing after, and its `outOfReach`, when
    * the prop is refused because the space of the read refusing it is out of
-   * reach. `show` runs when the prop is admitted and either its value
-   * `changed` or it was not showing. A refused prop is removed when it may be
-   * showing, and the refusal reported once per standing block.
+   * reach, is that read's cell. `show` runs when the prop is admitted and
+   * either its value `changed` or it was not showing. A refused prop is
+   * removed when it may be showing, and the refusal reported once per standing
+   * block.
    */
   #admitProp(
     state: NodeState,
@@ -1367,19 +1371,22 @@ export class WorkerReconciler {
     show: () => void,
     watch: FitWatch,
     value: unknown = UNKNOWN_PROP_VALUE,
-  ): { shown: boolean; outOfReach: boolean } {
+  ): { shown: boolean; outOfReach?: Cell<unknown> } {
     const policy = state.renderPolicy;
     // The first read that refuses, with what refused it, and whether its
     // space is in reach: a read whose space is out of reach is refused
     // because it could not complete, which is not a denial to report.
     const firstRefusal = <R>(
       refusalOf: (read: DecidingRead) => R | undefined,
-    ): { refusal: R; reachable: boolean } | undefined => {
+    ):
+      | { refusal: R; source: Cell<unknown>; reachable: boolean }
+      | undefined => {
       for (const read of decidingReads) {
         const refusal = refusalOf(read);
         if (refusal !== undefined) {
           return {
             refusal,
+            source: read.source,
             reachable: this.#cellAccessError(read.source) === undefined,
           };
         }
@@ -1397,7 +1404,7 @@ export class WorkerReconciler {
         : undefined;
     if (refused === undefined && remoteRefused === undefined) {
       if (changed || shown !== true) show();
-      return { shown: true, outOfReach: false };
+      return { shown: true };
     }
     if (shown !== false) {
       if (refused?.reachable === true) {
@@ -1409,9 +1416,10 @@ export class WorkerReconciler {
         this.#queueOps([{ op: "remove-prop", nodeId: state.nodeId, key }]);
       }
     }
+    const refusing = refused ?? remoteRefused;
     return {
       shown: false,
-      outOfReach: (refused ?? remoteRefused)?.reachable === false,
+      outOfReach: refusing?.reachable === false ? refusing.source : undefined,
     };
   }
 
