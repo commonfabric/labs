@@ -34,7 +34,10 @@ import {
   parseCfcLabelReference,
   registerCfcLabelDocument,
 } from "./label-documents.ts";
-import { isLabelMetadataTemplateEntry } from "./label-metadata-population.ts";
+import {
+  isLabelMetadataTemplateEntry,
+  isWellFormedLabelMetadataTemplateEntry,
+} from "./label-metadata-population.ts";
 import { confidentialityOnly, type IFCLabel } from "./label-view-core.ts";
 import { readConsumesEntry } from "./observation-classes.ts";
 import type {
@@ -178,13 +181,21 @@ export const cfcMetadataPresent = (value: unknown): boolean =>
  * `integrity` alone, so a third member is a format this build postdates,
  * and reading the two it knows would silently drop whatever the third
  * carries.
+ *
+ * An entry of the label-metadata template origin that is not keyed and
+ * classed as a template is not readable either. Decoding takes every entry
+ * of that origin out of the payload entries (spec §4.6.4), so reading one
+ * keyed at a payload path would drop the label it carries from every
+ * payload lookup.
  */
 const isReadableStoredEntry = (
   version: StoredCfcMetadata["version"],
   entry: unknown,
 ): boolean =>
   isStoredLabelMapEntry(entry) &&
-  (version === 2 || !isCfcLabelReference(entry.label));
+  (version === 2 || !isCfcLabelReference(entry.label)) &&
+  (!isLabelMetadataTemplateEntry(entry) ||
+    isWellFormedLabelMetadataTemplateEntry(entry));
 
 /**
  * Whether `value` is a stored envelope this build can produce labels from:
@@ -295,7 +306,8 @@ const decodedLabelMaps = new WeakMap<object, CfcMetadata["labelMap"]>();
  * Decodes a stored label map's one list into the payload entries and the
  * document-rooted label-metadata templates (spec §4.6.4), so that no lookup
  * over `entries` can match a template. A list holding no template is kept
- * as it stands.
+ * as it stands. The stored list is the only source of either: a decoded map
+ * carries no other member of the stored one.
  */
 const decodeLabelMap = (
   entries: LabelMapEntry[],
@@ -383,12 +395,17 @@ const resolveStoredLabel = (
 
 /**
  * The resolved form of `stored`: every label inline, whichever version it
- * was stored as. A version-1 envelope already is that form. A version-2
- * envelope resolves each referenced label through `tx` in `space`, under
- * `policy`, throwing {@link UnresolvableCfcLabelDocumentError} for a
- * reference nothing can back — fail closed, never a partially resolved
- * envelope. The result is memoized by the stored `labelMap`'s identity, so
- * a document read many times in a session resolves once.
+ * was stored as, and the label map decoded. A version-1 envelope holds
+ * every label inline already. A version-2 envelope resolves each referenced
+ * label through `tx` in `space`, under `policy`, throwing
+ * {@link UnresolvableCfcLabelDocumentError} for a reference nothing can
+ * back — fail closed, never a partially resolved envelope. The decoded
+ * label map is memoized by the stored `labelMap`'s identity, so a document
+ * read many times in a session resolves once.
+ *
+ * The result is built from the members this reader validated and from
+ * nothing else, so a member a stored envelope carries beside them, such as
+ * a `documentEntries` of its own, is never read as part of the resolved one.
  *
  * Takes an envelope {@link interpretStoredEnvelope} has classified, so
  * every entry is one a label can be produced from.
@@ -399,27 +416,22 @@ const resolveStoredCfcMetadata = (
   stored: StoredCfcMetadata,
   policy: StoredCfcReadPolicy,
 ): CfcMetadata => {
-  if (stored.version === 1) {
-    let labelMap = decodedLabelMaps.get(stored.labelMap);
-    if (labelMap === undefined) {
+  let labelMap = decodedLabelMaps.get(stored.labelMap);
+  if (labelMap === undefined) {
+    if (stored.version === 1) {
       labelMap = decodeLabelMap(stored.labelMap.entries);
       if (isDeepFrozen(stored.labelMap)) {
         decodedLabelMaps.set(stored.labelMap, labelMap);
       }
+    } else {
+      labelMap = decodeLabelMap(
+        stored.labelMap.entries.map((entry) => ({
+          ...entry,
+          label: resolveStoredLabel(tx, space, entry, policy),
+        })),
+      );
+      decodedLabelMaps.set(stored.labelMap, labelMap);
     }
-    return labelMap.documentEntries === undefined
-      ? stored
-      : { version: 1, schemaHash: stored.schemaHash, labelMap };
-  }
-  let labelMap = decodedLabelMaps.get(stored.labelMap);
-  if (labelMap === undefined) {
-    labelMap = decodeLabelMap(
-      stored.labelMap.entries.map((entry) => ({
-        ...entry,
-        label: resolveStoredLabel(tx, space, entry, policy),
-      })),
-    );
-    decodedLabelMaps.set(stored.labelMap, labelMap);
   }
   return {
     version: stored.version,
