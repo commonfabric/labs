@@ -25,6 +25,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import { CfcSchemaMigrationError } from "./migration-reason.ts";
+import { isValueStamp } from "./minted-integrity.ts";
 import {
   cfcSchemaResolvedRoot,
   hoistCfcSchemaDefs,
@@ -264,10 +265,15 @@ const mergeSetLikeIfcArray = (
       // A transaction may combine its symbolic declaration with a concrete
       // label before creator binding. Retain both constraints until prepare
       // binds the symbolic one; accepting the concrete clause cannot remove it.
+      // A value stamp (`addIntegrity`, principal claims excepted) is the
+      // stamping write's own and binds no later writer, so a schema that
+      // names fewer stamps than the stored one weakens nothing.
       const comparableExisting = key === "confidentiality"
         ? existingArray.filter((clause) =>
           !isCurrentPrincipalUserClause(clause)
         )
+        : key === "addIntegrity"
+        ? existingArray.filter((atom) => !isValueStamp(atom))
         : existingArray;
       if (!arraySubsetOf(comparableExisting, candidateArray)) {
         throw new Error(`${key} cannot be weakened at ${path || "/"}`);

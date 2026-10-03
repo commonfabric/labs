@@ -522,12 +522,13 @@ describe("CFOwnerView", () => {
       relabel(label: CfcLabelView): void {
         this.#label = label;
         for (const cell of this.#labelled) {
-          const update: CellUpdateNotification = {
+          // What the worker's host-read gate posts; a test stands in for it.
+          const update = {
             type: NotificationType.CellUpdate,
             cell,
             value: {},
             cfcLabel: label,
-          };
+          } as CellUpdateNotification;
           this.emit("message", update);
         }
       }

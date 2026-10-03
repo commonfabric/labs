@@ -656,6 +656,22 @@ The serialized declared scope (`space`, `user`, `session`, `inherit`, or `any`
 in schema positions) is distinct from `scope_key`. Declared scope is authoring
 and traversal metadata. `scope_key` is the runtime storage address dimension.
 
+Each instance stores its own CFC envelope beside its value. A write that
+narrows a slot's content into a scoped instance records the slot's schema
+policy input at that instance, so its envelope carries the labels the slot's
+schema declares and the write's per-path flow stamps. The flow stamp of a
+whole value a writer set is not recorded there. The broader slot keeps the
+label its own schema declares, beside the redirect.
+
+The cell label views and the runtime read ceiling read a scoped instance's
+labels as its own envelope joined with the confidentiality that a value read
+of each broader instance of the same id consumes: the space instance's for a
+user instance, the user and space instances' for a session instance. Entries
+labeling the pointer the broader slot holds are left out, and integrity comes
+from the instance's own envelope alone. Other readers, among them the flow
+join, the labels a schema read carries across links, dereference traces and
+label introspection, read the instance's own envelope only.
+
 ## Migration And Compatibility
 
 Existing documents and links with no scope metadata must behave as space

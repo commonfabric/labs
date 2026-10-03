@@ -47,7 +47,7 @@ import {
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import { RuntimeTransport } from "./transport.ts";
 import { EventEmitter } from "./emitter.ts";
-import { $onCellUpdate, CellHandle } from "@/cell-handle.ts";
+import { $onCellRefused, $onCellUpdate, CellHandle } from "@/cell-handle.ts";
 import { cellRefToKey } from "@/shared/utils.ts";
 
 const ipcLogger = getLogger("runtime-client");
@@ -416,9 +416,13 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.#recordSubscriptionDiagnostic(key, "localSubscribes");
         instances.add(cell);
         // Copy the cached value (and label) from an existing subscriber to the
-        // new one so late subscribers get the initial value.
+        // new one so late subscribers get the initial value, or the refusal
+        // that stands in its place.
         const existingInstance = instances.values().next().value;
-        if (existingInstance) {
+        const refusal = existingInstance?.refusal;
+        if (refusal !== undefined) {
+          cell[$onCellRefused](refusal);
+        } else if (existingInstance) {
           const cachedValue = existingInstance.get();
           if (cachedValue !== undefined) {
             cell[$onCellUpdate](cachedValue, {
@@ -674,7 +678,16 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
   };
 
   #handleCellUpdate(message: CellUpdateNotification): void {
-    const { cell: cellRef, value } = message;
+    const subscribed = this.#subscribed.get(cellRefToKey(message.cell));
+    if (message.refused !== undefined) {
+      // What each subscriber held of the cell goes, which an `undefined`
+      // value below would leave in place.
+      for (const instance of subscribed ?? []) {
+        instance[$onCellRefused](message.refused);
+      }
+      return;
+    }
+    const value = message.value;
     if (value === undefined) {
       // A value can be reported as `undefined` only when there's been a
       // conflict, and will be followed by the settled value. Ignore
@@ -689,7 +702,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       ? { cfcLabel: message.cfcLabel }
       : undefined;
 
-    const subscribed = this.#subscribed.get(cellRefToKey(cellRef));
     if (subscribed && subscribed.size > 0) {
       for (const instance of subscribed) {
         instance[$onCellUpdate](value, labelUpdate);

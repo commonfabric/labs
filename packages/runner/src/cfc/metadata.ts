@@ -15,6 +15,7 @@
 import { isDeepFrozen } from "@commonfabric/data-model";
 import type { URI } from "@commonfabric/memory/interface";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { CellScope } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
@@ -33,7 +34,8 @@ import {
   parseCfcLabelReference,
   registerCfcLabelDocument,
 } from "./label-documents.ts";
-import type { IFCLabel } from "./label-view-core.ts";
+import { confidentialityOnly, type IFCLabel } from "./label-view-core.ts";
+import { readConsumesEntry } from "./observation-classes.ts";
 import type {
   CfcMetadata,
   LabelMapEntry,
@@ -426,6 +428,93 @@ export const readStoredCfcMetadata = (
   return stored === undefined
     ? undefined
     : resolveStoredCfcMetadata(tx, target.space, stored, policy);
+};
+
+/** The labels {@link readStoredCfcLabelsForReader} answers with. */
+export type StoredCfcLabels = Pick<CfcMetadata, "labelMap">;
+
+/**
+ * The instances of a document broader than an instance of each scope: a user
+ * instance's space instance, and a session instance's user and space ones.
+ */
+const BROADER_SCOPES: Readonly<Record<CellScope, readonly CellScope[]>> = {
+  space: [],
+  user: ["space"],
+  session: ["user", "space"],
+};
+
+/**
+ * What a broader instance's `entry` restricts for a reader of the narrower
+ * instance's content: nothing where a value read does not consume the entry,
+ * else the entry with its confidentiality alone.
+ */
+const readerRestrictionOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
+  if (!readConsumesEntry("value", entry)) return [];
+  const label = confidentialityOnly(entry.label);
+  return label === undefined ? [] : [{ ...entry, label }];
+};
+
+/**
+ * The labels a reader of `target`'s instance answers to: the envelope that
+ * instance stores, joined with the confidentiality a value read of each
+ * broader instance of the same document consumes. `undefined` where none of
+ * them stores a label.
+ *
+ * The space, user and session instances of one id are instances of one cell
+ * (`docs/specs/scoped-cell-instances.md`), each holding a value and an
+ * envelope of its own, and a narrower instance's content is reached through
+ * the broader instance's slot. Reading it needs both authorizations: the
+ * reader must meet the broader instance's confidentiality as well as the
+ * narrower one's, the conjunction CFC asks of per-user content reached
+ * through a shared slot (§4.9.4). A reader that holds the narrower instance
+ * directly therefore answers to the broader instance's confidentiality too.
+ * That also covers an instance a narrowed write left before such writes
+ * stamped the instance's own envelope, which stores none of the labels its
+ * slot's schema declares.
+ *
+ * From each broader instance, the entries a value read consumes are joined:
+ * covering entries and the content classes, declared and derived alike, since
+ * the broader instance can hold a stamp the narrower one lacks, such as the
+ * flow stamp of the whole value a writer set. An entry for the pointer the
+ * broader slot holds (a `followRef` entry, a link-origin one included) is left
+ * out. It copies the labels of the instance the redirect's writer narrowed
+ * into, and every user's redirect is that one stored link, so it speaks for
+ * whichever user's write stored it, not for this instance's content, whose
+ * labels its own envelope and the joined declared entries carry. A read that
+ * resolves the redirect does measure that pointer, so it can refuse what a
+ * read of this instance admits; that over-taint predates this rule.
+ *
+ * Integrity is the instance's own. It speaks for whoever wrote the value, and
+ * whoever wrote the broader instance did not write this one: a claim stored
+ * there would otherwise vouch for a later, less trusted write here.
+ *
+ * Paths line up across the instances, since narrowed content sits at the path
+ * of the slot that redirects to it. Each envelope is read as
+ * {@link readStoredCfcMetadata} reads it, so one this build cannot interpret,
+ * on any of the instances, fails the read. A space-scoped target answers with
+ * its own envelope, unchanged. This is a reader's answer, not an envelope:
+ * what merges into or rewrites an instance's envelope reads that envelope
+ * alone, through {@link readStoredCfcMetadata}. The readers that answer to it
+ * are the cell label views and the runtime read ceiling; the flow join reads
+ * an instance's own envelope.
+ */
+export const readStoredCfcLabelsForReader = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+): StoredCfcLabels | undefined => {
+  const own = readStoredCfcMetadata(tx, target);
+  const broader = BROADER_SCOPES[normalizeCellScope(target.scope)].flatMap(
+    (scope) =>
+      readStoredCfcMetadata(tx, { ...target, scope })?.labelMap.entries
+        .flatMap(readerRestrictionOfEntry) ?? [],
+  );
+  if (broader.length === 0) return own;
+  return {
+    labelMap: {
+      version: 1,
+      entries: [...(own?.labelMap.entries ?? []), ...broader],
+    },
+  };
 };
 
 /**

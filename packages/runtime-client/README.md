@@ -18,6 +18,31 @@ option should continue observing `RuntimeClient.hasPendingWrites()` and
 covers pending pattern work as well as commits. Operations that require
 durability should retain the default pull.
 
+## Refused reads
+
+The worker builds every answer to a host's read of a cell's value, whether
+`CellHandle.sync()`, `pull()`, `initialize()` or a subscription's update, in one
+place, `HostReadGate`, which decides what of the cell the host may see. An
+answer is either the value or a `CellReadRefusal` that stands in its place; a
+refusal carries nothing of the cell, and is never an empty value, so a read the
+host could not make never reads as a cell that holds nothing.
+
+A handle holds a refusal in place of a value. `refusal` and `lastRead()` report
+it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()` and `initialize()`
+reject with it. A subscriber hears each refusal through the `onRefused` option
+of `subscribe()`, which runs at once for a handle already refused, and its value
+callback never receives one. The next admitted value, or a value the host
+writes, ends the refusal.
+
+The worker builds its gate with no display ceiling, so it refuses no read.
+
+Every request and notification the worker sends is classified in
+`REQUEST_DISPOSITIONS` and `NOTIFICATION_DISPOSITIONS`: decided by the gate,
+rendered, carrying no cell value, a reference, a trusted operation, or ungated.
+The answers of the channels marked as decided carry a mark only the gate gives
+them, and a type-level check holds the tables to it, so a new channel fails to
+type-check until it says how it stands.
+
 ## Diagnosing pending writes
 
 `RuntimeClient.getStorageDiagnostics()` asks the worker for a current storage

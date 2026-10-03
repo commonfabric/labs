@@ -5,17 +5,33 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
+import { nothing } from "lit";
 
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
+import { componentReadContracts } from "@commonfabric/runner/component-read-contract";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { $conn, isCellHandle } from "@commonfabric/runtime-client";
 
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import { CFPicker } from "./index.ts";
+
+/** The text of a Lit template and every template nested in its values. */
+function templateText(node: unknown): string {
+  const template = node as { strings?: unknown; values?: unknown[] };
+  if (!Array.isArray(template?.strings)) {
+    return node === null || node === undefined ? "" : String(node);
+  }
+  return template.strings.map((part, index) =>
+    part +
+    (index < (template.values?.length ?? 0)
+      ? templateText(template.values?.[index])
+      : "")
+  ).join("");
+}
 
 describe("CFPicker", () => {
   it("should be defined", () => {
@@ -61,6 +77,37 @@ describe("CFPicker", () => {
     const element = new CFPicker();
     element.minHeight = "300px";
     expect(element.minHeight).toBe("300px");
+  });
+
+  it("shows nothing while no items are bound, and its empty state for an empty list", () => {
+    // A view's render policy withholds an `items` binding the viewer may not
+    // see, and then no items arrive.
+    const element = new CFPicker();
+    expect(element.render()).toBe(nothing);
+    element.items = [];
+    element.willUpdate(new Map([["items", undefined]]));
+    expect(templateText(element.render())).toContain("No items");
+  });
+
+  it("reads its items as its component read contract says it does", () => {
+    // The reconciler decides the `$items` binding on this read, and on each
+    // item read as the `cf-render` it is handed to reads its cell, so the
+    // contract has to name the read the picker makes.
+    const { cell } = createRenderableCellHandle<unknown[]>([]);
+    const subscribed = spy(cell.runtime()[$conn](), "subscribe");
+    const element = new CFPicker();
+    element.items = cell;
+    try {
+      element.willUpdate(new Map([["items", undefined]]));
+      expect(subscribed.calls).toHaveLength(1);
+      expect(subscribed.calls[0].args[0].ref().schema).toEqual(
+        componentReadContracts["cf-picker"].items.schema,
+      );
+    } finally {
+      element.items = [];
+      element.willUpdate(new Map([["items", cell]]));
+      subscribed.restore();
+    }
   });
 
   it("subscribes to opaque items and keeps the selected item addressable", async () => {

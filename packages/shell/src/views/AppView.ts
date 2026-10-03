@@ -25,6 +25,7 @@ import { property, state } from "lit/decorators.js";
 import { CellEventTarget, CellUpdateEvent } from "../lib/cell-event-target.ts";
 import { DebuggerController } from "../lib/debugger-controller.ts";
 import { GlobalShortcutsController } from "../lib/global-shortcuts-controller.ts";
+import { deliverOpenPath } from "../lib/open-path.ts";
 import {
   RuntimeInternals,
   type SlugReferenceRefusal,
@@ -418,7 +419,7 @@ export class XAppView extends BaseView {
   });
 
   /**
-   * Whether the one-shot `?path=` deep link has been delivered; set after the
+   * Whether the one-shot `?path=` deep link has been delivered; set at the
    * first send so slug re-resolutions and task reruns never re-fire it.
    */
   #openPathDelivered = false;
@@ -426,22 +427,26 @@ export class XAppView extends BaseView {
   /** Deliver a `?path=` deep link into the loaded piece, once.
    *
    * Opt-in by contract: the piece must export an `openPath` stream on its
-   * result (e.g. Mobile Loom opens the given cabinet path in its page
-   * viewer). Pieces without the stream are untouched — the field simply
-   * goes undelivered. Fire-and-forget; a failed send must never affect
-   * pattern loading. */
-  #maybeDeliverOpenPath(pattern: PieceHandle<NameSchema>): void {
+   * result (`deliverOpenPath()`). A piece that exports none, or whose
+   * `openPath` is not a stream, is not written to, and nor is one whose field
+   * the display ceiling keeps from the shell. The link is claimed only once
+   * the answer is in, so a rerun that asked meanwhile, or a selection that
+   * moved on, sends nothing. Fire-and-forget; a failed send must never
+   * affect pattern loading. */
+  #maybeDeliverOpenPath(
+    pattern: PieceHandle<NameSchema>,
+    signal: AbortSignal,
+  ): void {
     if (this.#openPathDelivered) return;
     const view = this.app?.view;
     if (!view || !("openPath" in view) || !view.openPath) return;
-    const data = pattern.cell().get() as Record<string, unknown> | undefined;
-    if (!data || typeof data !== "object" || !("openPath" in data)) return;
-    this.#openPathDelivered = true;
-    (pattern.cell() as unknown as {
-      key(k: string): { send(v: unknown): Promise<void> };
-    })
-      .key("openPath")
-      .send({ path: view.openPath });
+    deliverOpenPath(pattern.cell(), view.openPath, () => {
+      if (signal.aborted || this.#openPathDelivered) return false;
+      this.#openPathDelivered = true;
+      return true;
+    }).catch((error) => {
+      console.error("[AppView] Failed to deliver the deep link:", error);
+    });
   }
 
   _selectedPattern = new Task(this, {
@@ -537,7 +542,7 @@ export class XAppView extends BaseView {
           // answer, and saying so with another's identity is how a slow load
           // came to claim a newer answer was on screen.
           this.#markShown(reference, landed, signal);
-          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern);
+          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern, signal);
           return pattern;
         }
         if ("pieceId" in app.view && app.view.pieceId) {
@@ -557,7 +562,7 @@ export class XAppView extends BaseView {
           if (!signal.aborted && slug) {
             this.#replacePieceUrlWithSlug(app.view, slug);
           }
-          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern);
+          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern, signal);
           return pattern;
         }
       } catch (error) {

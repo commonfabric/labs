@@ -128,6 +128,7 @@ describe("deriveFlowJoin()", () => {
         derived: true,
         structure: true,
         link: true,
+        minted: true,
         "external-ingest": true,
         "label-metadata": true,
       };

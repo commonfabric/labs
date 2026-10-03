@@ -2603,6 +2603,254 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("persists a narrowed write's CFC metadata on the scoped instance it lands in", async () => {
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const tx = runtime.edit();
+      tx.setCfcEnforcementMode("enforce-explicit");
+      // Written through the space instance: `notes` narrows into the user
+      // instance, and the space slot keeps a redirect to it.
+      const cell = runtime.getCell(
+        signer.did(),
+        "cfc-scoped-narrowed-write",
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            notes: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          },
+        },
+        tx,
+      );
+      cell.set({ title: "t", notes: "hello" });
+      tx.prepareCfc();
+      expect((await tx.commit()).ok).toBeDefined();
+      const id = parseLink(cell.getAsLink()).id!;
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string, scope?: "space" | "user" | "session"): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: unknown[] } };
+        } | undefined;
+      };
+      const scopedPersisted = replica.getDocument(id, "user");
+      const spacePersisted = replica.getDocument(id, "space");
+      const declared = {
+        path: ["notes"],
+        label: { confidentiality: ["secret"], integrity: ["trusted"] },
+        origin: "declared",
+      };
+
+      expect(scopedPersisted?.value).toEqual({ notes: "hello" });
+      expect(scopedPersisted?.cfc?.labelMap?.entries).toEqual([declared]);
+      // The space slot keeps the label its own input declares, beside the
+      // redirect's link entry.
+      expect(spacePersisted?.cfc?.labelMap?.entries).toContainEqual(declared);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("commits an element narrowed into a scoped instance again once that instance holds the array", async () => {
+    // The first write creates the user instance's array; its envelope spells
+    // the array as one, so the next write's input, at the array the
+    // instance now holds, merges with it.
+    const { runtime, storageManager } = createRuntime();
+    try {
+      const schema = {
+        type: "object",
+        properties: {
+          list: {
+            type: "array",
+            items: {
+              type: "string",
+              scope: "user",
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+        },
+      } as const satisfies JSONSchema;
+      let id = "";
+      for (const list of [["a"], ["a", "b"]]) {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-explicit");
+        const cell = runtime.getCell(
+          signer.did(),
+          "cfc-scoped-narrowed-elements",
+          schema,
+          tx,
+        );
+        cell.set({ list });
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+        id = parseLink(cell.getAsLink()).id!;
+      }
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string, scope?: "space" | "user" | "session"): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: unknown[] } };
+        } | undefined;
+      };
+      const scopedPersisted = replica.getDocument(id, "user");
+      expect(scopedPersisted?.value).toEqual({ list: ["a", "b"] });
+      expect(scopedPersisted?.cfc?.labelMap?.entries).toEqual([{
+        path: ["list", "*"],
+        label: { confidentiality: ["secret"] },
+        origin: "declared",
+      }]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  describe("an item write under a missing container the stored envelope describes as an object", () => {
+    // The envelope declares `list` by its members, with no `type`, and `list`
+    // is missing. A write at `list/0` is answered by the declaration of
+    // member `0`, as for any object, whatever the storage write creates for
+    // the missing container.
+    const member = {
+      type: "string",
+      ifc: { confidentiality: ["secret"] },
+    } as const satisfies JSONSchema;
+    const containers: Record<string, JSONSchema> = {
+      "properties": { properties: { "0": member } },
+      "additionalProperties": { additionalProperties: member },
+      "a reference to its properties": { $ref: "#/$defs/Members" },
+    };
+
+    const refusalOfItemWrite = async (
+      container: JSONSchema,
+      itemSchema: JSONSchema,
+      item: string | number,
+    ): Promise<string | undefined> => {
+      // The runtime's default posture: the characterization posture this
+      // suite's other cases use turns the merge's checks off.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const seed = runtime.edit();
+        const doc = runtime.getCell(
+          signer.did(),
+          "cfc-missing-member-container",
+          {
+            type: "object",
+            properties: {
+              // A labeled sibling, so the document stores an envelope.
+              title: { type: "string", ifc: { confidentiality: ["title"] } },
+              list: container,
+            },
+            $defs: { Members: { properties: { "0": member } } },
+          },
+          seed,
+        );
+        doc.set({ title: "t" });
+        expect((await seed.commit()).error).toBeUndefined();
+
+        const tx = runtime.edit();
+        runtime.getCellFromLink(
+          { ...doc.getAsNormalizedFullLink(), path: ["list", "0"] },
+          itemSchema,
+          tx,
+        ).set(item);
+        return (await tx.commit()).error?.message;
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    for (const [shape, container] of Object.entries(containers)) {
+      it(`keeps a member's confidentiality (${shape})`, async () => {
+        expect(
+          await refusalOfItemWrite(container, {
+            type: "string",
+            ifc: { confidentiality: ["other"] },
+          }, "x"),
+        ).toMatch(/confidentiality cannot be weakened at \/list\/0/);
+      });
+
+      it(`keeps a member's type (${shape})`, async () => {
+        expect(
+          await refusalOfItemWrite(container, {
+            type: "number",
+            ifc: { confidentiality: ["secret"] },
+          }, 1),
+        ).toMatch(/type changed incompatibly at \/list\/0/);
+      });
+    }
+  });
+
+  it("lifts an item write to a missing container the stored envelope gives only annotations", async () => {
+    // `list` is declared by its label, a description and a default alone,
+    // which constrain no shape, so the storage write's array answers: the
+    // first item write's input lands at the array, and the next item write,
+    // at the array the document then holds, merges with it.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const seed = runtime.edit();
+      const doc = runtime.getCell(
+        signer.did(),
+        "cfc-missing-annotated-container",
+        {
+          type: "object",
+          properties: {
+            // A labeled sibling, so the document stores an envelope.
+            title: { type: "string", ifc: { confidentiality: ["title"] } },
+            list: {
+              description: "labeled, shapeless",
+              ifc: { confidentiality: ["secret"] },
+            },
+          },
+        },
+        seed,
+      );
+      doc.set({ title: "t" });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const item = {
+        type: "string",
+        ifc: { confidentiality: ["secret"] },
+      } as const satisfies JSONSchema;
+      for (const [index, value] of [["0", "a"], ["1", "b"]]) {
+        const tx = runtime.edit();
+        runtime.getCellFromLink(
+          { ...doc.getAsNormalizedFullLink(), path: ["list", index] },
+          item,
+          tx,
+        ).set(value);
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+
+      const replica = storageManager.open(signer.did()).replica as unknown as {
+        getDocument(id: string): {
+          value?: unknown;
+          cfc?: { labelMap?: { entries: { path: string[] }[] } };
+        } | undefined;
+      };
+      const persisted = replica.getDocument(parseLink(doc.getAsLink()).id!);
+      expect(persisted?.value).toEqual({ title: "t", list: ["a", "b"] });
+      expect(persisted?.cfc?.labelMap?.entries.map((entry) => entry.path))
+        .toContainEqual(["list", "*"]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("persists CFC metadata for stored link writes without link schema", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
@@ -5629,7 +5877,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("persists only concrete evidence and addIntegrity in output metadata", async () => {
+  it("persists only concrete evidence and `addIntegrity` in output metadata, each in its own component", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -5726,16 +5974,18 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         } | undefined;
       };
       const persisted = replica.getDocument(parseLink(output.getAsLink()).id!);
-      expect(persisted?.cfc?.labelMap?.entries).toContainEqual({
-        path: ["value"],
-        label: {
-          integrity: [
-            "target-integrity",
-            "derived-integrity",
-          ],
+      expect(persisted?.cfc?.labelMap?.entries).toEqual([
+        {
+          path: ["value"],
+          label: { integrity: ["target-integrity"] },
+          origin: "declared",
         },
-        origin: "declared",
-      });
+        {
+          path: ["value"],
+          label: { integrity: ["derived-integrity"] },
+          origin: "minted",
+        },
+      ]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

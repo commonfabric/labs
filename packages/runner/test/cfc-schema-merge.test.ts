@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { JSONSchemaObj } from "../src/builder/types.ts";
+import type { CfcAtom } from "@commonfabric/api/cfc";
+import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import {
   cfcSchemaMergeIssue,
   cfcSchemaPoliciesEqual,
@@ -288,6 +289,38 @@ describe("mergeCfcSchemaEnvelopes", () => {
         },
       })
     ).toThrow(/maxConfidentiality/i);
+  });
+
+  it("merges a schema naming other value stamps than the first, keeping both", () => {
+    // A value stamp is the stamping write's own, so naming fewer than an
+    // earlier schema did weakens nothing.
+    const stamping = (...addIntegrity: CfcAtom[]): JSONSchema => ({
+      type: "object",
+      properties: { note: { type: "string", ifc: { addIntegrity } } },
+    });
+    const merged = mergeCfcSchemaEnvelopes(
+      stamping("reviewed"),
+      stamping("checked"),
+    );
+
+    expect(
+      ((merged as JSONSchemaObj).properties?.note as JSONSchemaObj).ifc
+        ?.addIntegrity,
+    ).toEqual(["reviewed", "checked"]);
+  });
+
+  it("throws when a schema leaves out a principal claim the first names in `addIntegrity`", () => {
+    const claiming = (...addIntegrity: CfcAtom[]): JSONSchema => ({
+      type: "object",
+      properties: { note: { type: "string", ifc: { addIntegrity } } },
+    });
+
+    expect(() =>
+      mergeCfcSchemaEnvelopes(
+        claiming({ kind: "authored-by", subject: "did:key:author" }),
+        claiming("checked"),
+      )
+    ).toThrow(/addIntegrity cannot be weakened/);
   });
 
   it("merges compatible set-like ifc labels", () => {

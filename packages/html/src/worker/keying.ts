@@ -95,12 +95,11 @@ export function generateKey(node: unknown): string {
  * Helper for `generateKey()`, which keys a node the hash refuses.
  * Nodes sharing a fallback key are told apart only by their position among
  * their siblings, so what it costs is the reuse of a DOM node that moved.
+ * Only an object or an array is refused: every other value, and a cell, which
+ * is keyed by its link, hashes.
  */
 function generateFallbackKey(node: unknown): string {
-  if (node === null || node === undefined) return "@@null";
-  if (typeof node !== "object") return `@@${typeof node}:${String(node)}`;
   if (Array.isArray(node)) return `@@array:${node.length}`;
-  if (isCell(node)) return "@@cell";
   const name = (node as { name?: unknown }).name;
   return typeof name === "string" ? `@@vnode:${name}` : "@@object";
 }
