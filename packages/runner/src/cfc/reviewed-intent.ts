@@ -4,9 +4,9 @@
  * identity, stating that the authenticated actor released exactly these
  * parameters to exactly these destinations, recently, once. An application
  * that acts outside the fabric on the actor's behalf (the consumer) publishes
- * a descriptor of what it accepts; the host previews the destinations the
- * pattern binds against it, and a trusted gesture on the host's surface
- * commits the record. This module is absent from authored pattern imports.
+ * a descriptor of what it accepts; the host previews the cells the pattern
+ * binds against it, and a trusted gesture on the host's surface commits the
+ * record. This module is absent from authored pattern imports.
  *
  * The record is what a consumer acts on, and {@link verifyReviewedIntentRecord}
  * is how it tells a record this module wrote from one a pattern wrote. The
@@ -52,7 +52,7 @@ export const REVIEWED_INTENT_WRITER = "cfc-reviewed-intent";
 /** The `provenance.ui.pattern` mark of the host's commit gesture. */
 export const REVIEWED_INTENT_GESTURE = "ReviewedIntent";
 
-/** The host surface a record names as its evidence. */
+/** The host surface a record names in its `evidence`. */
 export const REVIEWED_INTENT_COMPONENT = "cf-reviewed-intent";
 
 /**
@@ -79,6 +79,13 @@ export interface ReviewedIntentDestinationsParameter {
 
   /** Most destinations a record carries for this key; at least 1. */
   readonly max: number;
+
+  /**
+   * Atom patterns each destination's stored integrity must satisfy together,
+   * as one conjunction whose variables are shared across the patterns. At
+   * least one.
+   */
+  readonly integrity: readonly AtomPattern[];
 }
 
 /** A declared parameter whose value is text the actor enters on the surface. */
@@ -116,13 +123,6 @@ export interface ReviewedIntentDescriptor {
   readonly parameters: Readonly<Record<string, ReviewedIntentParameter>>;
 
   /**
-   * Atom patterns every destination's stored integrity must satisfy together,
-   * as one conjunction with shared variables. Nonempty when any parameter is
-   * of kind `destinations`.
-   */
-  readonly destinationIntegrity: readonly AtomPattern[];
-
-  /**
    * How long after the gesture a record is good for, in milliseconds. A record
    * takes the smaller of this and {@link SHORT_INTENT_WINDOW_MS}.
    */
@@ -132,13 +132,28 @@ export interface ReviewedIntentDescriptor {
   readonly maxAttempts: number;
 }
 
-/** A destination as reviewed: its stored value and the integrity it carries. */
+/** A storage location: a document, its scope, and a path in its value. */
+export interface ReviewedLocation {
+  readonly space: string;
+  readonly id: string;
+  readonly scope: string;
+  readonly path: readonly string[];
+}
+
+/** A destination as reviewed. */
 export interface ReviewedDestination {
-  /** The destination cell's stored value, exactly as the surface shows it. */
+  /** The destination's stored value, exactly as the surface shows it. */
   readonly address: JSONValue;
 
-  /** The atoms of the destination's stored integrity the descriptor names. */
+  /**
+   * The atoms of the destination's stored integrity that satisfied its
+   * parameter's patterns: one per pattern, under the first binding of their
+   * variables that satisfies them all.
+   */
   readonly integrity: readonly CfcAtom[];
+
+  /** Where the destination's cell resolved, for a consumer to resolve again. */
+  readonly source: ReviewedLocation;
 }
 
 /** The cells a pattern binds for one reviewed intent. */
@@ -147,10 +162,11 @@ export interface ReviewedIntentBindings {
   readonly descriptor: Cell<unknown>;
 
   /**
-   * The destination cells for each declared `destinations` parameter, in the
-   * order the record lists them.
+   * The cells bound for each declared parameter whose kind takes cells, in
+   * the order the record lists them. A `destinations` parameter takes its
+   * destinations; a `text` parameter takes none.
    */
-  readonly destinations: Readonly<Record<string, readonly Cell<unknown>[]>>;
+  readonly parameters: Readonly<Record<string, readonly Cell<unknown>[]>>;
 
   /**
    * The pattern's cell that receives a link to the committed record. Its write
@@ -170,6 +186,21 @@ export interface ReviewedIntentConsent {
   readonly [consentBrand]: true;
 }
 
+/** One declared parameter as the surface shows it. */
+export type ReviewedParameterPreview =
+  | {
+    readonly kind: "destinations";
+
+    /** The destinations, as the record carries them. */
+    readonly destinations: readonly ReviewedDestination[];
+  }
+  | {
+    readonly kind: "text";
+
+    /** The bound on the text the surface's field takes. */
+    readonly maxLength: number;
+  };
+
 /** Frozen preview for the trusted host's surface. */
 export interface PreparedReviewedIntent {
   /** The authenticated actor the record names as its subject. */
@@ -187,13 +218,8 @@ export interface PreparedReviewedIntent {
   /** The descriptor's digest, which the record carries as `endpoint`. */
   readonly endpoint: string;
 
-  /** Every `destinations` parameter, as the record carries it. */
-  readonly destinations: Readonly<
-    Record<string, readonly ReviewedDestination[]>
-  >;
-
-  /** Every `text` parameter, for the field the surface draws for it. */
-  readonly text: Readonly<Record<string, { readonly maxLength: number }>>;
+  /** Every declared parameter, by key. */
+  readonly parameters: Readonly<Record<string, ReviewedParameterPreview>>;
 
   /** How long after the gesture the record is good for, in milliseconds. */
   readonly windowMs: number;
@@ -205,14 +231,18 @@ export interface PreparedReviewedIntent {
   readonly consent: ReviewedIntentConsent;
 }
 
-/** What the actor entered on the surface, given to the commit. */
-export interface ReviewedIntentInput {
-  /** The text of every declared `text` parameter, and nothing else. */
-  readonly text: Readonly<Record<string, string>>;
-}
+/**
+ * What the actor entered on the surface, given to the commit: the value of
+ * every declared parameter the actor types, by key, and nothing else.
+ */
+export type ReviewedIntentInput = Readonly<Record<string, string>>;
 
 /**
- * The record a commit writes, as a consumer that verified it acts on it.
+ * The record a commit writes, as a consumer that verified it acts on it. The
+ * members are a closed set a reader must understand: a new constraint arrives
+ * through the descriptor, which the consumer wrote, not as a new member.
+ * `evidence` alone is open, and a reader ignores members of it it does not
+ * know.
  */
 export interface ReviewedIntentRecord {
   /** The descriptor's `operation`. */
@@ -232,10 +262,12 @@ export interface ReviewedIntentRecord {
    * destinations, a `text` parameter as the text entered.
    *
    * The stored record holds this as its JSON text with sorted keys, a leaf,
-   * and {@link verifyReviewedIntentRecord} returns it parsed. The runtime
-   * stores an object inside an array as a document of its own, which the
-   * record's root stamp would not cover; a leaf keeps every parameter inside
-   * the one document the stamp vouches for.
+   * and {@link verifyReviewedIntentRecord} returns it parsed. A writer claim
+   * governs the location it is declared at and not the locations below it, so
+   * a leaf is one location the record's claim covers whole. And a host's cell
+   * is made inside a builder frame, which every runtime pushes, so a write
+   * through it stores a plain object inside an array as a document of its own,
+   * which the record's root stamp would not cover.
    */
   readonly parameters: Readonly<
     Record<string, string | readonly ReviewedDestination[]>
@@ -244,7 +276,10 @@ export interface ReviewedIntentRecord {
   /** The data-model digest of `parameters`. */
   readonly payloadDigest: string;
 
-  /** Unique to the consent; what a consumer keys its delivery attempts on. */
+  /**
+   * A random value unique to the consent. It is the record's identity for a
+   * consumer's attempts, and its address derives from it.
+   */
   readonly idempotencyKey: string;
 
   /** When the commit wrote the record, in milliseconds since the epoch. */
@@ -256,11 +291,8 @@ export interface ReviewedIntentRecord {
   /** The descriptor's `maxAttempts`. */
   readonly maxAttempts: number;
 
-  /** The surface and the host event the gesture was made on. */
-  readonly evidence: {
-    readonly component: string;
-    readonly event: string;
-  };
+  /** Informational: the surface the gesture was made on. */
+  readonly evidence: Readonly<Record<string, JSONValue>>;
 }
 
 /** What a commit wrote. */
@@ -270,14 +302,6 @@ export interface ReviewedIntentResult {
 
   /** The actor-private receipt, in the actor's home space. */
   readonly receipt: Cell<unknown>;
-}
-
-/** A storage address compared by space, id, scope and path. */
-interface ReviewedAddress {
-  readonly space: string;
-  readonly id: string;
-  readonly scope: string;
-  readonly path: readonly string[];
 }
 
 /** A read whose content the record's transaction verifies. */
@@ -291,10 +315,9 @@ interface Inspection {
   readonly actor: string;
   readonly descriptor: ReviewedIntentDescriptor;
   readonly endpoint: string;
-  readonly descriptorAddress: ReviewedAddress;
-  readonly destinations: Record<string, ReviewedDestination[]>;
-  readonly destinationAddresses: Record<string, ReviewedAddress[]>;
-  readonly resultAddress: ReviewedAddress;
+  readonly descriptorLocation: ReviewedLocation;
+  readonly bound: Record<string, ReviewedDestination[]>;
+  readonly resultLocation: ReviewedLocation;
   readonly confidentiality: readonly CfcConfClause[];
   readonly evidence: readonly ReadEvidence[];
 }
@@ -302,7 +325,6 @@ interface Inspection {
 /** Runtime-owned state behind an opaque consent token. */
 interface ConsentState extends Inspection {
   readonly bindings: ReviewedIntentBindings;
-  readonly eventId: string;
   readonly idempotencyKey: string;
 }
 
@@ -313,7 +335,6 @@ const STALE_REVIEW =
 
 const DESCRIPTOR_KEYS = [
   "consumer",
-  "destinationIntegrity",
   "endpointName",
   "maxAttempts",
   "operation",
@@ -373,10 +394,13 @@ const parseParameter = (
   value: unknown,
 ): ReviewedIntentParameter => {
   if (isObjectNotArray(value) && value.kind === "destinations") {
+    const { min, max, integrity } = value;
     if (
-      hasExactKeys(value, ["kind", "max", "min"]) && isCount(value.min) &&
-      isPositiveInteger(value.max) && value.min <= value.max
-    ) return { kind: "destinations", min: value.min, max: value.max };
+      hasExactKeys(value, ["integrity", "kind", "max", "min"]) &&
+      isCount(min) && isPositiveInteger(max) && min <= max &&
+      Array.isArray(integrity) && integrity.length > 0 &&
+      integrity.every(isAtomPattern)
+    ) return { kind: "destinations", min, max, integrity: [...integrity] };
   } else if (isObjectNotArray(value) && value.kind === "text") {
     if (
       hasExactKeys(value, ["kind", "maxLength"]) &&
@@ -393,8 +417,7 @@ const parseParameter = (
  * consumer should before publishing one.
  *
  * @throws If `value` is not a descriptor: a member is missing, malformed, or
- *   not one this build knows, or a `destinations` parameter is declared with
- *   no destination integrity.
+ *   not one this build knows.
  */
 export function parseReviewedIntentDescriptor(
   value: unknown,
@@ -411,7 +434,6 @@ export function parseReviewedIntentDescriptor(
     endpointName,
     consumer,
     parameters,
-    destinationIntegrity,
     windowMs,
     maxAttempts,
   } = value;
@@ -435,34 +457,27 @@ export function parseReviewedIntentDescriptor(
   for (const [key, declared] of Object.entries(parameters)) {
     parsed[key] = parseParameter(key, declared);
   }
-  if (
-    !Array.isArray(destinationIntegrity) ||
-    !destinationIntegrity.every(isAtomPattern) ||
-    (destinationIntegrity.length === 0 &&
-      Object.values(parsed).some((entry) => entry.kind === "destinations"))
-  ) {
-    throw new Error(
-      "Reviewed intent descriptor requires `destinationIntegrity` to be atom patterns, at least one when it declares destinations",
-    );
-  }
   return {
     operation,
     endpointName,
     consumer,
     parameters: parsed,
-    destinationIntegrity: [...destinationIntegrity],
     windowMs,
     maxAttempts,
   };
 }
 
-/** The digest a record carries as `endpoint` for `descriptor`. */
+/**
+ * The digest a record carries as `endpoint` for `descriptor`: the data-model
+ * hash `hashStringOf`, whose bytes
+ * `docs/specs/space-model-formal-spec/2-hash-byte-format.md` specifies.
+ */
 export const reviewedIntentEndpoint = (
   descriptor: ReviewedIntentDescriptor,
 ): string => hashStringOf(descriptor as unknown as JSONValue);
 
-/** `link`'s address, with the scope normalized and nothing else. */
-const addressOf = (link: NormalizedFullLink): ReviewedAddress => ({
+/** `link`'s location, with the scope normalized and nothing else. */
+const locationOf = (link: NormalizedFullLink): ReviewedLocation => ({
   space: link.space,
   id: link.id,
   scope: normalizeCellScope(link.scope),
@@ -493,7 +508,7 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
 };
 
 /**
- * `value` as a frozen-ready JSON copy.
+ * `value` as a JSON copy.
  *
  * @throws If `value` holds a cell reference, a cycle, or anything else that
  *   is not JSON, naming `what` it was read as.
@@ -536,14 +551,38 @@ const storedIntegrity = (
     .flatMap((entry) => entry.label.integrity ?? []);
 
 /**
+ * The atoms of `carried` that satisfy `patterns`: one per pattern, the first
+ * consistent with the first binding of the patterns' variables that satisfies
+ * them all, or `undefined` when no binding does.
+ */
+const satisfyingAtoms = (
+  patterns: readonly AtomPattern[],
+  carried: readonly CfcAtom[],
+): CfcAtom[] | undefined => {
+  const [binding] = matchAtomPatternConjunction(patterns, carried);
+  if (binding === undefined) return undefined;
+  const chosen: CfcAtom[] = [];
+  for (const pattern of patterns) {
+    const atom = carried.find((candidate) =>
+      matchAtomPattern(pattern, candidate, binding) !== null
+    )!;
+    if (!chosen.some((existing) => deepEqual(existing, atom))) {
+      chosen.push(atom);
+    }
+  }
+  return chosen;
+};
+
+/**
  * Reads one destination: its stored value, which is all the surface shows of
- * it, and the atoms of its stored integrity the descriptor's patterns name.
+ * it, the atoms of its stored integrity that satisfy `patterns`, and where it
+ * is.
  */
 const readDestination = (
   tx: IExtendedStorageTransaction,
   cell: Cell<unknown>,
   patterns: readonly AtomPattern[],
-): { destination: ReviewedDestination; address: ReviewedAddress } => {
+): ReviewedDestination => {
   const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
   // Read as stored, so that a link inside the value is refused rather than
   // followed: the integrity covers this document, not one it links to.
@@ -552,18 +591,17 @@ const readDestination = (
     throw new Error("Reviewed intent refuses a destination that holds nothing");
   }
   const address = reviewedJson(stored, "destination");
-  const carried = storedIntegrity(tx, link);
-  if (matchAtomPatternConjunction(patterns, carried).length === 0) {
+  const integrity = satisfyingAtoms(patterns, storedIntegrity(tx, link));
+  if (integrity === undefined) {
     throw new Error(
       debugStr`Reviewed intent refuses a destination without the integrity its descriptor requires: $quote,long${address}`,
     );
   }
-  const integrity = snapshotJsonValue(
-    carried.filter((atom) =>
-      patterns.some((pattern) => matchAtomPattern(pattern, atom) !== null)
-    ),
-  ) as CfcAtom[];
-  return { destination: { address, integrity }, address: addressOf(link) };
+  return {
+    address,
+    integrity: reviewedJson(integrity, "destination") as CfcAtom[],
+    source: locationOf(link),
+  };
 };
 
 /** Reads everything the host will show, and what the commit verifies. */
@@ -574,7 +612,7 @@ const inspect = async (
   const cells = [
     bindings.descriptor,
     bindings.result,
-    ...Object.values(bindings.destinations).flat(),
+    ...Object.values(bindings.parameters).flat(),
   ];
   if (cells.some((cell) => cellRuntime(cell) !== runtime)) {
     throw new Error("Reviewed intent handles must belong to the same runtime");
@@ -584,9 +622,8 @@ const inspect = async (
   const tx = runtime.edit();
   let actor: string;
   let descriptor: ReviewedIntentDescriptor;
-  let descriptorAddress: ReviewedAddress;
-  const destinations: Record<string, ReviewedDestination[]> = {};
-  const destinationAddresses: Record<string, ReviewedAddress[]> = {};
+  let descriptorLocation: ReviewedLocation;
+  const bound: Record<string, ReviewedDestination[]> = {};
   let confidentiality: CfcConfClause[];
   const evidence: ReadEvidence[] = [];
   try {
@@ -597,7 +634,7 @@ const inspect = async (
     actor = acting;
     const descriptorLink = bindings.descriptor.withTx(tx).resolveAsCell()
       .getAsNormalizedFullLink();
-    descriptorAddress = addressOf(descriptorLink);
+    descriptorLocation = locationOf(descriptorLink);
     const { schema: _schema, ...stored } = descriptorLink;
     descriptor = parseReviewedIntentDescriptor(
       reviewedJson(
@@ -605,26 +642,26 @@ const inspect = async (
         "descriptor",
       ),
     );
-    for (const key of Object.keys(bindings.destinations)) {
+    for (const key of Object.keys(bindings.parameters)) {
       if (descriptor.parameters[key]?.kind !== "destinations") {
         throw new Error(
-          debugStr`Reviewed intent refuses a destination for a parameter its descriptor does not declare: $quote${key}`,
+          debugStr`Reviewed intent refuses cells for a parameter its descriptor does not declare as bound: $quote${key}`,
         );
       }
     }
     for (const [key, declared] of Object.entries(descriptor.parameters)) {
       if (declared.kind !== "destinations") continue;
-      const bound = bindings.destinations[key] ?? [];
-      if (bound.length < declared.min || bound.length > declared.max) {
+      const cellsForKey = bindings.parameters[key] ?? [];
+      if (
+        cellsForKey.length < declared.min || cellsForKey.length > declared.max
+      ) {
         throw new Error(
           debugStr`Reviewed intent requires between ${declared.min} and ${declared.max} destinations for $quote${key}`,
         );
       }
-      const read = bound.map((cell) =>
-        readDestination(tx, cell, descriptor.destinationIntegrity)
+      bound[key] = cellsForKey.map((cell) =>
+        readDestination(tx, cell, declared.integrity)
       );
-      destinations[key] = read.map((entry) => entry.destination);
-      destinationAddresses[key] = read.map((entry) => entry.address);
     }
     const consumed = collectConsumedLabel(tx).confidentiality;
     const actorAtom = cfcAtom.user(actor);
@@ -653,7 +690,7 @@ const inspect = async (
   // Where the link will be written is reviewed, but what the reads that find
   // it consumed is not shown and does not reach the record.
   const resultTx = runtime.edit();
-  let resultAddress: ReviewedAddress;
+  let resultLocation: ReviewedLocation;
   try {
     const target = resolveLink(
       runtime,
@@ -666,7 +703,7 @@ const inspect = async (
         "Reviewed intent refuses a result cell inside a reviewed intent",
       );
     }
-    resultAddress = addressOf(target);
+    resultLocation = locationOf(target);
     for (const read of readEvidence(resultTx)) evidence.push(read);
   } finally {
     resultTx.abort();
@@ -675,10 +712,9 @@ const inspect = async (
     actor,
     descriptor,
     endpoint: reviewedIntentEndpoint(descriptor),
-    descriptorAddress,
-    destinations,
-    destinationAddresses,
-    resultAddress,
+    descriptorLocation,
+    bound,
+    resultLocation,
     confidentiality,
     evidence,
   };
@@ -686,53 +722,57 @@ const inspect = async (
 
 /**
  * Prepares a reviewed intent from the cells a pattern binds, for the host's
- * surface. The preview is exactly what the commit writes besides the text the
- * actor enters; the consent it returns is good for one commit.
+ * surface. The preview is exactly what the commit writes besides the values
+ * the actor enters; the consent it returns is good for one commit.
  *
  * @throws If there is no authenticated actor, the descriptor is not one this
- *   build can show, a destination is bound for a parameter the descriptor
- *   does not declare or in a number it does not allow, a destination holds
- *   nothing or a cell reference, or lacks the integrity the descriptor
+ *   build can show, cells are bound for a parameter the descriptor does not
+ *   declare as bound or in a number it does not allow, a destination holds
+ *   nothing or a cell reference, or lacks the integrity its parameter
  *   requires, or what the surface would show exceeds the read ceiling.
  */
 export async function prepareReviewedIntent(
   bindings: ReviewedIntentBindings,
 ): Promise<PreparedReviewedIntent> {
   const inspected = await inspect(bindings);
+  const { descriptor } = inspected;
   // The preview and the retained consent share these values, so they are
   // frozen: a caller that edits what it was shown cannot change what the
   // commit compares against.
-  deepFreeze(inspected.destinations);
+  deepFreeze(inspected.bound);
   const consent = Object.freeze({}) as ReviewedIntentConsent;
   consents.set(consent, {
     ...inspected,
     bindings: Object.freeze({
       descriptor: bindings.descriptor.withTx(undefined),
       result: bindings.result.withTx(undefined),
-      destinations: Object.freeze(Object.fromEntries(
-        Object.entries(bindings.destinations).map(([key, cells]) => [
+      parameters: Object.freeze(Object.fromEntries(
+        Object.entries(bindings.parameters).map(([key, cells]) => [
           key,
           Object.freeze(cells.map((cell) => cell.withTx(undefined))),
         ]),
       )),
     }),
-    eventId: crypto.randomUUID(),
+    // The host transport carries no durable event identity, so the commit's
+    // identity is minted here, unpredictably: the record's address derives
+    // from it, and no other code can create that document first.
     idempotencyKey: crypto.randomUUID(),
   });
-  const { descriptor } = inspected;
   return Object.freeze({
     actor: inspected.actor,
     operation: descriptor.operation,
     endpointName: descriptor.endpointName,
     consumer: descriptor.consumer,
     endpoint: inspected.endpoint,
-    destinations: inspected.destinations,
-    text: deepFreeze(Object.fromEntries(
-      Object.entries(descriptor.parameters).flatMap(([key, declared]) =>
-        declared.kind === "text"
-          ? [[key, { maxLength: declared.maxLength }]]
-          : []
-      ),
+    parameters: deepFreeze(Object.fromEntries(
+      Object.entries(descriptor.parameters).map((
+        [key, declared],
+      ): [string, ReviewedParameterPreview] => [
+        key,
+        declared.kind === "destinations"
+          ? { kind: "destinations", destinations: inspected.bound[key] }
+          : { kind: "text", maxLength: declared.maxLength },
+      ]),
     )),
     windowMs: Math.min(descriptor.windowMs, SHORT_INTENT_WINDOW_MS),
     maxAttempts: descriptor.maxAttempts,
@@ -741,37 +781,34 @@ export async function prepareReviewedIntent(
 }
 
 /**
- * The record's parameters: the reviewed destinations, and the text entered
+ * The record's parameters: the reviewed destinations, and the value entered
  * for each declared `text` parameter.
  *
- * @throws If `input` holds text for a key the descriptor does not declare as
- *   text, lacks text for one it does, or holds text over its `maxLength`.
+ * @throws If `input` holds a value for a key the descriptor does not declare
+ *   as entered, lacks one it does, or holds text over its `maxLength`.
  */
 const parametersOf = (
   descriptor: ReviewedIntentDescriptor,
-  destinations: Record<string, ReviewedDestination[]>,
+  bound: Record<string, ReviewedDestination[]>,
   input: ReviewedIntentInput,
 ): Record<string, string | ReviewedDestination[]> => {
-  const text = isObjectNotArray(input) && isObjectNotArray(input.text)
-    ? input.text
-    : undefined;
-  if (text === undefined) {
-    throw new Error("Reviewed intent commit requires the entered text");
+  if (!isObjectNotArray(input)) {
+    throw new Error("Reviewed intent commit requires the entered values");
   }
-  for (const key of Object.keys(text)) {
+  for (const key of Object.keys(input)) {
     if (descriptor.parameters[key]?.kind !== "text") {
       throw new Error(
-        debugStr`Reviewed intent refuses text for a parameter its descriptor does not declare: $quote${key}`,
+        debugStr`Reviewed intent refuses a value for a parameter its descriptor does not declare as entered: $quote${key}`,
       );
     }
   }
   const parameters: Record<string, string | ReviewedDestination[]> = {};
   for (const [key, declared] of Object.entries(descriptor.parameters)) {
     if (declared.kind === "destinations") {
-      parameters[key] = destinations[key];
+      parameters[key] = bound[key];
       continue;
     }
-    const entered = text[key];
+    const entered = input[key];
     if (typeof entered !== "string") {
       throw new Error(
         debugStr`Reviewed intent commit requires text for $quote${key}`,
@@ -833,15 +870,16 @@ const writtenOnlyByReviewedIntent = (
  * actor-private receipt, then the record, both in the actor's home space,
  * then the record's link into the pattern's result cell, which may be in
  * another space. A transaction writes one space, so each is a separate
- * commit. The receipt comes first, so no record exists without one; a receipt
- * whose record is absent records a commit that failed. A record whose link
- * was not written is never acted on, and its window runs out.
+ * commit. The receipt comes first because the record's transaction reads it
+ * (see the attribution comment below); a receipt whose record is absent
+ * records a commit that failed. A record whose link was not written is never
+ * acted on, and its window runs out.
  *
  * The record's confidentiality joins the labels of everything the preview
  * read, and the actor's own `User` clause.
  *
  * @throws If the consent is unknown or spent, the gesture is not the host's,
- *   the entered text does not satisfy the descriptor, anything reviewed
+ *   the entered values do not satisfy the descriptor, anything reviewed
  *   changed, or a write fails.
  */
 export async function commitReviewedIntent(
@@ -864,21 +902,20 @@ export async function commitReviewedIntent(
     throw new Error("Reviewed intent requires a trusted host gesture");
   }
   const parameters = snapshotJsonValue(
-    parametersOf(state.descriptor, state.destinations, input),
+    parametersOf(state.descriptor, state.bound, input),
   );
   const current = await inspect(state.bindings);
   if (
     current.actor !== state.actor ||
     !deepEqual(current.descriptor, state.descriptor) ||
-    !deepEqual(current.descriptorAddress, state.descriptorAddress) ||
-    !deepEqual(current.destinations, state.destinations) ||
-    !deepEqual(current.destinationAddresses, state.destinationAddresses) ||
-    !deepEqual(current.resultAddress, state.resultAddress)
+    !deepEqual(current.descriptorLocation, state.descriptorLocation) ||
+    !deepEqual(current.bound, state.bound) ||
+    !deepEqual(current.resultLocation, state.resultLocation)
   ) {
     throw new Error(STALE_REVIEW);
   }
   const runtime = cellRuntime(state.bindings.descriptor);
-  const { actor, descriptor, eventId } = state;
+  const { actor, descriptor, idempotencyKey } = state;
   const at = Date.now();
   const record = {
     operation: descriptor.operation,
@@ -887,16 +924,16 @@ export async function commitReviewedIntent(
     subject: actor,
     parameters: canonicalJson(parameters),
     payloadDigest: hashStringOf(parameters),
-    idempotencyKey: state.idempotencyKey,
+    idempotencyKey,
     at,
     exp: at + Math.min(descriptor.windowMs, SHORT_INTENT_WINDOW_MS),
     maxAttempts: descriptor.maxAttempts,
-    evidence: { component: REVIEWED_INTENT_COMPONENT, event: eventId },
+    evidence: { component: REVIEWED_INTENT_COMPONENT },
   };
   const schema = writtenOnlyByReviewedIntent(current.confidentiality);
   const recordCell = runtime.getCell<JSONValue>(
     actor as never,
-    { reviewedIntent: eventId },
+    { reviewedIntent: idempotencyKey },
     schema,
   );
 
@@ -909,7 +946,7 @@ export async function commitReviewedIntent(
     });
     receipt = runtime.getCell(
       actor as never,
-      { reviewedIntentReceipt: eventId },
+      { reviewedIntentReceipt: idempotencyKey },
       schema,
       receiptTx,
     );
@@ -977,7 +1014,7 @@ export async function commitReviewedIntent(
       state.bindings.result.getAsNormalizedFullLink(),
       "writeRedirect",
     );
-    if (!deepEqual(addressOf(target), state.resultAddress)) {
+    if (!deepEqual(locationOf(target), state.resultLocation)) {
       throw new Error(STALE_REVIEW);
     }
     const { schema: _schema, ...recordLink } = recordCell
@@ -1001,10 +1038,20 @@ export async function commitReviewedIntent(
   };
 }
 
+/** Whether `value` is a reviewed location as a record stores one. */
+const isStoredLocation = (value: unknown): boolean =>
+  isObjectNotArray(value) &&
+  hasExactKeys(value, ["id", "path", "scope", "space"]) &&
+  isNonEmptyString(value.space) && isNonEmptyString(value.id) &&
+  isNonEmptyString(value.scope) && Array.isArray(value.path) &&
+  value.path.every((segment) => typeof segment === "string");
+
 /** Whether `value` is a reviewed destination as a record stores one. */
 const isStoredDestination = (value: unknown): boolean =>
-  isObjectNotArray(value) && hasExactKeys(value, ["address", "integrity"]) &&
-  value.address !== null && Array.isArray(value.integrity);
+  isObjectNotArray(value) &&
+  hasExactKeys(value, ["address", "integrity", "source"]) &&
+  value.address !== null && Array.isArray(value.integrity) &&
+  value.integrity.length > 0 && isStoredLocation(value.source);
 
 /**
  * Parses a record's stored `parameters` text.
@@ -1042,11 +1089,12 @@ const parseStoredParameters = (
  * `TransformedBy{builtin cfc-reviewed-intent}` atom; the document is in the
  * home space of the record's `subject`; and the record has exactly the
  * members a commit writes, with `parameters` text that parses and a
- * `payloadDigest` that is the digest of what it parses to. Only the runtime mints a `derived` entry, and only a
- * transaction under this module's identity mints that atom, so a pattern
- * cannot write a record that passes: a stored `writeAuthorizedBy` naming this
- * module is not evidence, since a pattern's own initialization can carry
- * one. A write into a record after the commit takes the stamp away.
+ * `payloadDigest` that is the digest of what it parses to. Only the runtime
+ * mints a `derived` entry, and only a transaction under this module's
+ * identity mints that atom, so pattern code cannot write a record that
+ * passes: a stored `writeAuthorizedBy` naming this module is not evidence,
+ * since a pattern's own initialization can carry one. `evidence` is
+ * informational, and only its being a record is checked.
  *
  * This verifies authorship and integrity only. Whether the record is the
  * consumer's, unexpired, and not yet acted on is the consumer's to check.
@@ -1087,10 +1135,7 @@ export function verifyReviewedIntentRecord(
       !isNonEmptyString(value.idempotencyKey) ||
       !Number.isSafeInteger(value.at) || !Number.isSafeInteger(value.exp) ||
       !isPositiveInteger(value.maxAttempts) ||
-      !isObjectNotArray(value.evidence) ||
-      !hasExactKeys(value.evidence, ["component", "event"]) ||
-      value.evidence.component !== REVIEWED_INTENT_COMPONENT ||
-      !isNonEmptyString(value.evidence.event)
+      !isObjectNotArray(value.evidence)
     ) {
       throw new Error("Reviewed intent record is malformed");
     }

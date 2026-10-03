@@ -14,6 +14,7 @@ import {
 import {
   commitReviewedIntent,
   parseReviewedIntentDescriptor,
+  type PreparedReviewedIntent,
   prepareReviewedIntent,
   REVIEWED_INTENT_WRITER,
   type ReviewedIntentBindings,
@@ -34,11 +35,17 @@ import { setCfcImplementationIdentity } from "../../src/storage/extended-storage
 const sender = await Identity.fromPassphrase("reviewed-intent-sender");
 const other = await Identity.fromPassphrase("reviewed-intent-other");
 
-/** The builtin that keeps the sender's address book and attests its entries. */
+/** The builtin that keeps the sender's address book. */
 const ADDRESS_BOOK = "address-book";
 
-/** The integrity an attested address book entry carries. */
-const VERIFIED_ADDRESS = "verified-address";
+/**
+ * The integrity a destination must carry: the address book wrote it, and
+ * nothing has written it since.
+ */
+const WRITTEN_BY_ADDRESS_BOOK = {
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: { kind: "builtin", builtinId: ADDRESS_BOOK },
+};
 
 /** A clause the address book keeps its entries under, beside the owner's. */
 const ADDRESS_BOOK_CLAUSE = "address-book-private";
@@ -59,10 +66,14 @@ const DESCRIPTOR = {
   endpointName: "Example Messenger",
   consumer: "example-messenger",
   parameters: {
-    to: { kind: "destinations", min: 1, max: 1 },
+    to: {
+      kind: "destinations",
+      min: 1,
+      max: 1,
+      integrity: [WRITTEN_BY_ADDRESS_BOOK],
+    },
     body: { kind: "text", maxLength: 40 },
   },
-  destinationIntegrity: [VERIFIED_ADDRESS],
   windowMs: 60_000,
   maxAttempts: 1,
 };
@@ -82,25 +93,63 @@ const trustedClick = (pattern = "ReviewedIntent") => {
   return event;
 };
 
-const text = (body: string) => ({ text: { body } });
+/** `cell` reached through a link with no schema, in `runtime`. */
+const schemaless = (runtime: Runtime, cell: Cell<unknown>): Cell<unknown> => {
+  const { schema: _schema, ...link } = cell.getAsNormalizedFullLink();
+  return runtime.getCellFromLink(link);
+};
+
+/** The values a sender types on the surface. */
+const text = (body: string) => ({ body });
+
+/** The destinations a preview shows for `key`. */
+const shown = (prepared: PreparedReviewedIntent, key = "to") => {
+  const parameter = prepared.parameters[key];
+  if (parameter?.kind !== "destinations") {
+    throw new Error(`No destinations parameter \`${key}\``);
+  }
+  return parameter.destinations;
+};
 
 /** Rewrites Alice's address book entry as the address book. */
 const changeAlice = async (
-  fixture: { runtime: Runtime; alice: Cell<unknown> },
+  fixture: {
+    entry: (
+      cause: string,
+      address: JSONValue,
+      options?: EntryOptions,
+    ) => Promise<Cell<unknown>>;
+  },
   address: string,
 ) => {
-  const tx = fixture.runtime.edit();
-  setCfcImplementationIdentity(tx, {
-    kind: "builtin",
-    builtinId: ADDRESS_BOOK,
+  await fixture.entry("contact-alice", address, {
+    confidentiality: [cfcAtom.user(sender.did()), ADDRESS_BOOK_CLAUSE],
   });
-  fixture.alice.withTx(tx).set(address as never);
-  expect((await tx.commit()).error).toBeUndefined();
+};
+
+/** How {@link setup}'s `entry` writes an address book entry. */
+interface EntryOptions {
+  /** Who writes it: the address book, or a pattern's handler. */
+  readonly writer?: ImplementationIdentity;
+
+  /** The confidentiality its schema declares. */
+  readonly confidentiality?: readonly unknown[];
+
+  /** Integrity its schema declares. */
+  readonly addIntegrity?: readonly unknown[];
+
+  /** Whether its schema claims it for its writer alone. */
+  readonly claimed?: boolean;
+}
+
+const ADDRESS_BOOK_WRITER: ImplementationIdentity = {
+  kind: "builtin",
+  builtinId: ADDRESS_BOOK,
 };
 
 /**
  * The sender's runtime over one store, holding a consumer's descriptor, two
- * attested address book entries, an unattested one, and a composer document
+ * address book entries, an entry a pattern wrote, and a composer document
  * whose fields a pattern binds.
  */
 const setup = async (descriptor: unknown = DESCRIPTOR) => {
@@ -143,27 +192,35 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
     ifc: { writeAuthorizedBy: [CONSUMER_WRITER] },
   }, publish);
   descriptorCell.set(descriptor as never);
+  // The sender's private notes, which every entry's writer reads first: a
+  // writer's `TransformedBy` is minted only over a labeled read.
+  const notes = runtime.getCell(home, "address-book-notes", {
+    ifc: { confidentiality: [cfcAtom.user(home)] },
+  } as never, publish);
+  notes.set({ updated: 1 } as never);
   expect((await publish.commit()).error).toBeUndefined();
 
-  /** Writes an address book entry carrying `integrity`. */
+  /** Writes an address book entry at `cause`, as `options.writer`. */
   const entry = async (
     cause: string,
     address: JSONValue,
     {
-      integrity = [VERIFIED_ADDRESS] as unknown[],
-      confidentiality = [cfcAtom.user(home)] as unknown[],
-    } = {},
+      writer = ADDRESS_BOOK_WRITER,
+      confidentiality = [cfcAtom.user(home)],
+      addIntegrity = [],
+      claimed = true,
+    }: EntryOptions = {},
   ): Promise<Cell<unknown>> => {
     const tx = runtime.edit();
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: ADDRESS_BOOK,
-    });
+    setCfcImplementationIdentity(tx, writer);
+    notes.withTx(tx).get();
     const cell = runtime.getCell(home, cause, {
       ifc: {
         confidentiality,
-        ...(integrity.length > 0 ? { addIntegrity: integrity } : {}),
-        writeAuthorizedBy: [ADDRESS_BOOK],
+        ...(addIntegrity.length > 0 ? { addIntegrity } : {}),
+        ...(claimed && writer.kind === "builtin"
+          ? { writeAuthorizedBy: [writer.builtinId] }
+          : {}),
       },
     } as never, tx);
     cell.set(address as never);
@@ -175,7 +232,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
   });
   const bob = await entry("contact-bob", "tel:+15550111");
   const unattested = await entry("contact-unattested", "tel:+15550199", {
-    integrity: [],
+    writer: PATTERN,
   });
 
   // The pattern's own document: a field naming the chosen contact by link,
@@ -201,6 +258,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
     bob,
     unattested,
     entry,
+    notes: notes.withTx(undefined),
     composer: composer.withTx(undefined),
     recipient: composer.withTx(undefined).key("recipient") as Cell<unknown>,
     result: composer.withTx(undefined).key("outbox") as Cell<unknown>,
@@ -209,7 +267,7 @@ const setup = async (descriptor: unknown = DESCRIPTOR) => {
     ): ReviewedIntentBindings {
       return {
         descriptor: fixture.descriptor,
-        destinations: { to: [fixture.recipient] },
+        parameters: { to: [fixture.recipient] },
         result: fixture.result,
         ...overrides,
       };
@@ -244,10 +302,22 @@ describe("reviewed-intent", () => {
         expect(prepared.endpointName).toBe("Example Messenger");
         expect(prepared.consumer).toBe("example-messenger");
         expect(prepared.endpoint).toBe(hashStringOf(DESCRIPTOR as never));
-        expect(prepared.destinations).toEqual({
-          to: [{ address: "tel:+15550100", integrity: [VERIFIED_ADDRESS] }],
+        expect(prepared.parameters).toEqual({
+          to: {
+            kind: "destinations",
+            destinations: [{
+              address: "tel:+15550100",
+              integrity: [WRITTEN_BY_ADDRESS_BOOK],
+              source: {
+                space: sender.did(),
+                id: fixture.alice.getAsNormalizedFullLink().id,
+                scope: "space",
+                path: [],
+              },
+            }],
+          },
+          body: { kind: "text", maxLength: 40 },
         });
-        expect(prepared.text).toEqual({ body: { maxLength: 40 } });
         expect(prepared.windowMs).toBe(60_000);
         expect(prepared.maxAttempts).toBe(1);
 
@@ -259,7 +329,7 @@ describe("reviewed-intent", () => {
         );
         const record = verifyReviewedIntentRecord(committed.record);
         const parameters = {
-          to: prepared.destinations.to,
+          to: shown(prepared),
           body: "See you at noon",
         };
         expect(record).toEqual({
@@ -273,10 +343,7 @@ describe("reviewed-intent", () => {
           at: record.at,
           exp: record.at + 60_000,
           maxAttempts: 1,
-          evidence: {
-            component: "cf-reviewed-intent",
-            event: expect.any(String),
-          },
+          evidence: { component: "cf-reviewed-intent" },
         });
         expect(record.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
         expect(record.at).toBeGreaterThanOrEqual(before);
@@ -416,7 +483,6 @@ describe("reviewed-intent", () => {
         }
         expect(records[0].id).not.toBe(records[1].id);
         expect(records[0].idempotencyKey).not.toBe(records[1].idempotencyKey);
-        expect(records[0].evidence.event).not.toBe(records[1].evidence.event);
       } finally {
         await fixture.dispose();
       }
@@ -431,9 +497,13 @@ describe("reviewed-intent", () => {
           trustedClick(),
           text("On my way"),
         );
+        // Written through a cell with no schema, so that what refuses it is
+        // the claim the record stores, not one this write declares.
         const tx = fixture.runtime.edit();
         setCfcImplementationIdentity(tx, PATTERN);
-        committed.record.withTx(tx).set({ operation: "send-message" } as never);
+        schemaless(fixture.runtime, committed.record).withTx(tx).set(
+          { operation: "send-message" } as never,
+        );
         expect((await tx.commit()).error?.message).toContain(
           "writeAuthorizedBy",
         );
@@ -465,7 +535,7 @@ describe("reviewed-intent", () => {
           unstamped.getCellFromLink(cell.getAsNormalizedFullLink());
         const prepared = await prepareReviewedIntent({
           descriptor: local(fixture.descriptor),
-          destinations: { to: [local(fixture.recipient)] },
+          parameters: { to: [local(fixture.recipient)] },
           result: local(fixture.result),
         });
         await expect(
@@ -478,16 +548,17 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("refuses text for a parameter the descriptor does not declare, missing text, and text over its `maxLength`", async () => {
+    it("refuses a value for a parameter the descriptor does not declare as entered, missing text, and text over its `maxLength`", async () => {
       const fixture = await setup();
       try {
         for (
           const [input, refusal] of [
-            [{ text: { body: "Hi", subject: "Hello" } }, /does not declare/],
-            [{ text: { to: "tel:+15550199" } }, /does not declare/],
-            [{ text: {} }, /requires text for/],
-            [{ text: { body: "x".repeat(41) } }, /over 40 characters/],
-            [undefined, /requires the entered text/],
+            [{ body: "Hi", subject: "Hello" }, /does not declare/],
+            [{ body: "Hi", to: "tel:+15550199" }, /does not declare/],
+            [{}, /requires text for/],
+            [{ body: 42 }, /requires text for/],
+            [{ body: "x".repeat(41) }, /over 40 characters/],
+            [undefined, /requires the entered values/],
           ] as const
         ) {
           const prepared = await prepareReviewedIntent(fixture.bindings());
@@ -803,7 +874,7 @@ describe("reviewed-intent", () => {
           runtime.getCellFromLink(cell.getAsNormalizedFullLink());
         const prepared = await prepareReviewedIntent({
           descriptor: local(fixture.descriptor),
-          destinations: { to: [local(fixture.recipient)] },
+          parameters: { to: [local(fixture.recipient)] },
           result: local(fixture.result),
         });
         // The re-read is the sender's; the actor changes as the receipt is
@@ -834,70 +905,100 @@ describe("reviewed-intent", () => {
       const fixture = await setup();
       try {
         const prepared = await prepareReviewedIntent(
-          fixture.bindings({ destinations: { to: [fixture.bob] } }),
+          fixture.bindings({ parameters: { to: [fixture.bob] } }),
         );
-        expect(prepared.destinations.to).toEqual([{
+        expect(shown(prepared)).toEqual([{
           address: "tel:+15550111",
-          integrity: [VERIFIED_ADDRESS],
+          integrity: [WRITTEN_BY_ADDRESS_BOOK],
+          source: {
+            space: sender.did(),
+            id: fixture.bob.getAsNormalizedFullLink().id,
+            scope: "space",
+            path: [],
+          },
         }]);
         const linked = await prepareReviewedIntent(fixture.bindings());
-        expect(linked.destinations.to[0].address).toBe("tel:+15550100");
+        expect(shown(linked)[0].address).toBe("tel:+15550100");
       } finally {
         await fixture.dispose();
       }
     });
 
-    it("matches record-shaped integrity patterns as one conjunction with shared variables", async () => {
-      const registry = (issuer: string) => ({
-        type: "verified-address",
-        issuer,
-      });
-      const fixture = await setup({
+    it("keeps only the atoms that satisfied the destination's patterns", async () => {
+      const IMPORTED_BY = {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: { kind: "builtin", builtinId: "contact-import" },
+      };
+      const WITNESSED = {
+        ...WRITTEN_BY_ADDRESS_BOOK,
+        inputWitness: IMPORTED_BY,
+      };
+      const withIntegrity = (integrity: unknown[]) => ({
         ...DESCRIPTOR,
-        destinationIntegrity: [
-          { type: "verified-address", issuer: { var: "$issuer" } },
-          { type: "issuer-trusted", issuer: { var: "$issuer" } },
-        ],
+        parameters: {
+          ...DESCRIPTOR.parameters,
+          to: { ...DESCRIPTOR.parameters.to, integrity },
+        },
       });
+      const fixture = await setup();
       try {
-        const attested = await fixture.entry("contact-carol", "tel:+15550155", {
-          integrity: [
-            registry("example-registry"),
-            { type: "issuer-trusted", issuer: "example-registry" },
-            VERIFIED_ADDRESS,
-          ],
+        // The address book writes an entry from an imported one alone, so the
+        // entry carries its writer's stamp twice: bare, and witnessing the
+        // import.
+        const runtime = fixture.runtime;
+        const imported = runtime.edit();
+        setCfcImplementationIdentity(imported, {
+          kind: "builtin",
+          builtinId: "contact-import",
         });
-        const prepared = await prepareReviewedIntent(
-          fixture.bindings({ destinations: { to: [attested] } }),
-        );
-        expect(prepared.destinations.to).toEqual([{
-          address: "tel:+15550155",
-          integrity: [
-            registry("example-registry"),
-            { type: "issuer-trusted", issuer: "example-registry" },
-          ],
-        }]);
+        fixture.notes.withTx(imported).get();
+        const source = runtime.getCell(sender.did(), "imported-carol", {
+          ifc: { confidentiality: [cfcAtom.user(sender.did())] },
+        } as never, imported);
+        source.set("tel:+15550155" as never);
+        expect((await imported.commit()).error).toBeUndefined();
+        const written = runtime.edit();
+        setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
+        source.withTx(written).get();
+        const carol = runtime.getCell(sender.did(), "contact-carol", {
+          ifc: {
+            confidentiality: [cfcAtom.user(sender.did())],
+            writeAuthorizedBy: [ADDRESS_BOOK],
+          },
+        } as never, written);
+        carol.set("tel:+15550155" as never);
+        expect((await written.commit()).error).toBeUndefined();
+        const to = { parameters: { to: [carol.withTx(undefined)] } };
+
+        const bare = await prepareReviewedIntent(fixture.bindings(to));
+        expect(shown(bare)[0].integrity).toEqual([WRITTEN_BY_ADDRESS_BOOK]);
+
+        await fixture.republish(withIntegrity([WITNESSED]));
+        const witnessed = await prepareReviewedIntent(fixture.bindings(to));
+        expect(shown(witnessed)[0].integrity).toEqual([WITNESSED]);
         const committed = await commitReviewedIntent(
-          prepared.consent,
+          witnessed.consent,
           trustedClick(),
           text("Hi"),
         );
         expect(verifyReviewedIntentRecord(committed.record).parameters.to)
-          .toEqual(prepared.destinations.to);
-        // The trusted issuer is a different one than verified the address.
-        const mismatched = await fixture.entry(
-          "contact-dave",
-          "tel:+15550166",
+          .toEqual(shown(witnessed));
+
+        // A variable shared across patterns binds once: the writer and the
+        // writer it witnesses must be the same, and here they are not.
+        const writer = { kind: "builtin", builtinId: { var: "$writer" } };
+        await fixture.republish(withIntegrity([
+          { type: CFC_ATOM_TYPE.TransformedBy, identity: writer },
           {
-            integrity: [
-              registry("example-registry"),
-              { type: "issuer-trusted", issuer: "other-registry" },
-            ],
+            type: CFC_ATOM_TYPE.TransformedBy,
+            inputWitness: {
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity: writer,
+            },
           },
-        );
-        await expect(prepareReviewedIntent(
-          fixture.bindings({ destinations: { to: [mismatched] } }),
-        )).rejects.toThrow(/without the integrity its descriptor requires/);
+        ]));
+        await expect(prepareReviewedIntent(fixture.bindings(to))).rejects
+          .toThrow(/without the integrity its descriptor requires/);
       } finally {
         await fixture.dispose();
       }
@@ -907,25 +1008,17 @@ describe("reviewed-intent", () => {
       const fixture = await setup();
       try {
         await expect(prepareReviewedIntent(
-          fixture.bindings({ destinations: { to: [fixture.unattested] } }),
+          fixture.bindings({ parameters: { to: [fixture.unattested] } }),
         )).rejects.toThrow(/without the integrity its descriptor requires/);
-        // A pattern's own document naming a contact is not the contact.
-        const tx = fixture.runtime.edit();
-        const lookalike = fixture.runtime.getCell(
-          sender.did(),
+        // A pattern's own document whose schema declares the very atom the
+        // descriptor requires does not carry it.
+        const lookalike = await fixture.entry(
           "pattern-contact",
-          {
-            type: "object",
-            ifc: { addIntegrity: ["some-other-endorsement"] },
-          } as never,
-          tx,
+          "tel:+15550199",
+          { writer: PATTERN, addIntegrity: [WRITTEN_BY_ADDRESS_BOOK] },
         );
-        lookalike.set({ name: "Alice", address: "tel:+15550199" } as never);
-        expect((await tx.commit()).error).toBeUndefined();
         await expect(prepareReviewedIntent(
-          fixture.bindings({
-            destinations: { to: [lookalike.withTx(undefined)] },
-          }),
+          fixture.bindings({ parameters: { to: [lookalike] } }),
         )).rejects.toThrow(/without the integrity its descriptor requires/);
       } finally {
         await fixture.dispose();
@@ -936,7 +1029,7 @@ describe("reviewed-intent", () => {
       const fixture = await setup();
       try {
         await expect(prepareReviewedIntent(
-          fixture.bindings({ destinations: { to: [fixture.composer] } }),
+          fixture.bindings({ parameters: { to: [fixture.composer] } }),
         )).rejects.toThrow(/destination to be JSON without cell references/);
       } finally {
         await fixture.dispose();
@@ -946,16 +1039,27 @@ describe("reviewed-intent", () => {
     it("refuses a destination over the host's read ceiling, and over the actor's own without one", async () => {
       const fixture = await setup();
       try {
+        // Another principal's address book entry, which the address book
+        // wrote after reading that principal's own notes.
         const author = fixture.runtimeFor(other);
+        const private_ = {
+          ifc: { confidentiality: [cfcAtom.user(other.did())] },
+        };
+        const noted = author.edit();
+        const notes = author.getCell(
+          sender.did(),
+          "other-notes",
+          private_ as never,
+          noted,
+        );
+        notes.set({ updated: 1 } as never);
+        expect((await noted.commit()).error).toBeUndefined();
         const tx = author.edit();
-        setCfcImplementationIdentity(tx, {
-          kind: "builtin",
-          builtinId: ADDRESS_BOOK,
-        });
+        setCfcImplementationIdentity(tx, ADDRESS_BOOK_WRITER);
+        notes.withTx(tx).get();
         const foreign = author.getCell(sender.did(), "foreign-contact", {
           ifc: {
             confidentiality: [cfcAtom.user(other.did())],
-            addIntegrity: [VERIFIED_ADDRESS],
             writeAuthorizedBy: [ADDRESS_BOOK],
           },
         } as never, tx);
@@ -965,7 +1069,7 @@ describe("reviewed-intent", () => {
         const link = foreign.getAsNormalizedFullLink();
         await expect(prepareReviewedIntent(
           fixture.bindings({
-            destinations: { to: [fixture.runtime.getCellFromLink(link)] },
+            parameters: { to: [fixture.runtime.getCellFromLink(link)] },
           }),
         )).rejects.toThrow(/read ceiling/);
         const unbounded = fixture.runtimeFor(sender, null);
@@ -974,7 +1078,7 @@ describe("reviewed-intent", () => {
           descriptor: unbounded.getCellFromLink(
             bindings.descriptor.getAsNormalizedFullLink(),
           ),
-          destinations: { to: [unbounded.getCellFromLink(link)] },
+          parameters: { to: [unbounded.getCellFromLink(link)] },
           result: unbounded.getCellFromLink(
             bindings.result.getAsNormalizedFullLink(),
           ),
@@ -990,7 +1094,7 @@ describe("reviewed-intent", () => {
         for (const key of ["cc", "body"]) {
           await expect(prepareReviewedIntent(
             fixture.bindings({
-              destinations: { to: [fixture.recipient], [key]: [fixture.bob] },
+              parameters: { to: [fixture.recipient], [key]: [fixture.bob] },
             }),
           )).rejects.toThrow(/does not declare/);
         }
@@ -1004,7 +1108,7 @@ describe("reviewed-intent", () => {
       try {
         for (const to of [[], [fixture.recipient, fixture.bob]]) {
           await expect(prepareReviewedIntent(
-            fixture.bindings({ destinations: { to } }),
+            fixture.bindings({ parameters: { to } }),
           )).rejects.toThrow(/between 1 and 1 destinations/);
         }
       } finally {
@@ -1054,7 +1158,7 @@ describe("reviewed-intent", () => {
           descriptor: anonymous.getCellFromLink(
             bindings.descriptor.getAsNormalizedFullLink(),
           ),
-          destinations: {
+          parameters: {
             to: [
               anonymous.getCellFromLink(fixture.bob.getAsNormalizedFullLink()),
             ],
@@ -1099,6 +1203,7 @@ describe("reviewed-intent", () => {
             },
           },
           { ...DESCRIPTOR, requireBiometric: true },
+          { ...DESCRIPTOR, destinationIntegrity: [WRITTEN_BY_ADDRESS_BOOK] },
         ]
       ) {
         expect(() => parseReviewedIntentDescriptor(descriptor)).toThrow(
@@ -1107,13 +1212,26 @@ describe("reviewed-intent", () => {
       }
     });
 
-    it("refuses destinations declared without destination integrity, and malformed limits", () => {
+    it("refuses destinations declared without integrity, and malformed limits", () => {
       for (
         const descriptor of [
-          { ...DESCRIPTOR, destinationIntegrity: [] },
           {
             ...DESCRIPTOR,
-            parameters: { to: { kind: "destinations", min: 2, max: 1 } },
+            parameters: {
+              to: { ...DESCRIPTOR.parameters.to, integrity: [] },
+            },
+          },
+          {
+            ...DESCRIPTOR,
+            parameters: {
+              to: { kind: "destinations", min: 1, max: 1 },
+            },
+          },
+          {
+            ...DESCRIPTOR,
+            parameters: {
+              to: { ...DESCRIPTOR.parameters.to, min: 2, max: 1 },
+            },
           },
           { ...DESCRIPTOR, windowMs: 0 },
           { ...DESCRIPTOR, maxAttempts: 1.5 },
@@ -1135,7 +1253,16 @@ describe("reviewed-intent", () => {
     const forged = (body: string) => {
       const parameters = {
         body,
-        to: [{ address: "tel:+15550199", integrity: [VERIFIED_ADDRESS] }],
+        to: [{
+          address: "tel:+15550199",
+          integrity: [WRITTEN_BY_ADDRESS_BOOK],
+          source: {
+            space: sender.did(),
+            id: "of:forged-contact",
+            scope: "space",
+            path: [],
+          },
+        }],
       };
       return {
         operation: "send-message",
@@ -1148,7 +1275,7 @@ describe("reviewed-intent", () => {
         at: 1_700_000_000_000,
         exp: 1_700_000_060_000,
         maxAttempts: 1,
-        evidence: { component: "cf-reviewed-intent", event: "forged" },
+        evidence: { component: "cf-reviewed-intent" },
       };
     };
 
@@ -1198,7 +1325,7 @@ describe("reviewed-intent", () => {
       const fixture = await setup();
       try {
         const prepared = await prepareReviewedIntent(
-          fixture.bindings({ destinations: { to: [fixture.bob] } }),
+          fixture.bindings({ parameters: { to: [fixture.bob] } }),
         );
         const committed = await commitReviewedIntent(
           prepared.consent,
@@ -1381,12 +1508,19 @@ describe("reviewed-intent", () => {
           trustedClick(),
           text("Genuine"),
         );
-        const record = committed.record as Cell<Record<string, unknown>>;
+        // Written through a cell with no schema, so that what refuses each
+        // write is the claim the record stores, not one the write declares.
+        const record = schemaless(fixture.runtime, committed.record) as Cell<
+          Record<string, unknown>
+        >;
         for (
           const [target, value] of [
             [record.key("parameters"), '{"body":"Tampered"}'],
-            [record.key("evidence").key("event"), "forged"],
-            [record.key("evidence"), { component: "cf-reviewed-intent" }],
+            [record.key("payloadDigest"), "forged"],
+            [record.key("added"), "forged"],
+            [record.key("evidence").key("component"), "forged"],
+            [record.key("evidence").key("added"), "forged"],
+            [record.key("evidence"), {}],
           ] as const
         ) {
           const tx = fixture.runtime.edit();
