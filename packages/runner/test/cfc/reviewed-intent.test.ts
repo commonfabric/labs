@@ -1194,6 +1194,156 @@ describe("reviewed-intent", () => {
       }
     });
 
+    it("refuses a destination in another principal's space, though the same builtin wrote it", async () => {
+      const fixture = await setup();
+      try {
+        // Another principal runs the same address book builtin in their own
+        // space and writes an entry the sender can read, after a labeled
+        // read of notes the sender can read too.
+        const attacker = fixture.runtimeFor(other);
+        const visible = { ifc: { confidentiality: [ADDRESS_BOOK_CLAUSE] } };
+        const noted = attacker.edit();
+        const notes = attacker.getCell(
+          other.did(),
+          "attacker-notes",
+          visible as never,
+          noted,
+        );
+        notes.set({ updated: 1 } as never);
+        expect((await noted.commit()).error).toBeUndefined();
+        const written = attacker.edit();
+        setCfcImplementationIdentity(written, ADDRESS_BOOK_WRITER);
+        notes.withTx(written).get();
+        const planted = attacker.getCell(other.did(), "planted-contact", {
+          type: "object",
+          ifc: {
+            confidentiality: [ADDRESS_BOOK_CLAUSE],
+            writeAuthorizedBy: [ADDRESS_BOOK],
+          },
+        } as never, written);
+        planted.set(
+          { name: "Alice (Mom)", address: "tel:+15550666" } as never,
+        );
+        expect((await written.commit()).error).toBeUndefined();
+        await fixture.storage.synced();
+        await expect(prepareReviewedIntent(
+          fixture.bindings({
+            parameters: {
+              to: [
+                fixture.runtime.getCellFromLink(
+                  planted.getAsNormalizedFullLink(),
+                ),
+              ],
+            },
+          }),
+        )).rejects.toThrow(/outside the space its parameter names/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses each way content a pattern chose could carry the integrity a descriptor names", async () => {
+      const writtenBy = (identity: unknown) => ({
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity,
+      });
+      const CERTIFIED = {
+        type: CFC_ATOM_TYPE.PolicyCertified,
+        policy: "example-certification",
+      };
+      const routes: {
+        name: string;
+        integrity: unknown[];
+        writer: ImplementationIdentity;
+        source?: "certified";
+        refusal: RegExp;
+      }[] = [
+        {
+          // Any writer's stamp: a pattern's own handler mints one on every
+          // write after a labeled read.
+          name: "any-writer",
+          integrity: [{ type: CFC_ATOM_TYPE.TransformedBy }],
+          writer: PATTERN,
+          refusal: /one builtin's `TransformedBy`/,
+        },
+        {
+          name: "verified-writer",
+          integrity: [writtenBy({ kind: "verified" })],
+          writer: PATTERN,
+          refusal: /one builtin's `TransformedBy`/,
+        },
+        {
+          name: "any-builtin",
+          integrity: [writtenBy({ kind: "builtin", builtinId: { var: "$b" } })],
+          writer: { kind: "builtin", builtinId: "ifElse" },
+          refusal: /one builtin's `TransformedBy`/,
+        },
+        {
+          // A builtin pattern code invokes writes what the pattern chose.
+          name: "invoked-builtin",
+          integrity: [writtenBy({ kind: "builtin", builtinId: "ifElse" })],
+          writer: { kind: "builtin", builtinId: "ifElse" },
+          refusal: /a builtin pattern code invokes/,
+        },
+        {
+          // Certification survives every combination, so a pattern that reads
+          // only a certified value and writes a constant carries it.
+          name: "certified",
+          integrity: [CERTIFIED],
+          writer: PATTERN,
+          source: "certified",
+          refusal: /one builtin's `TransformedBy`/,
+        },
+      ];
+      for (const route of routes) {
+        const fixture = await setup({
+          ...DESCRIPTOR,
+          parameters: {
+            ...DESCRIPTOR.parameters,
+            to: { ...DESCRIPTOR.parameters.to, integrity: route.integrity },
+          },
+        });
+        try {
+          const runtime = fixture.runtime;
+          let source: Cell<unknown> = fixture.notes;
+          if (route.source === "certified") {
+            const certify = runtime.edit();
+            setCfcImplementationIdentity(certify, {
+              kind: "builtin",
+              builtinId: "certifier",
+            });
+            const certified = runtime.getCell(sender.did(), "certified", {
+              ifc: {
+                confidentiality: [cfcAtom.user(sender.did())],
+                addIntegrity: [CERTIFIED],
+              },
+            } as never, certify);
+            certified.set({ checked: true } as never);
+            expect((await certify.commit()).error).toBeUndefined();
+            source = certified.withTx(undefined);
+          }
+          const tx = runtime.edit();
+          setCfcImplementationIdentity(tx, route.writer);
+          source.withTx(tx).get();
+          const chosen = runtime.getCell(sender.did(), `chosen-${route.name}`, {
+            ifc: { confidentiality: [cfcAtom.user(sender.did())] },
+          } as never, tx);
+          chosen.set("tel:+15550666" as never);
+          expect((await tx.commit()).error).toBeUndefined();
+          await expect(
+            prepareReviewedIntent(
+              fixture.bindings({
+                parameters: { to: [chosen.withTx(undefined)] },
+              }),
+            ),
+            route.name,
+          ).rejects.toThrow(route.refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("refuses a destination that holds a cell reference rather than a value", async () => {
       const fixture = await setup();
       try {
@@ -1713,6 +1863,31 @@ describe("reviewed-intent", () => {
         );
         expect(() => verified(unplaced)).toThrow(
           /`parameters` are malformed/,
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a stamped record whose destination is outside the space its parameter names", async () => {
+      const fixture = await setup();
+      try {
+        const base = forged("Send the code");
+        const parameters = JSON.parse(base.parameters);
+        parameters.to[0].source.space = other.did();
+        const record = await seeded(
+          fixture,
+          sender.did(),
+          "stamped-foreign-destination",
+          {
+            ...base,
+            parameters: JSON.stringify(parameters),
+            payloadDigest: hashStringOf(parameters),
+          },
+          { label: stampedLabel, origin: "derived", observes: "value" },
+        );
+        expect(() => verified(record)).toThrow(
+          /outside the space its parameter names/,
         );
       } finally {
         await fixture.dispose();
