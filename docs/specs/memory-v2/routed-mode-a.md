@@ -19,16 +19,52 @@ clients use its `hello`, `connection.challenge`, `connection.auth`,
 - Routed binary compression uses `mcmp` version 2, a big-endian expanded length,
   two-byte space-hint length, canonical DID bytes and one minimal gzip member.
   Version 1 has no routing hint and is refused. Uncompressed `fvj1` text still
-  uses the Fabric codec after strict JSON validation.
+  uses the Fabric codec after strict JSON validation. Compression is negotiated
+  per hop: the router compresses frames to a client that negotiated it, and
+  router-to-toolshed data sockets stay uncompressed.
+- The router pings a quiet client and closes the connection when no frame
+  answers, so a vanished client releases its worker.
+
+The public endpoint accepts `/api/storage/memory` for shared connections and
+`/api/storage/memory?space=<DID>` for dedicated connections. The optional query
+contains exactly one `space` parameter with a canonical Ed25519 DID, including
+the percent-encoded form emitted by `URLSearchParams`. Repeated parameters,
+additional fields and malformed escapes are refused. A dedicated socket denies
+frames naming another space. The URL grants no authority and never selects a
+private endpoint: each space frame still requires authoritative directory
+admission and toolshed verification. Unknown DIDs receive the same generic
+request denial after authentication; the upgrade does not reveal directory
+membership.
+
+`sharedMemoryConnection` controls the runner's socket topology. Both topologies
+supply a `SessionPrincipal`, so authentication follows the peer's advertised
+capabilities. A routed peer always requires signed `connection.auth`; a direct
+peer without that capability receives signed `session.open`. A deployment can
+install routed-capable clients and toolsheds with sharing off, move Memory
+WebSockets from nginx to this router, verify dedicated connections, then enable
+sharing. Clients that only sign direct session opens require an SDK update
+before that switch. Each dedicated socket consumes its own isolated worker and
+source-admission slot.
 
 The router issues a challenge through its link agent's channel-assigned context.
-A client completes it within 60 seconds. The agent hashes the exact signed
-statement bytes and signs issuance and receipt evidence; its fixed-format IPC
-never interprets public Memory values. The toolshed verifies the client
-signature, issuance signature, receipt signature, exact statement/issuance
-digests, claimed principal, router, deployment, epoch, context and timestamps.
-The statement's expiry cannot exceed one hour after either client issue or
-attested receipt. Positive client skew is bounded to 120 seconds.
+A client completes it within 60 seconds. The agent verifies the fixed-format
+signed statement itself before admitting the worker, hashes its exact bytes and
+signs issuance and receipt evidence; its fixed-format IPC never interprets
+public Memory values. The toolshed verifies the client signature, issuance
+signature, receipt signature, exact statement/issuance digests, claimed
+principal, router, deployment, epoch, context and timestamps. The statement's
+expiry cannot exceed one hour after either client issue or attested receipt.
+Positive client skew is bounded to 120 seconds.
+
+Each toolshed link has its own epoch, fresh for every connection, and a
+toolshed checks a proof only against its own link. A challenge records the
+link epochs live when it was issued, and the agent signs a separate issuance
+and receipt for each, so one client signature serves several toolsheds. A
+failed link is replaced with a new epoch; its toolshed closes the contexts it
+held, and only clients with sessions there reconnect. A statement signed
+before a toolshed's current link cannot reach it: the router pushes
+`connection/challenge` and holds that `session.open` until the client signs
+again. An open on a toolshed whose link is down is refused alone.
 
 ## Canonical binary records
 
@@ -82,13 +118,21 @@ retaining their queue budget until it ends.
 
 The durable ledger exclusively locks a separate inode, fsyncs authority changes
 before acknowledging them and fsyncs the parent directory on creation or atomic
-compaction. Each principal/challenge and exact client digest binds to one
+compaction. A link epoch cannot be reused while it is recorded: while its link
+lives, for 3,780 seconds after the link closes (the longest lease plus the
+challenge lifetime and clock skew), and while any unexpired claim names it.
+Links do not survive a restart, so a restart retires every live epoch. After
+that period every proof bound to the epoch has expired, so forgetting it frees
+the 1,024-epoch bound without reviving authority.
+
+Each principal/challenge and exact client digest binds to one
 router, deployment, epoch and context. Exact repeats within the same active
 context are idempotent. Re-signed router evidence cannot move them to another
 context or epoch. Release tombstones prevent replay from reinstating new-open
 authority; a fresh client signature can reauthorize. Closed contexts cannot
-reopen under the same link ID, and their proofs are tombstoned through expiry.
-Epoch reuse and key revocation remain permanently denied after toolshed restart.
+reopen under the same link ID until every statement they could hold has
+expired (3,780 seconds), and their proofs are tombstoned through expiry.
+Key revocation remains permanently denied after toolshed restart.
 
 Release leaves existing sessions on their original lease. Renewal with a fresh
 challenge extends current principal sessions; replaying an old statement cannot

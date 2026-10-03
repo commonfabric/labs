@@ -706,12 +706,12 @@ describe("WebSocketTransport failure signaling", () => {
     };
   };
 
-  /** Answers the client's `hello`, which is the whole of connecting. */
+  /** Answers `hello` as a server using signed session-open authentication. */
   const answerHello = (socket: DrivableWebSocket): void => {
     socket.receive(encodeMemoryBoundary({
       type: "hello.ok",
       protocol: MEMORY_PROTOCOL,
-      flags: getMemoryProtocolFlags(),
+      flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
       sessionOpen: TEST_HELLO_SESSION_OPEN,
     }));
   };
@@ -1451,7 +1451,7 @@ describe("WebSocketTransport failure signaling", () => {
       activeSocket.receive(encodeMemoryBoundary({
         type: "hello.ok",
         protocol: MEMORY_PROTOCOL,
-        flags: getMemoryProtocolFlags(),
+        flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
         sessionOpen: TEST_HELLO_SESSION_OPEN,
       }));
       await signingStarted.promise;
@@ -1509,7 +1509,7 @@ describe("WebSocketTransport failure signaling", () => {
         initialSocket.receive(encodeMemoryBoundary({
           type: "hello.ok",
           protocol: MEMORY_PROTOCOL,
-          flags: getMemoryProtocolFlags(),
+          flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
           sessionOpen: TEST_HELLO_SESSION_OPEN,
         }));
         await initialSocket.whenSent(2);
@@ -1536,7 +1536,7 @@ describe("WebSocketTransport failure signaling", () => {
         reconnectSocket.receive(encodeMemoryBoundary({
           type: "hello.ok",
           protocol: MEMORY_PROTOCOL,
-          flags: getMemoryProtocolFlags(),
+          flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
           sessionOpen: TEST_HELLO_SESSION_OPEN,
         }));
         await reconnectSigningStarted.promise;

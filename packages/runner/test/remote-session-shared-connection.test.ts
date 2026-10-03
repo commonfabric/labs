@@ -2,6 +2,10 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import {
+  type ClientMessage,
+  decodeTrustedMemoryBoundary,
+} from "@commonfabric/memory/v2";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
 import {
@@ -23,6 +27,9 @@ const SPACES = [
 type Harness = {
   factory: RemoteSessionFactory;
   dialed: URL[];
+
+  /** Uncompressed client requests submitted through the transport. */
+  sent: ClientMessage[];
 };
 
 describe("RemoteSessionFactory connection sharing", () => {
@@ -59,9 +66,19 @@ describe("RemoteSessionFactory connection sharing", () => {
     },
   ): Harness => {
     const dialed: URL[] = [];
+    const sent: ClientMessage[] = [];
     const createSocket: MemorySocketFactory = (address) => {
       dialed.push(address);
-      return createNativeMemorySocket(address);
+      const connected = createNativeMemorySocket(address);
+      return {
+        socket: connected.socket,
+        send: (frame) => {
+          if (typeof frame === "string" && frame.startsWith("fvj1:")) {
+            sent.push(decodeTrustedMemoryBoundary<ClientMessage>(frame));
+          }
+          return connected.send(frame);
+        },
+      };
     };
     const factory = new RemoteSessionFactory(
       createStorageAddressResolver(server.url, options.spaceHostMap),
@@ -70,7 +87,7 @@ describe("RemoteSessionFactory connection sharing", () => {
     );
     factory.setSharedConnections(options.shared);
     factories.push(factory);
-    return { factory, dialed };
+    return { factory, dialed, sent };
   };
 
   /** The principal of every session of `space` a connection holds. */
@@ -100,6 +117,35 @@ describe("RemoteSessionFactory connection sharing", () => {
         await Promise.all(opened.map(({ client }) => client.close()));
       }
     });
+  });
+
+  describe("authentication with sharing off", () => {
+    for (const connectionAuth of [false, true]) {
+      it(`uses the server's authentication capability when connectionAuth is ${connectionAuth}`, async () => {
+        const server = startServer({ connectionAuth });
+        const { factory, dialed, sent } = harnessFor(server, { shared: false });
+        await factory.setMessageCompressionEnabled(false);
+        const opened = await factory.create(SPACES[0]);
+        try {
+          expect(dialed).toHaveLength(1);
+          expect(dialed[0].searchParams.get("space")).toBe(SPACES[0]);
+          expect(principalsIn(server, SPACES[0])).toEqual([user.did()]);
+          expect(sent.filter((message) => message.type === "connection.auth"))
+            .toHaveLength(connectionAuth ? 1 : 0);
+          const opens = sent.filter((message) =>
+            message.type === "session.open"
+          );
+          expect(opens).toHaveLength(1);
+          expect(opens[0].principal).toBe(
+            connectionAuth ? user.did() : undefined,
+          );
+          expect(opens[0].invocation !== undefined).toBe(!connectionAuth);
+          expect(opens[0].authorization !== undefined).toBe(!connectionAuth);
+        } finally {
+          await opened.client.close();
+        }
+      });
+    }
   });
 
   describe("with sharing on", () => {

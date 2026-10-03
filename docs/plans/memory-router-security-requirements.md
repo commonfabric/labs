@@ -202,8 +202,11 @@ certificate private key, compromise exposes that key too.
     links. The pristine process creates a narrow worker-to-link-agent IPC
     channel so the link agent can bind each challenge and proof receipt to that
     channel's client context. Broker services never trust a context ID supplied
-    in a message. The link agent accepts bounded, fixed-format IPC metadata and
-    hashes opaque statements without parsing Memory payloads. Processes have the
+    in a message. The link agent accepts bounded, fixed-format IPC metadata. It
+    verifies the fixed-format `mra1` client statement (signature, principal,
+    router, deployment, challenge, issue time and lease) before admitting a
+    worker, so admission depends on no toolshed, and it parses no Memory
+    payload; each toolshed still verifies the statement itself. Processes have the
     minimum network access for their roles: the listener has no egress, workers
     cannot create sockets, and the directory process can reach only the
     directory and assigned toolsheds. Network namespaces or equivalent egress
