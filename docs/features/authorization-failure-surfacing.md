@@ -117,7 +117,11 @@ removes that target's content and event handlers while retaining the authorized
 Loom root and sibling panels. Revoking the root removes its rendered content.
 Subscription teardown also cancels pending render callbacks so they cannot
 restore a removed subtree. Transient transport errors preserve the mounted
-content and do not masquerade as revoked authority.
+content and do not masquerade as revoked authority. What stands in for revoked
+content reads "Access unavailable" beside a Retry button, which asks for the
+revoked space once more, and the status reads "Retrying…" until the answer
+comes; an
+admission restores the content.
 
 ## CLI: surface the denial for the space it was asked to reach
 
@@ -166,7 +170,10 @@ Two properties follow from terminating rather than looping:
   `StorageManager.retrySpaceAccess(space)`, which `Runtime` and `RuntimeClient`
   pass through, opens the session again through the same admission. If it is
   admitted, it repeats the loads the refusal failed; if it is refused, the
-  refusal is recorded where the first one was. Retrying a denied reopen on a
+  refusal is recorded where the first one was. The shell asks on events a grant
+  may lie behind: the person pressing the renderer's Retry button, navigating
+  into a refused space, or coming back to the page.
+  [`space-access.md`](space-access.md) lists them. Retrying a denied reopen on a
   schedule until an administrator acts is the retry-loop the engineering
   principles forbid; the CLI reports the error and exits. A genuinely transient
   or recoverable condition — a token-refresh window, a challenge race, a
