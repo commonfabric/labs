@@ -769,19 +769,34 @@ export function renderSpaceAccessProviderFor(
 }
 
 /**
- * Where a mount's render errors go: the client that mounted it, and no other.
+ * Where a mount's render errors go: the client that mounted it, and no other,
+ * as `gate()`, the worker's gate when the error is raised, decides them.
  *
  * A render error belongs to the document showing the tree rather than to
  * whichever client happens to own the worker, and a reconciler reports one
  * from deep inside a render. Named here so that rule is one a test can state,
  * the render failures that raise it being reachable only through a pattern.
+ *
+ * The renderer's own message (`raisedBy: "renderer"`) is made from no cell's
+ * contents, and is shown as the runtime's. A handler a pattern handed the
+ * renderer ran outside any transaction, and a view's failure was raised
+ * running the view, so neither carries labels to decide it on, and under a
+ * policy their message and stack are withheld, as such an error's are.
  */
 export function mountErrorSink(
   client: WorkerClient,
-  gate: HostReadGate,
-): (error: Error) => void {
-  return (error) => {
-    client.post(gate.error(runtimeErrorReport(error)));
+  gate: () => HostReadGate,
+): (error: Error, raisedBy?: "renderer" | "handler") => void {
+  return (error, raisedBy) => {
+    const report = runtimeErrorReport(error);
+    client.post(
+      raisedBy === "renderer"
+        ? gate().runtimeError({
+          message: report.message,
+          ...(report.code === undefined ? {} : { code: report.code }),
+        })
+        : gate().error(report),
+    );
   };
 }
 
@@ -4227,7 +4242,7 @@ export class RuntimeProcessor {
         });
         return batchId;
       },
-      onError: mountErrorSink(client, this.#hostReadGate),
+      onError: mountErrorSink(client, () => this.#hostReadGate),
     });
 
     let active = true;
@@ -4251,7 +4266,7 @@ export class RuntimeProcessor {
     return this.#runtime.viewReplication.mount(
       rawCell,
       key,
-      mountErrorSink(client, this.#hostReadGate),
+      mountErrorSink(client, () => this.#hostReadGate),
     ).then((cancel) => {
       if (!active) cancel?.();
       else cancelView = cancel;

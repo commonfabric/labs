@@ -8018,7 +8018,7 @@ describe("runtime-processor", () => {
       it("posts a render error to the client that mounted, and no other", () => {
         const mounting = testClient(1);
         const other = testClient(2);
-        mountErrorSink(mounting.client, new HostReadGate(undefined, {}))(
+        mountErrorSink(mounting.client, () => new HostReadGate(undefined, {}))(
           new Error("render blew up"),
         );
         expect(mounting.posted).toHaveLength(1);
@@ -8027,9 +8027,32 @@ describe("runtime-processor", () => {
         expect(other.posted).toEqual([]);
       });
 
+      it("shows the renderer's own error under a ceiling, and withholds a handler's", () => {
+        const mounting = testClient(1);
+        const sink = mountErrorSink(
+          mounting.client,
+          () => HostReadGate.forConfiguredCeiling([]),
+        );
+        sink(new Error("Invalid VDOM content: got symbol"), "renderer");
+        sink(new Error("handler saw a sealed value"), "handler");
+        expect(mounting.posted[0].message).toBe(
+          "Invalid VDOM content: got symbol",
+        );
+        expect(mounting.posted[1].message).not.toContain("sealed value");
+      });
+
+      it("decides with the gate the worker holds when the error is raised", () => {
+        const mounting = testClient(1);
+        let gate = new HostReadGate(undefined, {});
+        const sink = mountErrorSink(mounting.client, () => gate);
+        gate = HostReadGate.forConfiguredCeiling([]);
+        sink(new Error("handler saw a sealed value"), "handler");
+        expect(mounting.posted[0].message).not.toContain("sealed value");
+      });
+
       it("carries a compiler-stack failure's code, so the shell can act on it", () => {
         const mounting = testClient(1);
-        mountErrorSink(mounting.client, new HostReadGate(undefined, {}))(
+        mountErrorSink(mounting.client, () => new HostReadGate(undefined, {}))(
           new CompilerStackLoadError(new TypeError("chunk fetch failed")),
         );
         expect(mounting.posted[0].code).toBe(

@@ -377,7 +377,7 @@ export class WorkerReconciler {
   #rootCancel: Cancel | null = null;
 
   readonly #onOps: (ops: VDomOp[]) => number | void;
-  readonly #onError?: (error: Error) => void;
+  readonly #onError?: WorkerReconcilerOptions["onError"];
   readonly #renderDeclassificationPolicy: RenderDeclassificationPolicy;
 
   /**
@@ -571,6 +571,7 @@ export class WorkerReconciler {
             new Error(
               `Invalid VDOM content: expected WorkerVNode, string, or number, got ${typeof resolvedVnode}`,
             ),
+            "renderer",
           );
           return;
         }
@@ -698,6 +699,7 @@ export class WorkerReconciler {
       } catch (error) {
         this.#onError?.(
           error instanceof Error ? error : new Error(String(error)),
+          "handler",
         );
       }
       return true;

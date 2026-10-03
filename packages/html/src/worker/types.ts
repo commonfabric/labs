@@ -388,8 +388,13 @@ export interface WorkerReconcilerOptions {
     ops: VDomOp[],
   ) => number | void;
 
-  /** Optional: callback when an error occurs */
-  onError?: (error: Error) => void;
+  /**
+   * Optional: callback when an error occurs. `raisedBy` says whose message
+   * it is: the renderer's own, made from no cell's contents, or one raised by
+   * a handler a pattern handed the renderer, which ran outside any
+   * transaction and can quote whatever the pattern held.
+   */
+  onError?: (error: Error, raisedBy: "renderer" | "handler") => void;
 
   /** Authoritative session access, independent of cell confidentiality labels. */
   spaceAccess?: SpaceAccessProvider;

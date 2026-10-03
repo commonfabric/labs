@@ -1034,13 +1034,15 @@ export class HostReadGate {
   }
 
   /**
-   * An error the runtime raises about itself, as an unreachable host is, as
-   * a host may see it: as reported. Its message is the runtime's own, made
-   * from no cell, so nothing in it is decided. A pattern's error goes through
+   * An error the runtime raises about itself, as an unreachable host is, or
+   * as the renderer reports content it cannot render, as a host may see it:
+   * as reported. Its message is the runtime's own, made from no cell, so
+   * nothing in it is decided. `code` names it where the host's remedy
+   * depends on which error it is. A pattern's error goes through
    * {@link error}.
    */
   runtimeError(
-    report: { code: RuntimeErrorCode; message: string },
+    report: { code?: RuntimeErrorCode; message: string },
   ): ErrorNotification {
     return decided({ type: NotificationType.ErrorReport as const, ...report });
   }
