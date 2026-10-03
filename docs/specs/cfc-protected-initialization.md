@@ -294,13 +294,23 @@ An initialization policy input is authoritative only when the runtime records it
 with its private authorization mark. A record submitted through the public
 transaction interface has no initialization authority.
 
-Overlapping writes can record different intermediate snapshots. Every covering
-write snapshot must support absence: a snapshot showing an existing value, an
-unreadable path, a write redirect standing on the path above the slot, or
-unknown presence prevents initialization. A
-whole-object deletion followed by a child write cannot turn an existing field
-into a new field. The exact-value check reads the transaction's final value,
-rather than reconstructing it from overlapping write details.
+Overlapping writes can record different intermediate snapshots. A write detail
+keeps its path's state from before the transaction first wrote that path, and
+details come in the order their paths were first written, so the first detail
+covering the slot shows what the slot held before the transaction. That
+snapshot alone decides the slot's prior state. It must show the slot absent, or
+for a capture a link to the cell the capture names; a snapshot showing another
+value, an unreadable path, a write redirect standing on the path above the
+slot, or unknown presence prevents initialization. A later covering snapshot can
+show a value the transaction itself wrote earlier, so it neither prevents nor
+permits initialization. A whole-object deletion followed by a child write
+therefore cannot turn an existing field into a new field: the deletion is the
+first write covering the field, and its snapshot shows the field. A binding,
+which a later setup may re-point, does not consult the slot's prior state.
+
+What the slot ends the transaction holding is a separate check. It reads the
+transaction's final value rather than reconstructing it from overlapping write
+details.
 
 The permission waives `writeAuthorizedBy` and a UI contract's trusted-event
 requirement for that initialization, the two declarations that name who may
