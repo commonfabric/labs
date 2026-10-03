@@ -1718,20 +1718,20 @@ describe("HostReadGate, for what crosses beside a value", () => {
         // commit lands, and the gate alone decides where a host is sent, as
         // it must under every mode.
         cfcEnforcementMode: "observe",
-        navigateCallback: (target, consumed) => {
+        navigateCallback: async (target, consumed) => {
           if (gates === undefined) return;
           const ref = createCellRef(target);
-          const decide = (gate: HostReadGate) => {
+          const decide = async (gate: HostReadGate) => {
             try {
-              return gate.navigate(ref, consumed);
+              return await gate.navigate(ref, consumed);
             } catch (error) {
               return error;
             }
           };
           decisions.push({
             ref,
-            visitor: decide(gates.visitor),
-            owner: decide(gates.owner),
+            visitor: await decide(gates.visitor),
+            owner: await decide(gates.owner),
           });
           navigated();
         },
@@ -1823,9 +1823,20 @@ describe("HostReadGate, for what crosses beside a value", () => {
         integrity: [],
         modulePolicySpaces: {},
       };
+      // A claim the entry's writer chose, asserting the visitor reads the
+      // owner's space, which it does not.
+      const claimingAccess: {
+        confidentiality: CfcAtom[];
+        integrity: CfcAtom[];
+        modulePolicySpaces: Record<string, string[]>;
+      } = {
+        confidentiality: [],
+        integrity: [cfcAtom.hasRole(visitor.did(), space, "reader")],
+        modulePolicySpaces: {},
+      };
       const enact = async (
         viewer: Identity,
-        intent: { chosenFrom?: typeof sealed; storedSealed?: boolean },
+        intent: { chosenFrom?: typeof claimingAccess; stored?: CfcAtom },
       ) => {
         const storageManager = StorageManager.emulate({ as: owner });
         let gate: HostReadGate | undefined;
@@ -1837,10 +1848,12 @@ describe("HostReadGate, for what crosses beside a value", () => {
           storageManager,
           experimental: { serverExecution: true },
           // As the worker's callback does: the gate's request is posted.
-          navigateCallback: (target, consumed) => {
+          navigateCallback: async (target, consumed) => {
             called();
             if (gate === undefined) return;
-            delivered.push(gate.navigate(createCellRef(target), consumed));
+            delivered.push(
+              await gate.navigate(createCellRef(target), consumed),
+            );
           },
         });
         try {
@@ -1867,9 +1880,9 @@ describe("HostReadGate, for what crosses beside a value", () => {
               issuedIn: null,
             }],
           };
-          if (intent.storedSealed === true) {
+          if (intent.stored !== undefined) {
             // An entry something other than the server wrote, from what only
-            // the owner may see, and so stored with that label.
+            // some may see, and so stored with that label.
             writeSeedEnvelopeDoc(tx, space);
             seedStoredEnvelope(tx, {
               space,
@@ -1886,7 +1899,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
                   version: 1,
                   entries: [{
                     path: ["entries"],
-                    label: { confidentiality: [ownerOnly] },
+                    label: { confidentiality: [intent.stored] },
                   }],
                 },
               },
@@ -1937,13 +1950,21 @@ describe("HostReadGate, for what crosses beside a value", () => {
       // a schema input, which an ack carries none of, so only what reached
       // the host is compared.)
       expect(
-        (await enact(visitor, { chosenFrom: open, storedSealed: true }))
+        (await enact(visitor, { chosenFrom: open, stored: ownerOnly }))
           .delivered,
       ).toEqual([]);
       expect(
-        (await enact(owner, { chosenFrom: open, storedSealed: true }))
+        (await enact(owner, { chosenFrom: open, stored: ownerOnly }))
           .delivered,
       ).toEqual(navigation);
+      // The claim's integrity discharges nothing the entry stores: a
+      // non-member is not admitted to the owner's space on its say-so.
+      expect(
+        (await enact(visitor, {
+          chosenFrom: claimingAccess,
+          stored: cfcAtom.space(space),
+        })).delivered,
+      ).toEqual([]);
     });
 
     it("answers a host's read of the session effects document as unreadable", async () => {
@@ -2006,6 +2027,68 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(cellLabelSources(effects.key("entries"))).toBeUndefined();
     });
 
+    it("waits for the access lists a navigation's labels name, and calls a withhold definitive only where nothing can change it", async () => {
+      // The visitor may read the owner's space; its worker has not loaded
+      // the access list.
+      const server = newLoopbackServer();
+      const writer = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      const reader = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, {
+          as: visitor,
+        }),
+      });
+      try {
+        const tx = writer.edit();
+        tx.writeOrThrow({
+          space,
+          id: `of:${space}` as `${string}:${string}`,
+          type: "application/json",
+          path: [],
+        }, { value: { [space]: "OWNER", [visitor.did()]: "READ" } });
+        expect((await tx.commit()).ok).toBeDefined();
+        await writer.storageManager.synced();
+        const gate = gateFor(reader, visitor);
+        const target = createCellRef(reader.getCell(space, "anywhere"));
+        const outcome = async (
+          confidentiality: CfcAtom[],
+        ): Promise<unknown> => {
+          try {
+            await gate.navigate(target, () => ({
+              confidentiality,
+              integrity: [],
+              modulePolicySpaces: new Map(),
+              sources: [],
+            }));
+            return "admitted";
+          } catch (error) {
+            return error instanceof NavigationWithheldError
+              ? { definitive: error.definitive }
+              : error;
+          }
+        };
+
+        // A member, decided once its access list loads.
+        expect(await outcome([cfcAtom.space(space)])).toBe("admitted");
+        // A space the visitor is not a member of: refused, but an access
+        // list can still grant access, so not definitive.
+        const elsewhere =
+          (await Identity.fromPassphrase("host read channels elsewhere"))
+            .did();
+        expect(await outcome([cfcAtom.space(elsewhere)]))
+          .toEqual({ definitive: false });
+        // A label no access list or manifest can change.
+        expect(await outcome([ownerOnly])).toEqual({ definitive: true });
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
     it("decides a navigation as it decides what an action logged", async () => {
       await using docs = await shelf();
       const consumed = () =>
@@ -2013,18 +2096,18 @@ describe("HostReadGate, for what crosses beside a value", () => {
       const target = createCellRef(docs.caveated);
 
       // A withheld navigation is not answered with nothing, which a caller
-      // could take for one made: it throws.
-      expect(() => gateFor(docs.runtime, visitor).navigate(target, consumed))
-        .toThrow(NavigationWithheldError);
-      expect(gateFor(docs.runtime, owner).navigate(target, consumed))
+      // could take for one made: it rejects.
+      await expect(gateFor(docs.runtime, visitor).navigate(target, consumed))
+        .rejects.toThrow(NavigationWithheldError);
+      expect(await gateFor(docs.runtime, owner).navigate(target, consumed))
         .toEqual({
           type: NotificationType.NavigateRequest,
           targetCellRef: target,
         });
       // A request made outside an action carries no labels to decide it on.
-      expect(() => gateFor(docs.runtime, owner).navigate(target, undefined))
-        .toThrow(NavigationWithheldError);
-      expect(new HostReadGate(undefined, {}).navigate(target, undefined))
+      await expect(gateFor(docs.runtime, owner).navigate(target, undefined))
+        .rejects.toThrow(NavigationWithheldError);
+      expect(await new HostReadGate(undefined, {}).navigate(target, undefined))
         .toEqual({
           type: NotificationType.NavigateRequest,
           targetCellRef: target,

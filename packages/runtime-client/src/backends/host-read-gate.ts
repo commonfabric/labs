@@ -56,10 +56,12 @@ import type {
   TriggerTraceEntry,
 } from "@commonfabric/runner/shared";
 import {
+  type CfcConfClause,
   type CfcLabelView,
   cfcLabelViewForCell,
   cfcLabelViewForResolvedCell,
   membershipSpacesInConfidentiality,
+  modulePolicyRefsInConfidentiality,
   reportCfcDenial,
 } from "@commonfabric/runner/cfc";
 import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
@@ -348,6 +350,26 @@ export class HostReadGate {
   async #loadAccessLists(
     cells: readonly Cell<unknown>[],
   ): Promise<"none" | "loaded" | "failed"> {
+    if (this.#policy === undefined) return "none";
+    return await this.#loadAccessListsNamedBy(cells.flatMap((cell) => [
+      ...readProjected(cell, hostValueOf).consumed.confidentiality,
+      ...(cellLabelSources(cell) ?? []).flatMap((source) =>
+        source.view === undefined
+          ? []
+          : source.view.entries.flatMap((entry) =>
+            entry.label.confidentiality ?? []
+          )
+      ),
+    ]));
+  }
+
+  /**
+   * Loads the access lists of the spaces `labels` name that the replica does
+   * not hold, answering as {@link #loadAccessLists} does.
+   */
+  async #loadAccessListsNamedBy(
+    labels: readonly CfcConfClause[],
+  ): Promise<"none" | "loaded" | "failed"> {
     const membership = this.#sources.membership;
     const held = membership?.held?.bind(membership);
     const whenHeld = membership?.whenHeld?.bind(membership);
@@ -357,16 +379,6 @@ export class HostReadGate {
     ) {
       return "none";
     }
-    const labels = cells.flatMap((cell) => [
-      ...readProjected(cell, hostValueOf).consumed.confidentiality,
-      ...(cellLabelSources(cell) ?? []).flatMap((source) =>
-        source.view === undefined
-          ? []
-          : source.view.entries.flatMap((entry) =>
-            entry.label.confidentiality ?? []
-          )
-      ),
-    ]);
     const pending = membershipSpacesInConfidentiality(labels).filter((space) =>
       !held(space)
     );
@@ -1014,17 +1026,33 @@ export class HostReadGate {
    * A navigation is a side effect its caller records as done, as the effects
    * channel acks a server's intent once it is enacted, so one the policy
    * withholds is not returned as nothing: it throws
-   * `NavigationWithheldError`, `definitive` where labels were read and
-   * refused, and not where there were none to decide on or they could not
-   * be read.
+   * `NavigationWithheldError`.
+   *
+   * The decision is made once, so it waits first for the access lists of
+   * the spaces the labels name. A withhold is `definitive`, so that a caller
+   * may count the navigation as done, only where it cannot turn out
+   * otherwise for this viewer: labels were read and refused, and none of
+   * them depends on what the worker may yet learn, a space's access list
+   * (which can load late, fail to load, or grant access later) or a module
+   * policy's manifest. Any other withhold leaves the navigation undecided.
    */
-  navigate(
+  async navigate(
     target: CellRef,
     consumed: (() => SinkConsumedLabel) | undefined,
-  ): NavigateRequestNotification {
+  ): Promise<NavigateRequestNotification> {
+    const labels = this.#labelsOf(consumed);
+    if (labels !== undefined) {
+      await this.#loadAccessListsNamedBy(labels.confidentiality);
+    }
     const verdict = this.#consumedVerdict(consumed);
     if (verdict !== "admitted") {
-      throw new NavigationWithheldError(verdict === "refused");
+      throw new NavigationWithheldError(
+        verdict === "refused" && labels !== undefined &&
+          membershipSpacesInConfidentiality(labels.confidentiality)
+              .length === 0 &&
+          modulePolicyRefsInConfidentiality(labels.confidentiality).length ===
+            0,
+      );
     }
     return decided({
       type: NotificationType.NavigateRequest as const,
@@ -1160,6 +1188,18 @@ export class HostReadGate {
    */
   #withheld(consumed: (() => SinkConsumedLabel) | undefined): boolean {
     return this.#consumedVerdict(consumed) !== "admitted";
+  }
+
+  /** `consumed` read, or `undefined` where there are none or they fail. */
+  #labelsOf(
+    consumed: (() => SinkConsumedLabel) | undefined,
+  ): SinkConsumedLabel | undefined {
+    if (consumed === undefined) return undefined;
+    try {
+      return consumed();
+    } catch {
+      return undefined;
+    }
   }
 
   /**

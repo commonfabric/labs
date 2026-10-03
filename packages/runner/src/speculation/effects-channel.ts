@@ -150,8 +150,12 @@ function chosenFromOf(value: unknown): (() => SinkConsumedLabel) | undefined {
  * (`stored`). An entry the server wrote stores none, so the join is the
  * intent's own; one something else wrote stores the labels of what that
  * write was made from, which the intent's own claim does not lower.
- * Integrity is the intent's alone: a stored label's evidence is no claim
- * about what chose the target. Either one failing to read fails the join.
+ *
+ * Integrity is evidence an exchange rule can discharge confidentiality on,
+ * such as a `HasRole` fact. The claim is data the entry's writer chose, so
+ * its integrity is taken only where nothing is stored, where it can speak
+ * only to its own claim; where labels are stored, the stored integrity is
+ * taken instead. Either one failing to read fails the join.
  */
 function joinedLabels(
   chosenFrom: () => SinkConsumedLabel,
@@ -171,9 +175,11 @@ function joinedLabels(
       for (const space of spaces) set.add(space);
       modulePolicySpaces.set(key, set);
     }
+    const holdsLabels = held.confidentiality.length > 0 ||
+      held.integrity.length > 0;
     return {
       confidentiality: [...claimed.confidentiality, ...held.confidentiality],
-      integrity: claimed.integrity,
+      integrity: holdsLabels ? held.integrity : claimed.integrity,
       modulePolicySpaces,
       sources: [],
     };
@@ -211,8 +217,14 @@ export class EffectsChannel {
 
   #warnedNoNavigate = false;
 
-  /** Intents left pending as undecidable, each reported once in this life. */
-  readonly #reportedUndecidable = new Set<string>();
+  /** Withheld intents, each reported once in this life. */
+  readonly #reportedWithheld = new Set<string>();
+
+  /**
+   * Intents withheld definitively and acked as done for this session. Not
+   * enacted, so they are kept apart from {@link #enacted}.
+   */
+  readonly #withheldForSession = new Set<string>();
   #closed = false;
 
   constructor(runtime: Runtime) {
@@ -266,7 +278,9 @@ export class EffectsChannel {
       if (inFlight === undefined) break;
       if (await inFlight) return true;
     }
-    if (this.#enacted.has(nonce)) return true;
+    if (this.#enacted.has(nonce) || this.#withheldForSession.has(nonce)) {
+      return true;
+    }
     return await this.#beginEnactment(nonce, work);
   }
 
@@ -359,13 +373,17 @@ export class EffectsChannel {
     const started = Promise.withResolvers<unknown>();
     const settled = started.promise.then(() => true, (error) => {
       if (error instanceof NavigationWithheldError) {
-        // Nothing to decide this intent on: it waits, unacked, for a
-        // delivery that can be decided, and is reported once.
-        if (!this.#reportedUndecidable.has(nonce)) {
-          this.#reportedUndecidable.add(nonce);
-          logger.warn("enact-undecidable", () => [
-            `navigate intent ${nonce} carries no labels this client can ` +
-            "decide it on; left unacked",
+        // Withheld, and not retired here: an undecidable intent waits for a
+        // delivery that can be decided, and an optimistic flush leaves the
+        // server's intent to decide. Reported once.
+        if (!this.#reportedWithheld.has(nonce)) {
+          this.#reportedWithheld.add(nonce);
+          logger.warn("enact-withheld", () => [
+            `navigate intent ${nonce} withheld by the display ceiling ` +
+            (error.definitive
+              ? "on labels this viewer is refused"
+              : "with nothing it can be decided on") +
+            "; left unacked",
           ]);
         }
         return false;
@@ -378,7 +396,9 @@ export class EffectsChannel {
       return false;
     }).then((ok) => {
       this.#enactInFlight.delete(nonce);
-      if (!ok) this.#enacted.delete(nonce);
+      if (!ok || this.#withheldForSession.has(nonce)) {
+        this.#enacted.delete(nonce);
+      }
       return ok;
     });
     this.#enactInFlight.set(nonce, settled);
@@ -485,7 +505,7 @@ export class EffectsChannel {
         });
         continue;
       }
-      if (!this.#enacted.has(nonce)) {
+      if (!this.#enacted.has(nonce) && !this.#withheldForSession.has(nonce)) {
         if (entry.kind !== "navigate") {
           // A kind this client does not ship (protocol.md §5's closed
           // set): leave it unacked — acking would claim an enactment
@@ -540,6 +560,7 @@ export class EffectsChannel {
               if (
                 error instanceof NavigationWithheldError && error.definitive
               ) {
+                this.#withheldForSession.add(nonce);
                 return;
               }
               throw error;

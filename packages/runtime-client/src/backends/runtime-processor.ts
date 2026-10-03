@@ -3488,7 +3488,6 @@ export class RuntimeProcessor {
     );
   };
 
-  /** The root of the document a diagnostic names, which it is decided on. */
   /**
    * The document a graph address names, placed by its scope key: the space
    * instance, or this runtime's own user or session instance. Another
@@ -3508,6 +3507,7 @@ export class RuntimeProcessor {
     return own === scopeKey ? this.#documentAt(space, id, scope) : undefined;
   };
 
+  /** The root of the document a diagnostic names, which it is decided on. */
   #documentAt: DocumentAt = (space, id, scope) =>
     this.#runtime.getCellFromLink({
       space: space as DID,
@@ -4470,13 +4470,13 @@ export class RuntimeProcessor {
         return args;
       },
 
-      navigateCallback: (target, consumed) => {
+      navigateCallback: async (target, consumed) => {
         const link = parseLink(target.getAsLink()) as NormalizedFullLink;
         // Where to go is what the run that asked chose, from what it had
         // read, so the gate decides the request on that. A withheld request
-        // throws, so neither a flush nor the effects channel records it as
+        // rejects, so neither a flush nor the effects channel records it as
         // made.
-        postToClient(gate().navigate(link, consumed));
+        postToClient(await gate().navigate(link, consumed));
       },
 
       pieceCreatedCallback: (piece) => {
