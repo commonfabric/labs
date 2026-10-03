@@ -688,7 +688,11 @@ describe("RuntimeClient", () => {
         includeRef: true,
       });
 
-      assertEquals(response.value, { count: 7, label: "copied label" });
+      assertEquals("refused" in response, false);
+      assertEquals("value" in response && response.value, {
+        count: 7,
+        label: "copied label",
+      });
     });
 
     it("detaches a followed root through the runtime-client protocol", async () => {

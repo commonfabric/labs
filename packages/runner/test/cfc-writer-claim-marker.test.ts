@@ -310,8 +310,13 @@ describe("the marker for a writer-claimed position that holds nothing", () => {
       })).error,
     ).toBeUndefined();
     expect(doc.get().terms).toEqual({ question: "Where?" });
+    // The stamp is the writer's value's, in the minted component; the
+    // marker's declared entry still states no label.
+    expect(declaredAt(entriesOf(doc), ["terms"])).toMatchObject({ label: {} });
     expect(
-      declaredAt(entriesOf(doc), ["terms"])?.label.integrity,
+      entriesOf(doc).find((entry) =>
+        entry.origin === "minted" && entry.path.join("/") === "terms"
+      )?.label.integrity,
     ).toEqual(["cfc-writer-claim-marker-attested"]);
 
     refusedByClaim(

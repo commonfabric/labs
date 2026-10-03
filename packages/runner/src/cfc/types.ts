@@ -32,15 +32,6 @@ export type {
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
-// A write redirect a setup stages to a cell the piece it sets up did not
-// create: a binding passed into the piece's argument, or a result field that
-// names its argument or a cell the code setting it up closed over. `target` is
-// the slot holding the redirect, `sources` the cell it names. That cell belongs
-// to whoever handed the piece the binding, and the setup initializes none of
-// it, so the prepare gate takes the marker for the slot alone.
-export const CFC_STRUCTURAL_PROVENANCE_BINDING_PROJECTION =
-  "runtime.setup.binding-projection";
-
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
 // argument, result and internal documents, minted by the runner from the
@@ -298,6 +289,17 @@ export type CfcSandboxResult = {
  *   stamp they accompany; concrete `observes:"shape"` existence entries
  *   freeze at creation). Readers that predate this component treat its
  *   entries as covering (over-taint, fail-safe).
+ * - `minted`: integrity a write's own schema stamped onto the value it wrote
+ *   (`ifc.addIntegrity`), principal claims excepted. It labels that value
+ *   and no later one: a write changing the value, or part of it, withdraws
+ *   the entry unless the writing transaction's schema stamps what it wrote
+ *   with the same atoms, and a schema the document merely stores mints
+ *   nothing. A
+ *   `*`-path entry states that every value the path matches carries the
+ *   stamp, and is replaced by per-value entries by the first write that
+ *   leaves one of them without it. A position holding a reference carries no
+ *   entry: the value behind it is labeled in its own document. See
+ *   `minted-integrity.ts`.
  * - `external-ingest`: the `ExternalIngest` provenance mark a vouched ingest
  *   channel mints onto the value it durably appends. Builtin-authored from
  *   verified channel metadata only (the split-mint), so it bypasses the
@@ -324,6 +326,7 @@ export type LabelEntryOrigin =
   | "link"
   | "derived"
   | "structure"
+  | "minted"
   | "external-ingest"
   | "label-metadata";
 
@@ -620,17 +623,31 @@ export type WritePolicyInput =
   | {
     /**
      * Authority is carried by the runtime's private mark, never this record
-     * alone. A `"reference"` initialization stages a link to a cell that exists
-     * already and none of what the cell holds, so its `value` is that link.
-     * A `"replay"` record names an argument slot a runtime replaying a
-     * piece's setup carries over from the stored argument document, with
-     * the bytes it holds; it permits nothing but leaving those bytes as they
-     * are.
+     * alone. A `"capture"` initialization stages a link to a cell that exists
+     * already into a slot, and none of what the cell holds, so its `value` is
+     * that link: a list's entry or the list itself handed to a sub-pattern,
+     * or a binding a callback captures. It is matched by the cell the link
+     * names and by whether the link is a write redirect, not by the link's
+     * bytes, which can carry the binding's schema beside the address, and it
+     * never re-points a slot that held a link to another cell. A `"binding"`
+     * initialization is a binding a setup stages into an argument or a result
+     * field: matched the same way, but re-established on every setup, so a
+     * later setup may re-point it at the cell the pattern now names. A
+     * `"replay"` record
+     * names an argument slot a runtime replaying a piece's setup carries over
+     * from the stored argument document, with the bytes it holds; it permits
+     * nothing but leaving those bytes as they are.
      */
     readonly kind: "initialization";
     readonly target: CfcAddress;
     readonly value: FabricValue;
-    readonly mode: "seed" | "default" | "projection" | "reference" | "replay";
+    readonly mode:
+      | "seed"
+      | "default"
+      | "projection"
+      | "capture"
+      | "binding"
+      | "replay";
   }
   | {
     readonly kind: "schema";
@@ -646,6 +663,14 @@ export type WritePolicyInput =
      * at rest.
      */
     readonly schemaRole?: "output";
+
+    /**
+     * Present only when the schema is the one the target document stores,
+     * standing in for a writer that brought none. Such a writer answers to
+     * the claims that schema makes and is stamped nothing by it: a value
+     * stamp (`ifc.addIntegrity`) is the stamping write's own.
+     */
+    readonly storedSchema?: true;
   }
   | {
     readonly kind: "structural-provenance";
