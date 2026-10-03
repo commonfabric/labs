@@ -3,7 +3,16 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { BRIDGE_READ_REFUSED } from "@commonfabric/iframe-sandbox";
+import {
+  BRIDGE_READ_REFUSED,
+  type FabricBridge,
+  FabricBridgeHost,
+  IPC,
+} from "@commonfabric/iframe-sandbox";
+import {
+  connectFabric,
+  type FabricClient,
+} from "@commonfabric/iframe-sandbox/guest";
 import {
   $conn,
   $onCellRefused,
@@ -818,8 +827,33 @@ describe("cf-iframe cell bridge", () => {
       expect(Object.keys(bridge.resources).sort()).toEqual(["count", "notes"]);
     });
 
+    /**
+     * Serves `bridge` to a guest, as `cf-iframe` does, and runs `use` with the
+     * guest's client.
+     */
+    const asGuest = async (
+      bridge: FabricBridge,
+      use: (client: FabricClient) => Promise<void>,
+    ) => {
+      const channel = new MessageChannel();
+      const host = new FabricBridgeHost(bridge, channel.port1);
+      const client = connectFabric();
+      globalThis.dispatchEvent(
+        new MessageEvent("message", {
+          data: IPC.GUEST_PORT_HANDOFF,
+          ports: [channel.port2],
+        }),
+      );
+      try {
+        await use(client);
+      } finally {
+        client.disconnect();
+        host.disconnect();
+      }
+    };
+
     for (const built of ["named", "resolved"] as const) {
-      it(`holds a path whose read was refused to that refusal for a write the guest makes through it again, in a ${built} context`, async () => {
+      it(`refuses a guest's write through a path whose read was refused, in a ${built} context`, async () => {
         const requests: { type: RequestType }[] = [];
         const runtime = runtimeStub({
           [$conn]: () => ({
@@ -840,20 +874,76 @@ describe("cf-iframe cell bridge", () => {
         const bridge = built === "named"
           ? createCellContextBridge(context)
           : await resolveCellContextBridge(context, { database: "cell" });
-        // As the bridge host reaches a path for each request: the resource,
-        // then each key along the path.
-        const detail = () => bridge.resources.count.cell!.key!("detail");
-        await expect(detail().pull()).rejects.toMatchObject({
-          code: BRIDGE_READ_REFUSED,
-        });
-        requests.length = 0;
 
-        await expect(detail().set!("written blind")).rejects.toMatchObject({
-          code: BRIDGE_READ_REFUSED,
+        await asGuest(bridge, async (client) => {
+          const detail = client.cell<Record<string, unknown>>("count").key(
+            "detail",
+          );
+          await expect(detail.pull()).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          requests.length = 0;
+
+          await expect(detail.set("written blind")).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          expect(requests).toEqual([]);
         });
-        expect(requests).toEqual([]);
       });
     }
+
+    it("refuses a guest's write through a refused path when a refusal of the context changes the cell that answers for it", async () => {
+      const writes: CellRef[] = [];
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (request.type === RequestType.CellSet) {
+              writes.push(request.cell);
+              return Promise.resolve({});
+            }
+            return Promise.resolve({ refused: refusal });
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+      // While the context is admitted, `count`, which its schema declares,
+      // is the cell the link it holds names.
+      context[$onCellUpdate]({
+        count: {
+          "/": {
+            "link@1": {
+              id: "of:counter",
+              space: ref.space,
+              scope: "space",
+              path: [],
+            },
+          },
+        },
+      });
+      const bridge = createCellContextBridge(context);
+
+      await asGuest(bridge, async (client) => {
+        const detail = client.cell<Record<string, unknown>>("count").key(
+          "detail",
+        );
+        await expect(detail.pull()).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+
+        // One rise of a label refuses the context too, so `count` is now
+        // reached through the context rather than through its link: another
+        // handle, which has read nothing.
+        context[$onCellRefused](refusal);
+
+        await expect(detail.set("written blind")).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        expect(writes).toEqual([]);
+      });
+    });
 
     it("names the resources a refused context's schema declares", () => {
       const { runtime } = refusing();
