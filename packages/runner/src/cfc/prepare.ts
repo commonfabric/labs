@@ -6407,6 +6407,160 @@ const cfcFloorTrustContext = (
   };
 };
 
+/**
+ * PROTOTYPE (Topic 701 §4): an environment switch read once, so one build can
+ * measure each candidate rule. Absent, or where the host grants no
+ * environment, the value is `fallback`.
+ */
+const prototypeSwitch = (name: string, fallback: string): string => {
+  try {
+    return (globalThis as {
+      Deno?: { env: { get(key: string): string | undefined } };
+    })
+      .Deno?.env.get(name) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+/**
+ * PROTOTYPE (Topic 701 §4a): which reads that carry no label count against a
+ * `requiredIntegrity` floor, as reads holding no witness. `strict`: every
+ * one. `document`: one of a document that carries a label somewhere, as the
+ * unendorsed part of a partly endorsed value is. `off`: none, the read gate
+ * quantifying over labeled reads alone.
+ */
+const FLOOR_UNENDORSED_READS = prototypeSwitch(
+  "CF_FLOOR_UNENDORSED_READS",
+  "document",
+);
+
+/**
+ * PROTOTYPE (Topic 701 §4b): whether a recursive read holds, for a floor, only
+ * the integrity every location it covers carries, rather than the union its
+ * label joins.
+ */
+const FLOOR_WHOLE_READ_MEET =
+  prototypeSwitch("CF_FLOOR_WHOLE_READ_MEET", "1") === "1";
+
+/**
+ * PROTOTYPE (Topic 701 §4a): whether a shallow read of a location with
+ * labeled entries beneath it is left out of the floor. Such a read observes a
+ * container's shape, its keys or its length, and none of the data its
+ * members hold.
+ */
+const FLOOR_SKIP_SHALLOW_CONTAINERS =
+  prototypeSwitch("CF_FLOOR_SKIP_SHALLOW_CONTAINERS", "1") === "1";
+
+/**
+ * PROTOTYPE (Topic 701 §4a): whether a link-resolution probe that carries no
+ * label is left out of the floor. A probe observes whether a location holds a
+ * reference: where it holds none, the probe observed only the container's
+ * shape, and where it holds one, the probe observed a pointer, whose
+ * endorsement is an open question (Topic 701 §4c).
+ */
+const FLOOR_SKIP_UNLABELED_PROBES =
+  prototypeSwitch("CF_FLOOR_SKIP_UNLABELED_PROBES", "1") === "1";
+
+/**
+ * PROTOTYPE (Topic 701 §4b): whether a recursive read's own location joins
+ * the floor's meet only where the value read holds data that no labeled
+ * location beneath it covers (`holdsUncoveredData()`), rather than always.
+ */
+const FLOOR_OWN_DATA_WALK =
+  prototypeSwitch("CF_FLOOR_OWN_DATA_WALK", "1") === "1";
+
+/**
+ * Whether a read at `path` of a document with `metadata`, carrying no label of
+ * its own, counts against a `requiredIntegrity` floor
+ * (`FLOOR_UNENDORSED_READS`, `FLOOR_SKIP_SHALLOW_CONTAINERS`,
+ * `FLOOR_SKIP_UNLABELED_PROBES`).
+ */
+const unendorsedReadCounts = (
+  metadata: CfcMetadata | undefined,
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+  probe: boolean,
+): boolean => {
+  if (FLOOR_UNENDORSED_READS === "off") return false;
+  if (FLOOR_SKIP_UNLABELED_PROBES && probe) return false;
+  const labeled = (metadata?.labelMap.entries ?? []).filter((entry) =>
+    hasLabelValues(entry.label)
+  );
+  if (
+    FLOOR_SKIP_SHALLOW_CONTAINERS && nonRecursive === true &&
+    labeled.some((entry) =>
+      entry.path.length > path.length && isPrefix(path, entry.path)
+    )
+  ) {
+    return false;
+  }
+  return FLOOR_UNENDORSED_READS === "strict" || labeled.length > 0;
+};
+
+/**
+ * PROTOTYPE (Topic 701 §4b): whether `value`, the value at `path`, holds data
+ * at a location none of `covering` covers: a primitive, an absent value, or a
+ * container with no members, outside every subtree an entry of `covering`
+ * (each a path beneath the read's, `*` matching any segment) labels.
+ */
+const holdsUncoveredData = (
+  value: unknown,
+  path: readonly string[],
+  covering: readonly (readonly string[])[],
+): boolean => {
+  if (covering.some((entryPath) => entryPathCoversPrefix(entryPath, path))) {
+    return false;
+  }
+  if (!isObjectOrArray(value)) return true;
+  const keys = Array.isArray(value)
+    ? value.map((_, index) => String(index))
+    : Object.keys(value);
+  return keys.length === 0 ||
+    keys.some((key) =>
+      holdsUncoveredData(
+        (value as Record<string, unknown>)[key],
+        [...path, key],
+        covering,
+      )
+    );
+};
+
+/**
+ * The integrity a read at `path` offers a `requiredIntegrity` floor, as one
+ * list per location it consumed: for a recursive read, each labeled path
+ * beneath it, and its own path where the value there holds data outside them
+ * (`FLOOR_WHOLE_READ_MEET`, `FLOOR_OWN_DATA_WALK`), so that a floor's shared
+ * witness must hold of every part of the value read; otherwise its label's.
+ */
+const floorIntegrityOf = (
+  metadata: CfcMetadata | undefined,
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+  label: IFCLabel | undefined,
+  valueRead: () => unknown,
+): (readonly CfcAtom[])[] => {
+  if (!FLOOR_WHOLE_READ_MEET || nonRecursive === true || !metadata) {
+    return [label?.integrity ?? []];
+  }
+  const entries = consumedEntriesForRead(metadata, path, {
+    nonRecursive: false,
+    consumes: "all",
+  });
+  const beneath = entries
+    .filter((entry) =>
+      entry.path.length > path.length && isPrefix(path, entry.path)
+    )
+    .map((entry) => entry.path);
+  const locations = beneath.length > 0 && FLOOR_OWN_DATA_WALK &&
+      !holdsUncoveredData(valueRead(), path, beneath)
+    ? beneath
+    : [path, ...beneath];
+  return locations.map((location) =>
+    labelForEntriesAtPath(entries, location)?.integrity ?? []
+  );
+};
+
 const verifyInputRequirements = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
@@ -6514,10 +6668,17 @@ const verifyInputRequirements = (
       return (ifc?.requiredIntegrity?.length ?? 0) > 0 ||
         ifc?.maxConfidentiality !== undefined;
     });
+  // PROTOTYPE (Topic 701 §4b): each read's document-rooted path, from which
+  // a floor reads the value back (`holdsUncoveredData()`).
+  const documentPaths = new Map<object, readonly string[]>();
   const sourceMetadata = currentReads.map((read) => {
     // Gate paths are captured before resolving an envelope: backend reads may
     // mutate a caller-owned path array. Ungated targets only need the address.
     if (needsReadLabels) {
+      documentPaths.set(
+        read,
+        documentReads.has(read) ? [...read.path] : ["value", ...read.path],
+      );
       read.path = documentReads.has(read)
         ? canonicalizeDocumentPath(read.path)
         : canonicalizeLogicalPath(read.path);
@@ -6539,21 +6700,58 @@ const verifyInputRequirements = (
   // declaring `requiredIntegrity` or `maxConfidentiality` reads the result,
   // so the set is assembled on first ask and kept for the rest of the call.
   const buildGatedReads = () => {
-    const gatedReads = currentReads.map((read, index) => ({
-      ...read,
-      label: effectiveReadLabel(
-        sourceMetadata[index],
+    const gatedReads: Array<
+      (typeof currentReads)[number] & {
+        label: IFCLabel;
+        floorIntegrity?: (readonly CfcAtom[])[];
+      }
+    > = [];
+    for (const [index, read] of currentReads.entries()) {
+      const metadata = sourceMetadata[index];
+      const label = effectiveReadLabel(
+        metadata,
         read.path,
         { nonRecursive: read.nonRecursive, consumes: "all" },
-      ),
-    })).filter((read) =>
-      read.label !== undefined &&
+      );
       // A present-but-empty label ({} — no atoms) is the same trust level as
-      // an absent one (excluded above); whether metadata materialized an
-      // empty entry is a persistence/sync artifact and must not decide gate
-      // membership.
-      hasLabelValues(read.label)
-    );
+      // an absent one; whether metadata materialized an empty entry is a
+      // persistence/sync artifact and must not decide gate membership. Either
+      // joins the gate only where an unendorsed read counts against a floor.
+      // The write path's reads of its own destination decide which writes
+      // are emitted, never a written value (§18.6.2), so the prototype leaves
+      // them as they are: counted only where labeled, by their label.
+      const destination = isWriteDestinationRead(read.meta);
+      if (
+        !(label !== undefined && hasLabelValues(label)) &&
+        (destination ||
+          !unendorsedReadCounts(
+            metadata,
+            read.path,
+            read.nonRecursive,
+            isLinkResolutionProbe(read.meta),
+          ))
+      ) {
+        continue;
+      }
+      gatedReads.push({
+        ...read,
+        label: label ?? {},
+        floorIntegrity: floorIntegrityOf(
+          metadata,
+          read.path,
+          destination || read.nonRecursive,
+          label,
+          () =>
+            tx.read({
+              space: read.space,
+              id: read.id,
+              type: read.type ?? "application/json",
+              scope: read.scope,
+              path: documentPaths.get(read) ?? ["value", ...read.path],
+            }, { meta: internalVerifierRead }).ok?.value,
+        ),
+      });
+    }
     // Label-metadata observations (inv-12 Stage 2) join the gate with their
     // pre-resolved §4.6.4.2 population labels. Like trigger reads they have
     // no journal position, so they sit at -Infinity and join EVERY protected
@@ -6779,7 +6977,9 @@ const verifyInputRequirements = (
       // the plain floor. Quantifies over D4's per-write prefix `gating`, not
       // the transaction-global gate-visible read set.
       const ok = cfcIntegritySatisfiesFloorCoherently(
-        gating.map((read) => read.label?.integrity ?? []),
+        gating.flatMap((read) =>
+          read.floorIntegrity ?? [read.label?.integrity ?? []]
+        ),
         requiredIntegrity,
         cfcFloorTrustContext(tx),
       );
