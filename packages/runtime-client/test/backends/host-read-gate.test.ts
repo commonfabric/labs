@@ -531,7 +531,8 @@ describe("HostReadGate", () => {
         refused: { refusedBy: "display-ceiling" },
         cell: expect.objectContaining({ id: expect.any(String), path: [] }),
       });
-      expect("cfcLabelView" in (answer as { cell: object }).cell).toBe(false);
+      if (answer.cell === undefined) throw new Error("no cell was named");
+      expect("cfcLabelView" in answer.cell).toBe(false);
       expect(holds(answer, CREDENTIAL)).toBe(false);
     });
 
@@ -597,6 +598,54 @@ describe("HostReadGate", () => {
 
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
       expect(holds(answer, SEALED_NAME)).toBe(false);
+    });
+
+    it("decides the list on the record's own schema, which the list's read does not carry", async () => {
+      await using docs = await shelf();
+      // No stored label: only the record's schema says who may see it.
+      const keys = await docs.write("keys", {
+        "alice-secret-key": "alice's value",
+        "bob-secret-key": "bob's value",
+      });
+      const record = keys.asSchema({
+        type: "object",
+        additionalProperties: { type: "string" },
+        ifc: { confidentiality: [ownerOnly] },
+      });
+      const visitorGate = gateFor(docs.runtime, visitor);
+      expect("refused" in visitorGate.read(record)).toBe(true);
+
+      const refused = visitorGate.fields(record);
+
+      expect(refused).toEqual({ refused: { refusedBy: "display-ceiling" } });
+      expect(holds(refused, "alice-secret-key")).toBe(false);
+      expect(gateFor(docs.runtime, owner).fields(record)).toEqual({
+        fields: Object.fromEntries(
+          ["alice-secret-key", "bob-secret-key"].map((name) => [
+            name,
+            address(record.key(name)),
+          ]),
+        ),
+      });
+    });
+
+    it("answers a cell that holds no record with no list, and an empty record with an empty one", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const notRecords = {
+        "a-list": ["first", "second"],
+        "a-string": "a string",
+        "a-number": 7,
+      };
+      for (const [id, value] of Object.entries(notRecords)) {
+        expect(gate.fields(await docs.write(id, value))).toEqual({});
+      }
+      expect(gate.fields(docs.runtime.getCell(space, "never-written")))
+        .toEqual({});
+
+      expect(gate.fields(await docs.write("an-empty-record", {}))).toEqual({
+        fields: {},
+      });
     });
   });
 

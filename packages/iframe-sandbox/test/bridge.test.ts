@@ -217,10 +217,18 @@ describe("Fabric iframe bridge", () => {
 
       const cell = client.cell<string>("secret");
       const seen: Array<string | undefined> = [];
+      const withdrawn: Array<string | undefined> = [];
+      const errors: string[] = [];
       let heard = Promise.withResolvers<string>();
       const cancelSink = cell.sink((current) => {
         seen.push(current);
-      });
+        return () => withdrawn.push(current);
+      }, { onRefused: (error) => errors.push(error.code) });
+      // The refusal of the pull above still stands, and the sink hears it
+      // through `onRefused` alone: nothing is handed to the listener in the
+      // value's place.
+      expect(errors).toEqual([BRIDGE_READ_REFUSED]);
+      expect(seen).toStrictEqual([]);
       const cancelSnapshot = cell.subscribeSnapshot((snapshot) => {
         heard.resolve(
           snapshot.status === "error" ? snapshot.error.code : snapshot.status,
@@ -239,9 +247,245 @@ describe("Fabric iframe bridge", () => {
 
       await expect(heard.promise).resolves.toBe(BRIDGE_READ_REFUSED);
       expect(cell.get()).toBeUndefined();
-      expect(seen).toEqual([undefined, "shown before the seal"]);
+      // The sink hears the refusal, its value is withdrawn, and nothing is
+      // handed to it in the value's place.
+      expect(errors).toEqual([BRIDGE_READ_REFUSED, BRIDGE_READ_REFUSED]);
+      // Strict: `toEqual()` takes a trailing `undefined` for no entry at all.
+      expect(withdrawn).toStrictEqual(["shown before the seal"]);
+      expect(seen).toStrictEqual(["shown before the seal"]);
+
+      // A read admitted again ends the refusal, even one finding nothing.
+      heard = Promise.withResolvers<string>();
+      sinkListener!(undefined);
+      await expect(heard.promise).resolves.toBe("ready");
+      expect(seen).toStrictEqual(["shown before the seal", undefined]);
       cancelSink();
       cancelSnapshot();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("leaves a guest's sinks with their value when a write fails", async () => {
+    const bridge = createFabricBridge({
+      // A cell with no `set`, so a write fails with `method-not-supported`.
+      locked: cellResource(() => "held", {
+        sink: (listener) => {
+          listener("held");
+          return () => {};
+        },
+      }),
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("locked");
+      const seen: Array<string | undefined> = [];
+      const withdrawn: Array<string | undefined> = [];
+      const errors: string[] = [];
+      const cancel = cell.sink((current) => {
+        seen.push(current);
+        return () => withdrawn.push(current);
+      }, { onRefused: (error) => errors.push(error.code) });
+      await cell.pull();
+      const withdrawnBefore = [...withdrawn];
+
+      await expect(cell.set("written")).rejects.toMatchObject({
+        code: "method-not-supported",
+      });
+
+      // The value never changed, so the host will not deliver it again: a
+      // sink withdrawn for the failure would stay blank.
+      expect(seen.at(-1)).toBe("held");
+      expect(withdrawn).toStrictEqual(withdrawnBefore);
+      expect(errors).toEqual([]);
+      cancel();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("tells every sink of a refusal when one sink's `onRefused` throws, and keeps the pull's rejection", async () => {
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          // Delivers nothing, so the pull's answer is the one heard.
+          sink: () => () => {},
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const cell = client.cell<string>("secret");
+      const heard: string[] = [];
+      const cancelBroken = cell.sink(() => {}, {
+        onRefused: () => {
+          heard.push("broken");
+          throw new Error("a broken consumer");
+        },
+      });
+      const cancelSound = cell.sink(() => {}, {
+        onRefused: () => heard.push("sound"),
+      });
+
+      await expect(cell.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      expect(heard).toEqual(["broken", "sound"]);
+      cancelBroken();
+      cancelSound();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("refuses a guest's write through a path whose read was refused, whatever cell answers for it, until a read of it is admitted", async () => {
+    let refused = true;
+    const writes: Array<[string, FabricValue]> = [];
+    // A fresh cell for each key on each request, holding nothing of the
+    // last: what answers for a path can change between requests.
+    const child = (key: string): BridgeCell => ({
+      get: () => undefined,
+      pull: () => {
+        if (refused && key === "detail") {
+          throw new BridgeReadRefusedError("refused by the display ceiling");
+        }
+        return `${key} admitted`;
+      },
+      set: (value) => {
+        writes.push([key, value]);
+      },
+    });
+    const notes: BridgeCell = {
+      get: () => undefined,
+      pull: () => undefined,
+      // So a cell resolved from it offers a write.
+      set: (value) => {
+        writes.push(["notes", value]);
+      },
+      key: (key) => child(String(key)),
+      resolve: () => notes,
+    };
+    const bridge = createFabricBridge({ notes: { kind: "cell", cell: notes } });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const detail = client.cell<Record<string, string>>("notes").key(
+        "detail",
+      );
+      await expect(detail.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      await expect(detail.set("written blind")).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+      // Resolving the path reaches it afresh, and is held to it all the same.
+      const resolved = await client.cell<Record<string, string>>("notes")
+        .resolve();
+      await expect(resolved.key("detail").set("written blind")).rejects
+        .toMatchObject({ code: BRIDGE_READ_REFUSED });
+      // What a resolved cell holds when it is resolved is no read, so it
+      // admits nothing.
+      await expect((await detail.resolve()).set("written blind")).rejects
+        .toMatchObject({ code: BRIDGE_READ_REFUSED });
+      // A path whose read was never refused is not held to another's.
+      await client.cell<Record<string, string>>("notes").key("title").set(
+        "a title",
+      );
+      expect(writes).toEqual([["title", "a title"]]);
+
+      refused = false;
+      await expect(detail.pull()).resolves.toBe("detail admitted");
+      await detail.set("written after an admitted read");
+
+      expect(writes).toEqual([
+        ["title", "a title"],
+        ["detail", "written after an admitted read"],
+      ]);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("holds a path to a refusal its sink delivers, and to none a value the sink opens with ends", async () => {
+    let listener: ((value: FabricValue | undefined) => void) | undefined;
+    let failed: BridgeSinkFailure | undefined;
+    const writes: FabricValue[] = [];
+    const bridge = createFabricBridge({
+      secret: {
+        kind: "cell",
+        cell: {
+          get: () => undefined,
+          pull: () => {
+            throw new BridgeReadRefusedError("refused by the display ceiling");
+          },
+          set: (value) => {
+            writes.push(value);
+          },
+          sink: (heard, fail) => {
+            listener = heard;
+            failed = fail;
+            // What the cell held already, delivered as the sink opens.
+            heard("held before");
+            return () => {};
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const secret = client.cell<string>("secret");
+      await expect(secret.pull()).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+      const delivered = Promise.withResolvers<void>();
+      const cancel = secret.sink((value) => {
+        if (value === "held before") delivered.resolve();
+      });
+      await delivered.promise;
+
+      // The value the sink opened with is no read, so the refusal stands.
+      await expect(secret.set("written blind")).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+
+      // A value delivered after is a read the host was admitted.
+      listener!("admitted");
+      await expect(secret.set("written after")).resolves.toBeUndefined();
+      expect(writes).toEqual(["written after"]);
+
+      // And a refusal it delivers holds the path again.
+      failed!({ code: BRIDGE_READ_REFUSED, message: "refused again" });
+      await expect(secret.set("written blind again")).rejects.toMatchObject({
+        code: BRIDGE_READ_REFUSED,
+      });
+      expect(writes).toEqual(["written after"]);
+      cancel();
     } finally {
       client.disconnect();
       host.disconnect();

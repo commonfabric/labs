@@ -179,6 +179,14 @@ export type BridgeError = {
   resource?: string;
 };
 
+/**
+ * The code of the bridge error that stands for a read the host was refused,
+ * and for a write the host will not make through a path whose read was
+ * refused. The guest is told so rather than handed an empty value, which
+ * would read as a cell that holds nothing.
+ */
+export const BRIDGE_READ_REFUSED = "read-refused";
+
 export type BridgeResourceDescriptor = {
   name: string;
   kind: "cell" | "stream" | "sqlite" | "service";
@@ -230,7 +238,14 @@ export type BridgeCellIdentity = {
 /** Guest-visible descriptor for a host-minted stable cell capability. */
 export type BridgeResolvedCell = {
   handle: string;
-  hasValue: true;
+
+  /**
+   * Whether `value` is what the cell holds. False for a cell that has read
+   * nothing yet, which a guest reads with a pull rather than take as holding
+   * nothing. A host that predates it sends `true`, as a guest that predates
+   * it reads any answer.
+   */
+  hasValue: boolean;
 
   /** Operations the host authorizes on this resolved capability. */
   operations?: string[];

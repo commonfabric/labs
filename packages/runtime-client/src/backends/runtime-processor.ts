@@ -2423,12 +2423,20 @@ export class RuntimeProcessor {
    * The fields a record holds, each as a link to its own cell, as the
    * host-read gate decides them. Synced first, so that the labels the list
    * is decided on are the record's.
+   *
+   * @throws When the record's space refused the worker access: a load it
+   *   refused resolves as one that found nothing, and a record the worker
+   *   could not read is not one that holds no record.
    */
   async handleCellFields(
     request: CellFieldsRequest,
   ): Promise<CellFieldsResponse> {
     const cell = getCell(this.#runtime, request.cell);
     await cell.sync();
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(request.cell.space) ??
+      storage.authorizationError?.(request.cell.space);
+    if (denied !== undefined) throw denied;
     return this.#hostReadGate.fields(cell);
   }
 

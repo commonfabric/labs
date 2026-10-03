@@ -113,6 +113,27 @@ freshness boundary; it waits for the runtime Cell pull, including scheduler and
 storage work that pull must settle. The bridge does not substitute a lighter
 readiness probe for that contract.
 
+A read the host may not show is refused, with the `read-refused` error code, and
+is never delivered as `undefined`. `pull()` rejects with it, and a sink hears it
+through the `onRefused` option, after the cleanup its listener returned for the
+last value runs. A sink added while a refusal stands hears it there at once, and
+its listener is not called until a value arrives. A failed write changes no
+value, so it reaches no sink:
+
+```ts
+const stopSecret = secret.sink((value) => render(value), {
+  onRefused: (error) => renderHidden(error.code),
+});
+```
+
+A cell the host has not read yet is loading, not empty: `get()` returns
+`undefined`, its sink hears nothing until the host's read answers, and
+`update()` pulls before it computes.
+
+The host holds the path a guest read to that refusal: `set()` and `push()`
+through the same path reject with `read-refused` until a read of it (a `pull()`,
+or a value its sink delivers) is admitted.
+
 `describe()` makes the API inspectable by people and agents. It returns every
 resource's kind, core operations, named methods, description, and schema.
 Missing resources and unsupported operations reject with `FabricBridgeError`,

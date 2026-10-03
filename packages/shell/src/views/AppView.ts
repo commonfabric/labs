@@ -236,7 +236,8 @@ interface ShownResolution {
  * "Untitled" of a piece that has no name.
  */
 function titleOf(read: CellHandleRead<string | undefined>): string | undefined {
-  return "refused" in read ? CFC_POLICY_PLACEHOLDER_TEXT : read.value;
+  if ("refused" in read) return CFC_POLICY_PLACEHOLDER_TEXT;
+  return "value" in read ? read.value : undefined;
 }
 
 const PAGE_ORIGIN = "http://page.invalid";

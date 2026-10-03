@@ -71,7 +71,7 @@ export class CFSvg extends BaseElement {
   private _getContentValue(): string {
     if (isCellHandle<string>(this.content)) {
       const read = this.content.lastRead();
-      return "refused" in read ? "" : read.value ?? "";
+      return "value" in read ? read.value ?? "" : "";
     }
     return this.content ?? "";
   }

@@ -10,7 +10,6 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { shownValue } from "../../core/shown-value.ts";
 import { runtimeContext } from "../../runtime-context.ts";
 
 /**
@@ -231,8 +230,9 @@ export class CFCustodyAnswer extends BaseElement {
     // A room that has not proposed yet has no terms, and so no instance to
     // publish for: nothing to ask, and nothing to say. The terms
     // subscription asks once they are written.
-    // Terms the worker will not show read as none proposed.
-    const proposed = shownValue(terms);
+    // Terms the worker refuses are not terms to publish for: nothing is
+    // asked while the refusal stands.
+    const proposed = terms.refusal === undefined ? terms.get() : undefined;
     if (!proposed || typeof proposed !== "object" || Array.isArray(proposed)) {
       if (this.#error) {
         this.#error = "";

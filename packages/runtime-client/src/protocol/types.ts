@@ -3576,16 +3576,18 @@ export type CellGetResponse =
 /**
  * The fields a record holds, by name, each as the address of the field within
  * the record, or the refusal that stands in place of the list. An address
- * carries nothing the field holds and no label view, so the list is decided
- * on the label of the record itself, not on those of its fields: a field the
- * viewer may not see is listed, and a read of it is refused on its own.
+ * carries nothing the field holds and no label view: a read of a field is
+ * decided on its own.
  */
 export type CellFieldsResponse =
   & HostReadDecided
   & (
     | {
-      /** Each field the record holds, by name, as its address. */
-      fields: { readonly [name: string]: CellRef };
+      /**
+       * Each field the record holds, by name, as its address. Absent where
+       * the cell holds no record: nothing at all, a list, or a single value.
+       */
+      fields?: { readonly [name: string]: CellRef };
     }
     | CellRefusedAnswer
   );

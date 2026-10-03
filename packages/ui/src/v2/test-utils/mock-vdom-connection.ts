@@ -105,6 +105,10 @@ export function createRenderableCellHandle<T>(
   } as unknown as InitializedRuntimeConnection;
 
   const rt = { [$conn]: () => conn } as unknown as RuntimeClient;
-  const cell = new CellHandle<T>(rt, { ...DEFAULT_REF, ...ref }, value);
+  const cell = new CellHandle<T>(
+    rt,
+    { ...DEFAULT_REF, ...ref },
+    value === undefined ? { unread: true } : { value },
+  );
   return { cell, log };
 }

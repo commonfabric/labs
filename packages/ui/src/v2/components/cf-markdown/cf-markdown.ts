@@ -444,7 +444,8 @@ export class CFMarkdown extends BaseElement {
       // Content the worker will not show reads as the placeholder a render
       // shows in its place, not as an empty document.
       const read = this.content.lastRead();
-      return "refused" in read ? CFC_POLICY_PLACEHOLDER_TEXT : read.value ?? "";
+      if ("refused" in read) return CFC_POLICY_PLACEHOLDER_TEXT;
+      return "value" in read ? read.value ?? "" : "";
     }
     return this.content ?? "";
   }
@@ -470,7 +471,7 @@ export class CFMarkdown extends BaseElement {
           onRefused: update,
         });
         const read = contentCell.lastRead();
-        if ("value" in read && read.value === undefined) {
+        if ("unread" in read || ("value" in read && read.value === undefined)) {
           void contentCell.sync().then(() => {
             if (this.content === contentCell) {
               this.requestUpdate();

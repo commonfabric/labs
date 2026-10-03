@@ -20,7 +20,7 @@ import {
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { shownValue } from "../../core/shown-value.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 
 /** Capability kind assigned to a named context child. */
 export type CellContextResourceKind =
@@ -158,6 +158,13 @@ function asBridgeRefusal(error: unknown): unknown {
     : error;
 }
 
+/**
+ * The bridge cell for `cell`. A refused read reaches the guest as one, and a
+ * write through a handle whose read is refused is refused, as for any writer.
+ * The bridge host holds the path a guest named to a refusal of its read, so a
+ * later request through the same path is refused its writes too, whichever
+ * handle answers for the path by then.
+ */
 function bridgeCell(
   cell: CellHandle<unknown>,
   writable: boolean,
@@ -188,8 +195,15 @@ function bridgeCell(
           (cell as CellHandle<FabricValue[]>).pushAllStrict(values)
         ),
     }),
+    // A handle that has read nothing yet holds no value, so the guest is
+    // handed none until the worker answers: a guest that took the nothing
+    // for a value would compute from it.
+    hasValue: () => !("unread" in cell.lastRead()),
     sink: (listener, failed) =>
-      cell.subscribe((value) => listener(bridgeValue(value)), {
+      cell.subscribe((value) => {
+        if ("unread" in cell.lastRead()) return;
+        listener(bridgeValue(value));
+      }, {
         onRefused: (refusal) =>
           failed(
             new BridgeReadRefusedError(
@@ -356,7 +370,7 @@ function cellContextResources(
   // A context whose read is refused names the resources its schema declares,
   // each of which answers for its own reads.
   const names = (): Set<string> => {
-    const current = shownValue(root);
+    const current = valueForDisplay(root);
     return new Set([
       ...Object.keys(schemaProperties(root.ref().schema)),
       ...(current && typeof current === "object" ? Object.keys(current) : []),
@@ -364,7 +378,7 @@ function cellContextResources(
   };
   const resource = (name: string): BridgeResource | undefined => {
     const properties = schemaProperties(root.ref().schema);
-    const current = shownValue(root);
+    const current = valueForDisplay(root);
     if (
       !Object.hasOwn(properties, name) &&
       !(current && Object.hasOwn(current, name))
@@ -400,7 +414,7 @@ function cellContextResources(
  * The names of the fields `cell` holds: the keys of its value while the
  * worker admits the read, or, while it refuses it, the fields the worker
  * lists, each of which answers for its own reads. None when the worker
- * refuses even the list.
+ * refuses even the list, or answers that the cell holds no record.
  */
 async function fieldNames<T>(cell: CellHandle<T>): Promise<string[]> {
   try {
@@ -410,7 +424,7 @@ async function fieldNames<T>(cell: CellHandle<T>): Promise<string[]> {
     if (!(error instanceof CellReadRefusedError)) throw error;
   }
   try {
-    return Object.keys(await cell.fields());
+    return Object.keys((await cell.fields()) ?? {});
   } catch (error) {
     if (error instanceof CellReadRefusedError) return [];
     throw error;

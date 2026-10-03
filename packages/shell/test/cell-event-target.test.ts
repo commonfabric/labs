@@ -24,8 +24,8 @@ import {
 } from "../src/lib/cell-event-target.ts";
 
 const ref: CellRef = {
-  id: "of:titled" as CellRef["id"],
-  space: "did:key:titled" as CellRef["space"],
+  id: "of:titled",
+  space: "did:key:titled",
   scope: "space",
   path: [],
   schema: { type: "string" },

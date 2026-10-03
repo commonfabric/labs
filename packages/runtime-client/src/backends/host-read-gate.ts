@@ -195,9 +195,12 @@ function holdsEvents(cell: Cell<unknown>): boolean {
   return isStream(cell);
 }
 
-/** The names of the fields a {@link FIELDS_SCHEMA} read listed. */
-function fieldNamesOf(value: unknown): string[] {
-  return isObjectNotArray(value) ? Object.keys(value) : [];
+/**
+ * The names of the fields a {@link FIELDS_SCHEMA} read listed, or `undefined`
+ * where the cell holds no record: nothing, a list, or a single value.
+ */
+function fieldNamesOf(value: unknown): string[] | undefined {
+  return isObjectNotArray(value) ? Object.keys(value) : undefined;
 }
 
 /**
@@ -1061,25 +1064,34 @@ export class HostReadGate {
   /**
    * The fields the record `cell` holds, each as the address of the field
    * within it, or the refusal that stands in place of the list. The list is
-   * read under {@link FIELDS_SCHEMA}, which reads nothing a field holds, and
-   * is decided as any read is, on the record's own node and on what the read
-   * consumed, which includes no field's label. A record that holds one field
-   * the viewer may not see so lists every field, and each field's own read
-   * is decided as any read is. The names come from the record, not its schema, which a host may
-   * hold only as a reference it cannot resolve. An address carries no label
-   * view, as no ref but {@link ref}'s does: the field's own read decides
-   * whether its label may be seen.
+   * read under {@link FIELDS_SCHEMA}, which reads nothing a field holds.
+   *
+   * The list is decided as a read of the record itself is: on what the read
+   * consumed, and on the record's own labels, the stored ones or, where it
+   * stores none, its own schema's. The schema the list is read under carries
+   * no information-flow constraint, so it is never what the list is decided
+   * on. How much of the record's document that covers is the display fit's to
+   * say. A fit that decides on every label the document stores refuses the
+   * list of a record holding one field the viewer may not see; one that
+   * decides on the record's own node and on what the read consumed, which
+   * includes no field's label, lists every field of it.
+   *
+   * The names come from the record, not its schema, which a host may hold
+   * only as a reference it cannot resolve. An address carries no label view,
+   * and each field's own read is decided as any read is. A cell that holds no
+   * record, nothing at all, a list or a single value, is answered with no
+   * list, which is not the empty list of a record that holds no fields.
    */
   fields(cell: Cell<unknown>): CellFieldsResponse {
     const listed = cell.asSchema(FIELDS_SCHEMA);
     const policy = this.#policy;
-    let names: string[];
+    let names: string[] | undefined;
     if (policy === undefined) {
       names = fieldNamesOf(listed.get());
     } else {
       const read = readProjected(listed, fieldNamesOf);
       const refusal = readRefusal(
-        listed,
+        cell,
         [read.consumed],
         policy,
         this.#sources,
@@ -1087,6 +1099,8 @@ export class HostReadGate {
       if (refusal !== undefined) return this.#refuse(refusal, policy);
       names = read.value;
     }
+    // Nothing to list, which is not a record that holds no fields.
+    if (names === undefined) return decided({});
     const fields: Record<string, CellRef> = {};
     for (const name of names) fields[name] = createCellRef(cell.key(name));
     return decided({ fields });
