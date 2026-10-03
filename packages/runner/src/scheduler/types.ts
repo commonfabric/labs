@@ -1,9 +1,8 @@
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 
-import type { Module, Pattern } from "../builder/types.ts";
+import type { CellScope, Module, Pattern } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
-import type { CellScope } from "../builder/types.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,

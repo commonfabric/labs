@@ -45,9 +45,8 @@ import {
 } from "@/backends/runtime-processor.ts";
 import { runtimeErrorReport } from "@/backends/runtime-error.ts";
 import { createCellRef } from "@/backends/utils.ts";
-import { RequestType } from "@/protocol/mod.ts";
+import { NotificationType, RequestType } from "@/protocol/mod.ts";
 import { buildProcessor } from "./build-processor.ts";
-import { NotificationType } from "@/protocol/mod.ts";
 
 const owner = await Identity.fromPassphrase("host read channels owner");
 const visitor = await Identity.fromPassphrase("host read channels visitor");
