@@ -1756,7 +1756,7 @@ export class CFPieceMenu extends BaseElement {
       if (!fresh()) return;
       // A refused read is a failure to read the argument, which the panel
       // reports as one rather than show as an argument that holds nothing.
-      if ("refused" in response) {
+      if (response.refused !== undefined) {
         throw new CellReadRefusedError(response.refused);
       }
       if (response.cell) {

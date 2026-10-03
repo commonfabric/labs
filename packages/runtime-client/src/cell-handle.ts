@@ -143,6 +143,8 @@ export class CellHandle<T = unknown> {
     number,
     {
       onValue: (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void;
+      /** Runs the cleanup the subscriber's last value callback returned. */
+      clear: () => void;
       onRefused?: (refusal: CellReadRefusal) => void;
     }
   >();
@@ -468,7 +470,9 @@ export class CellHandle<T = unknown> {
     this.#value = undefined;
     this.#cfcLabel = undefined;
     this.#refusal = refusal;
-    for (const { onRefused } of this.#callbacks.values()) {
+    for (const { clear, onRefused } of this.#callbacks.values()) {
+      // What a subscriber set up for the value it was shown goes with it.
+      clear();
       onRefused?.(refusal);
     }
   }
@@ -653,9 +657,14 @@ export class CellHandle<T = unknown> {
 
   /**
    * Subscribe to cell value changes.
-   * The callback is called immediately with the current value (even if undefined)
-   * and whenever the value changes.
-   * The callback's return value (if a Cancel function) is called before the next update.
+   *
+   * At once, the subscriber hears what the handle holds: `callback` is called
+   * with the current value (even if undefined), or, where the worker refused
+   * the handle's last read, `onRefused` with the refusal and `callback` not
+   * at all. After that, `callback` is called whenever the value changes, and
+   * `onRefused` with each refusal. The callback's return value, if a Cancel
+   * function, is called before the next value, when a refusal drops the value
+   * it was given, and when the subscription is cancelled.
    */
   subscribe(
     callback: (
@@ -689,10 +698,7 @@ export class CellHandle<T = unknown> {
     const callbackId = this.#nextCallbackId++;
     let cleanup: Cancel | undefined | void;
 
-    const wrappedCallback = (
-      value: T | undefined,
-      cfcLabel: CfcLabelView | undefined,
-    ) => {
+    const clear = () => {
       if (typeof cleanup === "function") {
         try {
           cleanup();
@@ -701,6 +707,12 @@ export class CellHandle<T = unknown> {
         }
       }
       cleanup = undefined;
+    };
+    const wrappedCallback = (
+      value: T | undefined,
+      cfcLabel: CfcLabelView | undefined,
+    ) => {
+      clear();
       try {
         cleanup = callback(value, cfcLabel);
       } catch (error) {
@@ -708,9 +720,22 @@ export class CellHandle<T = unknown> {
       }
     };
 
+    // The connection seeds a handle new to its ref with what another handle
+    // of the same ref holds, which reaches this handle's subscribers so far.
+    // The subscriber added here hears what the handle holds once, below.
+    if (upgradeToCfcLabel) {
+      // Tear down the label-less backend sub, then re-open it label-aware.
+      void this.#conn.unsubscribe(this).finally(() => {
+        this.#conn.subscribe(this);
+      });
+    } else {
+      this.#conn.subscribe(this);
+    }
+
     const onRefused = options.onRefused;
     this.#callbacks.set(callbackId, {
       onValue: wrappedCallback,
+      clear,
       ...(onRefused === undefined ? {} : {
         onRefused: (refusal: CellReadRefusal) => {
           try {
@@ -721,14 +746,6 @@ export class CellHandle<T = unknown> {
         },
       }),
     });
-    if (upgradeToCfcLabel) {
-      // Tear down the label-less backend sub, then re-open it label-aware.
-      void this.#conn.unsubscribe(this).finally(() => {
-        this.#conn.subscribe(this);
-      });
-    } else {
-      this.#conn.subscribe(this);
-    }
 
     // Call immediately with what the handle holds, as Cell does: the value,
     // even when it is undefined, or the refusal standing in its place.
@@ -739,13 +756,7 @@ export class CellHandle<T = unknown> {
     }
 
     return () => {
-      if (typeof cleanup === "function") {
-        try {
-          cleanup();
-        } catch (error) {
-          console.error("[CellHandle] Cleanup error:", error);
-        }
-      }
+      clear();
       this.#callbacks.delete(callbackId);
       if (this.#callbacks.size === 0) {
         this.#conn.unsubscribe(this);
@@ -756,6 +767,10 @@ export class CellHandle<T = unknown> {
   /**
    * Fetch the current value from the worker.
    * If the value is itself a link, follows it to get the actual value.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses the read, which
+   *   then stands as the handle's refusal and reaches its subscribers'
+   *   `onRefused`.
    */
   async sync(): Promise<Readonly<T> | undefined> {
     return await this.#read({ type: RequestType.CellGet, cell: this.ref() });
@@ -829,7 +844,7 @@ export class CellHandle<T = unknown> {
 
   /** What `response`, a read's answer, holds: the value, or the refusal. */
   #readOf(response: CellValueResponse): CellHandleRead<T> {
-    return "refused" in response
+    return response.refused !== undefined
       ? { refused: response.refused }
       : { value: CellHandle.deserialize<T>(this, response.value) as T };
   }
@@ -1012,6 +1027,7 @@ export class CellHandle<T = unknown> {
     labelUpdate?: { cfcLabel: CfcLabelView | undefined },
   ): void {
     this.#updateGeneration++;
+    const endsRefusal = this.#refusal !== undefined;
     this.#refusal = undefined;
     const applied = applyValue(
       value,
@@ -1032,7 +1048,9 @@ export class CellHandle<T = unknown> {
     // value-only notification never spuriously churns the label.
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
       !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
-    if (!valueChanged && !labelChanged) {
+    // A value admitted after a refusal is news to the subscribers that heard
+    // the refusal, even one equal to what the handle held through it.
+    if (!valueChanged && !labelChanged && !endsRefusal) {
       return;
     }
 
