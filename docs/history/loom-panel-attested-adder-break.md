@@ -22,8 +22,9 @@ one that names a profile.
 The adder was a claim until then, and its only writer outside the daemons was
 whoever sent the event: Common Fabric's piece registration sent `{ piece }`
 alone, so every panel it registered named no adder. Loom's reconciler treats
-such a panel as anyone's to retract for everyone (loom
-`docs/development/proposals/socialized-loom-panels.md`, §4). commonfabric/labs
+such a panel as anyone's to retract for everyone
+([loom's socialized-panels proposal](https://github.com/commonfabric/loom/blob/main/docs/development/proposals/socialized-loom-panels.md),
+§4). commonfabric/labs
 #8428 proposed having the registering host put `addedBy` in the event. Its
 review found three runtime primitives, all newer than the root's attribution
 design, that let the root record the adder itself: `currentPrincipal()`

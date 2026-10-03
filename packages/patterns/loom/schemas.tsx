@@ -56,8 +56,10 @@ export interface PublishedDocument {
  * acted. `addedBy` is the DID of the principal who added the occurrence, and
  * the label entry the panel declares there names the same principal when the
  * root wrote it. Of the root's handlers only `admitPanel` writes either, and
- * once it has written a panel no other handler may; an occurrence it creates
- * records one of the two. An occurrence a caller made may hold an
+ * once it has written a panel no other handler may. An occurrence it creates
+ * records `addedByProfile` when its event names a profile, and otherwise
+ * `addedBy` when the event acted for a principal, so a run that acts for no
+ * one records neither. An occurrence a caller made may hold an
  * `addedBy` the root never wrote: the value is its writer's claim, and a label
  * entry there names the writer, not the principal the value names. A panel
  * with neither names no adder.

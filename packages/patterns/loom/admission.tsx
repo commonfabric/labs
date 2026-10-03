@@ -105,7 +105,9 @@ function validatePanel(panel: Panel): void {
     throw new Error("A URL panel requires an HTTP(S) URL without credentials");
   }
   if (panel.addedBy !== undefined && !isAdderDid(panel.addedBy)) {
-    throw new Error("A panel's addedBy must be a DID");
+    throw new Error(
+      "A panel's addedBy must be a DID of at most 195 characters",
+    );
   }
 }
 
@@ -225,8 +227,10 @@ export const admitPanel = handler<
     const piece = event.piece;
     if (piece === undefined) throw new Error("addPiece requires a piece");
     if (containsPiece(list, piece)) return;
+    const value: Panel = { kind: "piece", piece, ...adderFields(event) };
+    validatePanel(value);
     const panel = new Writable<Panel>();
-    panel.set({ kind: "piece", piece, ...adderFields(event) });
+    panel.set(value);
     panels.set([...list, panel]);
     return;
   }

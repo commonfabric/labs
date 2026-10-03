@@ -85,10 +85,11 @@ under a write contract outside a union branch, and this one sits inside each of
 the principal the event acted for: the participant who sent it, or, for an event
 a pattern's own handler sent, the user that pattern runs as. It records
 authority, not intent: any pattern a user runs can add a panel for them. A run
-that acts for no one records no adder. The actor is read from the panel
-document's stored label map as for `addedByProfile`: the `authored-by` atom of
-the entry whose path is exactly `["addedBy"]` and whose `origin` is not
-`"link"`. Patterns read the adder with
+that acts for no one records no adder, and one acting for a principal whose DID
+is longer than 195 characters, the bound every `addedBy` is held to, is refused.
+The actor is read from the panel document's stored label map as for
+`addedByProfile`: the `authored-by` atom of the entry whose path is exactly
+`["addedBy"]` and whose `origin` is not `"link"`. Patterns read the adder with
 `principalOf(panel.key("addedBy"), "authored-by")`; authorship on another field,
 such as the panel's title, does not name the adder. `addPanel` without `as`
 links an occurrence a caller made as it is, and an `addedBy` it already holds is
