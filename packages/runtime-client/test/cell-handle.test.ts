@@ -834,14 +834,29 @@ describe("cell-handle", () => {
       path: [],
     };
     const refusal = { refusedBy: "display-ceiling" } as const;
-    const makeRuntime = (answer: unknown = { value: undefined }) =>
-      ({
+    /**
+     * A runtime that answers each request a handle sends it with what
+     * `respond` returns for it, and keeps every request.
+     */
+    const answering = (
+      respond: (request: { type: RequestType }) => Promise<unknown>,
+    ) => {
+      const requests: { type: RequestType }[] = [];
+      const runtime = {
         [$conn]: () => ({
-          request: () => Promise.resolve(answer),
+          signal: new AbortController().signal,
+          request: (request: { type: RequestType }) => {
+            requests.push(request);
+            return respond(request);
+          },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
         }),
-      }) as unknown as RuntimeClient;
+      } as unknown as RuntimeClient;
+      return { runtime, requests };
+    };
+    const makeRuntime = (answer: unknown = { value: undefined }) =>
+      answering(() => Promise.resolve(answer)).runtime;
     const label = {
       version: 1 as const,
       entries: [{ path: [], label: { integrity: ["authored-by-alice"] } }],
@@ -967,21 +982,7 @@ describe("cell-handle", () => {
     });
 
     /** A runtime that keeps every request a handle sends it. */
-    const recording = () => {
-      const requests: unknown[] = [];
-      const runtime = {
-        [$conn]: () => ({
-          signal: new AbortController().signal,
-          request: (request: unknown) => {
-            requests.push(request);
-            return Promise.resolve({});
-          },
-          subscribe: () => Promise.resolve(),
-          unsubscribe: () => Promise.resolve(),
-        }),
-      } as unknown as RuntimeClient;
-      return { runtime, requests };
-    };
+    const recording = () => answering(() => Promise.resolve({}));
 
     it("sends no write made through it, and logs the refusal", async () => {
       const { runtime, requests } = recording();
@@ -1036,21 +1037,12 @@ describe("cell-handle", () => {
 
     it("sends and shows nothing for a write queued before a refusal that runs after it", async () => {
       let release: () => void = () => {};
-      const requests: { type: RequestType }[] = [];
-      const runtime = {
-        [$conn]: () => ({
-          signal: new AbortController().signal,
-          request: (request: { type: RequestType }) => {
-            requests.push(request);
-            // The first write holds the queue until it is released.
-            return requests.length === 1
-              ? new Promise<unknown>((resolve) => (release = () => resolve({})))
-              : Promise.resolve({});
-          },
-          subscribe: () => Promise.resolve(),
-          unsubscribe: () => Promise.resolve(),
-        }),
-      } as unknown as RuntimeClient;
+      const { runtime, requests } = answering(() =>
+        // The first write holds the queue until it is released.
+        requests.length === 1
+          ? new Promise<unknown>((resolve) => (release = () => resolve({})))
+          : Promise.resolve({})
+      );
       const cell = new CellHandle<string[]>(runtime, ref);
       const shown: unknown[] = [];
       cell.subscribe((value) => {
@@ -1090,6 +1082,43 @@ describe("cell-handle", () => {
         expect.objectContaining({ type: RequestType.CellSet }),
       ]);
       expect(cell.get()).toBe("written by the host");
+    });
+
+    it("starts a handle made with `asSchema()` in the refusal it was made from, and sends no write through it", async () => {
+      const { runtime, requests } = recording();
+      const cell = new CellHandle<string>(runtime, ref);
+      cell[$onCellRefused](refusal);
+
+      const rebound = cell.asSchema<string>({ type: "string" });
+
+      expect(rebound.lastRead()).toEqual({ refused: refusal });
+      expect(() => rebound.get()).toThrow(CellReadRefusedError);
+      const refusals: unknown[] = [];
+      rebound.subscribe(() => {}, {
+        onRefused: (heard) => refusals.push(heard),
+      });
+      expect(refusals).toEqual([refusal]);
+      await expect(rebound.setStrict("written over the seal")).rejects
+        .toThrow(CellReadRefusedError);
+      expect(requests).toEqual([]);
+    });
+
+    it("starts a handle made with `asSchema()` with the value it was made from", () => {
+      const cell = new CellHandle<string>(makeRuntime(), ref);
+      cell[$onCellUpdate]("admitted");
+
+      const rebound = cell.asSchema<string>({ type: "string" });
+
+      expect(rebound.lastRead()).toEqual({ value: "admitted" });
+    });
+
+    it("starts a `key()` child of a refused handle holding nothing, for the read of its own the worker decides", () => {
+      const cell = new CellHandle<Record<string, string>>(makeRuntime(), ref);
+      cell[$onCellRefused](refusal);
+
+      const child = cell.key("title");
+
+      expect(child.lastRead()).toEqual({ value: undefined });
     });
 
     for (const read of ["sync", "pull"] as const) {
@@ -1166,17 +1195,11 @@ describe("cell-handle", () => {
 
     it("lists the fields of a record whose whole read is refused, as handles the worker decides one by one", async () => {
       const field = (name: string): CellRef => ({ ...ref, path: [name] });
-      const requests: unknown[] = [];
-      const runtime = {
-        [$conn]: () => ({
-          request: (request: unknown) => {
-            requests.push(request);
-            return Promise.resolve({
-              fields: { title: field("title"), auth: field("auth") },
-            });
-          },
-        }),
-      } as unknown as RuntimeClient;
+      const { runtime, requests } = answering(() =>
+        Promise.resolve({
+          fields: { title: field("title"), auth: field("auth") },
+        })
+      );
       const cell = new CellHandle<Record<string, string>>(runtime, ref);
       cell[$onCellRefused](refusal);
 
@@ -1190,14 +1213,9 @@ describe("cell-handle", () => {
     });
 
     it("answers a cell that holds no record with no list, and an empty record with an empty one", async () => {
-      const answering = (response: object) =>
-        ({
-          [$conn]: () => ({ request: () => Promise.resolve(response) }),
-        }) as unknown as RuntimeClient;
-
-      expect(await new CellHandle(answering({}), ref).fields())
+      expect(await new CellHandle(makeRuntime({}), ref).fields())
         .toBeUndefined();
-      expect(await new CellHandle(answering({ fields: {} }), ref).fields())
+      expect(await new CellHandle(makeRuntime({ fields: {} }), ref).fields())
         .toEqual({});
     });
 

@@ -574,6 +574,12 @@ export class CellHandle<T = unknown> {
   /**
    * Get a child cell at the specified key.
    * Returns a new CellHandle with an extended path.
+   *
+   * The child starts with the part of this handle's value at the key, which
+   * an admitted read of this cell showed. It does not start in this handle's
+   * refusal: the child names a read of its own, which the worker decides on
+   * its own, and may admit where it refuses the whole, so the child holds
+   * nothing until that read answers.
    */
   key<K extends keyof T>(valueKey: K): CellHandle<T[K]> {
     const childRef = this.#extendPath(String(valueKey));
@@ -1039,7 +1045,10 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Create a new CellHandle with a different schema.
+   * Create a new CellHandle with a different schema. It addresses the same
+   * cell, so it starts in the state this handle's last read left: the value,
+   * or the refusal standing in its place, which refuses its writes as it does
+   * this handle's. Its first read of its own replaces either.
    */
   asSchema<U = unknown>(schema: JSONSchema): CellHandle<U> {
     const { schema: _schema, ...rest } = this.#ref;
@@ -1048,6 +1057,7 @@ export class CellHandle<T = unknown> {
       schema,
     });
     newCell.#value = this.#value;
+    newCell.#refusal = this.#refusal;
     return newCell as CellHandle<U>;
   }
 
