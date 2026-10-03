@@ -938,26 +938,44 @@ function markAuthoredDocumentSchema(
 /**
  * Collects into `calls` every `toSchema` call that generates part of
  * `expression`, a schema value, and returns whether every part of it was read
- * back to its source: a `toSchema` call, or a literal written out, read
- * member by member. A `const` binding, an import of one, and a member of an
- * object literal reached through them are read through, at any depth, as are
- * `as`, `satisfies`, `!` and parentheses. Anything else, such as a parameter
- * or a call's result, cannot be read back.
+ * back to its source. Read back are:
+ *
+ * - a `toSchema` call;
+ * - a value of a primitive type, which holds no schema;
+ * - an object or array literal, member by member, spreads included;
+ * - a `const` binding or an import of one, through its initializer;
+ * - a member access: the member an object literal reached that way holds,
+ *   and otherwise the whole object it is read from;
+ * - a call: its arguments, and, for a function written in the program, each
+ *   expression it returns, where its parameters stand for those arguments
+ *   (`bound`). A function only declared, as the library's are, writes no
+ *   `toSchema` call, so what it returns comes from its arguments;
+ * - a conditional or a `??`/`||` choice, both ways.
+ *
+ * Each is seen through `as`, `satisfies`, `!` and parentheses. Anything
+ * else, such as a `let` binding or a call whose function cannot be read,
+ * cannot be read back.
  */
 function readSchemaSources(
   expression: ts.Expression,
   checker: ts.TypeChecker,
   calls: ts.CallExpression[],
+  bound: ReadonlySet<ts.Symbol> = new Set(),
   depth = 0,
 ): boolean {
   if (depth >= 32) return false;
   const value = unwrapExpression(expression);
-  const next = (inner: ts.Expression | undefined) =>
-    !!inner && readSchemaSources(inner, checker, calls, depth + 1);
+  const next = (
+    inner: ts.Expression | undefined,
+    innerBound: ReadonlySet<ts.Symbol> = bound,
+  ) =>
+    !!inner &&
+    readSchemaSources(inner, checker, calls, innerBound, depth + 1);
   if (isToSchemaCall(value)) {
     calls.push(value);
     return true;
   }
+  if (isPrimitiveType(checker.getTypeAtLocation(value))) return true;
   if (ts.isObjectLiteralExpression(value)) {
     return value.properties.every((property) =>
       ts.isPropertyAssignment(property)
@@ -972,17 +990,132 @@ function readSchemaSources(
       next(ts.isSpreadElement(element) ? element.expression : element)
     );
   }
-  if (isLiteralValue(value)) return true;
   if (ts.isIdentifier(value)) {
+    const symbol = ts.isShorthandPropertyAssignment(value.parent)
+      ? checker.getShorthandAssignmentValueSymbol(value.parent)
+      : checker.getSymbolAtLocation(value);
     return value.text === "undefined" ||
+      (!!symbol && bound.has(symbol)) ||
       next(constInitializer(value, checker));
   }
   if (
     ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)
   ) {
-    return next(staticMemberOf(value, checker, depth));
+    return next(staticMemberOf(value, checker, depth) ?? value.expression);
+  }
+  if (ts.isConditionalExpression(value)) {
+    return next(value.whenTrue) && next(value.whenFalse);
+  }
+  if (
+    ts.isBinaryExpression(value) &&
+    (value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+      value.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+  ) {
+    return next(value.left) && next(value.right);
+  }
+  if (ts.isCallExpression(value)) {
+    const fn = calledFunction(value.expression, checker);
+    if (!fn) return false;
+    if (
+      !value.arguments.every((argument) =>
+        isFunctionLikeExpression(argument) || next(argument)
+      )
+    ) {
+      return false;
+    }
+    if (fn === "declared") return true;
+    const parameters = new Set(bound);
+    for (const parameter of fn.parameters) {
+      for (const name of bindingNamesOf(parameter.name)) {
+        const symbol = checker.getSymbolAtLocation(name);
+        if (symbol) parameters.add(symbol);
+      }
+    }
+    return returnedExpressions(fn).every((returned) =>
+      next(returned, parameters)
+    );
   }
   return false;
+}
+
+/** Whether `type` is primitive, so a value of it holds no schema. */
+function isPrimitiveType(type: ts.Type): boolean {
+  if (type.isUnion()) return type.types.every(isPrimitiveType);
+  return (type.flags &
+    (ts.TypeFlags.StringLike | ts.TypeFlags.NumberLike |
+      ts.TypeFlags.BigIntLike | ts.TypeFlags.BooleanLike |
+      ts.TypeFlags.ESSymbolLike | ts.TypeFlags.Null |
+      ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !== 0;
+}
+
+/**
+ * The function `callee` calls, through imports: one written in the program,
+ * as a function declaration or a `const` binding of a function or arrow
+ * function, or `"declared"` for one only declared in a declaration file, as
+ * the library's are. `undefined` where neither can be told.
+ */
+function calledFunction(
+  callee: ts.Expression,
+  checker: ts.TypeChecker,
+): ts.FunctionLikeDeclaration | "declared" | undefined {
+  const target = unwrapExpression(callee);
+  const name = ts.isPropertyAccessExpression(target) ? target.name : target;
+  let symbol = checker.getSymbolAtLocation(name);
+  if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declarations = symbol?.declarations ?? [];
+  if (
+    declarations.length > 0 &&
+    declarations.every((declaration) =>
+      declaration.getSourceFile().isDeclarationFile
+    )
+  ) {
+    return "declared";
+  }
+  if (!ts.isIdentifier(target)) return undefined;
+  const declaration = symbol?.valueDeclaration;
+  if (declaration && ts.isFunctionDeclaration(declaration)) {
+    return declaration.body ? declaration : undefined;
+  }
+  const initializer = declaration && ts.isVariableDeclaration(declaration) &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+    ? declaration.initializer && unwrapExpression(declaration.initializer)
+    : undefined;
+  return initializer &&
+      (ts.isArrowFunction(initializer) ||
+        ts.isFunctionExpression(initializer))
+    ? initializer
+    : undefined;
+}
+
+/** The identifiers a parameter's name binds, destructured ones included. */
+function bindingNamesOf(name: ts.BindingName): ts.Identifier[] {
+  if (ts.isIdentifier(name)) return [name];
+  return name.elements.flatMap((element) =>
+    ts.isOmittedExpression(element) ? [] : bindingNamesOf(element.name)
+  );
+}
+
+/**
+ * The expressions `fn` returns: its body, for an arrow function written as
+ * one, and otherwise the operand of each `return` in its body, not counting
+ * those of functions nested in it.
+ */
+function returnedExpressions(fn: ts.FunctionLikeDeclaration): ts.Expression[] {
+  if (!fn.body) return [];
+  if (!ts.isBlock(fn.body)) return [fn.body];
+  const returned: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isReturnStatement(node)) {
+      if (node.expression) returned.push(node.expression);
+      return;
+    }
+    if (ts.isFunctionLike(node)) return;
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(fn.body, visit);
+  return returned;
 }
 
 /**
@@ -1055,20 +1188,6 @@ function memberOfObjectLiteral(
     return undefined;
   }
   return undefined;
-}
-
-/**
- * Whether `expression` is a literal value: a string, number, `true`, `false`
- * or `null`, a negated number, or a template with no substitutions.
- */
-function isLiteralValue(expression: ts.Expression): boolean {
-  return ts.isStringLiteralLike(expression) ||
-    ts.isNumericLiteral(expression) ||
-    expression.kind === ts.SyntaxKind.TrueKeyword ||
-    expression.kind === ts.SyntaxKind.FalseKeyword ||
-    expression.kind === ts.SyntaxKind.NullKeyword ||
-    (ts.isPrefixUnaryExpression(expression) &&
-      ts.isNumericLiteral(expression.operand));
 }
 
 /**

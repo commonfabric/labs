@@ -13,7 +13,7 @@ import type { TransformationDiagnostic } from "../src/mod.ts";
 import { transformFiles, transformSource } from "./utils.ts";
 
 const PRELUDE = `/// <cts-enable />
-import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, toSchema, wish } from "commonfabric";
+import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, schema as schemaOf, toSchema, wish } from "commonfabric";
 const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
 type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPrincipal: CurrentPrincipal }>>;
 `;
@@ -283,6 +283,31 @@ export default pattern<{}>(() => {
           "schemas.input",
         ],
         [
+          "a function written in the program that returns it",
+          `const make = () => toSchema<${UNREAD}>();`,
+          "make()",
+        ],
+        [
+          "a function that wraps its argument",
+          "const wrap = (schema: any) => ({ ...schema, $defs: { ...schema.$defs } });",
+          `wrap(toSchema<${UNREAD}>())`,
+        ],
+        [
+          "a function given a callback beside it",
+          "const visit = <T,>(schema: T, _each: (value: T) => void) => schema;",
+          `visit(toSchema<${UNREAD}>(), () => {})`,
+        ],
+        [
+          "a library function that returns its argument",
+          "",
+          `schemaOf(toSchema<${UNREAD}>())`,
+        ],
+        [
+          "a conditional",
+          "const pick = true as boolean;",
+          `pick ? toSchema<${UNREAD}>() : toSchema<${UNREAD}>()`,
+        ],
+        [
           "a schema literal holding a `toSchema` call",
           `const schema = { type: "object", properties: { byId: toSchema<${UNREAD}>() } } as const;`,
           "schema",
@@ -303,15 +328,57 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
     }
 
     it("reports a schema that cannot be read back to its sources", async () => {
-      // A schema a call returns could be one `toSchema` generated in a schema
-      // that views a document.
+      // A `let` binding may hold any schema by the time the pattern reads it.
       const result = await transform(`
-const make = () => toSchema<${UNREAD}>();
-export default pattern((input: ${UNREAD}) => ({ input }), make());`);
+let schema = toSchema<${UNREAD}>();
+export default pattern((input: ${UNREAD}) => ({ input }), schema);`);
 
       expect(
         result.diagnostics.filter(isUnreadWriter).map(isUnfollowedReference),
       ).toEqual([true]);
+    });
+
+    for (
+      const [how, declaration, reference] of [
+        [
+          "a constant's property",
+          `const schemas = { input: toSchema<{ value: string }>(), other: toSchema<${UNREAD}>() } as const;`,
+          "schemas.input",
+        ],
+        [
+          "a property of a constant bound to an object literal",
+          `const generated = { input: toSchema<{ value: string }>(), other: toSchema<${UNREAD}>() };\nconst schemas = generated;`,
+          "schemas.input",
+        ],
+        [
+          "a nested property",
+          `const schemas = { outer: { input: toSchema<{ value: string }>(), other: toSchema<${UNREAD}>() } };`,
+          "schemas.outer.input",
+        ],
+        [
+          "a property a spread holds",
+          `const base = { input: toSchema<{ value: string }>(), other: toSchema<${UNREAD}>() };\nconst schemas = { ...base };`,
+          "schemas.input",
+        ],
+      ] as const
+    ) {
+      it(`reports nothing for the members a reference through ${how} does not read`, async () => {
+        // Only the member the reference reads defines the document.
+        const result = await transform(`${declaration}
+export default pattern((input: { value: string }) => ({ input }), ${reference});`);
+
+        expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+      });
+    }
+
+    it("reports nothing for a schema literal naming a declared constant", async () => {
+      // A value of a primitive type holds no schema.
+      const result = await transform(`
+declare const KEY: "value";
+const schema = { type: "object", properties: { value: { type: "string" } }, required: [KEY] } as const;
+export default pattern((input: { value: string }) => ({ input }), schema);`);
+
+      expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
     });
 
     it("reports nothing for a schema written out as a literal", async () => {
