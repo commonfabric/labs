@@ -85,10 +85,12 @@ a row's copy is the empty string, which both ends read as no name.
 
 A PIECE may publish a `shortName` for itself too — the name the collection that
 created it gave it — and a producer building rows may copy it from there. The
-editor never reads it off a destination: that name means something only to a
-reader reading through the collection that assigned it, while a row's copy is
-what the universe being read calls the member. A destination no row stands for
-shows no name, whatever it publishes.
+editor never reads it off a destination, nor off an entry that lists the piece
+directly rather than standing for it as a row: that name means something only
+to a reader reading through the collection that assigned it, while a row's copy
+is what the universe being read calls the member. A destination no row stands
+for shows no name, whatever it publishes, and a universe that lists pieces
+rather than rows offers nothing to a `#42` query.
 
 The name is never written into any document. A citation's spelling is computed
 where it is read, which is the rule

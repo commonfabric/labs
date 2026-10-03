@@ -149,12 +149,14 @@ reference-form mention. What differs is only what opens the query.
 `shortName` is optional in the `Mentionable` contract
 (`packages/ui/src/v2/core/mentionable.ts`), so a universe whose collection names
 nothing offers nothing to a `#` query, and a member the collection has not named
-is a row that query never reaches. The match is a PREFIX rather than a
-substring, because a member name is a number and `4` offering `42` beside `14`
-and `24` buries the one being typed. The `[[` query matches a row's `shortName`
-as well as its display name, so someone who knows the number reaches the member
-without switching sigils; what Enter completes there is unchanged, because an
-exact match is still asked of the display name alone.
+is a row that query never reaches. Only a row carries a name the query reads: an
+entry that is the piece itself, with no `piece` of its own, is matched by its
+display name alone, whatever `shortName` it publishes. The match is a PREFIX
+rather than a substring, because a member name is a number and `4` offering `42`
+beside `14` and `24` buries the one being typed. The `[[` query matches a row's
+`shortName` as well as its display name, so someone who knows the number reaches
+the member without switching sigils; what Enter completes there is unchanged,
+because an exact match is still asked of the display name alone.
 
 Enter does not complete a `#` query at all: it is picked from the list, or it
 stays text. The `[[` handler's fallthrough CREATES a piece for a query that

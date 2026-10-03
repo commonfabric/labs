@@ -27,9 +27,12 @@ export interface Mentionable {
    * reads that copy at both ends of a mention: a `#42` query matches it, and
    * a mention's pill shows it for the destination the row stands for, so
    * neither costs a read of the member behind the row. A piece may publish
-   * one for itself as well. The editor does not read that one off a
-   * destination: it is the name the piece's creating collection gave it, and
-   * a pill shows only what the universe it completes mentions from calls it.
+   * one for itself as well. The editor does not read that one, neither off a
+   * destination nor off an entry that is the piece itself: it is the name the
+   * piece's creating collection gave it, and both ends show only what the
+   * universe the editor completes mentions from calls the member. So a
+   * universe listing pieces rather than rows offers nothing to a `#42` query
+   * and gives no pill a name.
    *
    * Optional, and absent wherever no collection has named the member, which
    * is what keeps such an entry out of every short-name query rather than
