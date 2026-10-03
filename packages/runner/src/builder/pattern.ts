@@ -713,12 +713,14 @@ function factoryFromPattern<T, R>(
       return derived;
     };
     factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
-      // Pattern code is not trusted to keep to the type. `*` is refused OWNER
-      // because a space anyone owns is anyone's to take from the identity the
-      // run acts for.
-      for (
-        const [principal, capability] of Object.entries(options?.grants ?? {})
-      ) {
+      // Pattern code is not trusted to keep to the type, nor to leave the
+      // grants alone once they are checked, so what is checked and kept is a
+      // copy. `*` is refused OWNER because a space anyone owns is anyone's to
+      // take from the identity the run acts for.
+      const grants: InSpaceGrants | undefined = options?.grants === undefined
+        ? undefined
+        : { ...options.grants };
+      for (const [principal, capability] of Object.entries(grants ?? {})) {
         if (
           capability !== "READ" && capability !== "WRITE" &&
           capability !== "OWNER"
@@ -728,15 +730,14 @@ function factoryFromPattern<T, R>(
               debugStr`$quote${capability} to $quote${principal}`,
           );
         }
-        if (capability === "OWNER" && principal === "*") {
-          throw new Error("inSpace() grants OWNER only to a principal DID");
+        if (capability === "OWNER" && !isDID(principal)) {
+          throw new Error(
+            debugStr`inSpace() grants OWNER only to a principal DID, not ` +
+              debugStr`to $quote${principal}`,
+          );
         }
       }
-      const derived = makePatternFactory(
-        defaultScope,
-        space ?? "",
-        options?.grants,
-      );
+      const derived = makePatternFactory(defaultScope, space ?? "", grants);
       noteDerivedCopy(derived, factory);
       return derived;
     };

@@ -403,6 +403,32 @@ describe("in-space allocation", () => {
     );
   });
 
+  it("throws for an OWNER grant to a principal that is not a DID, whatever the caller's type says", () => {
+    const { pattern } = createTrustedBuilder(runtime).commonfabric;
+    const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+    const grants = { alice: "OWNER" } as unknown as Record<string, "READ">;
+
+    expect(() => Child.inSpace("owned", { grants })).toThrow(
+      "grants OWNER only to a principal DID",
+    );
+  });
+
+  it("creates the space with the grants as they were when `inSpace()` was called", async () => {
+    const root = await spawnRoot((Child, value) => {
+      const grants: Record<string, string> = { "*": "READ" };
+      const Mutated = Child.inSpace("mutated", { grants });
+      grants["*"] = "OWNER";
+      return [Mutated({ value })];
+    });
+    await root.send("first");
+
+    const [space] = await root.spaces();
+    expect(await aclOf(space as MemorySpace)).toEqual({
+      "*": "READ",
+      [signer.did()]: "OWNER",
+    });
+  });
+
   it("settles two processes resolving one name on one record", async () => {
     const second = openRuntime();
     const record = async (writer: Runtime) => {
