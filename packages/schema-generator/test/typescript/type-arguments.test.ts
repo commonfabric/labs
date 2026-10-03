@@ -265,7 +265,7 @@ describe("type-arguments", () => {
       });
     }
 
-    it("reads a property of a mapped type over an instantiation with the declaration's own parameter", async () => {
+    it("reads a property of a mapped type over an instantiation under its bindings", async () => {
       const c = await schemaOfC(
         `interface Input<T> { c: ${declared}; } type Root = Readonly<Input<number>>;`,
       );
