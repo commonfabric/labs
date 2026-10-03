@@ -56,12 +56,15 @@
 // probe, no scheduler node, no demand edge. The reconcile itself is
 // unchanged.
 
+import type { CfcJsonValue } from "@commonfabric/api/cfc";
+import { isDID } from "@commonfabric/identity";
 import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type SessionEffectsDocValue,
 } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { SinkConsumedLabel } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";
@@ -70,6 +73,74 @@ const logger = getLogger("effects-channel", {
   enabled: true,
   level: "warn",
 });
+
+/** `value` as a JSON value, the form a label's atom takes, or `undefined`. */
+function cfcJsonOf(value: unknown): CfcJsonValue | undefined {
+  if (
+    value === null || typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const items: CfcJsonValue[] = [];
+    for (const item of value) {
+      const json = cfcJsonOf(item);
+      if (json === undefined) return undefined;
+      items.push(json);
+    }
+    return items;
+  }
+  if (!isObjectNotArray(value)) return undefined;
+  const fields: Record<string, CfcJsonValue> = {};
+  for (const [key, field] of Object.entries(value)) {
+    const json = cfcJsonOf(field);
+    if (json === undefined) return undefined;
+    fields[key] = json;
+  }
+  return fields;
+}
+
+/** `value` as a list of a label's atoms or clauses, or `undefined`. */
+function atomsOf(value: unknown): CfcJsonValue[] | undefined {
+  const json = cfcJsonOf(value);
+  return Array.isArray(json) ? [...json] : undefined;
+}
+
+/**
+ * The labels an intent carries of what chose its target
+ * (`EffectIntentLabels`), in the form a navigation is decided on
+ * (`NavigateCallback`'s `consumed`), or `undefined` where it carries none
+ * this build can read, which is decided as a navigation made with no labels.
+ */
+function chosenFromOf(value: unknown): (() => SinkConsumedLabel) | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const confidentiality = atomsOf(value.confidentiality);
+  const integrity = atomsOf(value.integrity);
+  if (confidentiality === undefined || integrity === undefined) {
+    return undefined;
+  }
+  const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
+  const byArtifact = value.modulePolicySpaces;
+  if (!isObjectNotArray(byArtifact)) return undefined;
+  for (const [key, spaces] of Object.entries(byArtifact)) {
+    if (!Array.isArray(spaces)) return undefined;
+    const set = new Set<MemorySpace>();
+    for (const space of spaces) {
+      if (!isDID(space)) return undefined;
+      set.add(space);
+    }
+    modulePolicySpaces.set(key, set);
+  }
+  const read: SinkConsumedLabel = {
+    confidentiality,
+    integrity,
+    modulePolicySpaces,
+    sources: [],
+  };
+  return () => read;
+}
 
 export class EffectsChannel {
   readonly #runtime: Runtime;
@@ -373,8 +444,15 @@ export class EffectsChannel {
             scope: (target.scope ?? "space") as never,
             path: [...(target.path ?? [])],
           });
+          // What chose the target, as the server measured it: the
+          // navigation is decided on it as one this runtime's own run chose
+          // is. A callback that withholds the navigation throws, so it is
+          // left unacked rather than retired.
+          const chosenFrom = chosenFromOf(entry.args?.chosenFrom);
           work = () => {
-            const enacting = Promise.resolve().then(() => navigate(targetCell));
+            const enacting = Promise.resolve().then(() =>
+              navigate(targetCell, chosenFrom)
+            );
             this.#runtime.trackAsyncWork(enacting);
             return enacting;
           };

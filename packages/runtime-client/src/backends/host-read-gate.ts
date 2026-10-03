@@ -204,6 +204,21 @@ function fieldNamesOf(value: unknown): string[] | undefined {
 }
 
 /**
+ * A navigation the display ceiling withholds: the host is not told where the
+ * run that asked meant to go. Thrown rather than returned as nothing, so that
+ * the caller does not record the navigation as made.
+ */
+export class NavigationWithheldError extends Error {
+  constructor() {
+    super(
+      "The display ceiling withheld a navigation: what chose its target is " +
+        "not shown to this host.",
+    );
+    this.name = "NavigationWithheldError";
+  }
+}
+
+/**
  * Decides a host's reads of cells under one display policy.
  *
  * A gate built with no policy returns every read as read, the plain read
@@ -875,17 +890,19 @@ export class HostReadGate {
   }
 
   /**
-   * A pattern's request that the host navigate to `target`, or `undefined`
-   * where none is made. Where to go is what the action that asked chose,
-   * from what it had read (`consumed`), so the request is decided as
-   * {@link console} decides what an action logged, and one the policy
-   * withholds is not made.
+   * A pattern's request that the host navigate to `target`. Where to go is
+   * what the run that asked chose, from what it had read (`consumed`), so
+   * the request is decided as {@link console} decides what an action logged.
+   * A navigation is a side effect its caller records as done, as the effects
+   * channel acks a server's intent once it is enacted, so one the policy
+   * withholds is not returned as nothing: it throws
+   * {@link NavigationWithheldError}, and the caller records no enactment.
    */
   navigate(
     target: CellRef,
     consumed: (() => SinkConsumedLabel) | undefined,
-  ): NavigateRequestNotification | undefined {
-    if (this.#withheld(consumed)) return undefined;
+  ): NavigateRequestNotification {
+    if (this.#withheld(consumed)) throw new NavigationWithheldError();
     return decided({
       type: NotificationType.NavigateRequest as const,
       targetCellRef: target,

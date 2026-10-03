@@ -14,6 +14,7 @@ import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { rootRenderPolicyFor } from "@commonfabric/html/worker";
 import { createSession, Identity } from "@commonfabric/identity";
+import { SERVER_EXECUTION_EFFECTS_DOC_ID } from "@commonfabric/memory/v2";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import {
@@ -39,7 +40,11 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../runner/test/cfc-seed-envelope.ts";
-import { type DocumentAt, HostReadGate } from "@/backends/host-read-gate.ts";
+import {
+  type DocumentAt,
+  HostReadGate,
+  NavigationWithheldError,
+} from "@/backends/host-read-gate.ts";
 import {
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
@@ -1467,10 +1472,17 @@ describe("HostReadGate, for what crosses beside a value", () => {
         navigateCallback: (target, consumed) => {
           if (gates === undefined) return;
           const ref = createCellRef(target);
+          const decide = (gate: HostReadGate) => {
+            try {
+              return gate.navigate(ref, consumed);
+            } catch (error) {
+              return error;
+            }
+          };
           decisions.push({
             ref,
-            visitor: gates.visitor.navigate(ref, consumed),
-            owner: gates.owner.navigate(ref, consumed),
+            visitor: decide(gates.visitor),
+            owner: decide(gates.owner),
           });
           navigated();
         },
@@ -1539,7 +1551,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
         cancel();
 
         expect(decisions.length).toBe(1);
-        expect(decisions[0].visitor).toBeUndefined();
+        expect(decisions[0].visitor).toBeInstanceOf(NavigationWithheldError);
         expect(decisions[0].owner).toEqual({
           type: NotificationType.NavigateRequest,
           targetCellRef: decisions[0].ref,
@@ -1550,22 +1562,104 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("decides a server's navigation on what chose it, and leaves one it withholds unacked", async () => {
+      const nonce = "nav:host-read-channels";
+      const enact = async (viewer: Identity) => {
+        const storageManager = StorageManager.emulate({ as: owner });
+        let gate: HostReadGate | undefined;
+        const delivered: unknown[] = [];
+        let called: () => void = () => {};
+        const enacted = new Promise<void>((resolve) => (called = resolve));
+        const runtime = new Runtime({
+          apiUrl: new URL("http://localhost"),
+          storageManager,
+          experimental: { serverExecution: true },
+          // As the worker's callback does: the gate's request is posted.
+          navigateCallback: (target, consumed) => {
+            called();
+            if (gate === undefined) return;
+            delivered.push(gate.navigate(createCellRef(target), consumed));
+          },
+        });
+        try {
+          gate = gateFor(runtime, viewer);
+          const tx = runtime.edit();
+          const destination = runtime.getCell(
+            space,
+            "server-destination",
+            undefined,
+            tx,
+          );
+          destination.set({ title: "anyone may see this" });
+          const destinationId = destination.getAsNormalizedFullLink().id;
+          // The intent a server writes into this session's effects
+          // instance, raw as the server writes it, chosen from what only the
+          // owner may see.
+          runtime.getCellFromLink({
+            space,
+            id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+            scope: "session",
+            path: [],
+          }).withTx(tx).setRawUntyped({
+            entries: [{
+              nonce,
+              kind: "navigate",
+              args: {
+                target: { id: destinationId, path: [] },
+                chosenFrom: {
+                  confidentiality: [ownerOnly],
+                  integrity: [],
+                  modulePolicySpaces: {},
+                },
+              },
+              issuedIn: null,
+            }],
+          });
+          expect((await tx.commit()).ok).toBeDefined();
+          await enacted;
+          await runtime.settled();
+          const acks = runtime.getCellFromLink({
+            space,
+            id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+            scope: "session",
+            path: ["acks"],
+          }).get();
+          return { delivered, acks };
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      };
+
+      const toVisitor = await enact(visitor);
+      expect(toVisitor.delivered).toEqual([]);
+      expect(holds(toVisitor.acks, nonce)).toBe(false);
+
+      const toOwner = await enact(owner);
+      expect(toOwner.delivered).toEqual([
+        expect.objectContaining({ type: NotificationType.NavigateRequest }),
+      ]);
+      expect(toOwner.acks).toEqual({ [nonce]: true });
+    });
+
     it("decides a navigation as it decides what an action logged", async () => {
       await using docs = await shelf();
       const consumed = () =>
         readProjected(docs.contacts.asSchema(true), hostValueOf).consumed;
       const target = createCellRef(docs.caveated);
 
-      expect(gateFor(docs.runtime, visitor).navigate(target, consumed))
-        .toBeUndefined();
+      // A withheld navigation is not answered with nothing, which a caller
+      // could take for one made: it throws.
+      expect(() => gateFor(docs.runtime, visitor).navigate(target, consumed))
+        .toThrow(NavigationWithheldError);
       expect(gateFor(docs.runtime, owner).navigate(target, consumed))
         .toEqual({
           type: NotificationType.NavigateRequest,
           targetCellRef: target,
         });
       // A request made outside an action carries no labels to decide it on.
-      expect(gateFor(docs.runtime, owner).navigate(target, undefined))
-        .toBeUndefined();
+      expect(() => gateFor(docs.runtime, owner).navigate(target, undefined))
+        .toThrow(NavigationWithheldError);
       expect(new HostReadGate(undefined, {}).navigate(target, undefined))
         .toEqual({
           type: NotificationType.NavigateRequest,

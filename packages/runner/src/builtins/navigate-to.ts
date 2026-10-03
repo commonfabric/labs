@@ -160,7 +160,7 @@ export function navigateTo(
    * actor — and set the (session-scoped) result cell in the same
    * transaction. No local enactment: the session's client enacts. */
   function servedNavigate(
-    _tx: IExtendedStorageTransaction,
+    tx: IExtendedStorageTransaction,
     target: Cell<any>,
   ): void {
     const context = navigateEventContextOf(action);
@@ -223,6 +223,26 @@ export function navigateTo(
     // Resolve to root piece - follows links until path is empty
     const resolvedTarget = target.resolveAsCell();
     const targetLink = resolvedTarget.getAsNormalizedFullLink();
+    // What chose the target, which the session's client decides whether its
+    // host may be told the target on. The intent is written in a transaction
+    // of its own, which carries none of this run's reads, so the labels ride
+    // with the intent. Labels that cannot be read are left off, and a client
+    // withholds an intent that carries none under a ceiling.
+    let chosenFrom: Record<string, unknown> | undefined;
+    try {
+      const read = collectReaderConsumedLabel(tx, runtime.readTx());
+      chosenFrom = {
+        confidentiality: [...read.confidentiality],
+        integrity: [...read.integrity],
+        modulePolicySpaces: Object.fromEntries(
+          [...read.modulePolicySpaces].map((
+            [key, spaces],
+          ) => [key, [...spaces]]),
+        ),
+      };
+    } catch {
+      chosenFrom = undefined;
+    }
 
     // NO closure bookkeeping on the served arm (independent review M2):
     // `navigated` is never consulted by a served run — the store owns
@@ -273,6 +293,7 @@ export function navigateTo(
             ? { scope: targetLink.scope }
             : {}),
         },
+        ...(chosenFrom === undefined ? {} : { chosenFrom }),
       },
       // The engine stamps the issuing commit's seq at apply
       // (protocol.md §5's issuedIn; the stream-entry seq precedent).

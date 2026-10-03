@@ -635,6 +635,21 @@ export type EffectIntentTarget = {
 };
 
 /**
+ * The labels of everything the served run that chose an intent's target
+ * had read, as the run's runtime measured them for a reader: what the
+ * choice can have been made from. A client decides whether its host may be
+ * told the target on them, as it decides a navigation its own run chose.
+ * Each clause and atom is the JSON value the label holds;
+ * `modulePolicySpaces` names, by module-policy artifact key, the spaces
+ * where a policy a clause selects has its manifest.
+ */
+export type EffectIntentLabels = {
+  confidentiality: FabricValue[];
+  integrity: FabricValue[];
+  modulePolicySpaces: Record<string, string[]>;
+};
+
+/**
  * One client-effect intent entry (protocol.md §5's shape): `{ nonce,
  * kind, args, issuedIn }`. v2 ships exactly ONE kind — `navigate` — and
  * a new kind is a protocol.md §5 spec edit first.
@@ -656,7 +671,15 @@ export type EffectIntentTarget = {
 export type EffectIntentEntry = {
   nonce: string;
   kind: "navigate";
-  args: { target: EffectIntentTarget };
+  args: {
+    target: EffectIntentTarget;
+
+    /**
+     * What chose `target`. Absent from an intent written before servers
+     * carried it, which a client decides as one carrying no labels.
+     */
+    chosenFrom?: EffectIntentLabels;
+  };
   issuedIn: number | null;
 };
 

@@ -815,7 +815,14 @@ Session-scoped, server-computed, client-enacted effects (README §3.7).
   append-list of `{ nonce, kind, args, issuedIn: <derived commit
   seq> }`, `acks` a PER-NONCE map of the session's ack marks
   (`acks[nonce] = true`). v2 ships exactly one kind: `navigate`
-  with `args = { target: <entity link> }`. The ack's map shape is
+  with `args = { target: <entity link>, chosenFrom? }`. `chosenFrom`
+  carries the labels of everything the served run that chose the target
+  had read (`{ confidentiality, integrity, modulePolicySpaces }`), since
+  the intent's own commit carries none of that run's reads. The client
+  decides whether its host may be told the target on them, as it decides
+  a navigation its own run chose, and an intent without them is decided
+  as one carrying no labels. A navigation the client withholds is a
+  failed enactment: it is not acked. The ack's map shape is
   RULED (owner, 2026-08-13 — ratifying the implemented shape; the
   earlier scalar `{ ackedNonce }` draft is REJECTED): a scalar
   last-ack field loses an earlier un-retired ack whenever two

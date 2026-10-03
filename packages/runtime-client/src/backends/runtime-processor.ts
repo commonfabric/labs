@@ -4415,10 +4415,11 @@ export class RuntimeProcessor {
 
       navigateCallback: (target, consumed) => {
         const link = parseLink(target.getAsLink()) as NormalizedFullLink;
-        // Where to go is what the action that asked chose, from what it had
-        // read, so the gate decides the request on that.
-        const request = gate().navigate(link, consumed);
-        if (request !== undefined) postToClient(request);
+        // Where to go is what the run that asked chose, from what it had
+        // read, so the gate decides the request on that. A withheld request
+        // throws, so neither a flush nor the effects channel records it as
+        // made.
+        postToClient(gate().navigate(link, consumed));
       },
 
       pieceCreatedCallback: (piece) => {
