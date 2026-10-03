@@ -2834,7 +2834,7 @@ describe("wish built-in", () => {
         tx,
       );
       homeDefaultCell.key("profiles").set([profileA, profileB]);
-      homeDefaultCell.key("defaultProfile").set(profileA);
+      homeDefaultCell.key("defaultProfile").set({ profile: profileA });
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
       await tx.commit();
@@ -3314,7 +3314,7 @@ describe("wish built-in", () => {
       // Two profiles; the default is the *second* one — it must still resolve
       // first for headless callers.
       homeDefaultCell.key("profiles").set([p1, p2]);
-      homeDefaultCell.key("defaultProfile").set(p2);
+      homeDefaultCell.key("defaultProfile").set({ profile: p2 });
       (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
 
       await tx.commit();
@@ -3340,6 +3340,117 @@ describe("wish built-in", () => {
       expect(result.key("profile").get()?.result?.name).toBe("Grace");
       expect(result.key("profileName").get()?.result).toBe("Grace");
       expect(result.key("profileAvatar").get()?.result).toBe("grace.png");
+    });
+
+    /**
+     * The name headless `#profile` resolves to, over a home holding profiles
+     * Ada and Grace that `arrange` gives its default, and a legacy cell whose
+     * root links to Grace, the shape a default chosen before the slot takes.
+     */
+    const headlessProfileName = async (
+      label: string,
+      arrange: (
+        home: Cell<any>,
+        profiles: { ada: Cell<any>; grace: Cell<any>; legacy: Cell<any> },
+      ) => void,
+    ): Promise<unknown> => {
+      const ada = runtime.getCell(
+        (await Identity.fromPassphrase(`${label} ada`)).did(),
+        `${label} ada`,
+        undefined,
+        tx,
+      );
+      ada.set({ name: "Ada", initialNameApplied: "Ada", elements: [] });
+      await tx.commit();
+      await runtime.idle();
+      tx = runtime.edit();
+      const grace = runtime.getCell(
+        (await Identity.fromPassphrase(`${label} grace`)).did(),
+        `${label} grace`,
+        undefined,
+        tx,
+      );
+      grace.set({ name: "Grace", initialNameApplied: "Grace", elements: [] });
+      await tx.commit();
+      await runtime.idle();
+      tx = runtime.edit();
+
+      const homeSpaceCell = runtime.getHomeSpaceCell(tx);
+      const home = runtime.getCell<any>(
+        userIdentity.did(),
+        `${label} home`,
+        undefined,
+        tx,
+      );
+      const legacy = runtime.getCell<any>(
+        userIdentity.did(),
+        `${label} legacy`,
+        undefined,
+        tx,
+      );
+      legacy.set(grace);
+      home.key("profiles").set([ada, grace]);
+      arrange(home, { ada, grace, legacy });
+      (homeSpaceCell as any).key("defaultPattern").set(home);
+      await tx.commit();
+      await runtime.idle();
+      tx = runtime.edit();
+
+      const resultCell = runtime.getCell<Record<string, any>>(
+        patternSpace.did(),
+        `${label} result`,
+        undefined,
+        tx,
+      );
+      const result = runtime.run(
+        tx,
+        pattern(() => ({
+          profileName: wish({ query: "#profileName" }),
+        })),
+        {},
+        resultCell,
+      );
+      await tx.commit();
+      tx = runtime.edit();
+      await result.pull();
+      return result.key("profileName").get()?.result;
+    };
+
+    it("resolves headless #profile to a legacy default while the slot holds none", async () => {
+      expect(
+        await headlessProfileName(
+          "wish legacy fallback",
+          (home, { legacy }) => {
+            home.key("defaultProfile").set({});
+            home.key("legacyDefaultProfile").set(legacy);
+          },
+        ),
+      ).toBe("Grace");
+    });
+
+    it("resolves headless #profile to the slot's default over a legacy one", async () => {
+      expect(
+        await headlessProfileName(
+          "wish slot over legacy",
+          (home, { ada, legacy }) => {
+            home.key("defaultProfile").set({ profile: ada });
+            home.key("legacyDefaultProfile").set(legacy);
+          },
+        ),
+      ).toBe("Ada");
+    });
+
+    it("resolves headless #profile to the default of a home without the slot", async () => {
+      // A home that keeps its default as a link at the root of its
+      // `defaultProfile` cell, with no `legacyDefaultProfile`.
+      expect(
+        await headlessProfileName(
+          "wish home without slot",
+          (home, { legacy }) => {
+            home.key("defaultProfile").set(legacy);
+          },
+        ),
+      ).toBe("Grace");
     });
 
     it("orders headless #profile by MRU when no default is set", async () => {
@@ -3999,11 +4110,11 @@ describe("wish built-in", () => {
             bio: "",
             elements: [],
           });
-          homeDefaultCell.key("defaultProfile").set(orphan);
+          homeDefaultCell.key("defaultProfile").set({ profile: orphan });
         } else if (opts.defaultIndex !== undefined) {
-          homeDefaultCell.key("defaultProfile").set(
-            profileCells[opts.defaultIndex],
-          );
+          homeDefaultCell.key("defaultProfile").set({
+            profile: profileCells[opts.defaultIndex],
+          });
         }
         if (opts.mruIndices) {
           homeDefaultCell.key("mru").set(
@@ -4346,7 +4457,7 @@ describe("wish built-in", () => {
             );
           }
           if (opts.defaultIndex !== undefined) {
-            homeDefaultCell.key("defaultProfile").setRawUntyped(
+            homeDefaultCell.key("defaultProfile").key("profile").setRawUntyped(
               // deno-lint-ignore no-explicit-any
               aliasSigil(opts.defaultIndex) as any,
             );

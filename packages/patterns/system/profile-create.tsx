@@ -183,13 +183,22 @@ export const submitProfileCreation = handler<
   }
 });
 
+/**
+ * Home's default profile: a link to the chosen profile, under `profile`, or
+ * no `profile` while none is chosen. The link sits under a key because a
+ * handle to a cell whose root holds a link denotes the cell that link names,
+ * so a link stored at the root would make every later write land in the
+ * profile chosen first rather than re-point the default.
+ */
+export type DefaultProfileSlot = { profile?: BackwardsCompatibleProfile };
+
 // Sets the user's default profile — the one `#profile` resolves to in headless
 // mode and orders first in the picker. The chosen profile is bound per-row via
 // handler state (mirrors how home's removeSpaceHandler binds its item).
 export const setDefaultProfile = handler<
   unknown,
   {
-    defaultProfile: Writable<BackwardsCompatibleProfile | undefined>;
+    defaultProfile: Writable<DefaultProfileSlot>;
     // Take the profile as a LINK cell, not a resolved value: the handler only
     // needs the link to write into defaultProfile, and a link argument doesn't
     // require the profile's cross-space values to be loaded at event time —
@@ -200,7 +209,7 @@ export const setDefaultProfile = handler<
   }
 >((_, { defaultProfile, profile }) => {
   if (profile) {
-    defaultProfile.set(profile as any);
+    defaultProfile.key("profile").set(profile as any);
   }
 });
 
@@ -276,13 +285,14 @@ type PickerProfileLink<Binding, Action extends string> = Cfc<
   }
 >;
 
-// The home `defaultProfile` link: write authorized by `setDefaultProfile`.
-export type TrustedDefaultProfile =
-  | PickerProfileLink<
+// The home `defaultProfile` slot (`DefaultProfileSlot`): its `profile` link is
+// write authorized by `setDefaultProfile`.
+export type TrustedDefaultProfile = {
+  profile?: PickerProfileLink<
     typeof setDefaultProfile,
     typeof TRUSTED_PROFILE_SET_DEFAULT_ACTION
-  >
-  | undefined;
+  >;
+};
 
 // The home `mru` list: elements carry the picker `uiContract`; the array
 // container carries `writeAuthorizedBy: setMruProfile` to gate structural
