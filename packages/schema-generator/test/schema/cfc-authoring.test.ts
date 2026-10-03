@@ -3370,18 +3370,18 @@ describe("Schema: CFC authoring aliases", () => {
         "SchemaRoot",
       );
       const generator = new SchemaGenerator();
-      return [
-        asObjectSchema(generator.generateSchema(type, checker)),
-        asObjectSchema(
+      return {
+        plain: asObjectSchema(generator.generateSchema(type, checker)),
+        widened: asObjectSchema(
           generator.generateSchema(type, checker, undefined, {
             widenLiterals: true,
           }),
         ),
-      ];
+      };
     };
 
     it("keeps labeled cells over different payloads apart when widening literals", async () => {
-      const [plain, widened] = await plainAndWidened(
+      const { plain, widened } = await plainAndWidened(
         'Confidential<Cell<A>, readonly ["b"]> | Confidential<Cell<B>, readonly ["b"]> | undefined',
       );
       expect(widened).toEqual(plain);
@@ -3403,7 +3403,7 @@ describe("Schema: CFC authoring aliases", () => {
     });
 
     it("keeps labeled cells over different payload unions apart when widening literals", async () => {
-      const [plain, widened] = await plainAndWidened(
+      const { plain, widened } = await plainAndWidened(
         'Confidential<Cell<A | string>, readonly ["b"]> | Confidential<Cell<B | number>, readonly ["b"]> | undefined',
       );
       expect(widened).toEqual(plain);
