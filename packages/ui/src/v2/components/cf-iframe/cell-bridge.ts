@@ -158,11 +158,18 @@ function asBridgeRefusal(error: unknown): unknown {
     : error;
 }
 
+/**
+ * The bridge cell for `cell`. Each key reaches one child for as long as this
+ * cell lives, so the path a guest names in one request is the handle it
+ * named in the last: a refusal of that path's read stands for the guest's
+ * writes through it, as for any writer, until a read of it is admitted.
+ */
 function bridgeCell(
   cell: CellHandle<unknown>,
   writable: boolean,
 ): BridgeCell {
   const ref = cell.ref();
+  const children = new Map<string, BridgeCell>();
   return {
     identity: {
       id: ref.id,
@@ -197,7 +204,15 @@ function bridgeCell(
             ),
           ),
       }),
-    key: (key) => bridgeCell(cell.key(key as never), writable),
+    key: (key) => {
+      const name = String(key);
+      let child = children.get(name);
+      if (child === undefined) {
+        child = bridgeCell(cell.key(name as never), writable);
+        children.set(name, child);
+      }
+      return child;
+    },
     resolve: async () => bridgeCell(await cell.resolveAsCell(), writable),
   };
 }
@@ -362,6 +377,13 @@ function cellContextResources(
       ...(current && typeof current === "object" ? Object.keys(current) : []),
     ]);
   };
+  // The resource each name was last found to be, kept while the name reaches
+  // the same cell, so that a guest's requests reach one bridge cell, and the
+  // children it holds, for as long as they name one cell.
+  const found = new Map<
+    string,
+    { cell: CellHandle<unknown>; resource: BridgeResource }
+  >();
   const resource = (name: string): BridgeResource | undefined => {
     const properties = schemaProperties(root.ref().schema);
     const current = valueForDisplay(root);
@@ -378,7 +400,11 @@ function cellContextResources(
       : propertySchema === undefined
       ? root.key(name)
       : root.key(name).asSchema(propertySchema);
-    return cellResource(cell, propertySchema ?? cell.ref().schema);
+    const known = found.get(name);
+    if (known !== undefined && known.cell.equals(cell)) return known.resource;
+    const made = cellResource(cell, propertySchema ?? cell.ref().schema);
+    found.set(name, { cell, resource: made });
+    return made;
   };
 
   return new Proxy<Record<string, BridgeResource>>({}, {

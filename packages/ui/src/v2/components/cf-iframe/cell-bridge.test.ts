@@ -818,6 +818,43 @@ describe("cf-iframe cell bridge", () => {
       expect(Object.keys(bridge.resources).sort()).toEqual(["count", "notes"]);
     });
 
+    for (const built of ["named", "resolved"] as const) {
+      it(`holds a path whose read was refused to that refusal for a write the guest makes through it again, in a ${built} context`, async () => {
+        const requests: { type: RequestType }[] = [];
+        const runtime = runtimeStub({
+          [$conn]: () => ({
+            request: (request: { type: RequestType; cell: CellRef }) => {
+              requests.push(request);
+              return Promise.resolve(
+                request.type === RequestType.CellResolveAsCell
+                  ? { cell: request.cell }
+                  : { refused: refusal },
+              );
+            },
+            subscribe: () => Promise.resolve(),
+            unsubscribe: () => Promise.resolve(),
+            signal: { aborted: false },
+          }),
+        });
+        const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+        const bridge = built === "named"
+          ? createCellContextBridge(context)
+          : await resolveCellContextBridge(context, { database: "cell" });
+        // As the bridge host reaches a path for each request: the resource,
+        // then each key along the path.
+        const detail = () => bridge.resources.count.cell!.key!("detail");
+        await expect(detail().pull()).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        requests.length = 0;
+
+        await expect(detail().set!("written blind")).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        expect(requests).toEqual([]);
+      });
+    }
+
     it("names the resources a refused context's schema declares", () => {
       const { runtime } = refusing();
       const context = new CellHandle<Record<string, unknown>>(runtime, ref);
