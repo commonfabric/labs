@@ -103,6 +103,8 @@ export class CellHandle<T = unknown> {
   #nextCallbackId = 0;
   #schemaWarned = false;
   #updateGeneration = 0;
+  #cacheVersion = 0;
+  #cacheCallbacks = new Set<() => void>();
 
   /**
    * Monotonic invocation order for local value mutations on this handle. Async
@@ -173,7 +175,29 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Set the cell's value locally, as well as in the runtime.
+   * Handle-local revision of cached publications and worker confirmations,
+   * including unchanged values. Compare only on this handle to invalidate a
+   * display snapshot; this revision does not identify a storage commit.
+   */
+  getCacheVersion(): number {
+    return this.#cacheVersion;
+  }
+
+  /**
+   * Observe cache revisions after value subscribers run, including unchanged
+   * worker confirmations and reads that install a value. This local listener
+   * has no initial callback and opens no worker subscription. Cancel removes it.
+   */
+  onCacheChange(callback: () => void): Cancel {
+    this.#cacheCallbacks.add(callback);
+    return () => {
+      this.#cacheCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Publishes an optimistic value and sends it to the runtime. The returned
+   * promise covers request acknowledgment; transport failures are logged.
    */
   async set(value: T): Promise<void> {
     this.#requireSchema("set");
@@ -200,7 +224,45 @@ export class CellHandle<T = unknown> {
     });
   }
 
-  /** Set the cell's value and reject when the runtime refuses the write. */
+  /**
+   * Writes a UI edit and rejects when the runtime refuses it. Dispatch follows
+   * queued operations, then releases the queue while the commit is pending so
+   * later input can reach the runtime. The caller owns the optimistic display;
+   * subscriptions supply this handle's value, including any rollback.
+   */
+  async setForUI(value: T): Promise<void> {
+    this.#requireSchema("setForUI");
+    const serialized = this.#serializeWrite(value);
+    this.#writeGeneration++;
+    const { committed } = await this.#enqueueOperation((queue) => {
+      let committed: Promise<void>;
+      try {
+        committed = this.#conn.request<RequestType.CellSet>({
+          type: RequestType.CellSet,
+          cell: this.ref(),
+          value: serialized,
+          awaitCommit: true,
+        });
+      } catch (error) {
+        // Dispatch can throw before returning a promise. The queue still
+        // needs a rejected operation on which to install its cleanup tail.
+        return Promise.reject(error);
+      }
+      // A snapshot cached by an earlier queued operation predates this edit.
+      queue.hasValue = false;
+      // The dispatch promise releases the queue first. Observe a refusal
+      // even if it arrives before the caller starts awaiting the outcome.
+      void committed.catch(() => {});
+      return Promise.resolve({ committed });
+    });
+    await committed;
+  }
+
+  /**
+   * Sets the value and holds subsequent operations until its commit completes.
+   * Rejects refusal; publishes after commit unless a newer write or delivery
+   * superseded it.
+   */
   async setStrict(value: T): Promise<void> {
     this.#requireSchema("setStrict");
     const serialized = this.#serializeWrite(value);
@@ -368,6 +430,7 @@ export class CellHandle<T = unknown> {
 
   #publishValue(value: T): void {
     this.#value = value;
+    this.#cacheVersion++;
     for (const callback of this.#callbacks.values()) {
       try {
         // A local update does not change the label; carry the current one.
@@ -376,6 +439,7 @@ export class CellHandle<T = unknown> {
         console.error("[CellHandle] Callback error:", error);
       }
     }
+    this.#notifyCacheChange();
   }
 
   async send(event: T): Promise<void> {
@@ -663,6 +727,8 @@ export class CellHandle<T = unknown> {
       authoritative
     ) {
       this.#value = value;
+      this.#cacheVersion++;
+      this.#notifyCacheChange();
     }
     return value;
   }
@@ -706,6 +772,8 @@ export class CellHandle<T = unknown> {
       authoritative
     ) {
       this.#value = value;
+      this.#cacheVersion++;
+      this.#notifyCacheChange();
     }
     return value;
   }
@@ -892,6 +960,7 @@ export class CellHandle<T = unknown> {
       queue.value = applied;
       queue.hasValue = true;
     }
+    this.#cacheVersion++;
     const valueChanged = !valuesOrCellsEqual(applied, this.#value);
     // A label-only change (value identical) still fires label-aware subscribers.
     // `labelUpdate` is present only on notifications that carried a label, so a
@@ -899,6 +968,7 @@ export class CellHandle<T = unknown> {
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
       !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
     if (!valueChanged && !labelChanged) {
+      this.#notifyCacheChange();
       return;
     }
 
@@ -906,6 +976,17 @@ export class CellHandle<T = unknown> {
     if (labelUpdate !== undefined) this.#cfcLabel = labelUpdate.cfcLabel;
     for (const callback of this.#callbacks.values()) {
       callback(this.#value as Readonly<T>, this.#cfcLabel);
+    }
+    this.#notifyCacheChange();
+  }
+
+  #notifyCacheChange(): void {
+    for (const callback of this.#cacheCallbacks) {
+      try {
+        callback();
+      } catch (error) {
+        console.error("[CellHandle] Cache callback error:", error);
+      }
     }
   }
 
