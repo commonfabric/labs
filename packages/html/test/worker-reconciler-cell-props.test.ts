@@ -532,6 +532,69 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
     );
 
     await t.step(
+      "reports a handler that throws as the handler's error",
+      async () => {
+        class ThrowingStream extends MockStream {
+          override send(): void {
+            throw new Error("handler blew up");
+          }
+        }
+        const collector = createOpsCollector();
+        const errors: [string, string | undefined][] = [];
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          onError: (error, raisedBy) => errors.push([error.message, raisedBy]),
+        });
+        const rootCell = new MockCell({
+          type: "vnode",
+          name: "button",
+          props: new MockPropsCell({ onclick: new ThrowingStream() }),
+          children: ["Click"],
+        });
+
+        const cancel = mountReconciler(reconciler, rootCell);
+        try {
+          await t.settle();
+          const eventOp = collector.getOpsOfType("set-event")[0] as Extract<
+            VDomOp,
+            { op: "set-event" }
+          >;
+
+          assertEquals(
+            reconciler.dispatchEvent(eventOp.handlerId, { type: "click" }),
+            true,
+          );
+          assertEquals(errors, [["handler blew up", "handler"]]);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "reports a root that is no render node as the renderer's error",
+      async () => {
+        const errors: [string, string | undefined][] = [];
+        const reconciler = new WorkerReconciler({
+          onOps: createOpsCollector().onOps,
+          onError: (error, raisedBy) => errors.push([error.message, raisedBy]),
+        });
+
+        const cancel = mountReconciler(
+          reconciler,
+          new MockCell({ not: "a render node" }),
+        );
+        try {
+          await t.settle();
+          assertEquals(errors.map(([, raisedBy]) => raisedBy), ["renderer"]);
+          assertEquals(errors[0][0].startsWith("Invalid VDOM content"), true);
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
       "Cell<Props> event handler remains available during listener updates",
       async () => {
         const collector = createOpsCollector();
