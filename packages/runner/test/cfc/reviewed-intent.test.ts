@@ -537,6 +537,9 @@ describe("reviewed-intent", () => {
         { cfcEnforcementMode: "enforce-strict", cfcFlowLabels: "off" },
         { cfcEnforcementMode: "enforce-strict", cfcFlowLabels: "observe" },
         { cfcEnforcementMode: "disabled", cfcFlowLabels: "persist" },
+        // Observe only diagnoses: the record's own confidentiality and the
+        // writer claims that keep it whole would not be enforced.
+        { cfcEnforcementMode: "observe", cfcFlowLabels: "persist" },
       ];
       const unstamped = modes.map((dials) =>
         new Runtime({
@@ -608,6 +611,8 @@ describe("reviewed-intent", () => {
             [{ body: "Hi", to: "tel:+15550199" }, /does not declare/],
             [{}, /requires text for/],
             [{ body: 42 }, /requires text for/],
+            // A value the input only inherits was not entered.
+            [Object.create({ body: "Hi" }), /requires text for/],
             [{ body: "x".repeat(41) }, /over 40 characters/],
             [undefined, /requires the entered values/],
           ] as const
