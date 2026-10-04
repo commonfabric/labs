@@ -490,7 +490,7 @@ type CalculatorRequest = {
       ).toBe(true);
     });
 
-    it("leaves an imported shadow of a library name to the general path", async () => {
+    it("reads an imported shadow of a library name from its own declaration", async () => {
       // The name is resolved lexically, so an import alias shadows the
       // library's declaration the way it does for the checker.
       const { checker, sourceFile } = await createTestProgramFromFiles(
@@ -508,10 +508,13 @@ type CalculatorRequest = {
         undefined,
         sourceFile,
       );
-      // What is pinned is the routing: the library's rule is not applied, so
-      // the argument's member does not reach the schema. The general path
-      // leaves the shadow, a generic, unread.
-      expect(schema).toBe(true);
+      // The shadow's declaration supplies its member; the library's rule does
+      // not project the argument's members into the schema.
+      expect(schema).toEqual({
+        type: "object",
+        properties: { shadow: { type: "boolean", enum: [true] } },
+        required: ["shadow"],
+      });
     });
 
     // Named authored types analyze to a reference into the definitions, so
@@ -1123,11 +1126,13 @@ type CalculatorRequest = {
           anyOf: [{ type: ["number", "string"] }, { type: "undefined" }],
         },
       });
-      // A generic alias is not opened, and the general path leaves it unread,
-      // as it does any generic reference.
+      // The generic tuple alias reads its element from the bound argument.
       expect(
         await generateNamed(alias("Required", alias("Gen", stringNode()))),
-      ).toBe(true);
+      ).toEqual({
+        schema: { type: "array", items: { type: "string" } },
+        $defs: undefined,
+      });
     });
 
     it("keeps a never-valued signature's key surface", async () => {
@@ -2601,8 +2606,8 @@ type CalculatorRequest = {
     it("believes a supplied program answer over the file name", async () => {
       // The transformer hands down `program.isSourceFileDefaultLibrary`; a
       // program that says the library file is NOT a library sends the alias
-      // to the general path, which leaves a generic declared outside the
-      // library unread.
+      // to the general path. Its mapped declaration has no checker-created
+      // instantiation, so its parameter use remains unread.
       const { checker, sourceFile } = await createTestProgram(
         "type Dummy = unknown;",
       );
@@ -2614,10 +2619,10 @@ type CalculatorRequest = {
         sourceFile,
         { isDefaultLibrarySourceFile: () => false },
       );
-      expect(schema).toBe(true);
+      expect(schema).toEqual({});
     });
 
-    it("leaves an authored alias of a library name to the general path", async () => {
+    it("reads an authored alias of a library name from its own declaration", async () => {
       // A module, so the authored alias shadows the library's rather than
       // colliding with it as a script-level redeclaration would.
       const { checker, sourceFile } = await createTestProgram(
@@ -2630,9 +2635,12 @@ type CalculatorRequest = {
         undefined,
         sourceFile,
       );
-      // The authored alias resolves from scope to its own declaration, a
-      // generic, which the general path leaves unread.
-      expect(schema).toBe(true);
+      // The authored alias reads its own body under its argument bindings.
+      expect(schema).toEqual({
+        type: "object",
+        properties: { authored: { type: "boolean", enum: [true] } },
+        required: ["authored"],
+      });
     });
   });
 
@@ -2753,8 +2761,8 @@ type CalculatorRequest = {
     });
 
     describe("a generic declaration", () => {
-      // A generic read from its declaration describes its parameters unbound,
-      // which no reading can make stand for the arguments a reference supplies.
+      // A reference binds the declaration's parameters to its supplied arguments
+      // and defaults. Operators with no checker instantiation remain unread.
 
       const f = ts.factory;
       const generic = (name: string, ...args: ts.TypeNode[]) =>
@@ -2771,7 +2779,7 @@ type CalculatorRequest = {
         );
       const BOX = "export interface Box<T = number> { value: T }";
 
-      it("returns `true` for an argument wider than the parameter's constraint", async () => {
+      it("reads an argument wider than the parameter's constraint", async () => {
         // Read by the constraint, `name` would drop `extra` from every read.
         const schema = await generate(
           {
@@ -2787,10 +2795,23 @@ type CalculatorRequest = {
           ),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: {
+            name: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                extra: { type: "number" },
+              },
+              required: ["label", "extra"],
+            },
+          },
+          required: ["name"],
+        });
       });
 
-      it("returns `true` for a parameter read through `keyof`", async () => {
+      it("keeps reachable members beside an unread keyof parameter", async () => {
         const schema = await generate(
           { "/main.ts": "export interface Contact<T> { name: keyof T }" },
           generic(
@@ -2799,10 +2820,14 @@ type CalculatorRequest = {
           ),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { name: {} },
+          required: ["name"],
+        });
       });
 
-      it("returns `true` for a parameter read through an indexed access", async () => {
+      it("keeps reachable members beside an unread indexed parameter", async () => {
         const schema = await generate(
           {
             "/main.ts":
@@ -2812,25 +2837,37 @@ type CalculatorRequest = {
           generic("Contact", objectOf({ name: literal("Ada") })),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { name: {} },
+          required: ["name"],
+        });
       });
 
-      it("returns `true` for an argument that replaces the default", async () => {
+      it("reads an argument that replaces the default", async () => {
         const schema = await generate(
           { "/main.ts": BOX },
           generic("Box", keyword(ts.SyntaxKind.StringKeyword)),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        });
       });
 
-      it("returns `true` for an argument equal to the default", async () => {
+      it("reads an argument equal to the default", async () => {
         const schema = await generate(
           { "/main.ts": BOX },
           generic("Box", keyword(ts.SyntaxKind.NumberKeyword)),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        });
       });
 
       describe("an alias whose body is one of its parameters", () => {
@@ -2878,13 +2915,17 @@ type CalculatorRequest = {
         });
       });
 
-      it("returns `true` for a reference with no arguments", async () => {
+      it("reads a reference using its parameter default", async () => {
         const schema = await generate({ "/main.ts": BOX }, reference("Box"));
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        });
       });
 
-      it("returns `true` for a generic the module declares without `export`", async () => {
+      it("reads a generic the module declares without export", async () => {
         const schema = await generate(
           {
             "/main.ts": "interface Box<T = number> { value: T }\nexport {};",
@@ -2892,10 +2933,14 @@ type CalculatorRequest = {
           generic("Box", keyword(ts.SyntaxKind.NumberKeyword)),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        });
       });
 
-      it("returns `true` for a generic the module imports", async () => {
+      it("reads a generic the module imports", async () => {
         const schema = await generate(
           {
             "/types.ts": BOX,
@@ -2905,11 +2950,15 @@ type CalculatorRequest = {
           generic("Box", keyword(ts.SyntaxKind.NumberKeyword)),
         );
 
-        expect(schema).toBe(true);
+        expect(schema).toEqual({
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        });
       });
 
-      it("returns `true` for an argument the registry holds a type for", async () => {
-        // The generic is left unread whatever its argument denotes.
+      it("reads an argument the registry holds a type for", async () => {
+        // The registry supplies the type of an argument whose printed name is absent.
         const { checker, sourceFile } = await createTestProgramFromFiles(
           { "/main.ts": BOX },
           "/main.ts",
@@ -2927,7 +2976,11 @@ type CalculatorRequest = {
             undefined,
             sourceFile,
           ),
-        ).toBe(true);
+        ).toEqual({
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        });
       });
 
       it("returns `true` for a scope wrapper naming no payload", async () => {
@@ -3177,9 +3230,9 @@ type CalculatorRequest = {
           });
         });
 
-        it("returns `true` for a payload holding a parameter where substitution does not reach", async () => {
-          // Substitution does not open an indexed access, so `T` would stay
-          // unbound in the payload.
+        it("keeps a labelled payload's structure beside an unread indexed parameter", async () => {
+          // With no checker-created instantiation, bindings cannot evaluate this
+          // indexed access. The payload's structure and labels remain readable.
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3192,7 +3245,10 @@ type CalculatorRequest = {
             ),
           );
 
-          expect(schema).toBe(true);
+          expect(schema).toEqual({
+            ...{ type: "object", properties: { size: {} }, required: ["size"] },
+            ifc: { confidentiality: ["owner"] },
+          });
         });
 
         it("reads a generic the payload names with the argument", async () => {
@@ -3271,7 +3327,7 @@ type CalculatorRequest = {
           });
         });
 
-        it("returns `true` for a reference to the CFC alias itself", async () => {
+        it("reads a reference to the CFC alias itself", async () => {
           const schema = await generate(
             {
               "/main.ts": CFC + "export type Keep = Confidential<string, []>;",
@@ -3283,10 +3339,13 @@ type CalculatorRequest = {
             ),
           );
 
-          expect(schema).toBe(true);
+          expect(schema).toEqual({
+            type: "string",
+            ifc: { confidentiality: ["owner"] },
+          });
         });
 
-        it("returns `true` for an alias holding a CFC alias inside its body", async () => {
+        it("reads a CFC alias inside a generic body", async () => {
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3297,7 +3356,13 @@ type CalculatorRequest = {
             generic("Labeled", keyword(ts.SyntaxKind.StringKeyword)),
           );
 
-          expect(schema).toBe(true);
+          expect(schema).toEqual({
+            type: "object",
+            properties: {
+              value: { type: "string", ifc: { confidentiality: ["owner"] } },
+            },
+            required: ["value"],
+          });
         });
       });
     });

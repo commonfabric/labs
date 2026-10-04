@@ -2684,9 +2684,23 @@ Special path:
   pinned by `test/cfc-authoring.test.ts`,
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
-- Authored writer identities also survive plain generic interfaces and object
-  aliases, forwarded aliases, inherited members, index signatures, and `Record`
-  value arguments, in both pattern input and explicit output schemas. A whole
+- Plain generic declarations read members under their argument bindings,
+  including inherited interface and class members and structural alias bodies.
+  Member defaults, scope wrappers and `Default` union validation use those
+  bindings. Printed captures bind checker-created argument types when authored
+  argument nodes are unavailable. Mapped views such as
+  `Readonly<Input<number>>` retain the input declaration's member bindings;
+  synthetic generic references resolve and bind their declarations from module
+  scope. Optional declared members stay outside `required` and retain the
+  checker's `undefined` alternative beside the bound value; explicitly written
+  `undefined` remains. Pinned by
+  `test/generic-pattern-input.test.ts`, `test/aliased-binding-declared-type.test.ts`
+  and schema-generator `test/typescript/type-arguments.test.ts`; binding terms
+  are defined in the mapping spec §4.1.
+- Authored writer identities also survive plain generic interfaces, classes and
+  structural aliases, forwarded aliases, inherited members, tuples, literal index
+  signatures, array and nullable alias bodies, and `Record` value arguments,
+  in both pattern input and explicit output schemas. A whole
   `WriteAuthorizedBy` can be passed as a type argument, or a member can apply it
   to a writer parameter supplied as a direct `typeof` query. Defaults read under
   preceding parameters. Recursive `$defs` preserve the declaration identity of
@@ -2697,7 +2711,10 @@ Special path:
   also reports `cfc-write-authorized-by:unread`, including on stored-source
   compilation. Pinned by `test/generic-writer-policy.test.ts` and
   `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
-  mapping spec §11 describes the binding rules.
+  mapping spec §§4.1 and 11 describe the binding rules. The library syntax
+  branch follows named aliases to reachable writer queries, so
+  `Readonly<Protected>` retains a policy written in `Protected`; ordinary value
+  queries such as `Partial<typeof value>` retain checker semantics.
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 
