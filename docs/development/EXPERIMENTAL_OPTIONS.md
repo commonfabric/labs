@@ -1511,6 +1511,16 @@ the per-epic implementation notes).
   only to a viewer whose membership in that subject the render boundary
   already verified for another reason: the viewer's own or session space, or
   a `Space` atom the same label names. The commitment is never opened.
+- **Status on 2026-10-03.** The worker's host-read gate decides every channel
+  the Purpose lists, and each request and notification the worker sends a
+  host has a disposition (`host-read-dispositions.ts`) that type-checks
+  against its answer. A decision whose documents or access lists the worker
+  has not loaded waits for them; one that cannot load them is refused. Under
+  the ceiling, program text (pattern sources and graph previews) and the
+  worker's own console are not forwarded, and diagnostic addresses in a
+  refused document name the document alone. The action-run and write-stack
+  traces, a storage error's conflict set and a refused commit's inputs still
+  carry field paths, without values.
 - **Path to removal.** Retire the opt-out once no profile needs it, then make
   the ceiling unconditional.
 

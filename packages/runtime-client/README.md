@@ -98,7 +98,8 @@ Two things fall outside the tables:
 
 - A failed request's message, which a handler raises and which names the failure
   rather than a cell's contents.
-- The worker's own console, which runs in the runtime's own context.
+- The worker's own console, which runs in the runtime's own context and is
+  forwarded only where no display ceiling applies.
 
 ## Diagnosing pending writes
 

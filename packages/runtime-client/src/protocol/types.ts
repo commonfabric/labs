@@ -3900,14 +3900,12 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
- * An error with no request to fail -- a renderer error, or one a pattern
- * raised between requests. Every field but `message` is context that the
- * raising site may or may not have had.
- */
-/**
  * A runtime error as a host handles it, wherever it came from: the worker's
- * report, which the host-read gate made ({@link ErrorNotification}), or one
- * the connection raises itself for a failed request.
+ * report of one with no request to fail, a renderer error or one a pattern
+ * raised between requests, which the host-read gate made
+ * ({@link ErrorNotification}), or one the connection raises itself for a
+ * failed request. Every field but `message` is context that the raising site
+ * may or may not have had.
  */
 export type ErrorReport = {
   type: NotificationType.ErrorReport;

@@ -615,7 +615,7 @@ candidate that produced the warning.
 **Data** shows the piece's argument and result values (both stay live while
 the menu is open; linked cells appear as `{"@cell": …}` stubs). Where the
 display ceiling refuses one whole, as it does a piece holding a credential,
-it shows each field the schema declares on its own, with `[hidden by policy]`
+it shows each field the record holds on its own, with `[hidden by policy]`
 at each field the ceiling refuses. **Actions** lists the handler streams the
 piece's declared argument and result schemas carry and dispatches an event to
 one, with an optional JSON payload. A handler only appears if the stream is declared in the pattern's

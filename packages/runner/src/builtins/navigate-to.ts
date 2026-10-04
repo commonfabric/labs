@@ -134,9 +134,11 @@ export function navigateTo(
     // the firing session's effects INSTANCE; the CLIENT half of a flag-ON
     // runtime enacts OPTIMISTICALLY under the speculation overlay,
     // carrying the same deterministic nonce the authoritative intent
-    // arrives with. The OFF arm falls through to today's path unchanged —
-    // target RESOLUTION stays inside each arm so the OFF path keeps
-    // today's exact order (navigateCallback check before resolve).
+    // arrives with. The OFF arm falls through to the client-computed path,
+    // whose order is unchanged — target RESOLUTION stays inside each arm,
+    // so the OFF path checks `navigateCallback` before it resolves. Both
+    // arms hand the callback what the run had consumed (`consumed`), which
+    // a host's display ceiling decides the navigation on.
     if (runtime.experimental.serverExecution === true) {
       if (servedRun) {
         servedNavigate(tx, target);
@@ -480,7 +482,11 @@ export function navigateTo(
     runtime.scheduler.queueExecution();
   }
 
-  /** Today's client-computed path — the OFF arm, byte-identical. */
+  /**
+   * The client-computed path, the OFF arm: the navigation is made as before,
+   * and the callback is also handed what the run had consumed, so a host's
+   * display ceiling can withhold it (`NavigationWithheldError`).
+   */
   function legacyNavigate(
     tx: IExtendedStorageTransaction,
     target: Cell<any>,

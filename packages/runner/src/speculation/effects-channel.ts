@@ -36,6 +36,16 @@
 // enactment would let the server retire a navigation that never
 // happened — permanent loss.
 //
+// One refusal is acked without being enacted: a navigation the display
+// ceiling withholds DEFINITIVELY (`NavigationWithheldError` with
+// `definitive`), on labels this viewer is refused that nothing it can
+// later learn would admit. Every delivery would withhold it again, so it
+// counts as done for the session: acked, and kept in the session's
+// withheld set, rather than left unacked to pile up. It is a decision,
+// not a failed enactment. A withhold for want of labels, or one that a
+// later access list could reverse, is a failure as above and stays
+// unacked.
+//
 // The ack is once-per-nonce and the server-side retirement is
 // idempotent, so the accepted LT8 re-enactment never doubles anything
 // downstream of the client.
@@ -357,7 +367,9 @@ export class EffectsChannel {
    * record and releases any ack chained on the returned promise;
    * FAILURE retracts the record and withholds the ack, so the durable
    * entry — still unacked in the store — re-enacts on a later
-   * delivery (or the LT8 reload re-read).
+   * delivery (or the LT8 reload re-read). A definitive withhold is not a
+   * failure here: the delivery's `work` resolves it as done, and it acks
+   * (see the header).
    *
    * BOTH records are installed before `work` is invoked, so a callback
    * that enacts synchronously — or that re-enters a reconcile before
