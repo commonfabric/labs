@@ -49,9 +49,11 @@ existing state publishes none until loading settles. A favorite, mentionable, or
 profile element whose piece document is confirmed absent is excluded from
 matches; its entry remains in the discovery collection. Failed favorite,
 mentionable, and profile element loads are skipped when another readable match
-remains. This includes current-space and explicit-DID mentionable searches. If
-no readable match remains and a candidate load failed, Wish reports the load
-error. The legacy
+remains. This includes current-space and explicit-DID mentionable searches. A
+profile-scope search reads the selected profile's elements, so when the selected
+profile itself failed to load, the search reports that load error (see the
+profile rules below). If no readable match remains and a candidate load failed,
+Wish reports the load error. The legacy
 `#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
 collection produces a no-match error. A failed discovery-collection load, or a
