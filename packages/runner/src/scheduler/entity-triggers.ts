@@ -82,24 +82,73 @@ function pathKey(path: readonly MemoryAddressPathComponent[]): string {
 }
 
 /**
+ * Builds an independent reference for the reads a write overlaps.
+ *
+ * Proper prefixes are found by binary search. The written path and its
+ * extensions form a contiguous range in path order, starting at the write's
+ * insertion point. Sorting once lets every moved path be checked without
+ * scanning all registered reads for each probe; the reference shares no nodes
+ * with the trigger trie.
+ */
+export function createTriggerReference(
+  registered: readonly (readonly MemoryAddressPathComponent[])[],
+): (
+  writePath: readonly MemoryAddressPathComponent[],
+) => Iterable<readonly MemoryAddressPathComponent[]> {
+  const sorted = [...registered].sort(comparePaths);
+
+  /** Returns the first sorted path at or after `target`, or the list's end. */
+  const lowerBound = (
+    target: readonly MemoryAddressPathComponent[],
+  ): number => {
+    let lower = 0;
+    let upper = sorted.length;
+    while (lower < upper) {
+      const middle = Math.floor((lower + upper) / 2);
+      if (comparePaths(sorted[middle]!, target) < 0) lower = middle + 1;
+      else upper = middle;
+    }
+    return lower;
+  };
+
+  return function* (writePath) {
+    for (let depth = 0; depth < writePath.length; depth++) {
+      const prefix = writePath.slice(0, depth);
+      const index = lowerBound(prefix);
+      if (index < sorted.length && comparePaths(sorted[index]!, prefix) === 0) {
+        yield sorted[index]!;
+      }
+    }
+
+    const lower = lowerBound(writePath);
+    for (let index = lower; index < sorted.length; index++) {
+      const path = sorted[index]!;
+      if (!arraysOverlap(path, writePath)) break;
+      yield path;
+    }
+  };
+}
+
+/**
  * Throws unless `indexed` and the reads of `registered` that `writePath`
  * overlaps are the same set of paths.
  *
- * This is the definition the trie implements, written out as a scan: what the
- * trie answered on one side, and {@link arraysOverlap} over every registered
- * read on the other. The message names the write and every path the two
- * disagree on.
+ * Applies {@link arraysOverlap} to the reference reads on one side and takes
+ * the trie result on the other. The reference may be narrowed to the matching
+ * reads by {@link createTriggerReference}. The message names the write and
+ * every path the two disagree on.
  */
 export function assertNoTriggerDrift(
   indexed: Iterable<readonly MemoryAddressPathComponent[]>,
-  registered: readonly (readonly MemoryAddressPathComponent[])[],
+  registered: Iterable<readonly MemoryAddressPathComponent[]>,
   writePath: readonly MemoryAddressPathComponent[],
 ): void {
   const answered = new Set<string>();
   for (const path of indexed) answered.add(pathKey(path));
-  const scanned = new Set(
-    registered.filter((path) => arraysOverlap(path, writePath)).map(pathKey),
-  );
+  const scanned = new Set<string>();
+  for (const path of registered) {
+    if (arraysOverlap(path, writePath)) scanned.add(pathKey(path));
+  }
   const drift = [
     ...[...answered].filter((path) => !scanned.has(path)),
     ...[...scanned].filter((path) => !answered.has(path)),
@@ -251,7 +300,14 @@ export class EntityTriggers {
   ): void {
     if (!TRIGGER_EQUIVALENCE_CHECK) return;
     const registered: (readonly MemoryAddressPathComponent[])[] = [];
-    for (const paths of this.#pathsByAction.values()) registered.push(...paths);
+    for (const paths of this.#pathsByAction.values()) {
+      for (const path of paths) registered.push(path);
+    }
+    // A few probes cost less as full scans than as a sort of the readership.
+    // Broad mutations share one sorted reference across all of their probes.
+    const reference = moved.length <= 4
+      ? () => registered
+      : createTriggerReference(registered);
     const scans = triggerScanWork.scans;
     const pathsVisited = triggerScanWork.pathsVisited;
     const pathsMatched = triggerScanWork.pathsMatched;
@@ -259,7 +315,7 @@ export class EntityTriggers {
       for (const writePath of [[], ...moved]) {
         const indexed: (readonly MemoryAddressPathComponent[])[] = [];
         this.forEachMatching(writePath, (path) => indexed.push(path));
-        assertNoTriggerDrift(indexed, registered, writePath);
+        assertNoTriggerDrift(indexed, reference(writePath), writePath);
       }
     } finally {
       triggerScanWork.scans = scans;

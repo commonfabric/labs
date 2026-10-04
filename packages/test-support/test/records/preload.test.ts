@@ -15,6 +15,7 @@ import {
   parseJUnit,
   preloadModulePath,
   readNameMaps,
+  recordingArguments,
   RECORDS_DIR_VARIABLE,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
@@ -98,6 +99,14 @@ interface RunOptions {
    * can leave a name map in. True unless a test says otherwise.
    */
   write?: boolean;
+
+  /**
+   * The permission flags of a test task the run stands in for, which it
+   * is started with alongside what `recordingArguments()` adds to them.
+   * Without them, the run may read and write everything that `write`
+   * lets it and takes the preload alone.
+   */
+  flags?: readonly string[];
 }
 
 /**
@@ -118,32 +127,39 @@ async function runFixture(
   files: readonly string[],
   options: RunOptions = {},
 ): Promise<Deno.CommandOutput> {
-  const { before = [], skips, write = true } = options;
-  const env: Record<string, string> = {
-    [RECORDS_DIR_VARIABLE]: fixture.spool,
-    [SKIP_LIST_VARIABLE]: "",
-  };
+  const { before = [], flags, skips, write = true } = options;
+  let skipList: string | undefined;
   if (skips !== undefined) {
-    const path = join(fixture.dir, "skips.json");
+    skipList = join(fixture.dir, "skips.json");
     await Deno.writeTextFile(
-      path,
+      skipList,
       typeof skips === "string" ? skips : serializeSkipList(skips),
     );
-    env[SKIP_LIST_VARIABLE] = path;
   }
+  const permissions = flags ??
+    ["--allow-read", ...(write ? ["--allow-write"] : []), "--allow-env"];
+  const recording = flags === undefined
+    ? [`--preload=${preloadModulePath()}`]
+    : recordingArguments(flags, {
+      spool: fixture.spool,
+      root: fixture.dir,
+      ...(skipList === undefined ? {} : { skipList }),
+    });
   return await new Deno.Command(Deno.execPath(), {
     args: [
       "test",
-      "--allow-read",
-      ...(write ? ["--allow-write"] : []),
-      "--allow-env",
+      "--no-check",
+      ...permissions,
       ...before.map((module) => `--preload=${module}`),
-      `--preload=${preloadModulePath()}`,
+      ...recording,
       `--junit-path=${fixture.junit}`,
       ...files,
     ],
     cwd: fixture.runIn,
-    env,
+    env: {
+      [RECORDS_DIR_VARIABLE]: fixture.spool,
+      [SKIP_LIST_VARIABLE]: skipList ?? "",
+    },
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -760,6 +776,34 @@ describe("preload", () => {
       expect(reported.get("name, options and body")).toEqual("skip");
       expect(reported.get("options and body")).toEqual("skip");
       expect(reported.get("whole definition")).toEqual("pass");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("skips a listed test in a run whose own flags read and write nothing", async () => {
+    // A workspace member whose task grants `--allow-env` and nothing else
+    // is started with that and what the recording arguments add to it.
+    // Those additions are all the preload has to read the skip list with,
+    // and to climb from the test file to the repository root that the
+    // list is keyed from.
+
+    const fixture = await makeFixture(
+      { "member/bare.test.ts": BARE_FILE },
+      "member",
+    );
+    try {
+      const run = await runFixture(fixture, ["bare.test.ts"], {
+        flags: ["--allow-env"],
+        skips: { "member/bare.test.ts": ["bare dropped"] },
+      });
+      assert(run.success, output(run));
+      expect(output(run)).not.toContain("test records:");
+      const reported = await outcomes(fixture);
+      expect(reported.get("bare kept")).toEqual("pass");
+      expect(reported.get("bare dropped")).toEqual("skip");
+      const names = await readNameMaps(fixture.spool);
+      expect(names.get("bare kept")).toEqual("member/bare.test.ts");
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }

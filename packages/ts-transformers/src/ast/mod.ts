@@ -102,6 +102,7 @@ export {
   isUnknownType,
   isUnresolvedSchemaType,
   registerSyntheticCallType,
+  TYPE_NODE_FLAGS,
   typeToSchemaTypeNode,
   typeToTypeNode,
   unwrapCellLikeType,

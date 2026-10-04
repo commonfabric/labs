@@ -36,8 +36,8 @@ observation classes exist to separate.
 Better than the audit implied — most of the plumbing is present:
 
 - **A provenance axis on the persisted entry.** `LabelMapEntry.origin`
-  (`declared` | `link` | `derived` | `structure` | `external-ingest`,
-  `packages/runner/src/cfc/types.ts`) already tags *update discipline*. This is
+  (`declared` | `link` | `derived` | `structure` | `minted` |
+  `external-ingest`, `packages/runner/src/cfc/types.ts`) already tags *update discipline*. This is
   orthogonal to the *consumption* axis this epic adds.
 - **Reads already distinguish shape.** `IReadActivity.nonRecursive`
   (`storage/interface.ts`) marks shape-only observations (key-add, length);
@@ -269,19 +269,40 @@ normative from C1 on:
   consumed nothing for probes.
 - **The §4 row 3 / row 4 boundary is the dereference trace.** A probe issued
   while *following* a reference — its slot path covered at-or-above by a
-  same-tx recorded trace source — is resolution machinery (row 4,
-  unchanged); the follow's taint arrives via the ordinary reads of the
-  target. Only standalone probes (no covering trace: `lastNode:"top"` link
-  reads, raw link handles, unfollowed redirect checks) are row-3 followRef
-  observations. Without this boundary every value read's own traversal
-  probes consume each hop's pointer label, and a list coordinator's J joins
-  every slot's transport label — the same pointwise re-smear.
+  same-tx recorded trace source — belongs to that dereference (row 4). The
+  follow's content taint arrives via the ordinary reads of the target, and
+  its pointer taint via one probe: the probe of the followed slot itself,
+  the trace's source, is a followRef observation and consumes the
+  followRef-class entries that resolve at that slot, as a standalone probe
+  of the slot does. A dereference thereby retains the restrictions of the
+  reference it follows (spec §4.6.3, §8.2.4). The other covered probes,
+  which walk the path beneath the followed slot and find no reference,
+  consume nothing, and the plain reads resolution journals at the followed
+  slot skip the runtime-minted `*` templates. Standalone probes (no
+  covering trace: `lastNode:"top"` link reads, raw link handles, unfollowed
+  redirect checks) are row-3 followRef observations. A list coordinator's
+  scaffolding probes carry the machinery marker (§6.2) and consume nothing,
+  so a coordinator's J does not join every slot's transport label.
+- **An `enumerate` entry applies at its container only.** It labels a
+  container's membership, order and count, so it is consumed by a read of
+  the container. A read of an array's native `length`, which the journal
+  records beneath the array, is also measured as a shape read of the array;
+  a verifier probe of the parent tells an array from an object with a field
+  named `length`, and a machinery-marked read is left as it is. It is not
+  consumed by a read of one child, which observes that child: longest-prefix
+  resolution would otherwise put the membership of every element on a read
+  of any one of them. A concrete `structure` entry takes the same exact-path
+  rule, and a recursive read of an ancestor consumes either.
 - **followRef observations contribute confidentiality only.** The §8.9.3
   hereditary integrity meet quantifies over the transformation's *content*
   inputs; standalone probes rarely resolve any label, and admitting them
   would empty the weakest-link meet on virtually every transaction,
   silently ending TransformedBy / PolicyCertified propagation. Pointer
   integrity evidence stays on the link entry (the LinkReference chain).
+  The probe of a followed slot leaves its input witnesses to the followed
+  reference's own location, which resolves them over the value stamps at the
+  slot, and which counts whenever the slot's label is confidential
+  (`cfc-transformed-by-input-witnesses.md`).
 
 ### 6.2 The runtime's own wiring is the second non-standalone probe (2026-09-16)
 
@@ -348,6 +369,17 @@ instead of the flow join:
 - **Render label views** consume per-class the same way: a public `value`
   read of a child under a secret container `shape` no longer inherits the
   container's shape label (today the flat model takes the max).
+- **Label views across a link.** A view derived by following a link carries
+  the followed slot's reference restrictions: the confidentiality of
+  everything that resolves at the slot, whatever its class, wildcard
+  templates included (spec §18.6.2 `referenceLabel`), as one class-less entry
+  at the view's root. That holds for `resolveAsCell()`, a lazy read's hop, a
+  query-result proxy, and every link an eager schema read crosses. A rebase
+  keeps a class-less ancestor entry, so every position reached through the
+  link carries them, as spec §4.6.3 and §8.2.4 require, where the slot's own
+  `followRef` entry is dropped below the target. An eager schema read carries
+  nothing else from the slot. The other paths also keep the slot's own
+  entries, integrity included, and the labels stored below the slot.
 
 That precision win is what pays for the epic on the LLM/agent surface.
 

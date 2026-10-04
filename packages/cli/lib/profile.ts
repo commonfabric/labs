@@ -19,8 +19,10 @@
 import type { CellScope } from "@commonfabric/api";
 import {
   type Cell,
+  cellRuntime,
   getMetaLink,
   type IExtendedStorageTransaction,
+  sendEvent,
 } from "@commonfabric/runner";
 
 import { canonicalAddress } from "./callable.ts";
@@ -119,7 +121,7 @@ export async function createdByThisCall(
     if (candidates.length === 1) return resolved;
     const argument = getMetaLink(profile, "argument");
     if (argument === undefined) continue;
-    const initialName = candidate[1].runtime.getCellFromLink(argument)
+    const initialName = cellRuntime(candidate[1]).getCellFromLink(argument)
       .key("initialName");
     await initialName.sync();
     if (String(initialName.get() ?? "") === name) named.push(resolved);
@@ -153,7 +155,7 @@ function sendCreate(
   return new Promise((resolve, reject) => {
     try {
       // deno-lint-ignore no-explicit-any
-      (root.key("createProfile") as Cell<any>).send(event, resolve, {
+      sendEvent(root.key("createProfile"), event, resolve, {
         onAppended: (delivery, appendedTx) => {
           if (!delivery.delivered && appendedTx.status().status !== "error") {
             reject(new Error(`event append refused: ${delivery.refused}`));

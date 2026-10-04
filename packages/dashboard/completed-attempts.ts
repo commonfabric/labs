@@ -9,19 +9,28 @@ interface HeldRun {
 
   /** Whether each cancelled attempt listed any job, by attempt number. */
   readonly startedJobs: Map<number, boolean>;
+
+  /** What each attempt did with its jobs, by attempt number. */
+  readonly jobCounts: Map<number, JobCounts>;
+}
+
+/** How many of an attempt's jobs ran, and how many were skipped. */
+export interface JobCounts {
+  readonly ran: number;
+  readonly skipped: number;
 }
 
 /**
- * The completed attempts of one repository's workflow runs, and whether each
- * cancelled one listed any job. GitHub's run listing carries only each run's
+ * The completed attempts of one repository's workflow runs, whether each
+ * cancelled one listed any job, and how many jobs each one ran and skipped. GitHub's run listing carries only each run's
  * latest attempt, so an earlier attempt takes a request of its own. GitHub
  * reports several events as `cancelled`, among them a newer push replacing a
  * run while it is still queued, a job running past its `timeout-minutes`, and
  * someone stopping a run while it runs. Of those, only the first says nothing
  * about the commit, and an empty job listing is what marks it: the other two
  * ran jobs, though a listing can also hold jobs no runner started. An attempt
- * does not carry its job count, so that takes a request of its own too. A
- * completed attempt and its job count never change, so each is requested once
+ * does not carry its job counts, so they take a request of their own too. A
+ * completed attempt and its job counts never change, so each is requested once
  * and held for as long as its run stays among the runs observed.
  */
 export class CompletedAttempts {
@@ -110,11 +119,51 @@ export class CompletedAttempts {
     return !started;
   }
 
+  /**
+   * Returns how many of `attempt`'s jobs ran and how many were skipped,
+   * reading every page of the attempt's job listing unless the counts are
+   * already held. Rejects when a request fails, or when GitHub returns a page
+   * without a numeric `total_count` and a `jobs` array of objects.
+   */
+  async jobCounts(attempt: Run): Promise<JobCounts> {
+    const { id, run_attempt: number } = attempt;
+    const held = this.#held(attempt).jobCounts;
+    const known = held.get(number);
+    if (known) return known;
+    let ran = 0, skipped = 0;
+    for (let page = 1;; page++) {
+      const listing = await github<unknown>(
+        `repos/${this.#repo}/actions/runs/${id}/attempts/${number}/jobs` +
+          `?per_page=100&page=${page}`,
+        this.#token,
+      );
+      if (
+        !isObjectNotArray(listing) ||
+        typeof listing.total_count !== "number" ||
+        !Array.isArray(listing.jobs) ||
+        !listing.jobs.every(isObjectNotArray)
+      ) {
+        throw new Error(
+          `GitHub run ${id} attempt ${number} job listing page ${page} did ` +
+            "not include a numeric `total_count` and a `jobs` array",
+        );
+      }
+      for (const job of listing.jobs) {
+        if (job.conclusion === "skipped") skipped++;
+        else ran++;
+      }
+      if (!listing.jobs.length || ran + skipped >= listing.total_count) break;
+    }
+    const counts = { ran, skipped };
+    held.set(number, counts);
+    return counts;
+  }
+
   /** Returns what is held for `run`, starting an empty record if nothing is. */
   #held(run: Run): HeldRun {
     let held = this.#runs.get(run.id);
     if (!held) {
-      held = { attempts: new Map(), startedJobs: new Map() };
+      held = { attempts: new Map(), startedJobs: new Map(), jobCounts: new Map() };
       this.#runs.set(run.id, held);
     }
     return held;

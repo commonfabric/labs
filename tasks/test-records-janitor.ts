@@ -88,7 +88,7 @@ async function listServiceAccounts(clients: Clients): Promise<unknown[]> {
       accounts?: unknown[];
       nextPageToken?: string;
     };
-    accounts.push(...page.accounts ?? []);
+    for (const account of page.accounts ?? []) accounts.push(account);
     pageToken = page.nextPageToken;
   } while (pageToken !== undefined);
   return accounts;

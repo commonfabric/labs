@@ -30,6 +30,7 @@ import {
   NotificationType,
   OperationUpdateNotification,
   PendingWritesNotification,
+  PresenceUpdateNotification,
   RequestType,
   SpaceAccessLostNotification,
   TelemetryNotification,
@@ -155,6 +156,7 @@ export function isIPCRemoteNotification(
     isNavigateRequestNotification(value) || isErrorNotification(value) ||
     isVDomBatchNotification(value) || isPendingWritesNotification(value) ||
     isOperationUpdateNotification(value) ||
+    isPresenceUpdateNotification(value) ||
     isEventNeedsAttentionNotification(value) ||
     isSpaceAccessLostNotification(value) ||
     isEventIntentOutcomeNotification(value);
@@ -174,9 +176,26 @@ export function isOperationUpdateNotification(
 }
 
 /**
- * Is `value` a {@link CellUpdateNotification}? Requires `value` to be
- * *present* rather than of any particular shape, since `undefined` is a value
- * a cell can hold and the absent case has to stay distinguishable from it.
+ * Is `value` a {@link PresenceUpdateNotification}? The event is checked as
+ * an object carrying a `kind`; its record contents remain the consumer's
+ * concern.
+ */
+export function isPresenceUpdateNotification(
+  value: unknown,
+): value is PresenceUpdateNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.PresenceUpdate &&
+    typeof value.subscriptionId === "string" &&
+    isObjectNotArray(value.event) &&
+    (value.event.kind === "snapshot" || value.event.kind === "upsert" ||
+      value.event.kind === "remove" || value.event.kind === "failure");
+}
+
+/**
+ * Is `value` a {@link CellUpdateNotification}? Requires `value`, or the
+ * `refused` that stands in its place, to be *present* rather than of any
+ * particular shape, since `undefined` is a value a cell can hold and the
+ * absent case has to stay distinguishable from it.
  * `cell` is tested with `typeof`, which `null` passes, so a `null` cell gets
  * through here and fails further in.
  */
@@ -187,7 +206,7 @@ export function isCellUpdateNotification(
     isObjectNotArray(value) &&
     value.type === NotificationType.CellUpdate &&
     typeof value.cell === "object" &&
-    "value" in value
+    ("value" in value || "refused" in value)
   );
 }
 
@@ -340,7 +359,9 @@ export function isWorkerReadyNotification(
 ): value is WorkerReadyNotification {
   return (
     isObjectNotArray(value) &&
-    value.type === TransportNotificationType.WorkerReady
+    value.type === TransportNotificationType.WorkerReady &&
+    (value.lifetimeLock === undefined ||
+      typeof value.lifetimeLock === "string")
   );
 }
 

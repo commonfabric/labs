@@ -1,5 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { CellImpl } from "../src/cell.ts";
 import {
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
@@ -11,6 +13,9 @@ import {
   cfcConfidentialityForObservationNode,
   cfcObservationFitsCeiling,
 } from "../src/cfc/observation.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
+import { interceptTransaction } from "./support/intercept-transaction.ts";
 
 // Audit item 22 — the LLM observation path must fail CLOSED on a metadata READ
 // ERROR. `cfcConfidentialityForObservationNode` treats an absent label as
@@ -24,44 +29,47 @@ import {
 // unchanged (it already treats a missing label as blocked) — only the LLM
 // egress path adopts the fail-closed variant.
 
-const cellWhoseMetadataReadErrors = {
-  getAsNormalizedFullLink: () => ({
-    id: "of:labeled-cell",
-    space: "did:key:test",
-    type: "application/json",
-    path: [],
-  }),
-  runtime: {
-    readTx: () => ({
-      readOrThrow: () => {
-        throw new Error("storage read error");
-      },
-      readValueOrThrow: () => {
-        throw new Error("storage read error");
-      },
-    }),
-  },
-};
-
-const cellWithAbsentMetadata = {
-  getAsNormalizedFullLink: () => ({
-    id: "of:unlabelled-cell",
-    space: "did:key:test",
-    type: "application/json",
-    path: [],
-  }),
-  runtime: {
-    readTx: () => ({
-      // No `["cfc"]` doc: a clean read returning undefined (NOT an error).
-      readOrThrow: () => undefined,
-      readValueOrThrow: () => undefined,
-    }),
-  },
-};
+const signer = await Identity.fromPassphrase("llm observation fail closed");
 
 const REAL_CEILING = ["some-real-confidentiality-atom"];
 
 describe("LLM observation fail-closed on metadata read error (audit 22)", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+  // A cell bound to a transaction whose every read errors.
+  let cellWhoseMetadataReadErrors: unknown;
+  // A cell naming a document with no `["cfc"]` metadata: a clean read
+  // returning undefined, not an error.
+  let cellWithAbsentMetadata: unknown;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager,
+    });
+    const failing = interceptTransaction(
+      runtime.edit(),
+      (method, _args, proceed) => {
+        if (method === "readOrThrow" || method === "readValueOrThrow") {
+          throw new Error("storage read error");
+        }
+        return proceed();
+      },
+    );
+    cellWhoseMetadataReadErrors = new CellImpl(
+      runtime,
+      failing,
+      runtime.getCell(signer.did(), "labeled-cell").getAsNormalizedFullLink(),
+    );
+    cellWithAbsentMetadata = runtime.getCell(signer.did(), "unlabelled-cell");
+  });
+
+  afterEach(async () => {
+    await runtime.dispose();
+    await storageManager.close();
+  });
+
   it("reports readFailed when a metadata read errors (vs. cleanly absent)", () => {
     expect(
       cfcLabelViewForCellWithStatus(cellWhoseMetadataReadErrors).readFailed,

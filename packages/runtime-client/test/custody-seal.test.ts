@@ -18,6 +18,7 @@ const cells = {
   allowedSources: ref("sources"),
 };
 const receipt = ref("receipt");
+const box = ref("box", "did:key:room");
 
 describe("custody-seal", () => {
   it("prepares a preview and commits only its opaque confirmation id", async () => {
@@ -31,6 +32,7 @@ describe("custody-seal", () => {
       instance: "instance",
       policy: { type: "https://commonfabric.org/cfc/atom/Policy" },
       sources: [],
+      witnessedRelease: true,
       stance: { choice: "sushi" },
     };
     const conn = {
@@ -41,7 +43,7 @@ describe("custody-seal", () => {
           request.type === RequestType.CustodySealPrepare
             ? preview
             : request.type === RequestType.CustodySealCommit
-            ? { cell: receipt }
+            ? { receipt, box, instance: "instance" }
             : undefined,
         );
       },
@@ -53,12 +55,51 @@ describe("custody-seal", () => {
     expect(await client.prepareCustodySeal(cells)).toEqual(preview);
     await client.cancelCustodySeal("cancelled");
     const sealed = await client.commitCustodySeal(preview.id);
-    expect(sealed).toBeInstanceOf(CellHandle);
-    expect(sealed.ref()).toEqual(receipt);
+    expect(sealed.receipt).toBeInstanceOf(CellHandle);
+    expect(sealed.receipt.ref()).toEqual(receipt);
+    expect(sealed.box).toBeInstanceOf(CellHandle);
+    expect(sealed.box.ref()).toEqual(box);
+    expect(sealed.instance).toBe("instance");
     expect(requests).toEqual([
       { type: RequestType.CustodySealPrepare, ...cells },
       { type: RequestType.CustodySealCancel, id: "cancelled" },
       { type: RequestType.CustodySealCommit, id: "prepared" },
+    ]);
+  });
+
+  it("asks the worker to publish an answer and to read it back", async () => {
+    const requests: unknown[] = [];
+    const answered: Record<string, unknown> = {
+      [RequestType.CustodyAnswerPublish]: {
+        instance: "instance",
+        answer: "sushi",
+      },
+      [RequestType.CustodyAnswerRead]: { answer: "sushi" },
+    };
+    const conn = {
+      on: () => {},
+      request: (request: { type: string }) => {
+        requests.push(request);
+        return Promise.resolve(answered[request.type]);
+      },
+    } as unknown as never;
+    const client = new (RuntimeClient as unknown as {
+      new (conn: never, principal: undefined): RuntimeClient;
+    })(conn, undefined);
+    const room = { terms: cells.terms, policy: cells.policy };
+    const output = ref("choice", "did:key:room");
+
+    expect(await client.publishCustodyAnswer({ ...room, output })).toEqual({
+      instance: "instance",
+      answer: "sushi",
+    });
+    expect(await client.readCustodyAnswer(room)).toBe("sushi");
+    answered[RequestType.CustodyAnswerRead] = {};
+    expect(await client.readCustodyAnswer(room)).toBeUndefined();
+    expect(requests).toEqual([
+      { type: RequestType.CustodyAnswerPublish, ...room, output },
+      { type: RequestType.CustodyAnswerRead, ...room },
+      { type: RequestType.CustodyAnswerRead, ...room },
     ]);
   });
 });

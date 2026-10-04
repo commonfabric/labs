@@ -11,6 +11,10 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const owner = await Identity.fromPassphrase("owner-adoption-owner");
 const other = await Identity.fromPassphrase("owner-adoption-other");
@@ -43,7 +47,7 @@ describe("explicit owner policy adoption", () => {
       storageManager: manager,
     });
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "profile-module",
       sourceFile: "/profile.tsx",
@@ -89,7 +93,7 @@ describe("explicit owner policy adoption", () => {
     const target = runtime.getCell(owner.did(), "legacy", undefined, tx)
       .getAsNormalizedFullLink();
     stageOwnerPolicyAdoption(tx, source, target, "Saved name");
-    tx.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(tx, {
       id: "changed-principal",
       actingPrincipal: other.did(),
     });
@@ -149,7 +153,7 @@ describe("explicit owner policy adoption", () => {
 
   it("requires the source field's owner", () => {
     const tx = runtime.edit();
-    tx.setCfcTrustSnapshot({ id: "other", actingPrincipal: other.did() });
+    setCfcTrustSnapshot(tx, { id: "other", actingPrincipal: other.did() });
     const source = runtime.getCell(owner.did(), "profile", undefined, tx).key(
       "name",
     ).getAsNormalizedFullLink();
@@ -178,7 +182,7 @@ describe("explicit owner policy adoption", () => {
   });
   it("rejects additional authorship claims instead of endorsing the old bytes", async () => {
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "verified",
       moduleIdentity: "profile-module",
       sourceFile: "/profile.tsx",
@@ -225,7 +229,7 @@ describe("explicit owner policy adoption", () => {
 
   it("refuses an inherited writer requirement instead of dropping it", async () => {
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "verified",
       moduleIdentity: "profile-module",
       sourceFile: "/profile.tsx",

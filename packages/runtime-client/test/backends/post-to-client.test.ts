@@ -23,10 +23,9 @@ import {
 } from "@/protocol/mod.ts";
 
 /**
- * A value that passes every `FabricValue` check and has no encoding: an object
- * forged onto a `FabricPrimitive`'s prototype. Building one takes deliberate
- * effort, which is why nothing probes for it -- and why what happens when one
- * arrives is worth pinning.
+ * A value with no encoding: an object forged onto a `FabricPrimitive`'s
+ * prototype. Building one takes deliberate effort, which is why the post does
+ * not probe for it -- and why what happens when one arrives is worth pinning.
  */
 function forged(): unknown {
   return Object.create(FabricBytes.prototype);

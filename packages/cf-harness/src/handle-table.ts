@@ -144,7 +144,10 @@ export const defineOwnEntry = (
   });
 };
 
-/** Constructs an empty handle table salted with `salt` (the run id). */
+/**
+ * Constructs an empty handle table salted with `salt`, the id of the run
+ * creating it.
+ */
 export const createHarnessHandleTable = (
   salt: string,
 ): HarnessHandleTable => ({
@@ -297,22 +300,34 @@ const referentIdentityKey = (
  */
 export const referentDraft = (
   referent: HarnessHandleReferent,
-): HarnessHandleReferentDraft =>
-  referent.kind === "document"
-    ? {
-      kind: referent.kind,
-      source: referent.source,
-      value: referent.value,
-      label: referent.label,
-      labelSource: referent.labelSource,
-    }
-    : {
-      kind: referent.kind,
-      source: referent.source,
-      value: referent.value,
-      label: referent.label,
-      labelSource: referent.labelSource,
-    };
+): HarnessHandleReferentDraft => {
+  switch (referent.kind) {
+    case "document":
+      return {
+        kind: referent.kind,
+        source: referent.source,
+        value: referent.value,
+        label: referent.label,
+        labelSource: referent.labelSource,
+      };
+    case "research":
+      return {
+        kind: referent.kind,
+        source: referent.source,
+        value: referent.value,
+        label: referent.label,
+        labelSource: referent.labelSource,
+      };
+    case "return":
+      return {
+        kind: referent.kind,
+        source: referent.source,
+        value: referent.value,
+        label: referent.label,
+        labelSource: referent.labelSource,
+      };
+  }
+};
 
 /**
  * Mints a referent handle for `referent` — content a tool observed, or an
@@ -354,16 +369,16 @@ export const mintReferentHandle = async (
 
 /**
  * Folds the entries and referents of `incoming` into `current`, answering a
- * table that holds everything either held. Both were minted from one run's
- * table, and a mint only ever fills a field an entry left undefined, so an
+ * table that holds everything either held. Both were minted from one table,
+ * and a mint only ever fills a field an entry left undefined, so an
  * address present in both is merged field by field: each optional field is
  * taken from whichever side defines it, and from `current` where both do. A
  * writer's table carries a copy of every entry it read, so neither side's
  * copy of an entry can simply stand; two writers that each extended the
  * table they read both keep their additions, whichever recorded second.
  *
- * @throws Error when the tables carry different salts, since their tokens
- * were then derived from different runs and cannot share a table; or when
+ * @throws Error when the tables carry different salts, since they then grew
+ * from different tables and their tokens cannot share one; or when
  * two writers minting from one base drew different tokens for one address,
  * or one token for two different addresses or referents, none of which
  * either writer could see of the other.
@@ -374,7 +389,7 @@ export const mergeHarnessHandleTables = (
 ): HarnessHandleTable => {
   if (current.salt !== incoming.salt) {
     throw new Error(
-      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+      `handle tables first salted by different runs cannot merge: ${current.salt} and ${incoming.salt}`,
     );
   }
   const entries = [...current.entries];
@@ -441,6 +456,29 @@ export const resolveReferentToken = (
   token: string,
 ): HarnessHandleReferent | undefined =>
   table.referents?.find((held) => held.token === token);
+
+/**
+ * The strings the return referents `text` names stand for, by token, for
+ * showing to the owner beside the text and never to a model. A parent can
+ * write about what a child found without reading it — "bought the item at
+ * cfh:v:…" — and the owner, whose run it is, can see the value. The text
+ * itself is left as written, so a value cannot become part of its markup: a
+ * link the parent wrote around a token keeps the token. A token that names
+ * anything else, or nothing this table holds, has no entry.
+ */
+export const returnReferentValues = (
+  text: string,
+  table: HarnessHandleTable,
+): Record<string, string> => {
+  const values: Record<string, string> = {};
+  for (const [token] of text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN))) {
+    const referent = resolveReferentToken(table, token);
+    if (referent?.kind === "return" && typeof referent.value === "string") {
+      defineOwnEntry(values, token, referent.value);
+    }
+  }
+  return values;
+};
 
 /** Returns the entry holding `token`, or `undefined` when none does. */
 export const resolveHandleToken = (
@@ -680,9 +718,9 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: malformed referent token \`${String(token)}\``,
       );
     }
-    if (kind !== "document" && kind !== "research") {
+    if (kind !== "document" && kind !== "research" && kind !== "return") {
       throw new Error(
-        `invalid handle table: referent kind must be \`document\` or \`research\`, got \`${
+        `invalid handle table: referent kind must be \`document\`, \`research\`, or \`return\`, got \`${
           String(kind)
         }\``,
       );
@@ -698,12 +736,15 @@ const assertValidReferents = (referents: unknown): void => {
       );
     }
     // A label source belongs to a kind: a row or a query labels a document,
-    // and only research labels research. A record pairing them otherwise was
-    // not minted by this module.
+    // only research labels research, and only a child labels a return. A
+    // record pairing them otherwise was not minted by this module.
+    const labelSources = kind === "document"
+      ? ["row", "query"]
+      : kind === "research"
+      ? ["research"]
+      : ["child"];
     if (
-      kind === "document"
-        ? labelSource !== "row" && labelSource !== "query"
-        : labelSource !== "research"
+      typeof labelSource !== "string" || !labelSources.includes(labelSource)
     ) {
       throw new Error(
         `invalid handle table: referent \`${token}\` has an unknown labelSource \`${

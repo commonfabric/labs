@@ -246,8 +246,8 @@ type PendingGrantConsumptionClaim = {
  * or a method on the transaction interface: a claim staged here is written
  * into the reserved `grant:cfc:` namespace INSIDE the privileged scope by
  * `flushCfcGrantConsumptionClaims` (called from `prepareBoundaryCommit`), so
- * a registration surface reachable from handler code via `(cell.tx as any)`
- * would launder unprivileged receipt forgeries — spending any grant the
+ * a registration surface reachable from code holding the transaction would
+ * launder unprivileged receipt forgeries — spending any grant the
  * caller can name — through the runtime's own privileged flush, bypassing
  * the S18 gate that blocks direct writes. Module privacy keeps the ONLY
  * writers the resolver below (which registers a claim exclusively for a

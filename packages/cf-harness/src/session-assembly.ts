@@ -20,6 +20,7 @@
  * nowhere else.
  */
 
+import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
 import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
@@ -88,6 +89,16 @@ export interface HarnessSessionConfig {
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
 
+  /**
+   * The runsc sandbox (`--sandbox-runtime runsc`): no Docker, sessions
+   * honoured. Absent means the docker sandbox.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
+
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
 
@@ -139,7 +150,7 @@ export interface HarnessSessionConfig {
 
   /**
    * Connector handles every session on this console is granted, named by the
-   * CFC class the loom instance behind it declares for each.
+   * loom connection behind each and described by the CFC classes it declares.
    */
   connectorGrants: readonly HarnessConnectorGrantSpec[];
 
@@ -276,6 +287,21 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxDockerRuntime !== undefined
       ? { sandboxDockerRuntime: config.sandboxDockerRuntime }
+      : {}),
+    ...(config.sandboxRuntimeKind !== undefined
+      ? { sandboxRuntimeKind: config.sandboxRuntimeKind }
+      : {}),
+    ...(config.sandboxRootfs !== undefined
+      ? { sandboxRootfs: config.sandboxRootfs }
+      : {}),
+    ...(config.sandboxCfcPolicy !== undefined
+      ? { sandboxCfcPolicy: config.sandboxCfcPolicy }
+      : {}),
+    ...(config.sandboxRunscBinary !== undefined
+      ? { sandboxRunscBinary: config.sandboxRunscBinary }
+      : {}),
+    ...(config.sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
       : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }
@@ -442,9 +468,10 @@ const establishContextMessages = async (
       options.onGrantsUnavailable?.(error);
     }
   }
-  messages.push(
-    ...pieceTargetingContextMessages(await engine.establishInputCells()),
-  );
+  const inputCells = await engine.establishInputCells();
+  for (const message of pieceTargetingContextMessages(inputCells)) {
+    messages.push(message);
+  }
   const patternRefsMessage = patternRefsContextMessage(
     await engine.establishPatternRefs(),
   );

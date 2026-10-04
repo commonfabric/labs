@@ -112,7 +112,14 @@ describe(
         );
         expect(compiled).toBe(0);
         expect(failed).toEqual([GOOD]);
-        expect(logged).toContain("  ✗ settle-step.test.tsx: wedged");
+        // What follows the file's name is the error as the runner formats
+        // it, whose stack depends on what else this process has compiled.
+        expect(
+          logged.some((line) =>
+            line.startsWith("  ✗ settle-step.test.tsx: ") &&
+            line.includes("wedged")
+          ),
+        ).toBe(true);
       });
     });
 

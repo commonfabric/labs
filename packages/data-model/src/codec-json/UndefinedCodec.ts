@@ -38,4 +38,9 @@ export class UndefinedCodec extends BaseTerminalCodec<JsonCodecValue, null> {
   ): FabricValue {
     return undefined;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

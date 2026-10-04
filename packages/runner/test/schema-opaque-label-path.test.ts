@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import { getCarriedCfcLabelView } from "../src/cfc/label-view-state.ts";
+import { getCarriedCfcLabelView } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { validateAndTransform } from "../src/schema.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -17,35 +17,19 @@ describe("validateAndTransform()", () => {
       apiUrl: new URL(import.meta.url),
     });
     try {
+      const path = [...Array(7).fill("value"), "leaf"];
+      const label = { confidentiality: ["private"], integrity: ["author"] };
       const cell = runtime.getCell(signer.did(), "opaque-label-path");
       const projected = validateAndTransform(runtime, runtime.readTx(), {
         link: {
           ...cell.getAsNormalizedFullLink(),
           schema: { type: "object", asCell: ["opaque"] },
         },
-        cfcLabelView: {
-          version: 1,
-          entries: [{
-            path: [
-              "value",
-              "value",
-              "value",
-              "value",
-              "value",
-              "value",
-              "value",
-              "leaf",
-            ],
-            label: { confidentiality: ["private"], integrity: ["author"] },
-          }],
-        },
+        cfcLabelView: { version: 1, entries: [{ path, label }] },
       });
       expect(getCarriedCfcLabelView(projected)).toEqual({
         version: 1,
-        entries: [{
-          path: ["value", "leaf"],
-          label: { confidentiality: ["private"], integrity: ["author"] },
-        }],
+        entries: [{ path, label }],
       });
     } finally {
       await runtime.dispose({ closeStorage: false });

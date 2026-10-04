@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -35,14 +36,21 @@ describe("CFC link-write integrity gate", () => {
       );
       const targetId = target.getAsNormalizedFullLink().id;
 
-      // A plain value write makes the target a CFC write target.
+      // The stored reference and its policy input name the same source.
       tx.markCfcRelevant("test");
-      tx.writeValueOrThrow({
-        space: signer.did(),
-        scope: "space",
-        id: targetId,
-        path: ["value", "field"],
-      }, "v");
+      tx.writeValueOrThrow(
+        {
+          space: signer.did(),
+          scope: "space",
+          id: targetId,
+          path: ["field"],
+        },
+        linkRefFrom({
+          space: signer.did(),
+          id: "of:cfc-link-integrity-source",
+          path: [],
+        }),
+      );
 
       // Forge a link-write policy input whose carried label view attaches an
       // InjectionSafe integrity atom (author-controlled).
@@ -52,13 +60,13 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-integrity-source",
-          path: ["value"],
+          path: [],
         },
         cfcLabelView: {
           version: 1,
@@ -133,7 +141,7 @@ describe("CFC link-write integrity gate", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       }, "v");
       tx.recordCfcWritePolicyInput({
         kind: "link-write",
@@ -141,13 +149,13 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-reader-source",
-          path: ["value"],
+          path: [],
         },
         cfcLabelView: {
           version: 1,
@@ -191,7 +199,7 @@ describe("CFC link-write integrity gate", () => {
         space: signer.did(),
         scope: "space" as const,
         id: target.getAsNormalizedFullLink().id,
-        path: ["value", "field"],
+        path: ["field"],
       };
       tx.markCfcRelevant("test");
       tx.writeValueOrThrow(address, "v");
@@ -202,7 +210,7 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-schema-reader-source",
-          path: ["value"],
+          path: [],
         },
         linkSchema: {
           type: "string",

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <application
+        android:allowBackup="false"
+        android:label="Common Fabric Weaver"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_la
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Weaver">
+        <activity

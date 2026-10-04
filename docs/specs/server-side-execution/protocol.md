@@ -90,8 +90,8 @@ from an owned setup transaction that commits to storage, and since a
 wave's withdrawable acceptance cannot supply that, its setup transaction
 commits directly to the store as the serving loop's own derived-class
 commit, outside the wave (serving-loop.md §3e). Every other client of
-the piece controller — the shell, the background piece service — keeps
-the client-side shape until its own migration.)*
+the piece controller, such as the shell, keeps the client-side shape
+until its own migration.)*
 
 **The `system` class is PRODUCER-defined, its contents exemplary
 (RULED 2026-08-05).** The stamp rides the memory server's generic
@@ -342,8 +342,8 @@ load-bearing enforcement; commit-level identity is not load-bearing
 | --- | --- |
 | `authored` doc write | session authenticated → write authority on doc/path (existing ACL) → CAS on base revision |
 | `authored` event append | session authenticated → append authority on stream doc → `eventId` unique among stream entries above the stream's `eventWatermark` (CAS — the dedupe horizon, events.md §4) → the memory server STAMPS `firedAt` from the commit envelope (authenticated principal + session); a client-supplied `firedAt` that disagrees is REJECTED, never corrected |
-| `authored`, server-produced (outbox event append, `.inSpace` provisioning) | commit metadata carries the acting identity (`actingPrincipal` + `actingSession` — the ORIGINATING chain actor, events.md §2) + `capabilityRef` → admission validates that capability grant against the target doc/stream (a delegated-capability check, NEVER session-identity impersonation) → for event appends, `firedAt` stamps from the validated acting identity (the stamping paragraph below) → CAS. *(Phase-1 bound, stage D/F: the landed validation is carriage PRESENCE + COMPLETENESS — authored class only, non-empty `actingPrincipal` + `capabilityRef`, a sessionless batch refused for session-scoped writes (scopes.md §5) — with scoped writes keyed from the carried identity; RESOLVING the grant against the target doc/stream awaits per-doc grants, which today's ACL model does not hold, and is the named owed hardening — verification-coverage.md OW13.)* **Genesis of a provisioned space (RULED 2026-08-18):** the FIRST commit into a `.inSpace()`-minted space is its ACL, signed by the SPACE'S OWN identity (its keys derive from the creation name, CT-1650), and that same commit names the ACTING user OWNER (`{ [actor]: "OWNER", "*": "WRITE" }` — the shape a client mints); every later write into the space is the actor's, through this row's delegated carriage or a client's own session; the serving identity is neither owner nor actor at any step and appears nowhere in the ACL (verification-coverage.md OW31 — the build is owed post-merge, before the flip). |
-| `derived` | producer holds the live `execution_lease` for the space (one equality check) → CAS |
+| `authored`, server-produced (outbox event append, `.inSpace` provisioning) | commit metadata carries the acting identity (`actingPrincipal` + `actingSession` — the ORIGINATING chain actor, events.md §2) + `capabilityRef` → admission validates that capability grant against the target doc/stream (a delegated-capability check, NEVER session-identity impersonation) → for event appends, `firedAt` stamps from the validated acting identity (the stamping paragraph below) → CAS. *(Phase-1 bound, stage D/F: the landed validation is carriage PRESENCE + COMPLETENESS — authored class only, non-empty `actingPrincipal` + `capabilityRef`, a sessionless batch refused for session-scoped writes (scopes.md §5) — with scoped writes keyed from the carried identity; RESOLVING the grant against the target doc/stream awaits per-doc grants, which today's ACL model does not hold, and is the named owed hardening — verification-coverage.md OW13.)* **Genesis of a provisioned space (RULED 2026-08-18):** the FIRST commit into a `.inSpace()`-minted space is its ACL, signed by the SPACE'S OWN identity (a key generated for that one commit and then dropped — [random space identities](../random-space-identities.md)), and that same commit names the ACTING user OWNER (`{ [actor]: "OWNER" }` — the shape a client mints), together with any grants the `inSpace()` call names; the space is created before the handler re-runs, and the calling space's allocation record, written in the handler's commit, is what later runs read; every later write into the space is the actor's, through this row's delegated carriage or a client's own session; the serving identity is neither owner nor actor at any step and appears nowhere in the ACL (verification-coverage.md OW31 — the build is owed post-merge, before the flip). |
+| `derived` | producer holds the live `execution_lease` for the space (one equality check) → no operation on the space's ACL document `of:<space>`, in any memory ACL mode (no derived producer writes it; INV-12) → CAS |
 | `system` | unchanged from today |
 | READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03) | requester holds A live `execution_lease` on the co-hosted memory server — its OWN space's lease, not necessarily the read space's (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space) → the named instance is read. A non-lease-holder naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey` in `packages/memory/v2.ts`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. A live lease holder may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard now applies to non-holders only.)* |
 
@@ -504,7 +504,9 @@ whose lease it does not hold — the shape that would silently resolve
 `user:<serviceDID>`. Cross-space serving therefore reads foreign
 SPACE-scope state freely (§2b's free-read row) and foreign SCOPED
 state not at all; lifting that refusal is exactly the grant
-resolution above, never a lease-trust widening. Remote attestation
+resolution above, never a lease-trust widening. Refusal (i) is typed
+as permanent for served delivery: a served event whose required load
+meets it terminalizes at once (events.md §5). Remote attestation
 stays anticipated future work.
 
 **Run identity for a derivation (S1).** A derivation runs PER
@@ -541,9 +543,10 @@ them). v2 keeps that invariant and adds the class discipline:
 | --- | --- |
 | read a foreign doc | free — logged read + server-internal wake (§3b). *Mechanism (OW31, RULED 2026-08-18/19, BUILT — retires the Phase-7 OWNER posture): the serving runtime's loopback sessions carry a session-level delegated READ binding (`actingAs: "space-owner"`, signed into the session.open descriptor), admitted only for the memory ACL's DELEGATING class — under the flag the co-hosted process identity (`memoryAclPrincipalsFor`), OFF the flag empty; the operator's OWNER-class `serviceDids` list is verbatim on both arms and the process identity is never in it by default. The memory server resolves the binding ITSELF from the space's ACL — the ruled "ACL can be read with service identity" — and the session's READ-class capability decisions (session.open, queries, watches) then run as the space's OWNER: the user whose space it is, `session.open` on an owner-only home space included. WRITE/OWNER-class requirements keep resolving against the ENVELOPE principal, so the binding grants no session-plane write path (served writes ride this table's delegated carriage; the observe-mode canary counts any residual); a delegating principal may not initialize a genesis; revocation judges the acting user, so an ownership change revokes the bound session and the next mount re-resolves. Spaces with no valid concrete-owner ACL bind nothing (fresh → authenticated READ, populated-legacy → the compat arm, malformed → fail closed). Trust footing: LT5's — the co-hosted process is already trusted for carried actor claims on the write plane; the binding ATTRIBUTES reads that were previously ambient under the blanket. If this posture proves wrong live, the ruling's own escape hatch is a flagged follow-up, never a quiet re-widening — verification-coverage.md OW31.* |
 | derive FROM foreign state | home derivation reading foreign inputs; result commits HOME |
-| mutate a foreign space | **an event append to a foreign stream — the ONLY cross-space mutation** |
+| mutate a foreign space | **an event append to a foreign stream — the ONLY cross-space mutation** apart from the provisioning and bookkeeping writes the rows below sanction |
 | `derived` commit into a foreign space | FORBIDDEN — SpaceServer(B) is B's only deriver; A never derives into B |
 | provision a foreign/new space (`.inSpace`) | authored-class, foreign-first split at the wave commit step — see below |
+| bookkeeping write a served run triggers, made after the run is over, into a space its actor owns or was granted (compile-cache and program writeback, the `agent` effect's index entry) | the same foreign batch, under the triggering run's delegated carriage passed explicitly — serving-loop.md §3d |
 | client authored writes to several spaces | unchanged from today: separate per-space commits, per-space ACL + CAS |
 
 The event append crosses as an ordinary `authored` commit under the
@@ -599,11 +602,16 @@ relocated into the wave's commit step:
 - Failure: foreign fails ⇒ home never commits ⇒ the event stays
   unconsequenced and replays; persistent failure falls to the
   error-is-the-consequence rule (events.md §5).
-- Replay safety: destination DIDs/ids derive from the creation event
-  (CT-1650 — anonymous `inSpace()`, DID unique per user + creation
-  event), so a replayed handler re-derives the SAME ids and the
-  re-provisioning is a CAS no-op. The today-orphan window (foreign
-  landed, home did not) becomes convergent instead of dangling.
+- Replay safety: an `inSpace()` target resolves through an allocation
+  record the calling (home) space holds, one per name, keyed by the
+  creation event for the anonymous form; the record commits with the
+  home writes that refer to the space. A replayed handler reads the
+  record its first run wrote and reaches the SAME space, and ids inside
+  it derive from the creation event, so re-provisioning is a CAS no-op.
+  A space created for a run whose home commit never landed is
+  remembered by the process that created it and reused on replay there;
+  one abandoned by a process that stopped is unreferenced and inert —
+  one access-control document nobody can reach.
   Provisioning handlers MUST therefore be deterministic given
   payload + cells — no clock, no randomness (events.md §3); replay
   convergence depends on it. A transformer lint can trail.

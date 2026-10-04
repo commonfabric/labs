@@ -4,7 +4,7 @@
  *
  * The half read is a member's `deno-test` task where it declares one and
  * its `test` task otherwise, followed by that half's own dependencies,
- * taking the first that reads as a single `deno test` or as the sharded
+ * taking the first that reads as a single `deno test` or as the batch
  * runner's wrapper around one. A dependency of a dependency is not
  * reached. A member with one is
  * enumerated a file at a time, so a lane can be asked for a few files out
@@ -32,29 +32,28 @@
 
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
-import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
 import {
   memberTasks,
   memberTestFiles,
   type ParsedTestTask,
   testBatches,
+  testBatchOf,
   unmatchedGlobs,
 } from "./deno-task.ts";
 import {
   claimsIdentity,
   type CommandContext,
+  denoTestCommand,
   type Invocation,
   type LocatableRecord,
   type Location,
   type MeasuredSet,
   measuringInto,
-  recordingArguments,
   type RecordSurface,
-  shuffleArguments,
   skipListOf,
   type Suite,
   type UnitRequest,
-  writeSkipList,
+  writeBatchSkipList,
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
@@ -72,21 +71,9 @@ const BROWSER_SUFFIX = "#browser-test";
  */
 export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map([
   [
-    "./packages/dashboard",
-    "its tests run through `test/runner.ts`, which splits them into three " +
-    "commands by the permissions each file needs and by whether it needs a " +
-    "browser",
-  ],
-  [
     "./packages/identity",
     "its tests run in a browser through deno-web-test, which takes no file " +
     "list from a lane",
-  ],
-  [
-    "./packages/patterns",
-    "its first pass runs under `test-import-map.json`, which replaces the " +
-    "workspace's map so that `commonfabric` names the shim under " +
-    "`tools/test-support/` that its tests are written against",
   ],
 ]);
 
@@ -114,9 +101,9 @@ interface Member {
   browserTest: boolean;
 
   /**
-   * The test files the Deno-only half declines, which is what the
-   * browser half runs. The browser half is one unit whatever it holds,
-   * so these are files the topology accounts for without enumerating.
+   * The test files the browser half runs. The browser half is one unit
+   * whatever it holds, so these are files the topology accounts for
+   * without enumerating.
    */
   browserFiles: string[];
 }
@@ -145,6 +132,13 @@ async function readMember(
 ): Promise<Member | undefined> {
   const memberDir = path.resolve(root, memberPath);
   const tasks = await memberTasks(memberDir);
+  if (tasks.browserTest && tasks.browserPaths.length === 0) {
+    throw new Error(
+      `\`${memberPath}\`'s \`browser-test\` task names no files the ` +
+        `topology can read. Write it as a \`deno run\` of its runner followed ` +
+        `by the paths or globs it runs.`,
+    );
+  }
   const whole = tasks.present && tasks.denoHalf &&
     tasks.denoTest === undefined;
   if (whole !== runsWhole.has(memberPath)) {
@@ -191,20 +185,17 @@ async function readMember(
   member.files = (await memberTestFiles(memberDir, tasks.denoTest))
     .map(relative);
   member.run = tasks.denoTest;
-  if (member.browserTest) {
-    // What the Deno-only half ignores is what the browser half runs. A
-    // member that splits its halves by a name — `*.browser.test.ts` — is
-    // otherwise a member whose browser files no suite claims, because
-    // the browser unit is one unit rather than one per file. The same
-    // paths the task names, read without its ignores, so the difference
-    // is what an ignore took out rather than what the task never looked
-    // at.
-    const everything = new Set(
-      (await memberTestFiles(memberDir, { ...tasks.denoTest, ignores: [] }))
-        .map(relative),
-    );
-    for (const file of member.files) everything.delete(file);
-    member.browserFiles = [...everything].sort();
+  if (tasks.browserTest) {
+    // The browser unit is one unit rather than one per file, so without
+    // this a member that splits its halves by a name — `*.browser.test.ts`
+    // — is a member whose browser files no suite claims. They are the
+    // files the browser half's task names, rather than every file the
+    // Deno-only half ignores, because the Deno-only half may also ignore
+    // files that another suite runs.
+    member.browserFiles = (await memberTestFiles(memberDir, {
+      paths: tasks.browserPaths,
+      ignores: [],
+    })).map(relative);
   }
   return member;
 }
@@ -212,6 +203,20 @@ async function readMember(
 /** A member's own unit, which is the whole of it. */
 function wholeUnit(member: Member): string {
   return member.memberPath.replace(/^\.\//, "");
+}
+
+/**
+ * The `deno test` process a member's test file runs in, named by the
+ * member's scope and by which of the member's runs its flags put it in.
+ * `file` is relative to the member's directory, as the member's task names
+ * it.
+ */
+function memberProcess(
+  scope: string,
+  run: ParsedTestTask,
+  file: string,
+): string {
+  return `${scope} ${testBatchOf(run, file)}`;
 }
 
 /**
@@ -268,12 +273,21 @@ function unitSuite(
   const byScope = new Map<string, Member>();
   const units: string[] = [];
   const whole: string[] = [];
+  const processes = new Map<string, string>();
   for (const member of members) {
     byScope.set(member.scope, member);
     if (member.run !== undefined) {
       for (const file of member.files) {
         units.push(file);
         byUnit.set(file, member);
+        processes.set(
+          file,
+          memberProcess(
+            member.scope,
+            member.run,
+            path.relative(member.memberPath, file),
+          ),
+        );
       }
     } else if (member.denoHalf) {
       // A member with no Deno-only half has nothing for a `deno task
@@ -281,12 +295,15 @@ function unitSuite(
       units.push(wholeUnit(member));
       byUnit.set(wholeUnit(member), member);
       whole.push(wholeUnit(member));
+      // A whole unit is a process of its own, named after the unit.
+      processes.set(wholeUnit(member), wholeUnit(member));
     }
     if (member.browserTest) {
       const unit = `${wholeUnit(member)}${BROWSER_SUFFIX}`;
       units.push(unit);
       byUnit.set(unit, member);
       whole.push(unit);
+      processes.set(unit, unit);
     }
   }
 
@@ -308,6 +325,10 @@ function unitSuite(
     units,
     unavailable: [],
     whole,
+    // A file runs in the `deno test` its member's flags put it in, and a
+    // whole unit in the task it names. Whichever of those marks when its
+    // units began has its setup measured; every one of them has a setup.
+    processes,
     ...(sources.length === 0 ? {} : { sources }),
     ...(measured.length === 0 ? {} : { measured }),
 
@@ -380,6 +401,7 @@ function unitSuite(
             command: [Deno.execPath(), "task", member.denoTestTask],
             cwd: memberDir,
             env: denoEnv,
+            process: whole,
           });
         }
         if (files.length > 0 && member.run !== undefined) {
@@ -393,19 +415,28 @@ function unitSuite(
           for (const [index, batch] of batches.entries()) {
             const name = index === 0 ? slug : `${slug}.${index}`;
             const junitPath = path.join(context.outputDir, `${name}.xml`);
+            const process = memberProcess(
+              member.scope,
+              member.run,
+              batch.files[0]!,
+            );
             const requests = batch.files.map((file) => byFile.get(file)!);
+            const skipList = await writeBatchSkipList(
+              context,
+              name,
+              skipListOf(requests),
+            );
             invocations.push({
-              command: [
-                Deno.execPath(),
-                "test",
-                ...batch.flags,
-                ...shuffleArguments(),
-                ...recordingArguments(batch.flags, context),
-                `--junit-path=${junitPath}`,
-                ...batch.files,
-              ],
+              command: denoTestCommand(
+                batch.flags,
+                context,
+                junitPath,
+                batch.files,
+                skipList.path,
+              ),
               cwd: memberDir,
-              env: { ...denoEnv, ...await skipEnv(context, name, requests) },
+              env: { ...denoEnv, ...skipList.env },
+              process,
               junit: [{
                 path: junitPath,
                 kind: "unit",
@@ -420,28 +451,13 @@ function unitSuite(
             command: [Deno.execPath(), "task", "browser-test"],
             cwd: memberDir,
             env,
+            process: `${whole}${BROWSER_SUFFIX}`,
           });
         }
       }
       return invocations;
     },
   };
-}
-
-/**
- * Writes a batch's skip list and names it in the environment, or leaves
- * the environment alone where nothing is skipped.
- */
-async function skipEnv(
-  context: CommandContext,
-  slug: string,
-  requests: readonly UnitRequest[],
-): Promise<Record<string, string>> {
-  const skips = skipListOf(requests);
-  if (Object.keys(skips).length === 0) return {};
-  const skipListPath = path.join(context.outputDir, `${slug}.skip.json`);
-  await writeSkipList(skipListPath, skips);
-  return { [SKIP_LIST_VARIABLE]: skipListPath };
 }
 
 /**

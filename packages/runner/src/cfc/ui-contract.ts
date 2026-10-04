@@ -2,9 +2,14 @@ import {
   isFabricDataUri,
   valueFromDataUri,
 } from "@commonfabric/data-model/codec-data-uri";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { CellScope, FabricValue, JSONSchema } from "../builder/types.ts";
+import type {
+  CellScope,
+  FabricValue,
+  JSONSchema,
+  JSONSchemaObj,
+} from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { findAndInlineDataUriLinks } from "../data-uri.ts";
 import { isNormalizedFullLink } from "../link-types.ts";
@@ -49,6 +54,12 @@ export type UiContractEntry = {
 
   /** The schema document that resolves local references inside `.schema`. */
   root?: JSONSchema;
+
+  /**
+   * Set when the contract sits inside an `anyOf` or `oneOf` branch, so it
+   * holds only for the values that branch matches.
+   */
+  conditional?: true;
 };
 
 const uiContractEntry = (
@@ -56,8 +67,15 @@ const uiContractEntry = (
   contract: UiContract,
   schema?: JSONSchema,
   root?: JSONSchema,
+  conditional = false,
 ): UiContractEntry => {
   const entry: UiContractEntry = { path, contract };
+  if (conditional) {
+    Object.defineProperty(entry, "conditional", {
+      value: true,
+      enumerable: false,
+    });
+  }
   if (schema !== undefined) {
     Object.defineProperty(entry, "schema", {
       value: schema,
@@ -90,6 +108,14 @@ type TrustedEventPolicyTx = Pick<
   IExtendedStorageTransaction,
   "getCfcState" | "recordCfcWritePolicyInput"
 >;
+
+/**
+ * The schema envelope a document stores, in the form the commit boundary
+ * verifies against, or `undefined` when it stores none or cannot be read.
+ */
+export type StoredSchemaResolver = (
+  write: NormalizedFullLink,
+) => JSONSchema | undefined;
 
 type AddressLike = {
   space: string;
@@ -159,43 +185,49 @@ const trustRequirementsFromContract = (
   };
 };
 
+/**
+ * The refs one branch of a walk has followed, each held under the document
+ * that gives it its meaning. A local pointer names a definition of the
+ * document it is read in, so it is held under that document's root, and the
+ * same pointer in another document is another ref. An embedded or external
+ * ref names its document wherever it sits, and is held under `undefined`.
+ *
+ * A set is never added to once it is in a map; recording a ref replaces the
+ * set. Copying the map therefore gives a branch a record of its own.
+ */
+type SeenRefs = Map<JSONSchema | undefined, ReadonlySet<string>>;
+
+/** Whether `schema` is a ref site, an object schema carrying a `$ref`. */
+const hasSchemaRef = (
+  schema: JSONSchema | undefined,
+): schema is JSONSchemaObj & { $ref: string } =>
+  isObjectOrArray(schema) && typeof schema.$ref === "string";
+
 // Follow a `$ref` of any form the runtime resolves — a local pointer, an
 // embedded schema, or an external `cid:` document — one chain at a time. The
-// resolver guards the chain; `seenRefs`, the refs this branch of the walk has
-// followed, guards the descent, where a recursive document reaches its own
-// ref again below the body it resolved to. The schema comes back as it is
-// where it carries no ref, where the ref closes a cycle, or where it resolves
-// to nothing.
+// resolver guards the chain; `seenRefs` guards the descent, where a recursive
+// document reaches its own ref again below the body it resolved to. A resolved
+// view can be a document of its own, so a recursion may alternate between
+// documents; a pointer stays recorded under its document for as long as the
+// branch runs, which is what closes such a cycle. The schema comes back as it
+// is where it carries no ref, where the ref closes a cycle, or where it
+// resolves to nothing.
 const followSchemaRef = (
   schema: JSONSchema | undefined,
   root: JSONSchema | undefined,
-  seenRefs: Set<string>,
+  seenRefs: SeenRefs,
 ): JSONSchema | undefined => {
-  if (!isObjectOrArray(schema) || typeof schema.$ref !== "string") {
-    return schema;
-  }
+  if (!hasSchemaRef(schema)) return schema;
   const ref = schema.$ref;
-  if (seenRefs.has(ref)) return schema;
-  seenRefs.add(ref);
+  const document = ref.startsWith("#") ? root ?? schema : undefined;
+  const refs = seenRefs.get(document);
+  if (refs?.has(ref)) return schema;
+  seenRefs.set(document, new Set(refs).add(ref));
   return ContextualFlowControl.resolveSchemaRefs(
     schema,
     isObjectOrArray(root) ? root : schema,
   ) ?? schema;
 };
-
-// The seen refs to carry below a resolution. A resolution that enters another
-// document — its root is not the one the ref was read in — leaves the local
-// pointers followed so far behind: each named a definition of the document
-// being left, and the same pointer in the new document is another ref. An
-// embedded or external ref names its document wherever it sits, and stays.
-const seenRefsBelow = (
-  seenRefs: Set<string>,
-  root: JSONSchema | undefined,
-  resolvedRoot: JSONSchema,
-): Set<string> =>
-  resolvedRoot === root
-    ? seenRefs
-    : new Set([...seenRefs].filter((ref) => !ref.startsWith("#")));
 
 // The root a resolved ref's target resolves against: its own document where
 // the ref's chain ended in another one — a definition body that is an
@@ -213,7 +245,7 @@ const resolvedRootFor = (
 const uiContractFromSchemaInternal = (
   schema: JSONSchema | undefined,
   root: JSONSchema | undefined,
-  seenRefs: Set<string>,
+  seenRefs: SeenRefs,
 ): UiContract | undefined => {
   const resolvedSchema = followSchemaRef(schema, root, seenRefs);
   if (resolvedSchema !== schema && schema !== undefined) {
@@ -225,7 +257,7 @@ const uiContractFromSchemaInternal = (
     return uiContractFromSchemaInternal(
       resolvedSchema,
       resolvedRoot,
-      seenRefsBelow(seenRefs, root, resolvedRoot),
+      seenRefs,
     );
   }
   if (
@@ -262,15 +294,18 @@ const uiContractFromSchemaInternal = (
 export const uiContractFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContract | undefined =>
-  uiContractFromSchemaInternal(schema, schema, new Set());
+  uiContractFromSchemaInternal(schema, schema, new Map());
 
 const uiContractsFromSchemaInternal = (
   schema: JSONSchema | undefined,
   root: JSONSchema | undefined,
   path: string[],
-  seenRefs: Set<string>,
+  seenRefs: SeenRefs,
+  conditional = false,
+  includeAlternatives = false,
 ): UiContractEntry[] => {
-  const branchRefs = new Set(seenRefs);
+  // Following a ref records it, and only this branch may see the record.
+  const branchRefs = hasSchemaRef(schema) ? new Map(seenRefs) : seenRefs;
   const resolvedSchema = followSchemaRef(schema, root, branchRefs);
   if (resolvedSchema !== schema && schema !== undefined) {
     const resolvedRoot = resolvedRootFor(
@@ -282,7 +317,9 @@ const uiContractsFromSchemaInternal = (
       resolvedSchema,
       resolvedRoot,
       path,
-      seenRefsBelow(branchRefs, root, resolvedRoot),
+      branchRefs,
+      conditional,
+      includeAlternatives,
     );
   }
   if (!isObjectOrArray(resolvedSchema)) {
@@ -294,12 +331,39 @@ const uiContractsFromSchemaInternal = (
   const contract = uiContractFromSchemaInternal(
     resolvedSchema,
     childRoot,
-    new Set(),
+    new Map(),
   );
   if (contract !== undefined) {
     entries.push(
-      uiContractEntry([...path], contract, resolvedSchema, childRoot),
+      uiContractEntry(
+        [...path],
+        contract,
+        resolvedSchema,
+        childRoot,
+        conditional,
+      ),
     );
+  }
+  if (
+    includeAlternatives && isObjectOrArray(resolvedSchema.ifc) &&
+    Array.isArray(resolvedSchema.ifc.writePolicyAnyOf)
+  ) {
+    for (const policy of resolvedSchema.ifc.writePolicyAnyOf) {
+      const alternative = isObjectOrArray(policy)
+        ? uiContractFromSchemaInternal({ ifc: policy }, childRoot, new Map())
+        : undefined;
+      if (alternative !== undefined) {
+        entries.push(
+          uiContractEntry(
+            [...path],
+            alternative,
+            resolvedSchema,
+            childRoot,
+            conditional,
+          ),
+        );
+      }
+    }
   }
 
   const hasProperties = isObjectOrArray(resolvedSchema.properties);
@@ -328,42 +392,60 @@ const uiContractsFromSchemaInternal = (
           definition as JSONSchema,
           definition as JSONSchema,
           [],
-          new Set(),
+          new Map(),
+          false,
+          includeAlternatives,
         )
       )
       .map((entry) => entry.contract);
     if (definitionContracts.length === 1) {
-      entries.push(uiContractEntry([...path], definitionContracts[0]));
-    }
-  }
-
-  if (hasProperties) {
-    for (const [key, child] of Object.entries(resolvedSchema.properties)) {
       entries.push(
-        ...uiContractsFromSchemaInternal(
-          child as JSONSchema,
-          childRoot,
-          [...path, key],
-          seenRefs,
+        uiContractEntry(
+          [...path],
+          definitionContracts[0],
+          undefined,
+          undefined,
+          conditional,
         ),
       );
     }
   }
 
-  const compound = [
-    ...(Array.isArray(resolvedSchema.anyOf) ? resolvedSchema.anyOf : []),
-    ...(Array.isArray(resolvedSchema.oneOf) ? resolvedSchema.oneOf : []),
-    ...(Array.isArray(resolvedSchema.allOf) ? resolvedSchema.allOf : []),
-  ];
-  for (const child of compound) {
-    entries.push(
-      ...uiContractsFromSchemaInternal(
+  if (hasProperties) {
+    for (const [key, child] of Object.entries(resolvedSchema.properties)) {
+      const propertyEntries = uiContractsFromSchemaInternal(
         child as JSONSchema,
         childRoot,
-        path,
+        [...path, key],
         seenRefs,
-      ),
+        conditional,
+        includeAlternatives,
+      );
+      for (const entry of propertyEntries) entries.push(entry);
+    }
+  }
+
+  const compound: [JSONSchema, boolean][] = [
+    ...(Array.isArray(resolvedSchema.anyOf) ? resolvedSchema.anyOf : []),
+    ...(Array.isArray(resolvedSchema.oneOf) ? resolvedSchema.oneOf : []),
+  ].map((child) => [child as JSONSchema, true]);
+  for (
+    const child of Array.isArray(resolvedSchema.allOf)
+      ? resolvedSchema.allOf
+      : []
+  ) {
+    compound.push([child as JSONSchema, conditional]);
+  }
+  for (const [child, childConditional] of compound) {
+    const branchEntries = uiContractsFromSchemaInternal(
+      child,
+      childRoot,
+      path,
+      seenRefs,
+      childConditional,
+      includeAlternatives,
     );
+    for (const entry of branchEntries) entries.push(entry);
   }
 
   // `items` keeps its `*` entry even beside prefixItems, mirroring
@@ -376,26 +458,28 @@ const uiContractsFromSchemaInternal = (
     isObjectOrArray(resolvedSchema.items) ||
     typeof resolvedSchema.items === "boolean"
   ) {
-    entries.push(
-      ...uiContractsFromSchemaInternal(
-        resolvedSchema.items as JSONSchema,
-        childRoot,
-        [...path, "*"],
-        seenRefs,
-      ),
+    const itemEntries = uiContractsFromSchemaInternal(
+      resolvedSchema.items as JSONSchema,
+      childRoot,
+      [...path, "*"],
+      seenRefs,
+      conditional,
+      includeAlternatives,
     );
+    for (const entry of itemEntries) entries.push(entry);
   }
 
   if (Array.isArray(resolvedSchema.prefixItems)) {
     for (let index = 0; index < resolvedSchema.prefixItems.length; index++) {
-      entries.push(
-        ...uiContractsFromSchemaInternal(
-          resolvedSchema.prefixItems[index] as JSONSchema,
-          childRoot,
-          [...path, String(index)],
-          seenRefs,
-        ),
+      const slotEntries = uiContractsFromSchemaInternal(
+        resolvedSchema.prefixItems[index] as JSONSchema,
+        childRoot,
+        [...path, String(index)],
+        seenRefs,
+        conditional,
+        includeAlternatives,
       );
+      for (const entry of slotEntries) entries.push(entry);
     }
   }
 
@@ -405,7 +489,21 @@ const uiContractsFromSchemaInternal = (
 export const uiContractsFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContractEntry[] =>
-  uiContractsFromSchemaInternal(schema, schema, [], new Set());
+  uiContractsFromSchemaInternal(schema, schema, [], new Map());
+
+/**
+ * Like {@link uiContractsFromSchema}, except that it also returns the contract
+ * of each `writePolicyAnyOf` alternative. A trusted event matching any of them
+ * is evidence for the write: which alternative, if any, admits the write is
+ * decided at commit. The one place an alternative's contract is not returned
+ * is the fallback that reads an unknown-typed schema's `$defs`, which returns
+ * a contract only when it finds exactly one; a definition with two gestured
+ * alternatives yields none, and a write relying on it is refused.
+ */
+const uiContractCandidatesFromSchema = (
+  schema: JSONSchema | undefined,
+): UiContractEntry[] =>
+  uiContractsFromSchemaInternal(schema, schema, [], new Map(), false, true);
 
 export const trustedEventProvenanceMatchesUiContract = (
   provenance: unknown,
@@ -526,6 +624,18 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
   return candidates;
 };
 
+/**
+ * Whether `event` is a trusted gesture: an event the renderer marked, whose
+ * provenance says the browser trusted a DOM event on a UI surface. This is
+ * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
+ * their match on which surface it was, so it shows that a person acted and
+ * not on what.
+ */
+export const isTrustedGesture = (event: unknown): boolean =>
+  isRendererTrustedEvent(event) && isObjectNotArray(event) &&
+  isTrustedDomProvenance(event.provenance) &&
+  isObjectNotArray(event.provenance.ui);
+
 const pathsEqual = (
   left: readonly unknown[],
   right: readonly unknown[],
@@ -566,18 +676,54 @@ const sameDocument = (
   target.id === write.id &&
   target.scope === write.scope;
 
+/**
+ * The contracts the write's stored envelope declares at a path above or below
+ * the write rather than at it. The commit boundary judges a write against a
+ * contract wherever the two paths overlap, and looks for the evidence at the
+ * contract's own path, so that is where it is recorded.
+ */
+const storedContractsAroundWrite = (
+  write: NormalizedFullLink,
+  storedSchemaFor: StoredSchemaResolver,
+): UiContractEntry[] =>
+  uiContractCandidatesFromSchema(storedSchemaFor(write)).filter((entry) =>
+    !pathPatternMatches(entry.path, write.path) &&
+    pathsOverlap(entry.path, write.path)
+  );
+
+// Whether one path, `*` matching any segment, lies on the other's line of
+// descent: equal, or one a prefix of the other.
+const pathsOverlap = (
+  pattern: readonly unknown[],
+  path: readonly unknown[],
+): boolean =>
+  pattern.every((segment, index) =>
+    index >= path.length || String(segment) === "*" ||
+    String(segment) === String(path[index])
+  );
+
 const contractCandidatesForWrite = (
   tx: TrustedEventPolicyTx,
   write: NormalizedFullLink,
+  storedSchemaFor: StoredSchemaResolver,
 ): UiContract[] => {
   const contracts: UiContract[] = [];
   if (write.schema !== undefined) {
-    for (const entry of uiContractsFromSchema(write.schema)) {
+    for (const entry of uiContractCandidatesFromSchema(write.schema)) {
       if (
         pathsEqual(entry.path, []) || pathPatternMatches(entry.path, write.path)
       ) {
         contracts.push(entry.contract);
       }
+    }
+  }
+  // The contract the document stores binds every writer, including one
+  // whose own schema declares a label without restating the contract, and
+  // the commit boundary verifies the write against it. Matching the event
+  // here is what records the evidence that check looks for.
+  for (const entry of uiContractCandidatesFromSchema(storedSchemaFor(write))) {
+    if (pathPatternMatches(entry.path, write.path)) {
+      contracts.push(entry.contract);
     }
   }
   for (const input of tx.getCfcState().writePolicyInputs) {
@@ -587,7 +733,7 @@ const contractCandidatesForWrite = (
       sameDocument(input.target, write) &&
       pathHasPrefix(write.path, input.target.path)
     ) {
-      for (const entry of uiContractsFromSchema(input.schema)) {
+      for (const entry of uiContractCandidatesFromSchema(input.schema)) {
         if (
           pathPatternMatches([...input.target.path, ...entry.path], write.path)
         ) {
@@ -711,7 +857,7 @@ const contractCandidatesFromEventContext = (
       ) {
         continue;
       }
-      for (const entry of uiContractsFromSchema(link.schema)) {
+      for (const entry of uiContractCandidatesFromSchema(link.schema)) {
         if (pathPatternMatches([...link.path, ...entry.path], write.path)) {
           contracts.push(entry.contract);
         }
@@ -744,10 +890,11 @@ export const recordTrustedEventPolicyInputs = (
   tx: TrustedEventPolicyTx,
   writes: readonly NormalizedFullLink[],
   event: unknown,
+  storedSchemaFor: StoredSchemaResolver,
 ): void => {
   for (const write of writes) {
     const contracts = [
-      ...contractCandidatesForWrite(tx, write),
+      ...contractCandidatesForWrite(tx, write, storedSchemaFor),
       ...contractCandidatesFromEventContext(event, write),
     ];
     for (const contract of contracts) {
@@ -774,6 +921,27 @@ export const recordTrustedEventPolicyInputs = (
         provenance: (matchingEvent as SerializedTrustedEvent).provenance,
       });
       break;
+    }
+    for (const entry of storedContractsAroundWrite(write, storedSchemaFor)) {
+      const matchingEvent = trustedEventMatchCandidates(event).find(
+        (candidate) => trustedEventMatchesUiContract(candidate, entry.contract),
+      );
+      if (matchingEvent === undefined) continue;
+      const at = { ...write, path: [...entry.path] };
+      const target = {
+        space: write.space,
+        id: write.id,
+        scope: write.scope,
+        path: [...entry.path],
+      };
+      const eventId = trustedEventId(matchingEvent, at);
+      if (trustedEventPolicyInputAlreadyRecorded(tx, target, eventId)) continue;
+      tx.recordCfcWritePolicyInput({
+        kind: "trusted-event",
+        target,
+        eventId,
+        provenance: (matchingEvent as SerializedTrustedEvent).provenance,
+      });
     }
   }
 };

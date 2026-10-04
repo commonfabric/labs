@@ -23,9 +23,9 @@ async function createBenchEnv(): Promise<BenchEnv> {
     apiUrl: new URL(import.meta.url),
     storageManager,
   });
-  const session = await createSession({
+  const session = createSession({
     identity: signer,
-    spaceName: `piece-bench-${crypto.randomUUID()}`,
+    spaceDid: await runtime.createSpace(),
   });
   const pieces = new PiecesController(session, runtime);
   await pieces.synced();

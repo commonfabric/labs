@@ -62,6 +62,7 @@ import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { sendEvent } from "../src/cell.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
@@ -1449,12 +1450,7 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
 
     let ackStatus: string | undefined;
     const ackArrivals = new ArrivalLog<void>();
-    (result.key("bump") as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: { status(): { status: string } }) => void,
-      ): unknown;
-    }).send({}, (ackTx) => {
+    sendEvent(result.key("bump"), {}, (ackTx) => {
       ackStatus = ackTx.status().status;
       ackArrivals.record();
     });

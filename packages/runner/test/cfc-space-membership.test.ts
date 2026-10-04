@@ -19,36 +19,37 @@ const SPACE_TEAM = "did:key:team-space";
 const SERVICE = "did:web:commonfabric.org#runtime";
 
 describe("spaceReaderRole (§4.9.3 capability resolver)", () => {
-  it("grants implicit OWNER for a principal's own identity space", () => {
-    // A principal definitionally owns its own space (space DID == principal
-    // DID), independent of any ACL document or deployment ACL mode.
-    expect(spaceReaderRole(undefined, ALICE, ALICE)).toBe("owner");
+  it("resolves a principal's own identity space through its ACL", () => {
+    // A Home space's genesis ACL names its user OWNER; without an ACL, being
+    // the space's DID grants nothing.
+    expect(spaceReaderRole({ [ALICE]: "OWNER" }, ALICE)).toBe("owner");
+    expect(spaceReaderRole(undefined, ALICE)).toBeNull();
   });
 
   it("grants implicit OWNER to a configured service DID", () => {
-    expect(spaceReaderRole(undefined, SPACE_TEAM, SERVICE, [SERVICE])).toBe(
+    expect(spaceReaderRole(undefined, SERVICE, [SERVICE])).toBe(
       "owner",
     );
   });
 
   it("maps a READ grant to the reader role", () => {
     const acl: ACL = { [MALLORY]: "OWNER", [ALICE]: "READ" };
-    expect(spaceReaderRole(acl, SPACE_TEAM, ALICE)).toBe("reader");
+    expect(spaceReaderRole(acl, ALICE)).toBe("reader");
   });
 
   it("maps a WRITE grant to the writer role (WRITE implies READ)", () => {
     const acl: ACL = { [MALLORY]: "OWNER", [ALICE]: "WRITE" };
-    expect(spaceReaderRole(acl, SPACE_TEAM, ALICE)).toBe("writer");
+    expect(spaceReaderRole(acl, ALICE)).toBe("writer");
   });
 
   it("maps an OWNER grant to the owner role", () => {
     const acl: ACL = { [ALICE]: "OWNER" };
-    expect(spaceReaderRole(acl, SPACE_TEAM, ALICE)).toBe("owner");
+    expect(spaceReaderRole(acl, ALICE)).toBe("owner");
   });
 
   it("falls back to the ANYONE ('*') grant when the principal is unlisted", () => {
     const acl: ACL = { [MALLORY]: "OWNER", "*": "READ" };
-    expect(spaceReaderRole(acl, SPACE_TEAM, ALICE)).toBe("reader");
+    expect(spaceReaderRole(acl, ALICE)).toBe("reader");
   });
 
   it("prefers an explicit principal entry over the ANYONE grant", () => {
@@ -59,35 +60,35 @@ describe("spaceReaderRole (§4.9.3 capability resolver)", () => {
       [ALICE]: "READ",
       "*": "OWNER",
     };
-    expect(spaceReaderRole(acl, SPACE_TEAM, ALICE)).toBe("reader");
+    expect(spaceReaderRole(acl, ALICE)).toBe("reader");
   });
 
   it("returns null for a principal absent from a `*`-less ACL (fail closed)", () => {
     const acl: ACL = { [MALLORY]: "OWNER" };
-    expect(spaceReaderRole(acl, SPACE_TEAM, ALICE)).toBeNull();
+    expect(spaceReaderRole(acl, ALICE)).toBeNull();
   });
 
   it("returns null for a missing ACL document (fail closed)", () => {
     // The whole soundness point: an unread/absent ACL grants NOTHING, so the
     // Space label stays blocked. Residency is not read authority.
-    expect(spaceReaderRole(undefined, SPACE_TEAM, ALICE)).toBeNull();
+    expect(spaceReaderRole(undefined, ALICE)).toBeNull();
   });
 
   it("returns null for a malformed ACL value (fail closed)", () => {
-    expect(spaceReaderRole("not-an-acl" as unknown as ACL, SPACE_TEAM, ALICE))
+    expect(spaceReaderRole("not-an-acl" as unknown as ACL, ALICE))
       .toBeNull();
     expect(
-      spaceReaderRole({ [ALICE]: "SUDO" } as unknown as ACL, SPACE_TEAM, ALICE),
+      spaceReaderRole({ [ALICE]: "SUDO" } as unknown as ACL, ALICE),
     ).toBeNull();
   });
 
   it("returns null for a syntactically valid but ownerless ACL", () => {
-    expect(spaceReaderRole({ [ALICE]: "READ" }, SPACE_TEAM, ALICE)).toBeNull();
-    expect(spaceReaderRole({ "*": "OWNER" }, SPACE_TEAM, ALICE)).toBeNull();
+    expect(spaceReaderRole({ [ALICE]: "READ" }, ALICE)).toBeNull();
+    expect(spaceReaderRole({ "*": "OWNER" }, ALICE)).toBeNull();
   });
 
   it("does not grant a service role to a non-service principal", () => {
-    expect(spaceReaderRole(undefined, SPACE_TEAM, ALICE, [SERVICE])).toBeNull();
+    expect(spaceReaderRole(undefined, ALICE, [SERVICE])).toBeNull();
   });
 });
 
@@ -143,12 +144,20 @@ describe("createRuntimeSpaceMembershipProvider (§4.9.3 provider)", () => {
     expect(provider.readerRole(SPACE_TEAM)).toBeNull();
   });
 
-  it("grants the acting user's own space without reading an ACL", () => {
-    const { runtime, getCalls } = fakeRuntime({});
+  it("resolves the acting user's own space through its ACL", () => {
+    // A Home space's user owns it because its genesis ACL says so; being the
+    // space's DID grants nothing without that entry.
+    const { runtime, getCalls } = fakeRuntime({
+      [`of:${ALICE}`]: { [ALICE]: "OWNER" },
+    });
     const provider = createRuntimeSpaceMembershipProvider(runtime, ALICE);
     expect(provider.readerRole(ALICE)).toBe("owner");
-    // Own-space is implicit OWNER — no ACL doc read needed.
-    expect(getCalls).not.toContain(`of:${ALICE}`);
+    expect(getCalls).toContain(`of:${ALICE}`);
+    const { runtime: unread } = fakeRuntime({});
+    expect(
+      createRuntimeSpaceMembershipProvider(unread, ALICE).readerRole(ALICE),
+    )
+      .toBeNull();
   });
 
   it("fails closed on a malformed ACL value", () => {

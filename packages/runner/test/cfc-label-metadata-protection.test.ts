@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
@@ -161,15 +162,15 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       space: spaceB,
       scope: "space",
       id: targetId,
-      path: ["value", "field"],
-    }, "v");
+      path: ["field"],
+    }, linkRefFrom({ space: sourceSpace, id: sourceId, path: [] }));
     tx.recordCfcWritePolicyInput({
       kind: "link-write",
       target: {
         space: spaceB,
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       },
       source: {
         space: sourceSpace,
@@ -384,7 +385,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             space: spaceB,
             scope: "space",
             id: targetId,
-            path: ["value", "field"],
+            path: ["field"],
           },
           source: {
             space: spaceA,
@@ -397,6 +398,9 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             entries: [{
               path: ["carriedOnly"],
               label: { confidentiality: [userAtom] },
+            }, {
+              path: ["stringOnly"],
+              label: { confidentiality: ["opaque-tag"] },
             }],
           },
         });
@@ -436,15 +440,15 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           space: spaceB,
           scope: "space",
           id: targetId,
-          path: ["value", "legacyField"],
-        }, "old");
+          path: ["legacyField"],
+        }, linkRefFrom({ space: spaceA, id: sourceId, path: [] }));
         tx1.recordCfcWritePolicyInput({
           kind: "link-write",
           target: {
             space: spaceB,
             scope: "space",
             id: targetId,
-            path: ["value", "legacyField"],
+            path: ["legacyField"],
           },
           source: {
             space: spaceA,
@@ -465,15 +469,15 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           space: spaceB,
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
-        }, "v");
+          path: ["field"],
+        }, linkRefFrom({ space: spaceA, id: sourceId, path: [] }));
         tx2.recordCfcWritePolicyInput({
           kind: "link-write",
           target: {
             space: spaceB,
             scope: "space",
             id: targetId,
-            path: ["value", "field"],
+            path: ["field"],
           },
           source: {
             space: spaceA,

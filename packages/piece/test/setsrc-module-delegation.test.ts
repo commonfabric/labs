@@ -99,9 +99,9 @@ describe("setsrc module delegation", () => {
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "setsrc-delegation-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -291,9 +291,9 @@ export default pattern<{seed?: ${seedType}}>(() => {
         storageManager,
       });
       observerPieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: pieces.getSpaceName()!,
+          spaceDid: pieces.getSpace(),
         }),
         observer,
       );
@@ -409,7 +409,6 @@ export default pattern<{seed?: ${seedType}}>(() => {
     await runtime.patternManager.flushCompileCacheWrites();
     await pieces.synced();
     const patternSpace = pieces.getSpace();
-    const patternSpaceName = pieces.getSpaceName()!;
 
     const loadClosure = async (targetRuntime: Runtime, identity: string) => {
       const tx = targetRuntime.edit();
@@ -437,9 +436,9 @@ export default pattern<{seed?: ${seedType}}>(() => {
         return freshRuntime;
       };
       const createFreshPieces = async (freshRuntime: Runtime) => {
-        const freshSession = await createSession({
+        const freshSession = createSession({
           identity: signer,
-          spaceName: patternSpaceName,
+          spaceDid: patternSpace,
         });
         const freshPieces = new PiecesController(freshSession, freshRuntime);
         await freshPieces.synced();
@@ -597,9 +596,9 @@ export default pattern<{seed?: ${seedType}}>(() => {
     });
     try {
       const strictPieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: "setsrc-delegation-strict-" + crypto.randomUUID(),
+          spaceDid: await strictRuntime.createSpace(),
         }),
         strictRuntime,
       );

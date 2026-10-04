@@ -74,9 +74,9 @@ describe("pieces-controller", () => {
         experimental: { computedCellIds },
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `pieces-controller-${crypto.randomUUID()}`,
+          spaceDid: await runtime.createSpace(),
         }),
         runtime,
       );

@@ -102,30 +102,6 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   return { update, only };
 }
 
-/** One of `count` processes a run is divided into; `index` is 0-based. */
-export interface Shard {
-  index: number;
-  count: number;
-}
-
-/**
- * The share of the patterns `PATTERN_COMPAT_SHARD` names, as `"i/n"` counting
- * from one, or all of them where it names nothing. Compiling a pattern is
- * single-threaded CPU work, so dividing the patterns between processes is
- * what puts more cores to use.
- */
-export function parseShard(raw: string | undefined): Shard {
-  if (!raw) return { index: 0, count: 1 };
-  const match = raw.match(/^(\d+)\/(\d+)$/);
-  if (!match) throw new Error(`Invalid shard "${raw}"; expected "i/n".`);
-  const index = Number(match[1]) - 1;
-  const count = Number(match[2]);
-  if (count < 1 || index < 0 || index >= count) {
-    throw new Error(`Shard "${raw}" out of range.`);
-  }
-  return { index, count };
-}
-
 /**
  * A baseline's filename. The timestamp is human metadata — when this contract
  * was recorded — and sorts chronologically because ISO basic format does. The
@@ -307,21 +283,18 @@ export async function readBaselines(
 }
 
 /**
- * The items one run of the gate judges: those `--only` selects, divided among
- * the shards by position. Each item goes to exactly one of the shards, and
- * every shard is given its items by that one rule.
+ * The items one run of the gate judges: those `--only` selects, or every item
+ * where it selects none.
  */
 export function selectItems(
   items: readonly string[],
   only: readonly string[],
-  shard: Shard,
 ): string[] {
-  const selected = only.length === 0
-    ? items
+  return only.length === 0
+    ? [...items]
     : items.filter((item) =>
       only.some((match) => matchesPatternFilter(item, match))
     );
-  return selected.filter((_item, i) => i % shard.count === shard.index);
 }
 
 /** Record a contract as a new baseline. Returns the filename written. */

@@ -15,6 +15,7 @@ import {
 import { HARNESS_BROWSER_ACCESS_LEASE_TYPE } from "../src/contracts/browser-access.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
+import { HarnessControlError } from "../src/control-errors.ts";
 import {
   parseHostMountSpecs,
   resolveInteractiveProvisioning,
@@ -32,6 +33,7 @@ import {
   runHarnessInteractiveChatStdioCli,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
+import type { HarnessClientActionRequester } from "../src/contracts/client-action.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
 import { HarnessChatStoreHeldError } from "../src/session-store.ts";
 import {
@@ -754,8 +756,7 @@ Deno.test("interactive stdio CLI parses runtime options", () => {
   assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions([
-        "--chat-max-in-memory-events",
-        "-1",
+        "--chat-max-in-memory-events=-1",
       ], {}),
     Error,
     "--chat-max-in-memory-events requires a non-negative integer value",
@@ -779,7 +780,7 @@ Deno.test("interactive stdio CLI parses runtime options", () => {
   assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions([
-        "--chat-max-in-memory-events",
+        "--chat-max-in-memory-events=",
       ], {}),
     Error,
     "--chat-max-in-memory-events requires a non-empty value",
@@ -956,6 +957,172 @@ Deno.test("interactive NDJSON transport validates method-specific params", async
     "ok" in response && response.ok === false ? response.error.code : "",
     "invalid_request",
   );
+});
+
+Deno.test("interactive NDJSON transport keeps an answer that arrives while its request is still being written", async () => {
+  const action = {
+    kind: "open_loom",
+    loomId: "loom-0123456789abcdef",
+  } as const;
+  const output: string[] = [];
+  const requestWriting = Promise.withResolvers<string>();
+  const answerWritten = Promise.withResolvers<void>();
+  const outcomes = Promise.withResolvers<unknown>();
+  const line = (requestId: string, method: string, params: unknown) =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+  async function* lines() {
+    yield line("start", "start_session", {
+      sessionId: "s",
+      workspace: { hostPath: "/w" },
+      model: "m",
+      clientActions: true,
+    });
+    yield line("turn", "start_turn", {
+      sessionId: "s",
+      turnId: "t",
+      input: { text: "go" },
+    });
+    yield line("answer", "resolve_client_action", {
+      sessionId: "s",
+      actionId: await requestWriting.promise,
+      outcome: "done",
+      result: "opened",
+    });
+  }
+  let ids = 0;
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: lines(),
+    writeLine: async (text) => {
+      output.push(text);
+      const envelope = JSON.parse(text) as HarnessInteractiveChatOutputEnvelope;
+      if ("requestId" in envelope && envelope.requestId === "answer") {
+        answerWritten.resolve();
+      }
+      if (
+        "event" in envelope &&
+        envelope.event.kind === "client_action_requested"
+      ) {
+        // The request's write is still in flight when the client answers it.
+        requestWriting.resolve(envelope.event.actionId);
+        await answerWritten.promise;
+      }
+    },
+    createService: (onEvent, onEventDeliveryError) =>
+      new HarnessInteractiveChatService({
+        onEvent,
+        onEventDeliveryError,
+        randomUUID: () => `id-${++ids}`,
+        createPromptLoop: (options) => ({
+          runTranscript: async (run) => {
+            const request = (options as {
+              requestClientActions?: HarnessClientActionRequester;
+            }).requestClientActions!;
+            outcomes.resolve(await request([action], run.signal));
+            const finalMessage = {
+              role: "assistant" as const,
+              content: "done",
+            };
+            return {
+              model: "m",
+              finalAssistantText: "done",
+              transcript: [...run.transcript, finalMessage],
+              modelTurns: 1,
+              runState: {} as HarnessPromptLoopResult["runState"],
+            };
+          },
+        }),
+      }),
+  });
+
+  assertEquals(await outcomes.promise, [
+    { action, outcome: "done", result: "opened" },
+  ]);
+  const envelopes = decodeLines(output);
+  assertEquals(
+    envelopes.flatMap((envelope) =>
+      "requestId" in envelope && envelope.requestId === "answer"
+        ? [envelope.ok]
+        : []
+    ),
+    [true],
+  );
+  assertEquals(
+    envelopes.flatMap((envelope) =>
+      "event" in envelope && envelope.event.kind.startsWith("client_action_")
+        ? [envelope.event.kind]
+        : []
+    ),
+    ["client_action_requested", "client_action_resolved"],
+  );
+});
+
+Deno.test("interactive NDJSON transport validates resolve_client_action and clientActions params", async () => {
+  const output: string[] = [];
+  const line = (requestId: string, method: string, params: unknown) =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      // Well formed, but no such session: reaches the service.
+      line("ok", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "done",
+        result: "opened",
+      }),
+      line("bad-outcome", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "maybe",
+      }),
+      line("missing-id", "resolve_client_action", {
+        sessionId: "s",
+        outcome: "done",
+      }),
+      line("long-result", "resolve_client_action", {
+        sessionId: "s",
+        actionId: "a",
+        outcome: "failed",
+        result: "x".repeat(501),
+      }),
+      line("bad-opt-in", "start_session", {
+        workspace: { hostPath: "/w" },
+        clientActions: "yes",
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+  });
+
+  const codes = Object.fromEntries(
+    decodeLines(output).flatMap((response) =>
+      "requestId" in response
+        ? [[
+          response.requestId,
+          response.ok ? "ok" : response.error.code,
+        ]]
+        : []
+    ),
+  );
+  assertEquals(codes, {
+    "ok": "session_not_found",
+    "bad-outcome": "invalid_request",
+    "missing-id": "invalid_request",
+    "long-result": "invalid_request",
+    "bad-opt-in": "invalid_request",
+  });
 });
 
 Deno.test("interactive NDJSON transport rejects malformed policy params", async () => {
@@ -1275,7 +1442,76 @@ Deno.test("interactive stdio CLI still rejects unknown arguments", () => {
   assertThrows(
     () => parseHarnessInteractiveChatStdioCliOptions(["--not-a-flag"], {}),
     Error,
-    "unsupported interactive chat stdio argument",
+    "`--not-a-flag` is not a flag of the interactive stdio entrypoint.",
+  );
+});
+
+Deno.test("interactive stdio CLI refuses a misspelled flag, naming the flag it meant", () => {
+  const error = assertThrows(
+    () =>
+      parseHarnessInteractiveChatStdioCliOptions(
+        ["--host-mounts", "name=c,source=/tmp,target=/c"],
+        {},
+      ),
+    HarnessControlError,
+    "`--host-mounts` is not a flag of the interactive stdio entrypoint. Did you mean `--host-mount`?",
+  );
+  assertEquals(error.code, "invalid-request");
+});
+
+Deno.test("interactive stdio CLI refuses an undeclared flag without its value", () => {
+  const error = assertThrows(
+    () =>
+      parseHarnessInteractiveChatStdioCliOptions(["--api-key=sk-secret"], {}),
+    HarnessControlError,
+    "`--api-key` is not a flag of the interactive stdio entrypoint.",
+  );
+  assertEquals(error.message.includes("sk-secret"), false);
+});
+
+Deno.test("interactive stdio CLI refuses a word starting with `-` without repeating it", () => {
+  const error = assertThrows(
+    () =>
+      parseHarnessInteractiveChatStdioCliOptions(
+        ["--Remember my password is hunter2"],
+        {},
+      ),
+    HarnessControlError,
+  );
+  assertEquals(
+    error.message,
+    "An argument starting with `-` is not a flag of the interactive stdio entrypoint. A value starting with `-` needs the `--<flag>=<value>` spelling.",
+  );
+});
+
+Deno.test("interactive stdio CLI refuses a flag given no value, rather than taking the next word as its value", () => {
+  for (
+    const [argv, flag] of [
+      [["--chat-session-db", "--api-key=sk-secret"], "--chat-session-db"],
+      [["--host-mount", "-hidden"], "--host-mount"],
+      [["--max-model-turns", "-1"], "--max-model-turns"],
+      [["--fabric-space", "--x"], "--fabric-space"],
+      [["--loom-authoring-config", "-h"], "--loom-authoring-config"],
+      [["--chat-max-in-memory-events"], "--chat-max-in-memory-events"],
+    ] as const
+  ) {
+    const error = assertThrows(
+      () => parseHarnessInteractiveChatStdioCliOptions(argv, {}),
+      HarnessControlError,
+    );
+    assertStringIncludes(error.message, `\`${flag}\` was given no value`);
+    assertEquals(/sk-secret|hidden/.test(error.message), false);
+  }
+});
+
+Deno.test("interactive stdio CLI refuses a positional argument without repeating it", () => {
+  const error = assertThrows(
+    () => parseHarnessInteractiveChatStdioCliOptions(["hunter2"], {}),
+    Error,
+  );
+  assertEquals(
+    error.message,
+    "unsupported interactive chat stdio argument: the entrypoint takes no positional arguments",
   );
 });
 
@@ -1335,7 +1571,7 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
   // embedder gets a behaviour change for free.
-  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd()), {});
+  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd(), {}), {});
 
   const seen: RunHarnessInteractiveChatStdioOptions[] = [];
   await runHarnessInteractiveChatStdioCli(
@@ -1353,7 +1589,7 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
 
 Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
-    await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd()),
+    await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
     { maxModelTurns: 32 },
   );
 });
@@ -1611,5 +1847,90 @@ Deno.test("interactive stdio writes one refusal line to its error output for a h
   } finally {
     holder.close();
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
+  // Same derivation as the batch CLI, so a chat session and a batch run
+  // launched from one environment execute in the same sandbox.
+  assertEquals(
+    await resolveInteractiveProvisioning({}, Deno.cwd(), {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/r",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/p",
+      CF_HARNESS_RUNSC_BINARY: "/b",
+      CF_HARNESS_DOCKER_NETWORK_MODE: "host",
+    }),
+    {
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: "/r",
+      sandboxCfcPolicy: "/p",
+      sandboxRunscBinary: "/b",
+      sandboxRunscNetworkMode: "host",
+    },
+  );
+  await assertRejects(
+    () =>
+      resolveInteractiveProvisioning({}, Deno.cwd(), {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish",
+      }),
+    Error,
+    "CF_HARNESS_DOCKER_NETWORK_MODE must be one of none, bridge, or host",
+  );
+
+  // The default policy the usage text promises is discovered under HOME for
+  // the runsc runtime, through the real file system.
+  const home = await Deno.makeTempDir();
+  try {
+    const policy = join(
+      home,
+      ".local",
+      "share",
+      "runsc-cfc",
+      "cfc-policy.json",
+    );
+    assertEquals(
+      await resolveInteractiveProvisioning({}, Deno.cwd(), {
+        HOME: home,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      }),
+      { sandboxRuntimeKind: "runsc" },
+    );
+    await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
+      recursive: true,
+    });
+    await Deno.writeTextFile(policy, "{}");
+    assertEquals(
+      await resolveInteractiveProvisioning({}, Deno.cwd(), {
+        HOME: home,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      }),
+      { sandboxRuntimeKind: "runsc", sandboxCfcPolicy: policy },
+    );
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its environment", async () => {
+  // The standalone entrypoint reads the process environment itself; the
+  // Loom-local host is covered in its own suite.
+  const previous = Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME");
+  Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", "runsc");
+  try {
+    const seen: RunHarnessInteractiveChatStdioOptions[] = [];
+    await runHarnessInteractiveChatStdioCli([], Deno.cwd(), (options) => {
+      seen.push(options);
+      return Promise.resolve();
+    });
+    assertEquals(seen.length, 1);
+    assertEquals(seen[0].basePromptLoopOptions?.sandboxRuntimeKind, "runsc");
+  } finally {
+    if (previous === undefined) {
+      Deno.env.delete("CF_HARNESS_SANDBOX_RUNTIME");
+    } else {
+      Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", previous);
+    }
   }
 });

@@ -3,11 +3,13 @@ import {
   type FabricBridge,
   IPC,
 } from "@commonfabric/iframe-sandbox";
-import { isCellHandle } from "@commonfabric/runtime-client";
+import { isCellHandle, type RuntimeClient } from "@commonfabric/runtime-client";
+import { ContextConsumer } from "@lit/context";
 import { css, html } from "lit";
 import type { PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { runtimeContext } from "../../runtime-context.ts";
 import {
   type CellContextResourceKind,
   createCellContextBridge,
@@ -51,6 +53,24 @@ export class CFIframe extends BaseElement {
   private _contextBridge: FabricBridge = { resources: {} };
   private _contextReady = true;
   private _contextGeneration = 0;
+
+  /**
+   * Where the host serves the sandbox's outer frame, as the runtime it
+   * provided says, or `undefined` to have the sandbox inline it.
+   *
+   * It comes from the host's runtime and from nowhere else. It is private to
+   * the class rather than a property of the element, so nothing that renders
+   * one -- a pattern's markup included -- can name the frame that stands
+   * between its guest and the page.
+   */
+  #outerFrameUrl: string | undefined = undefined;
+
+  /** Holds the subscription to the host's runtime. */
+  private _runtimeConsumer = new ContextConsumer(this, {
+    context: runtimeContext,
+    subscribe: true,
+    callback: (runtime) => this.onRuntime(runtime),
+  });
 
   constructor() {
     super();
@@ -176,6 +196,14 @@ export class CFIframe extends BaseElement {
     `,
   ];
 
+  /** Takes the outer frame's URL from the runtime the host provided. */
+  private onRuntime(runtime: RuntimeClient | undefined) {
+    const url = runtime?.iframeOuterFrameUrl();
+    if (url === this.#outerFrameUrl) return;
+    this.#outerFrameUrl = url;
+    this.requestUpdate();
+  }
+
   private onLoad() {
     this.emit("load");
   }
@@ -257,6 +285,7 @@ export class CFIframe extends BaseElement {
       <common-iframe-sandbox
         .bridge="${bridge}"
         .src="${source}"
+        .outerFrameUrl="${this.#outerFrameUrl}"
         height="100%"
         width="100%"
         style="border: none;"

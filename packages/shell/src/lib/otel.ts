@@ -7,10 +7,8 @@
  *
  * This is GATED and LAZY: nothing OpenTelemetry-related is imported at module
  * load. `initBrowserOtel` only pulls in the web SDK via dynamic `import(...)`
- * when `localStorage["telemetryEnabled"] === "true"`, mirroring the server's
- * lazy-import pattern in packages/background-piece-service/src/otel.ts. With
- * telemetry disabled the default bundle is untouched and there is zero added
- * network/CPU.
+ * when `localStorage["telemetryEnabled"] === "true"`. With telemetry disabled
+ * the default bundle is untouched and there is zero added network/CPU.
  *
  * Only type-only imports appear at the top; they are erased at build time and
  * never pull the OTel packages into the default bundle.

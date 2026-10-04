@@ -766,16 +766,20 @@ export const classifyBuiltinToolFailure = (
 /**
  * Which browser-tool errors count as harness failures. `invalid_input` is the
  * model asking for something outside the action vocabulary, recorded as
- * `tool_not_allowed`. `lease_unavailable` and `host_unavailable` are the
- * run's environment failing the tool. A `command_failed` is an ordinary
- * page-level outcome (a ref that no longer exists, a navigation that failed)
- * the model is expected to react to, so it is not recorded as a failure.
+ * `tool_not_allowed`. `lease_unavailable`, `host_unavailable`, and
+ * `session_ended` are the run's environment failing the tool. The rest are
+ * ordinary outcomes the model is expected to react to — a ref that no longer
+ * exists, a navigation that failed, a field only the owner may fill, the
+ * owner saying no — so they are not recorded as failures.
  */
 const classifyBrowserToolFailure = (
   output: unknown,
   at: string,
 ): HarnessFailureRecord | undefined => {
-  if (!isBrowserToolErrorOutput(output) || output.code === "command_failed") {
+  if (
+    !isBrowserToolErrorOutput(output) ||
+    BROWSER_OUTCOME_CODES.has(output.code)
+  ) {
     return undefined;
   }
   return createHarnessFailureRecord({
@@ -790,6 +794,13 @@ const classifyBrowserToolFailure = (
     ...(output.exitCode !== undefined ? { exitCode: output.exitCode } : {}),
   });
 };
+
+/** The browser-tool error codes that are outcomes rather than failures. */
+const BROWSER_OUTCOME_CODES: ReadonlySet<string> = new Set([
+  "command_failed",
+  "stale_ref",
+  "owner_only_field",
+]);
 
 const isBrowserToolErrorOutput = (
   output: unknown,

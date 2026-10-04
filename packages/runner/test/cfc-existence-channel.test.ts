@@ -690,7 +690,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     );
     const clean = rt.edit();
     clean.writeValueOrThrow(
-      { space, scope: "space", id: uri(outId), path: ["value", "secret"] },
+      { space, scope: "space", id: uri(outId), path: ["secret"] },
       "fresh",
     );
     clean.recordCfcWritePolicyInput({
@@ -699,7 +699,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         space,
         scope: "space",
         id: uri(outId),
-        path: ["value", "secret"],
+        path: ["secret"],
       },
       schemaHash: declared.taggedHashString,
       schema: declared.schema,
@@ -761,7 +761,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     });
     const clean = rt.edit();
     clean.writeValueOrThrow(
-      { space, scope: "space", id: uri(elsewhereId), path: ["value"] },
+      { space, scope: "space", id: uri(elsewhereId), path: [] },
       { unrelated: 2 },
     );
     clean.recordCfcWritePolicyInput({
@@ -770,7 +770,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         space,
         scope: "space",
         id: uri(outId),
-        path: ["value", "secret"],
+        path: ["secret"],
       },
       schemaHash: declared.taggedHashString,
       schema: declared.schema,

@@ -2,7 +2,6 @@ import { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { CFPiece } from "../cf-piece/index.ts";
 
 declare global {
   var Plaid: any;
@@ -125,15 +124,8 @@ export class CFPlaidLink extends BaseElement {
 
     const authCellId = JSON.stringify(this.auth?.ref());
 
-    const container = CFPiece.findPieceContainer(this);
-    if (!container) {
-      throw new Error("No <cf-piece> container.");
-    }
-    const { pieceId } = container;
-
     const payload = {
       authCellId,
-      integrationPieceId: pieceId,
       products: this.products,
     };
 
@@ -159,11 +151,7 @@ export class CFPlaidLink extends BaseElement {
         throw new Error("No link token received from server");
       }
 
-      this.initializePlaidLink(
-        data.linkToken,
-        authCellId,
-        pieceId || undefined,
-      );
+      this.initializePlaidLink(data.linkToken, authCellId);
     } catch (error) {
       console.error("Error creating link session:", error);
       this.authStatus = `Error: ${
@@ -173,11 +161,7 @@ export class CFPlaidLink extends BaseElement {
     }
   }
 
-  private initializePlaidLink(
-    linkToken: string,
-    authCellId: string,
-    integrationPieceId?: string,
-  ) {
+  private initializePlaidLink(linkToken: string, authCellId: string) {
     if (this.plaidHandler) {
       this.plaidHandler.destroy();
     }
@@ -186,11 +170,7 @@ export class CFPlaidLink extends BaseElement {
       token: linkToken,
       onSuccess: async (publicToken: string, _metadata: any) => {
         this.authStatus = "Processing authentication...";
-        await this.handlePublicToken(
-          publicToken,
-          authCellId,
-          integrationPieceId,
-        );
+        await this.handlePublicToken(publicToken, authCellId);
       },
       onExit: (error: any, _metadata: any) => {
         if (error) {
@@ -219,11 +199,7 @@ export class CFPlaidLink extends BaseElement {
     this.plaidHandler.open();
   }
 
-  private async handlePublicToken(
-    publicToken: string,
-    authCellId: string,
-    integrationPieceId?: string,
-  ) {
+  private async handlePublicToken(publicToken: string, authCellId: string) {
     this.isLoading = true;
     this.authStatus = "Exchanging token...";
 
@@ -238,7 +214,6 @@ export class CFPlaidLink extends BaseElement {
           body: JSON.stringify({
             publicToken,
             authCellId,
-            integrationPieceId,
           }),
         },
       );

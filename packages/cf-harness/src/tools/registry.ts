@@ -1,4 +1,8 @@
-import type { BuiltinToolId } from "../contracts/tool-descriptor.ts";
+import type {
+  BuiltinToolId,
+  HarnessToolDescriptor,
+} from "../contracts/tool-descriptor.ts";
+import type { SandboxRuntimeDescription } from "../sandbox/types.ts";
 import { acquireSkillTool } from "./acquire-skill.ts";
 import { assignSlugTool } from "./assign-slug.ts";
 import {
@@ -13,6 +17,7 @@ import { delegateTaskTool } from "./delegate-task.ts";
 import { describeHandleTool } from "./describe-handle.ts";
 import { editFileTool } from "./edit-file.ts";
 import { finishTaskTool } from "./finish-task.ts";
+import { weaverActionTool } from "./weaver-action.ts";
 import { readPieceSourceTool, revisePieceTool } from "./piece-source.ts";
 import { researchTool } from "./research.ts";
 import { readFileTool } from "./read-file.ts";
@@ -27,7 +32,7 @@ import { submitResultTool } from "./submit-result.ts";
 import { webFetchTool } from "./web-fetch.ts";
 import { viewImageTool } from "./view-image.ts";
 import { writeFileTool } from "./write-file.ts";
-import type { HarnessToolDefinition } from "./types.ts";
+import type { HarnessToolDefinition, HarnessToolRun } from "./types.ts";
 
 export const BUILTIN_TOOLS = [
   bashTool,
@@ -47,6 +52,7 @@ export const BUILTIN_TOOLS = [
   resolvePieceTool,
   describeHandleTool,
   finishTaskTool,
+  weaverActionTool,
   searchPatternsTool,
   recordFeedbackTool,
   searchSkillsTool,
@@ -76,3 +82,16 @@ export const getBuiltinTool = (
   toolId: string,
 ): HarnessToolDefinition | undefined =>
   BUILTIN_TOOL_REGISTRY.get(toolId as BuiltinToolId);
+
+/**
+ * The descriptor of `tool` that a run on `runtime` offers the model, given
+ * what about `run` decides it — its enforcement mode, and whether a browser
+ * host carries its browser actions: the tool's own, unless the tool has one
+ * that depends on them.
+ */
+export const builtinToolDescriptorForRuntime = (
+  tool: Pick<HarnessToolDefinition, "descriptor" | "descriptorForRuntime">,
+  runtime: SandboxRuntimeDescription,
+  run: HarnessToolRun,
+): HarnessToolDescriptor =>
+  tool.descriptorForRuntime?.(runtime, run) ?? tool.descriptor;

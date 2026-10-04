@@ -1,12 +1,16 @@
 import { expect } from "@std/expect";
 import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 
+import type { FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
-import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
+import {
+  encodeMemoryBoundary,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
+} from "@commonfabric/memory/v2";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -265,6 +269,56 @@ describe("Blob Routes", () => {
     expect(get.status).toBe(200);
     expect(get.headers.get("Content-Type")).toBe("application/octet-stream");
     expect(new Uint8Array(await get.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("refuses an upload whose body is an array of numbers", async () => {
+    const identity = await Identity.fromPassphrase(
+      "toolshed-blob-route-number-array",
+    );
+    const post = await app.request(`/${identity.did()}/blobs/image.gif`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: encodeMemoryBoundary({ type: "image/gif", body: [71, 73, 70] }),
+    });
+    expect(post.status).toBe(400);
+  });
+
+  it("refuses an upload standing for more slots than a memory message may", async () => {
+    // The body is valid bytes; the extra member is what the limit refuses,
+    // since nothing else about the upload reads it.
+    const identity = await Identity.fromPassphrase(
+      "toolshed-blob-route-slot-limit",
+    );
+    const padding: FabricValue[] = [];
+    padding[MAX_UNTRUSTED_MESSAGE_SLOTS] = 1;
+    const post = await app.request(`/${identity.did()}/blobs/image.gif`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: encodeMemoryBoundary({
+        type: "image/gif",
+        body: new FabricBytes(new Uint8Array([71, 73, 70])),
+        padding,
+      }),
+    });
+    expect(post.status).toBe(400);
+  });
+
+  it("serves a stored blob whose body is an array of numbers", async () => {
+    const identity = await Identity.fromPassphrase(
+      "toolshed-blob-route-stored-array",
+    );
+    await bootstrapHomeSpace(identity);
+    const contents = { type: "image/gif", body: [71, 73, 70] };
+    const id = hashOf(contents).toString();
+    await memoryServer.writeDocument(identity.did(), `cid:${id}`, contents);
+
+    const get = await app.request(
+      `/${identity.did()}/blobs/${id.slice("fid1:".length)}.gif`,
+    );
+    expect(get.status).toBe(200);
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(
+      new Uint8Array([71, 73, 70]),
+    );
   });
 
   it("rejects invalid blob payloads", async () => {

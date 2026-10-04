@@ -1,3 +1,5 @@
+import type { FabricPrimitive } from "@commonfabric/data-model";
+import { BaseFabricPrimitive } from "@commonfabric/data-model/fabric-bases";
 import { FrozenMap, FrozenSet } from "@commonfabric/data-model/frozen-builtins";
 
 // Resolve `entries`/`values` from the prototype chain so own-property shadows
@@ -38,6 +40,7 @@ export type ModuleSafeValue =
   | number
   | string
   | bigint
+  | FabricPrimitive
   | RegExp
   | readonly ModuleSafeValue[]
   | ModuleSafeRecord
@@ -97,10 +100,14 @@ function validateModuleSafeValue(
   }
   visited.add(objectValue);
 
-  // TODO(danfuzz): This part of the code will probably have to gain the
-  // ability to reason specifically about `FabricSpecialObject`s in order
-  // to fully support the data model.
+  // TODO(danfuzz): This part of the code admits `FabricPrimitive`s, and will
+  // probably have to gain the ability to reason specifically about
+  // `FabricInstance`s too in order to fully support the data model.
   try {
+    // A `FabricPrimitive` acts like a JavaScript primitive: it is frozen when
+    // it is constructed, and its state is private, so it is inert as it stands.
+    if (BaseFabricPrimitive.isInstance(objectValue)) return;
+
     if (Array.isArray(objectValue)) {
       validateOwnProperties(objectValue, path, visited, { skipLength: true });
       return;
@@ -239,6 +246,11 @@ function freezeModuleSafeValue(
   const existing = converted.get(objectValue);
   if (existing !== undefined) {
     return existing;
+  }
+
+  // Inert as it stands (see `validateModuleSafeValue()`), so kept as is.
+  if (BaseFabricPrimitive.isInstance(objectValue)) {
+    return objectValue;
   }
 
   if (Array.isArray(objectValue)) {

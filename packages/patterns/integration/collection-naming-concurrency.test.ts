@@ -8,11 +8,7 @@
  * `lift`, `Writable` and `equals` from `commonfabric` as values, and those are
  * ambient declarations that bind nothing outside the pattern runtime's module
  * environment — so the test compiles a fixture that re-exports both
- * allocators through the harness and calls what comes back. That is also why this file
- * sits under `integration/`: the package's plain-Deno lane runs under
- * `test-import-map.json`, whose `commonfabric` is a stub and which maps no
- * runner entry point, while the `integration` task runs under workspace
- * resolution, where the runtime and the harness resolve.
+ * allocators through the harness and calls what comes back.
  */
 
 import {

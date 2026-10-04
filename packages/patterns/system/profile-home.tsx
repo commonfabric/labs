@@ -897,7 +897,10 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     const pieceTitleForm = new Writable("").for("pieceTitleForm");
     // Rendered profile view (CT-1748): the cell view shows a read-only
     // presentation by default; the owner flips this to reveal the edit form.
-    const editing = new Writable<boolean>(false).for("editing");
+    // Per session: the profile's space grants anyone WRITE, and this flag is
+    // not owner-protected, so a space-scoped cell here would let a visitor
+    // flip the owner's own view.
+    const editing = Writable.perSession.of<boolean>(false);
     // Is the current viewer the profile owner? `wish("#profile")` resolves the
     // VIEWER's default profile as `.result`, but `.candidates` contains every
     // profile linked from that viewer's home. Compare `SELF` against the whole

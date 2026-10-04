@@ -8,6 +8,7 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
 import {
+  authorizeLoopbackSessionOpen,
   verifySessionOpenAuthorization,
   wireAuthorizationOf,
 } from "../v2/session-open-auth.ts";
@@ -375,5 +376,63 @@ describe("verifySessionOpenAuthorization", () => {
         wireAuthorizationOf(new FabricBytes(new Uint8Array([1, 2, 3]))),
       ).toBe(undefined);
     });
+  });
+});
+
+describe("authorizeLoopbackSessionOpen", () => {
+  it("returns the issuer of a signed open that verifies", async () => {
+    expect(
+      await authorizeLoopbackSessionOpen(
+        await buildOpen(signedFields()),
+        verifyOptions(),
+      ),
+    ).toBe(alice.did());
+  });
+
+  it("throws for a signed open whose invocation no longer matches its signature", async () => {
+    const message = await buildOpen(signedFields());
+    message.invocation.iat = 0;
+    await expect(
+      Promise.resolve(authorizeLoopbackSessionOpen(message, verifyOptions())),
+    ).rejects.toThrow("Invalid signature");
+  });
+
+  it("throws for a signed open addressed to a different audience", async () => {
+    const message = await buildOpen(signedFields({ aud: mallory.did() }));
+    await expect(
+      Promise.resolve(authorizeLoopbackSessionOpen(message, verifyOptions())),
+    ).rejects.toThrow("memory session.open audience mismatch");
+  });
+
+  it("returns the issuer of a signed open that also names another principal", async () => {
+    const message = await buildOpen(signedFields());
+    expect(
+      await authorizeLoopbackSessionOpen({
+        ...message,
+        authorization: { ...message.authorization, principal: mallory.did() },
+      }, verifyOptions()),
+    ).toBe(alice.did());
+  });
+
+  it("returns the principal an unsigned open names", async () => {
+    expect(
+      await authorizeLoopbackSessionOpen(
+        {
+          space: space.did(),
+          session: {},
+          authorization: { principal: mallory.did() },
+        },
+        verifyOptions(),
+      ),
+    ).toBe(mallory.did());
+  });
+
+  it("returns `undefined` for an unsigned open that names no principal", async () => {
+    expect(
+      await authorizeLoopbackSessionOpen(
+        { space: space.did(), session: {}, authorization: {} },
+        verifyOptions(),
+      ),
+    ).toBeUndefined();
   });
 });

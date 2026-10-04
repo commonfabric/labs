@@ -244,8 +244,8 @@ Deno.test("buildDiffDocument: a shared cache is reused across builds (cache hit)
     const ws = stubWs(root);
     // First build populates the cache for the resolved abs path.
     const first = buildDiffDocument(diff, model, ws, cache);
-    assert(first.maps.rootFiles.length === 1, "first build resolved the file");
-    const absPath = first.maps.rootFiles[0];
+    assert(first.maps.rootFiles.size === 1, "first build resolved the file");
+    const [absPath] = first.maps.rootFiles.keys();
     assert(cache.has(absPath), "cache populated after the first build");
     // Make read() throw if called again; the cache hit must avoid re-reading.
     const throwingWs: DiffWorkspace = {
@@ -257,7 +257,7 @@ Deno.test("buildDiffDocument: a shared cache is reused across builds (cache hit)
     const second = buildDiffDocument(diff, model, throwingWs, cache);
     // The second build reused the cached parse and still maps the file.
     assertEquals(
-      second.maps.rootFiles,
+      [...second.maps.rootFiles.keys()],
       [absPath],
       "cache hit kept the mapping",
     );

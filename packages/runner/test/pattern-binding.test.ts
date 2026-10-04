@@ -18,7 +18,7 @@ import { isAliasBinding } from "../src/alias-binding.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import {
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "../src/cfc/link-label-view.ts";
 import { createCell, isCell } from "../src/cell.ts";
 import {
@@ -42,7 +42,13 @@ import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-import type { JSONSchema } from "../src/builder/types.ts";
+import type {
+  FabricExecPlainObject,
+  FabricExecValue,
+  JSONSchema,
+  Pattern,
+} from "../src/builder/types.ts";
+import type { AnyCell } from "../src/cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -781,7 +787,7 @@ describe("pattern-binding", () => {
             },
           },
         ],
-      };
+      } satisfies Pattern;
 
       const result = unwrapOneLevelAndBindToDoc(
         { op: nestedPattern },
@@ -1017,10 +1023,12 @@ describe("pattern-binding", () => {
       // The label view is a flow-control side channel, and cfc's own module
       // calls it no part of a link's addressing identity -- so it is no part
       // of what names a node either.
-      const link = runtime
-        .getCell(space, `labeled ${crypto.randomUUID()}`, undefined, tx)
-        .getAsLink();
-      setLinkCfcLabelView(link, {} as never);
+      const link = withLinkCfcLabelView(
+        runtime
+          .getCell(space, `labeled ${crypto.randomUUID()}`, undefined, tx)
+          .getAsLink(),
+        {} as never,
+      );
       expect(linkCfcLabelView(link)).not.toBeUndefined();
 
       const reduced = reduce({ x: link }).x;
@@ -1388,6 +1396,62 @@ describe("pattern-binding", () => {
       expect(links[0].path).toEqual(["foo"]);
       expect(links[0].id).toBeDefined();
       expect(links[0].space).toBe(space);
+    });
+  });
+
+  describe("walk typing", () => {
+    it("types each walk's result by the kind of its argument", () => {
+      // Asserted when the file is type-checked: the carrier is never called.
+      // A pattern comes back a pattern and a record a record; a value of any
+      // other kind is promised an execution value and nothing narrower.
+
+      function carrier(
+        pattern: Pattern,
+        record: FabricExecPlainObject,
+        value: FabricExecValue,
+        cell: AnyCell<unknown>,
+      ) {
+        const patternOut: Pattern = unwrapOneLevelAndBindToDoc(
+          pattern,
+          undefined,
+          cell,
+        );
+        const recordOut: FabricExecPlainObject = unwrapOneLevelAndBindToDoc(
+          record,
+          undefined,
+          cell,
+        );
+        const valueOut: FabricExecValue = unwrapOneLevelAndBindToDoc(
+          value,
+          undefined,
+          cell,
+        );
+        // @ts-expect-error a `FabricExecValue` argument is typed only as one
+        const valueAsRecord: FabricExecPlainObject = unwrapOneLevelAndBindToDoc(
+          value,
+          undefined,
+          cell,
+        );
+
+        const causalRecord: FabricExecPlainObject = causalFormOfBinding(record);
+        const causalValue: FabricExecValue = causalFormOfBinding(value);
+        // @ts-expect-error a `FabricExecValue` argument is typed only as one
+        const causalAsRecord: FabricExecPlainObject = causalFormOfBinding(
+          value,
+        );
+
+        return {
+          patternOut,
+          recordOut,
+          valueOut,
+          valueAsRecord,
+          causalRecord,
+          causalValue,
+          causalAsRecord,
+        };
+      }
+
+      expect(typeof carrier).toBe("function");
     });
   });
 });

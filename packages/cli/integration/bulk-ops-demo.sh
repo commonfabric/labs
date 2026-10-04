@@ -50,7 +50,6 @@ if [ -z "${CF_IDENTITY:-}" ]; then
   cf id new >"$CF_IDENTITY" 2>/dev/null
 fi
 export CF_IDENTITY
-SPACE="${SPACE:-$(mktemp -u surveyXXXXXXXX)}"
 WORK="$(mktemp -d)"
 
 B=$'\033[1m'; D=$'\033[2m'; C=$'\033[36m'; N=$'\033[0m'
@@ -173,6 +172,22 @@ refused() {
     UNREFUSED=$((UNREFUSED + 1))
   fi
 }
+
+# A space named in $SPACE is used as it stands; otherwise the identity creates
+# one, since opening a space never creates it. `cf space create` prints the
+# new space's DID. It runs before the first act, so its stderr is held back
+# like every act's, and shown only when the create fails: a server that is
+# down fails here, and what cf said is then the whole transcript.
+if [ -z "${SPACE:-}" ]; then
+  SPACE=$(cf space create --quiet 2>"$ERR")
+  CREATE_STATUS=$?
+  if [ "$CREATE_STATUS" -ne 0 ] || [ -z "$SPACE" ]; then
+    printf '%scf space create against %s exited %s and printed no space, so no act ran:%s\n' \
+      "$R" "$CF_API_URL" "$CREATE_STATUS" "$N" >&2
+    sed 's/^/  /' "$ERR" >&2
+    exit 1
+  fi
+fi
 
 printf '%s\n' "${B}A board-sized survey, watched end to end${N}"
 say "A board holds a collection of member pieces it created through its own"

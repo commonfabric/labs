@@ -77,18 +77,19 @@ describe("filter-resume-rearm", () => {
         ),
       );
       expect((await tx.commit()).error).toBeUndefined();
-      const prototype = Object.getPrototypeOf(first) as Cell<unknown>;
-      const originalSync = prototype.sync;
+      // A cell syncs through the storage manager, which holds the children's.
+      const storageManager = runtime.storageManager;
+      const originalSyncCell = storageManager.syncCell;
       using _sync = stub(
-        prototype,
-        "sync",
-        function (
-          this: Cell<unknown>,
-          ...args: Parameters<typeof originalSync>
-        ) {
-          return children.has(this.getAsNormalizedFullLink().id)
-            ? held.promise.then(() => this)
-            : Reflect.apply(originalSync, this, args);
+        storageManager,
+        "syncCell",
+        function <T>(
+          cell: Cell<T>,
+          ...rest: unknown[]
+        ): Promise<Cell<T>> {
+          return children.has(cell.getAsNormalizedFullLink().id)
+            ? held.promise.then(() => cell)
+            : Reflect.apply(originalSyncCell, storageManager, [cell, ...rest]);
         },
       );
       // Predicate execution is held absent; the real coordinator still writes

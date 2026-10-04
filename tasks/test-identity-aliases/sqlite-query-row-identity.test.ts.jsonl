@@ -1,0 +1,1 @@
+{"date":"2026-09-28","from":{"k":"unit","s":"runner","n":"sqlite-query-row-identity > rewrites a column-labeled result in place when a row moves to another position"},"to":{"k":"unit","s":"runner","n":"sqlite-query-row-identity > writes no document of a column-labeled result whose rows move to other positions"}}

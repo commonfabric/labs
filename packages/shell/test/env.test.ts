@@ -67,37 +67,6 @@ Deno.test({
 });
 
 Deno.test({
-  name: "shell env rejects a non-WebSocket presence service URL",
-  permissions: { read: true },
-  async fn() {
-    await expect(withPatchedGlobals({
-      $API_URL: "http://shell.test/",
-      $PRESENCE_URL: "https://presence.test",
-    }, importFreshEnvModule)).rejects.toThrow("WebSocket URL");
-  },
-});
-
-Deno.test({
-  name: "shell env reads the optional presence service URL",
-  permissions: { read: true },
-  async fn() {
-    const configured = await withPatchedGlobals({
-      $API_URL: "http://shell.test/",
-      $PRESENCE_URL: "wss://presence.test/socket",
-    }, importFreshEnvModule);
-    expect(configured.PRESENCE_URL?.href).toBe(
-      "wss://presence.test/socket",
-    );
-
-    const disabled = await withPatchedGlobals({
-      $API_URL: "http://shell.test/",
-      $PRESENCE_URL: undefined,
-    }, importFreshEnvModule);
-    expect(disabled.PRESENCE_URL).toBeUndefined();
-  },
-});
-
-Deno.test({
   name:
     "serverExecution: the build define selects the OFF arm (rollback lever) or forces ON",
   permissions: { read: true },

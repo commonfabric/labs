@@ -29,6 +29,7 @@ import { defer } from "@commonfabric/utils/defer";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Cell, FactoryInput, JSONSchema } from "../src/builder/types.ts";
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
+import { cellRuntime } from "../src/cell.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { INJECTION_SAFE_ATOM } from "../src/cfc/schema-sanitization.ts";
 import { getMetaLink, parseLink } from "../src/link-utils.ts";
@@ -2426,7 +2427,7 @@ function patternOutputCell(resultCell: Cell<any>, testPattern: any): Cell<any> {
   const resultLink = getMetaLink(liveResultCell, "result");
   const parentResultCell = resultLink === undefined
     ? undefined
-    : liveResultCell.runtime.getCellFromLink(resultLink);
+    : cellRuntime(liveResultCell).getCellFromLink(resultLink);
   const path = testPattern.result?.$alias?.path;
   if (parentResultCell === undefined || !Array.isArray(path)) {
     return liveResultCell;

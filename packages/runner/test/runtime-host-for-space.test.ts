@@ -84,6 +84,158 @@ describe("Runtime.registerSpaceHost", () => {
     }
   });
 
+  describe("registerSpaceHostDetailed()", () => {
+    it("returns storage's refusal and routes compute only on acceptance", async () => {
+      const storageManager = Object.assign(
+        StorageManager.emulate({ as: signer }),
+        {
+          registerSpaceHostDetailed(_space: string, host: string) {
+            if (host === "http://pinned.test/") {
+              return {
+                accepted: false,
+                reason: "default-route-in-use",
+              } as const;
+            }
+            if (host === "http://other.test/") {
+              return {
+                accepted: false,
+                reason: "known-different-host",
+                existingHost: "http://host-b.test/",
+              } as const;
+            }
+            return { accepted: true } as const;
+          },
+        },
+      );
+      const runtime = new Runtime({
+        apiUrl: new URL("http://host-a.test/"),
+        storageManager,
+      });
+      try {
+        const spaceC = "did:key:z6Mk-host-for-space-c" as MemorySpace;
+        expect(runtime.registerSpaceHostDetailed(spaceC, "http://pinned.test"))
+          .toEqual({ accepted: false, reason: "default-route-in-use" });
+        expect(runtime.mappedHostFor(spaceC)).toBeUndefined();
+
+        expect(runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test"))
+          .toEqual({ accepted: true });
+        expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+
+        expect(runtime.registerSpaceHostDetailed(spaceB, "http://other.test"))
+          .toEqual({
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://host-b.test/",
+          });
+        expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns `no-remote-resolution` from an emulated manager", async () => {
+      const runtime = makeRuntime();
+      try {
+        expect(
+          runtime.storageManager.registerSpaceHostDetailed?.(
+            spaceB,
+            "http://host-b.test/",
+          ),
+        ).toEqual({ accepted: false, reason: "no-remote-resolution" });
+        expect(runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test/"))
+          .toEqual({ accepted: false, reason: "no-remote-resolution" });
+        expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns `unspecified` for a refusal by a manager that gives only a verdict", async () => {
+      const storageManager = Object.assign(
+        StorageManager.emulate({ as: signer }),
+        {
+          registerSpaceHostDetailed: undefined,
+          registerSpaceHost(_space: string, host: string) {
+            return host !== "http://refused.test/";
+          },
+        },
+      );
+      const runtime = new Runtime({
+        apiUrl: new URL("http://host-a.test/"),
+        storageManager,
+      });
+      try {
+        expect(
+          runtime.registerSpaceHostDetailed(spaceB, "http://refused.test/"),
+        ).toEqual({ accepted: false, reason: "unspecified" });
+        expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+        expect(runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test/"))
+          .toEqual({ accepted: true });
+        expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns `no-remote-resolution` when the manager takes no hints", async () => {
+      const runtime = new Runtime({
+        apiUrl: new URL("http://host-a.test/"),
+        storageManager: Object.assign(StorageManager.emulate({ as: signer }), {
+          registerSpaceHostDetailed: undefined,
+          registerSpaceHost: undefined,
+        }),
+      });
+      try {
+        expect(runtime.registerSpaceHostDetailed(spaceB, "http://host-b.test/"))
+          .toEqual({ accepted: false, reason: "no-remote-resolution" });
+        expect(runtime.registerSpaceHost(spaceB, "http://host-b.test/"))
+          .toBe(false);
+        expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("throws on a host that is not an origin, naming the space", async () => {
+      const runtime = makeRuntime();
+      try {
+        expect(() =>
+          runtime.registerSpaceHostDetailed(spaceB, "https://host-b.test/api")
+        ).toThrow(`Invalid host for space ${spaceB}`);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  });
+
+  it("takes the verdict of a manager that gives only a registration", async () => {
+    const storageManager = Object.assign(
+      StorageManager.emulate({ as: signer }),
+      {
+        registerSpaceHost: undefined,
+        registerSpaceHostDetailed(_space: string, host: string) {
+          return host === "http://refused.test/"
+            ? { accepted: false, reason: "default-route-in-use" } as const
+            : { accepted: true } as const;
+        },
+      },
+    );
+    const runtime = new Runtime({
+      apiUrl: new URL("http://host-a.test/"),
+      storageManager,
+    });
+    try {
+      expect(runtime.registerSpaceHost(spaceB, "http://refused.test/"))
+        .toBe(false);
+      expect(runtime.mappedHostFor(spaceB)).toBeUndefined();
+      expect(runtime.registerSpaceHost(spaceB, "http://host-b.test/"))
+        .toBe(true);
+      expect(runtime.mappedHostFor(spaceB)).toBe("http://host-b.test/");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("rejects non-origin hints before forwarding them to storage", async () => {
     const storageVerdicts: Array<[string, string]> = [];
     const storageManager = Object.assign(

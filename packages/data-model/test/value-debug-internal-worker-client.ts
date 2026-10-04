@@ -1,11 +1,12 @@
 /**
  * The test side of `value-debug-internal-worker.ts`: starts a worker, sends it
- * one request, and returns its report.
+ * one request, and returns its report once the worker has been torn down.
  *
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
 import { defer } from "@commonfabric/utils/defer";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 
 import type {
   InternalReport,
@@ -28,10 +29,13 @@ export async function reportFromFreshRealm(
   worker.onmessage = (ev) => report.resolve(ev.data as InternalReport);
   worker.onerror = (ev) => report.reject(new Error(ev.message));
 
+  let lifetimeLock: string | undefined;
   try {
     worker.postMessage({ load } satisfies InternalRequest);
-    return await report.promise;
+    const reported = await report.promise;
+    lifetimeLock = reported.lifetimeLock;
+    return reported;
   } finally {
-    worker.terminate();
+    await terminateWorker(worker, lifetimeLock);
   }
 }

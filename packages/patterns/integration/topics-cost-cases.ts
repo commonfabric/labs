@@ -15,6 +15,7 @@ import type {
   IExtendedStorageTransaction,
   SchedulerGraphSnapshot,
 } from "@commonfabric/runner";
+import { maxOf } from "@commonfabric/utils/math";
 
 import {
   type AttemptReads,
@@ -899,7 +900,7 @@ function bodyTotalOf(bodies: readonly BodyReads[]): BodyRecord {
     registeredDependencies: sum((body) => body.registeredDependencies),
     maxRunProxyAccesses: Math.max(
       0,
-      ...bodies.map((body) => body.maxRunProxyAccesses),
+      maxOf(bodies.map((body) => body.maxRunProxyAccesses)),
     ),
   };
 }

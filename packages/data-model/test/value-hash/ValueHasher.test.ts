@@ -25,6 +25,8 @@ import { UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -573,6 +575,62 @@ describe("ValueHasher", () => {
           expect(hex(hashBytesOf(nsec))).not.toBe(hex(hashBytesOf(days)));
         });
       });
+      describe("FabricDurationNsec (dedicated TAG_DURATION_NSEC primitive tag)", () => {
+        it("matches a hand-computed byte stream for `FabricDurationNsec(42n)`", () => {
+          // TAG_DURATION_NSEC (0x2E) + LEB128(1) + [0x2A]. Mirrored in
+          // Section 7 of `2-hash-byte-format.md`.
+          const expected = sha256([
+            0x2e,
+            0x01,
+            0x2a,
+          ]);
+          expect(hashBytesOf(new FabricDurationNsec(42n))).toEqual(expected);
+        });
+
+        it("produces different hashes for `FabricDurationNsec` values", () => {
+          const d1 = new FabricDurationNsec(0n);
+          const d2 = new FabricDurationNsec(1_000_000_000n);
+          expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
+        });
+
+        it("produces different hashes for `FabricDurationNsec` and `FabricEpochNsec` with the same `bigint`", () => {
+          // Same underlying value, different tag -> different hash
+          const span = new FabricDurationNsec(100n);
+          const instant = new FabricEpochNsec(100n);
+          expect(hex(hashBytesOf(span))).not.toBe(hex(hashBytesOf(instant)));
+        });
+      });
+      describe("FabricDurationDay (dedicated TAG_DURATION_DAY primitive tag)", () => {
+        it("matches a hand-computed byte stream for `FabricDurationDay(7n)`", () => {
+          // TAG_DURATION_DAY (0x2F) + LEB128(1) + [0x07]. Mirrored in
+          // Section 7 of `2-hash-byte-format.md`.
+          const expected = sha256([
+            0x2f,
+            0x01,
+            0x07,
+          ]);
+          expect(hashBytesOf(new FabricDurationDay(7n))).toEqual(expected);
+        });
+
+        it("produces different hashes for `FabricDurationDay` values", () => {
+          const d1 = new FabricDurationDay(0n);
+          const d2 = new FabricDurationDay(7n);
+          expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
+        });
+
+        it("produces different hashes for `FabricDurationDay` and `FabricEpochDay` with the same `bigint`", () => {
+          // Same underlying value, different tag -> different hash
+          const span = new FabricDurationDay(100n);
+          const day = new FabricEpochDay(100n);
+          expect(hex(hashBytesOf(span))).not.toBe(hex(hashBytesOf(day)));
+        });
+
+        it("produces different hashes for `FabricDurationDay` and `FabricDurationNsec` with the same `bigint`", () => {
+          const days = new FabricDurationDay(100n);
+          const nsec = new FabricDurationNsec(100n);
+          expect(hex(hashBytesOf(days))).not.toBe(hex(hashBytesOf(nsec)));
+        });
+      });
       describe("FabricRegExp (dedicated TAG_REGEXP primitive tag)", () => {
         it("matches a hand-computed byte stream for `FabricRegExp(/abc/gi)`", () => {
           // TAG_REGEXP (0x2B), then source, flags, and flavor, each a direct
@@ -713,12 +771,14 @@ describe("ValueHasher", () => {
 
           const pushShortString = (value: string) => {
             const encoded = enc.encode(value);
-            stream.push(0x24, encoded.length, ...encoded);
+            stream.push(0x24, encoded.length);
+            for (const byte of encoded) stream.push(byte);
           };
 
           const pushLongString = (value: string) => {
             const hashed = sha256(enc.encode(value));
-            stream.push(0xf0, ...hashed);
+            stream.push(0xf0);
+            for (const byte of hashed) stream.push(byte);
           };
 
           // Type tag.

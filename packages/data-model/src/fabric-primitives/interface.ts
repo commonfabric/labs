@@ -25,6 +25,8 @@ export const FABRIC_PRIMITIVE_VALUE_TAGS = Object.freeze(
   {
     FabricEpochNsec: "FabricEpochNsec",
     FabricEpochDay: "FabricEpochDay",
+    FabricDurationNsec: "FabricDurationNsec",
+    FabricDurationDay: "FabricDurationDay",
     FabricHash: "FabricHash",
     FabricBytes: "FabricBytes",
     FabricKeyPair: "FabricKeyPair",
@@ -46,6 +48,12 @@ export const FABRIC_PRIMITIVE_CODEC_TYPE_TAGS = Object.freeze(
   {
     /** Constant for class `FabricBytes`. */
     Bytes: "Bytes@1",
+
+    /** Constant for class `FabricDurationDay`. */
+    DurationDay: "DurationDay@1",
+
+    /** Constant for class `FabricDurationNsec`. */
+    DurationNsec: "DurationNsec@1",
 
     /** Constant for class `FabricEpochDay`. */
     EpochDay: "EpochDay@1",

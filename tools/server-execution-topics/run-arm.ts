@@ -252,7 +252,6 @@ try {
     ...endpoint,
     ...flags,
     FRONTEND_URL: endpoint.API_URL,
-    SPACE_NAME: `topics-campaign-${crypto.randomUUID()}`,
     HEADLESS: "1",
     CF_LOG_LEVEL: "silent",
     CF_CAMPAIGN_RUN_DIR: runDir,

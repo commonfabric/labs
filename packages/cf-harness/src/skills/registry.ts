@@ -684,7 +684,7 @@ export const discoverHarnessSkills = async (
     skillsRoot,
     resolvedSkillsRoot,
   );
-  diagnostics.push(...scanDiagnostics);
+  for (const diagnostic of scanDiagnostics) diagnostics.push(diagnostic);
   const skills: HarnessSkillRecord[] = [];
   const seenNames = new Set<string>();
   for (const skillPath of skillFiles.sort()) {
@@ -790,7 +790,9 @@ export const discoverHarnessSkills = async (
         skillDir,
         resolvedSkillDir,
       });
-    recordDiagnostics.push(...resourceDiagnostics);
+    for (const diagnostic of resourceDiagnostics) {
+      recordDiagnostics.push(diagnostic);
+    }
     skills.push({
       name,
       description,
@@ -924,9 +926,11 @@ export const loadHarnessSkillContext = async (
       "",
       `Skill directory: ${skill.sandboxSkillDir}`,
       "Relative paths in this skill resolve against that directory unless stated otherwise.",
-      ...formatSkillResourceIndex(skill),
-      "</skill_context>",
     );
+    for (const line of formatSkillResourceIndex(skill)) {
+      contextBlocks.push(line);
+    }
+    contextBlocks.push("</skill_context>");
     activations.push({
       name: skill.name,
       source: options.source,

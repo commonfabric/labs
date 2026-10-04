@@ -61,6 +61,8 @@ Each construct family is classified as one of:
 | --- | --- | --- |
 | Reactive property access in JSX or helper-owned expressions | Supported | Authored reactive reads like `state.user.name` should remain natural and lower to explicit reactive access as needed |
 | Reactive element access with static or known-symbol keys | Supported | Forms like `items[0]`, `item[NAME]`, `state["foo"]` should lower predictably when the access path is statically representable |
+| `input[SELF]` on a pattern's own input parameter, in the pattern body, JSX, a plain-array callback, or a handler's bound state | Supported | `SELF` names the pattern's own result, and on the input the pattern body receives `input[SELF]` reads the same result as a destructured `[SELF]: self` binding, including a path read through it (`input[SELF].title`, `input[SELF].items.map(...)`), a local bound to it (`const self = input[SELF]`), and a `[SELF]` destructured off the input in the body |
+| `x[SELF]` inside an explicit computation callback, inside a reactive collection callback, or on anything but the pattern's own input parameter itself | Unsupported | Only the input the pattern body receives knows the pattern's result. `computed` / `action` / `lift` / `handler` callbacks see plain values, a reactive collection callback sees a captured reference to the input, and a value read off the input or another pattern's result is not the input, so `[SELF]` on any of them is `undefined`. The receiver must be the parameter itself: a local holding the input (`const i = input; i[SELF]`) is not followed back to it, and is reported too. So is a well-known key read through `input[SELF]`, such as `input[SELF][NAME]`, which is `undefined`; `const me = input[SELF]; me[NAME]` is the form that works. The compiler reports all of these; write `input[SELF]` or destructure `[SELF]: self`, in the pattern body, and capture that local where a callback needs it. A value built from an object literal holds whatever keys it was given and is outside this row |
 | Reactive ternary control flow in supported lowered value-expression sites | Supported | Authored `cond ? x : y` should preserve JavaScript branch meaning in JSX, top-level pattern-body value sites, and callback-local values inside supported collection callbacks |
 | Callback-local value bindings inside a plain-array `map` callback | Supported | A plain-array `map` callback in a pattern body runs during pattern build and its result is collected rather than read, so its value-expression sites are pattern-body value sites: a binding such as `const isToday = weekDates?.[colIdx] === todayDate` inside `COLUMN_INDICES.map(...)` lowers to a per-iteration lift-applied computation, and reads the same as the equivalent binding written directly in the pattern body |
 | Callback-local value bindings inside a result-interpreting array callback | Unsupported | `filter`, `find`, `some`, `every`, `sort`, `flatMap`, and `reduce` read what their callback returns while they run — as a boolean, a number, an array test, or the next accumulator. A lifted binding returned from one of those is a cell rather than the value the method expects, so these callbacks carry no pattern-owned wrapper site and a reactive computation in one still moves into `computed(...)` |
@@ -209,6 +211,7 @@ action(() => state.name.trim())
 ```ts
 // Shown inside a pattern body.
 computed(() => derivedValue.get())
+computed(() => input[SELF])
 ```
 
 Why:
@@ -216,6 +219,10 @@ Why:
 - dynamic access, receiver methods, and true-cell eager reads are valid here
 - `.get()` on ordinary opaque/reactive values is still not part of the
   language, even inside a computation callback
+- `input[SELF]` looks like any other key read off the input, and dynamic access
+  such as `computed(() => input[key])` is valid here, but the callback sees the
+  input as a plain value, on which `SELF` names nothing; `const self =
+  input[SELF]` in the pattern body, captured here, is the form that works
 
 ### Where A Builder's Callback May Come From
 

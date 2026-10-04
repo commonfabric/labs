@@ -22,15 +22,15 @@ import type {
   Definition,
   Document,
   Line,
-  Span,
   StructureKind,
   StructureNode,
   TokenClass,
 } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
-import { cpLen } from "../../ansi.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";
 import { isTokenClass } from "../../theme.ts";
+import { linesFromClasses } from "../classes.ts";
+import { structureNode, type StructureSource } from "../structure.ts";
 import {
   createPlainTextHighlighter,
   plainTextDocument,
@@ -80,6 +80,13 @@ export interface TreeSitterGrammar {
   /** The structure entry a node declares, or undefined when it declares none.
    * The walk descends into every node either way. */
   structureEntry(node: SyntaxNode): StructureEntry | undefined;
+
+  /** Stretches of source whose line breaks the language ignores and the
+   * grammar reads as the end of a statement. The parser reads each line break
+   * inside a match as a space, which leaves every offset unchanged, so a match
+   * must not hold the line break that ends a line comment. The expression must
+   * be global. */
+  readonly insignificantLineBreaks?: RegExp;
 }
 
 interface LoadedGrammar {
@@ -197,6 +204,14 @@ function loadedGrammar(grammar: TreeSitterGrammar): LoadedGrammar | undefined {
   return ready;
 }
 
+/** The text a grammar's parser reads for `text`, offset for offset. */
+function parserText(grammar: TreeSitterGrammar, text: string): string {
+  const spans = grammar.insignificantLineBreaks;
+  return spans === undefined
+    ? text
+    : text.replaceAll(spans, (span) => span.replace(/[\r\n]/g, " "));
+}
+
 function parseWith(ready: LoadedGrammar, text: string, from?: Tree): Tree {
   const tree = ready.parser.parse(text, from);
   // deno-coverage-ignore-start -- a parse returns no tree only when it is
@@ -216,7 +231,7 @@ export function highlightLines(
 ): Line[] {
   const ready = loadedGrammar(grammar);
   if (ready === undefined) return plainTextLines(text);
-  const tree = parseWith(ready, text);
+  const tree = parseWith(ready, parserText(grammar, text));
   try {
     const lineStarts = computeLineStarts(text);
     return colorLines(ready, tree, text, lineStarts);
@@ -235,7 +250,7 @@ export function parseDocument(
 ): Document {
   const ready = loadedGrammar(grammar);
   if (ready === undefined) return plainTextDocument(text);
-  const tree = parseWith(ready, text);
+  const tree = parseWith(ready, parserText(grammar, text));
   try {
     const lineStarts = computeLineStarts(text);
     const definitions = new Map<string, Definition[]>();
@@ -278,22 +293,28 @@ export function createHighlighter(
   const ready = loadedGrammar(grammar);
   if (ready === undefined) return createPlainTextHighlighter(initial);
   let text = initial;
-  let lineStarts = computeLineStarts(text);
-  const held = { tree: parseWith(ready, text) };
-  let lines = colorLines(ready, held.tree, text, lineStarts);
+  let source = parserText(grammar, text);
+  let sourceStarts = computeLineStarts(source);
+  const held = { tree: parseWith(ready, source) };
+  let lines = colorLines(ready, held.tree, text, computeLineStarts(text));
   const highlighter: Highlighter = {
     get lines() {
       return lines;
     },
     update(next: string): readonly Line[] {
       if (next === text) return lines;
-      const nextStarts = computeLineStarts(next);
+      const nextSource = parserText(grammar, next);
+      const nextStarts = computeLineStarts(nextSource);
       const previous = held.tree;
-      previous.edit(treeEdit(textEdit(text, next), lineStarts, nextStarts));
-      held.tree = parseWith(ready, next, previous);
+      previous.edit(
+        treeEdit(textEdit(source, nextSource), sourceStarts, nextStarts),
+      );
+      held.tree = parseWith(ready, nextSource, previous);
       previous.delete();
       text = next;
-      lineStarts = nextStarts;
+      source = nextSource;
+      sourceStarts = nextStarts;
+      const lineStarts = source === text ? nextStarts : computeLineStarts(text);
       lines = colorLines(ready, held.tree, text, lineStarts);
       return lines;
     },
@@ -361,62 +382,7 @@ function colorLines(
   text: string,
   lineStarts: number[],
 ): Line[] {
-  const classes = classify(ready, tree, text.length);
-  const classAt = (offset: number): TokenClass => {
-    const claimed = classes[offset];
-    if (!WHITESPACE.test(text[offset])) return claimed ?? "plain";
-    // A capture that spans several tokens, such as a whole type annotation,
-    // covers the space between them; that space is not part of any token.
-    return claimed !== undefined && LITERAL_CLASSES.has(claimed)
-      ? claimed
-      : "whitespace";
-  };
-  const lines: Line[] = [];
-  let depth = 0;
-  for (let line = 0; line < lineStarts.length; line++) {
-    const start = lineStarts[line];
-    const end = lineEnd(text, lineStarts, line);
-    const spans: Span[] = [];
-    let column = 0;
-    let offset = start;
-    while (offset < end) {
-      const cls = classAt(offset);
-      let next = offset + 1;
-      if (cls !== "bracket") {
-        while (next < end && classAt(next) === cls) next++;
-      }
-      const segment = text.slice(offset, next);
-      if (cls === "bracket") {
-        const opening = segment === "(" || segment === "[" || segment === "{";
-        const bracketDepth = opening
-          ? depth++
-          : (depth = Math.max(0, depth - 1));
-        spans.push({ col: column, text: segment, cls, bracketDepth });
-      } else {
-        spans.push({ col: column, text: segment, cls });
-      }
-      column += cpLen(segment);
-      offset = next;
-    }
-    lines.push({ text: text.slice(start, end), spans });
-  }
-  return lines;
-}
-
-const WHITESPACE = /\s/;
-
-/** Token classes whose text is content, so the space inside one belongs to it. */
-const LITERAL_CLASSES: ReadonlySet<TokenClass> = new Set<TokenClass>([
-  "string",
-  "template",
-  "regex",
-  "comment",
-  "docComment",
-  "markdownQuote",
-]);
-
-function lineEnd(text: string, lineStarts: number[], line: number): number {
-  return line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length;
+  return linesFromClasses(text, classify(ready, tree, text.length), lineStarts);
 }
 
 /**
@@ -450,75 +416,36 @@ function classify(
   return classes;
 }
 
-/** Shared state for one structure walk. */
-interface StructureWalk {
-  readonly text: string;
-  readonly lineStarts: number[];
-  readonly definitions: Map<string, Definition[]>;
-}
-
 function structureNodes(
   grammar: TreeSitterGrammar,
   node: SyntaxNode,
-  walk: StructureWalk,
+  source: StructureSource,
   depth: number,
 ): StructureNode[] {
   const out: StructureNode[] = [];
   for (const child of node.children) {
     const entry = grammar.structureEntry(child);
     if (entry === undefined) {
-      out.push(...structureNodes(grammar, child, walk, depth));
+      for (const nested of structureNodes(grammar, child, source, depth)) {
+        out.push(nested);
+      }
       continue;
     }
-    out.push(structureNode(grammar, child, entry, walk, depth));
+    const extent = entry.extent ?? child;
+    out.push(structureNode(
+      source,
+      {
+        kind: entry.kind,
+        label: entry.label,
+        name: entry.name,
+        nameOffset: entry.nameOffset,
+        startOffset: extent.startIndex,
+        endOffset: extent.endIndex,
+        astKind: child.type,
+      },
+      depth,
+      (inner) => structureNodes(grammar, child, source, inner),
+    ));
   }
   return out;
-}
-
-function structureNode(
-  grammar: TreeSitterGrammar,
-  node: SyntaxNode,
-  entry: StructureEntry,
-  walk: StructureWalk,
-  depth: number,
-): StructureNode {
-  const extent = entry.extent ?? node;
-  const startOffset = extent.startIndex;
-  const endOffset = extent.endIndex;
-  const startLine = lineIndexOf(walk.lineStarts, startOffset);
-  const endLine = lineIndexOf(
-    walk.lineStarts,
-    Math.max(startOffset, endOffset - 1),
-  );
-  if (entry.name !== undefined) {
-    const declarations = walk.definitions.get(entry.name) ?? [];
-    declarations.push({
-      name: entry.name,
-      kind: entry.kind,
-      startLine,
-      endLine,
-      startOffset,
-      endOffset,
-    });
-    walk.definitions.set(entry.name, declarations);
-  }
-  return {
-    kind: entry.kind,
-    label: entry.label,
-    ...(entry.name === undefined ? {} : { name: entry.name }),
-    ...(entry.nameOffset === undefined ? {} : { nameOffset: entry.nameOffset }),
-    startLine,
-    endLine,
-    startCol: column(walk, startLine, startOffset),
-    endCol: column(walk, endLine, endOffset),
-    startOffset,
-    endOffset,
-    depth,
-    children: structureNodes(grammar, node, walk, depth + 1),
-    astKinds: [node.type],
-  };
-}
-
-function column(walk: StructureWalk, line: number, offset: number): number {
-  return cpLen(walk.text.slice(walk.lineStarts[line], offset));
 }

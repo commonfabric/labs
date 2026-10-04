@@ -1,8 +1,25 @@
 import { expect } from "@std/expect/expect";
 import { join } from "@std/path";
 
+import type { sendEvent } from "@commonfabric/runner";
 import { decode, encode } from "@commonfabric/utils/encoding";
 import { isPerfDiagnosticWarnKey } from "../lib/perf-diagnostic-logs.ts";
+
+/**
+ * Sends to a test's stand-in handler cell, which is an object of the test's own
+ * rather than a runtime cell, through the stand-in's own `send()`, handing it
+ * the commit callback and send options the dispatch passes.
+ */
+export const sendThroughStandIn: typeof sendEvent = (
+  stream,
+  event,
+  onCommit,
+  sendOptions,
+) => {
+  (stream as unknown as {
+    send(event: unknown, onCommit?: unknown, sendOptions?: unknown): void;
+  }).send(event, onCommit, sendOptions);
+};
 
 // Decodes a `Uint8Array` into an array of strings for each line.
 export function bytesToLines(stream: Uint8Array): string[] {

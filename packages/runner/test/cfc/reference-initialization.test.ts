@@ -7,11 +7,19 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
-import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
+import {
+  recordCapturedArgumentFields,
+  recordReferencedArgumentFields,
+} from "../../src/cfc/reference-initialization.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
+import { areLinksSame } from "../../src/link-utils.ts";
 import { runtimeWritePolicyAuthorization } from "../../src/cfc/types.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "../../src/storage/v2-emulate.ts";
 
 const signer = await Identity.fromPassphrase("reference-initialization-owner");
 const stager = await Identity.fromPassphrase(
@@ -78,6 +86,20 @@ describe("reference-initialization", () => {
     await runtime.dispose();
   });
 
+  /** Every confidentiality atom `cell`'s stored label map holds at `path`. */
+  function confidentialityAt(
+    cell: { getAsNormalizedFullLink(): NormalizedFullLink },
+    path: readonly string[],
+  ): unknown[] {
+    return (readStoredCfcMetadata(
+      runtime.edit(),
+      cell.getAsNormalizedFullLink(),
+    )
+      ?.labelMap.entries ?? [])
+      .filter((entry) => entry.path.join("/") === path.join("/"))
+      .flatMap((entry) => entry.label.confidentiality ?? []);
+  }
+
   /** Writes an entry under no schema, as a list's existing entry is held. */
   function entryCell(
     tx: ReturnType<Runtime["edit"]>,
@@ -103,7 +125,7 @@ describe("reference-initialization", () => {
       );
       expect(recorded).toHaveLength(1);
       expect(recorded[0]).toMatchObject({
-        mode: "reference",
+        mode: "capture",
         target: { id: link.id, path: ["element"] },
         value: argument.key("element").getRaw(),
       });
@@ -123,6 +145,60 @@ describe("reference-initialization", () => {
         tx,
         argument.getAsNormalizedFullLink(),
         ["value", "redirect", "missing"],
+      );
+
+      expect(
+        tx.getCfcState().writePolicyInputs.filter((input) =>
+          input.kind === "initialization"
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe("recordCapturedArgumentFields()", () => {
+    it("records each link within a named field, a write redirect among them, at its own path", () => {
+      const tx = runtime.edit();
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      const entry = entryCell(tx, "entry", "a");
+      const redirect = entry.getAsWriteRedirectLink();
+      const link = entry.getAsLink();
+      argument.setRaw({
+        params: {
+          redirect,
+          nested: { link, note: "kept as a value" },
+          list: [link, 1],
+        },
+      });
+
+      recordCapturedArgumentFields(
+        tx,
+        argument.getAsNormalizedFullLink(),
+        ["params"],
+      );
+
+      const recorded = tx.getCfcState().writePolicyInputs.filter((input) =>
+        input.kind === "initialization"
+      );
+      expect(recorded.every((input) => input.mode === "capture")).toBe(true);
+      expect(recorded.map((input) => [input.target.path, input.value]))
+        .toEqual([
+          [["params", "redirect"], redirect],
+          [["params", "nested", "link"], link],
+          [["params", "list", "0"], link],
+        ]);
+      expect(recorded.every((input) => tx.isRuntimeWritePolicyInput(input)))
+        .toBe(true);
+    });
+
+    it("records nothing for a named field that holds only values, or nothing", () => {
+      const tx = runtime.edit();
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      argument.setRaw({ params: { body: "forged", tags: ["a"], n: 1 } });
+
+      recordCapturedArgumentFields(
+        tx,
+        argument.getAsNormalizedFullLink(),
+        ["params", "missing"],
       );
 
       expect(
@@ -176,7 +252,7 @@ describe("reference-initialization", () => {
       const argument = runtime.getCell(space, "argument", argumentSchema, tx);
       tx.recordCfcWritePolicyInput({
         kind: "initialization",
-        mode: "reference",
+        mode: "capture",
         target: { ...argument.getAsNormalizedFullLink(), path: ["element"] },
         value: { body: "forged" },
       }, runtimeWritePolicyAuthorization);
@@ -192,7 +268,7 @@ describe("reference-initialization", () => {
       argument.set({ element: entryCell(tx, "entry", "a") });
       tx.recordCfcWritePolicyInput({
         kind: "initialization",
-        mode: "reference",
+        mode: "capture",
         target: { ...argument.getAsNormalizedFullLink(), path: ["element"] },
         value: argument.key("element").getRaw(),
       });
@@ -350,6 +426,59 @@ describe("reference-initialization", () => {
       expect(message).not.toContain("writeAuthorizedBy");
     });
 
+    it("refuses a link installed into an absent field whose stored policy names a writer, even when the transaction then rewrites the field's parent", async () => {
+      // The field was absent before the transaction. Rewriting its parent
+      // afterwards records a snapshot in which the field already holds the
+      // link, which must not pass for a link the field held before.
+      const holderSchema: JSONSchema = {
+        type: "object",
+        properties: {
+          holder: {
+            type: "object",
+            properties: {
+              element: {
+                type: "object",
+                properties: { body: { type: "string" } },
+                ifc: { writeAuthorizedBy: writer },
+              },
+              n: { type: "number" },
+            },
+          },
+        },
+      };
+      const seed = runtime.edit();
+      entryCell(seed, "entry", "a");
+      runtime.getCell(space, "holder-argument", holderSchema, seed).set({
+        holder: { n: 1 },
+      });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+
+      for (const rewriteParent of [false, true]) {
+        const tx = runtime.edit();
+        const link = runtime.getCell(space, "entry", undefined, tx).getAsLink();
+        const raw = runtime.getCell(space, "holder-argument", undefined, tx);
+        raw.key("holder").key("element").setRaw(link);
+        if (rewriteParent) raw.key("holder").setRaw({ element: link, n: 2 });
+        const argument = runtime.getCell(
+          space,
+          "holder-argument",
+          holderSchema,
+          tx,
+        ).getAsNormalizedFullLink();
+        recordReferencedArgumentFields(
+          tx,
+          { ...argument, path: [...argument.path, "holder"] },
+          ["element"],
+        );
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy requires a trusted verified binding identity at /holder/element",
+        );
+      }
+    });
+
     it("refuses a link to another cell staged over a field that holds one", async () => {
       const first = runtime.edit();
       const created = runtime.getCell(space, "argument", argumentSchema, first);
@@ -379,6 +508,530 @@ describe("reference-initialization", () => {
         body: "a",
       });
     });
+
+    it("refuses a link to another cell staged over a field that holds one when a binding covers the field beside the capture", async () => {
+      // A binding accepts a slot its setup re-points; a capture does not.
+      // Where both cover one slot, the capture decides, so the write fails
+      // closed whichever record comes first.
+      const first = runtime.edit();
+      const created = runtime.getCell(space, "argument", argumentSchema, first);
+      created.set({ element: entryCell(first, "entry-a", "a") });
+      recordReferencedArgumentFields(
+        first,
+        created.getAsNormalizedFullLink(),
+        ["element"],
+      );
+      runtime.prepareTxForCommit(first);
+      expect((await first.commit()).error).toBeUndefined();
+
+      for (const bindingFirst of [true, false]) {
+        const tx = runtime.edit();
+        const held = runtime.getCell(space, "argument", argumentSchema, tx);
+        held.key("element").set(entryCell(tx, "entry-b", "b"));
+        const argument = held.getAsNormalizedFullLink();
+        const recordBinding = () =>
+          tx.recordCfcWritePolicyInput({
+            kind: "initialization",
+            mode: "binding",
+            target: { ...argument, path: ["element"] },
+            value: held.key("element").getRaw(),
+          }, runtimeWritePolicyAuthorization);
+        if (bindingFirst) recordBinding();
+        recordReferencedArgumentFields(tx, argument, ["element"]);
+        if (!bindingFirst) recordBinding();
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+      }
+      expect(runtime.getCell(space, "argument").key("element").get()).toEqual({
+        body: "a",
+      });
+    });
+  });
+
+  describe("a captured binding staged as a write redirect", () => {
+    // The owner's list is initialized as a protected default in a transaction
+    // attributed to the owner, so its stored label names the owner. A
+    // collection builtin stages a write redirect to it into each sub-pattern's
+    // `params`, as the binding the builtin's callback captures.
+
+    const ownedList: JSONSchemaObj = {
+      type: "array",
+      items: { type: "string" },
+      ifc: {
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+        addIntegrity: [{
+          kind: "represents-principal",
+          subject: { __ctCurrentPrincipal: true },
+        }],
+        writeAuthorizedBy: writer,
+      },
+    };
+    const boardSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        items: { ...ownedList, default: [] },
+        note: { type: "string" },
+      },
+    };
+    /** An argument schema whose `params` holds `captures`. */
+    const capturing = (captures: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: { params: { type: "object", properties: captures } },
+    });
+    const capturingSchema = capturing({
+      items: { ...ownedList, asCell: ["readonly"] },
+    });
+
+    /**
+     * Initializes the owner's list on `board`, in a transaction attributed to
+     * the owner as a handler run of theirs is.
+     */
+    async function initializeOwnersList(board = "board") {
+      const seed = runtime.edit();
+      runtime.getCell(space, board, undefined, seed).set({ note: "saved" });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const first = runtime.edit();
+      first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+      const cell = runtime.getCell(space, board, boardSchema, first);
+      recordNewProtectedDefaults(
+        first,
+        cell.getAsNormalizedFullLink(),
+        { type: "object", properties: { note: { type: "string" } } },
+        boardSchema,
+        { items: [] },
+        { items: [], note: "saved" },
+      );
+      cell.set({ items: [], note: "saved" });
+      runtime.prepareTxForCommit(first);
+      expect((await first.commit()).error).toBeUndefined();
+    }
+
+    /**
+     * A write redirect to the list on `board`, carrying `schema` in its
+     * payload when one is given, as a pattern's bound capture does.
+     */
+    function captured(
+      tx: ReturnType<Runtime["edit"]>,
+      board = "board",
+      schema?: JSONSchema,
+    ) {
+      return runtime.getCell(space, board, undefined, tx).key("items")
+        .asSchema(schema).getAsWriteRedirectLink({
+          includeSchema: schema !== undefined,
+        });
+    }
+
+    /**
+     * Stages `params` into the argument named `name` under `schema`, and
+     * records its links as a collection builtin does unless `recorded` is
+     * `false`.
+     */
+    function stage(
+      tx: ReturnType<Runtime["edit"]>,
+      params: unknown,
+      { name = "argument", recorded = true, schema = capturingSchema } = {},
+    ) {
+      const argument = runtime.getCell(space, name, schema, tx);
+      argument.set({ params });
+      if (recorded) {
+        recordCapturedArgumentFields(tx, argument.getAsNormalizedFullLink(), [
+          "params",
+        ]);
+      }
+      return argument;
+    }
+
+    /** Stages `params` as `stage()` does, in a transaction of its own. */
+    async function commitStaging(
+      params: (tx: ReturnType<Runtime["edit"]>) => unknown,
+      options: Parameters<typeof stage>[2] = {},
+    ) {
+      const tx = runtime.edit();
+      stage(tx, params(tx), options);
+      runtime.prepareTxForCommit(tx);
+      return (await tx.commit()).error?.message;
+    }
+
+    /** The owner's list, read outside any transaction under test. */
+    function ownersList(): unknown {
+      return runtime.getCell(space, "board").key("items").get();
+    }
+
+    it("accepts it into an absent owner-protected field once it is recorded", async () => {
+      await initializeOwnersList();
+      // The same staging is committed twice, recorded and not, so the recording
+      // is what the acceptance turns on.
+      for (const recorded of [false, true]) {
+        const tx = runtime.edit();
+        stage(tx, { items: captured(tx) }, {
+          name: `argument-${recorded}`,
+          recorded,
+        });
+        runtime.prepareTxForCommit(tx);
+        const error = (await tx.commit()).error?.message;
+
+        if (recorded) expect(error).toBeUndefined();
+        else expect(error).toContain("writeAuthorizedBy");
+      }
+    });
+
+    it("accepts it from a principal other than the owner, and from the owner over it after", async () => {
+      await initializeOwnersList();
+      for (const principal of [stager.did(), signer.did()]) {
+        actingPrincipal = principal;
+        const tx = runtime.edit();
+        stage(tx, { items: captured(tx) });
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+    });
+
+    it("refuses a write through it, in the transaction staging it, without the list's writer", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      const argument = stage(tx, { items: captured(tx) });
+      argument.key("params").key("items").set(["forged"]);
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /items",
+      );
+      expect(ownersList()).toEqual([]);
+    });
+
+    it("refuses a write through it by a principal other than the list's owner", async () => {
+      await initializeOwnersList();
+      actingPrincipal = stager.did();
+      const staging = runtime.edit();
+      stage(staging, { items: captured(staging) });
+      runtime.prepareTxForCommit(staging);
+      expect((await staging.commit()).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      runtime.getCell(space, "argument", capturingSchema, tx).key("params")
+        .key("items").set(["forged"]);
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "ownerPrincipal mismatch at /items",
+      );
+      expect(ownersList()).toEqual([]);
+    });
+
+    it("refuses a value staged in its place", async () => {
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      stage(tx, { items: ["forged"] });
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /params/items",
+      );
+    });
+
+    it("refuses a write redirect to another cell staged over one the field holds", async () => {
+      await initializeOwnersList();
+      await initializeOwnersList("other-board");
+      const first = runtime.edit();
+      const held = captured(first);
+      stage(first, { items: held });
+      runtime.prepareTxForCommit(first);
+      expect((await first.commit()).error).toBeUndefined();
+
+      const second = runtime.edit();
+      stage(second, { items: captured(second, "other-board") });
+      runtime.prepareTxForCommit(second);
+
+      expect((await second.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /params/items",
+      );
+      expect(
+        runtime.getCell(space, "argument").key("params").key("items").getRaw(),
+      ).toEqual(held);
+    });
+
+    for (const emptiedFirst of [false, true]) {
+      it(
+        `accepts it again under another schema over the slot that holds it${
+          emptiedFirst
+            ? ", after the transaction empties the record holding it"
+            : ""
+        }`,
+        async () => {
+          // A later version of the pattern binds the same cell under a
+          // schema of its own, so the bytes it stages differ while the cell
+          // they name does not. Staged over the stored link, the same cell
+          // lands no write; staged into a record the transaction emptied
+          // first, it lands one.
+          await initializeOwnersList();
+          expect(
+            await commitStaging((tx) => ({
+              items: captured(tx, "board", ownedList),
+            })),
+          ).toBeUndefined();
+          const revised: JSONSchemaObj = {
+            ...ownedList,
+            description: "the owner's list, revised",
+          };
+
+          const tx = runtime.edit();
+          if (emptiedFirst) {
+            runtime.getCell(space, "argument", undefined, tx).key("params")
+              .setRaw({});
+          }
+          stage(tx, { items: captured(tx, "board", revised) });
+          runtime.prepareTxForCommit(tx);
+
+          expect((await tx.commit()).error).toBeUndefined();
+          expect(
+            areLinksSame(
+              runtime.getCell(space, "argument").key("params").key("items")
+                .getRaw(),
+              captured(runtime.edit()),
+            ),
+          ).toBe(true);
+        },
+      );
+    }
+
+    for (const emptied of ["params", "root", "slot"]) {
+      it(`refuses a write redirect to another cell staged over the slot after the transaction empties the ${emptied}`, async () => {
+        await initializeOwnersList();
+        await initializeOwnersList("other-board");
+        expect(await commitStaging((tx) => ({ items: captured(tx) })))
+          .toBeUndefined();
+
+        const tx = runtime.edit();
+        const raw = runtime.getCell(space, "argument", undefined, tx);
+        if (emptied === "params") raw.key("params").setRaw({});
+        if (emptied === "root") raw.setRaw({});
+        if (emptied === "slot") {
+          raw.key("params").key("items").setRaw(undefined);
+        }
+        stage(tx, { items: captured(tx, "other-board") });
+        runtime.prepareTxForCommit(tx);
+
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy requires a trusted verified binding identity at /params/items",
+        );
+        expect(
+          runtime.getCell(space, "argument").key("params").key("items")
+            .getRaw(),
+        ).toEqual(captured(runtime.edit()));
+      });
+    }
+
+    it("refuses a value beside a staged link under a protected record in params", async () => {
+      // The link's record covers the link's own slot, never the protected
+      // record holding it.
+      await initializeOwnersList();
+      const schema = capturing({
+        record: {
+          type: "object",
+          properties: {
+            items: { ...ownedList, asCell: ["readonly"] },
+            note: { type: "string" },
+          },
+          ifc: { writeAuthorizedBy: writer },
+        },
+      });
+
+      expect(
+        await commitStaging(
+          (tx) => ({ record: { items: captured(tx), note: "forged" } }),
+          { schema },
+        ),
+      ).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /params/record",
+      );
+    });
+
+    it("refuses a value beside a staged link in a list whose items are protected", async () => {
+      await initializeOwnersList();
+      const schema = capturing({
+        list: {
+          type: "array",
+          items: { ...ownedList, asCell: ["readonly"] },
+        },
+      });
+
+      expect(
+        await commitStaging(
+          (tx) => ({ list: [captured(tx), "forged"] }),
+          { schema },
+        ),
+      ).toContain("writeAuthorizedBy");
+    });
+
+    it("keeps the confidentiality its link carries on the slot when it is staged again", async () => {
+      // The slot declares a writer and no confidentiality; the list it names
+      // is secret, and only the link's own label says so at the slot.
+      const secretList: JSONSchemaObj = {
+        type: "array",
+        items: { type: "string" },
+        ifc: { confidentiality: ["secret"] },
+      };
+      const seed = runtime.edit();
+      runtime.getCell(space, "secret-board", {
+        type: "object",
+        properties: { items: secretList },
+      }, seed).set({ items: ["a"] });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+      const schema = capturing({
+        items: {
+          type: "array",
+          items: { type: "string" },
+          asCell: ["readonly"],
+          ifc: { writeAuthorizedBy: writer },
+        },
+      });
+
+      for (const _ of ["staged", "staged again"]) {
+        expect(
+          await commitStaging(
+            (tx) => ({ items: captured(tx, "secret-board") }),
+            { schema },
+          ),
+        ).toBeUndefined();
+        expect(
+          confidentialityAt(runtime.getCell(space, "argument"), [
+            "params",
+            "items",
+          ]),
+        ).toContain("secret");
+      }
+    });
+  });
+
+  describe("a captured binding to a record whose field carries a floor", () => {
+    // A record whose `admins` field may hold only a value carrying the `admin`
+    // endorsement, which a write through `registrySchema` mints. A collection
+    // builtin stages a write redirect to the record, or to a cell holding a
+    // link to it, into each sub-pattern's `params`. The slot's schema repeats
+    // the record's floor, and nothing is written under the slot. Each document
+    // carries a labeled `note`, so its stored labels are what a link to it
+    // brings.
+
+    const note = { type: "string", ifc: { addIntegrity: ["noted"] } } as const;
+    const admins = { type: "array", items: { type: "string" } } as const;
+    const registrySchema: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        note,
+        admins: {
+          ...admins,
+          ifc: { requiredIntegrity: ["admin"], addIntegrity: ["admin"] },
+        },
+      },
+    };
+    // The same record written by a schema that mints no endorsement.
+    const unendorsingSchema: JSONSchemaObj = {
+      type: "object",
+      properties: { note, admins },
+    };
+    const holderSchema: JSONSchemaObj = {
+      type: "object",
+      properties: { note, registry: {} },
+    };
+    const capturingSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        params: {
+          type: "object",
+          properties: { registry: { ...registrySchema, asCell: ["readonly"] } },
+        },
+      },
+    };
+
+    /** Commits `write` in a transaction of its own, and returns its refusal. */
+    async function commit(write: (tx: ReturnType<Runtime["edit"]>) => void) {
+      const tx = runtime.edit();
+      write(tx);
+      runtime.prepareTxForCommit(tx);
+      return (await tx.commit()).error?.message;
+    }
+
+    /** Stages a redirect to `cell` as the captured binding, and records it. */
+    function stage(
+      tx: ReturnType<Runtime["edit"]>,
+      cell: { getAsWriteRedirectLink(): unknown },
+    ) {
+      const argument = runtime.getCell(space, "argument", capturingSchema, tx);
+      argument.set({ params: { registry: cell.getAsWriteRedirectLink() } });
+      recordCapturedArgumentFields(tx, argument.getAsNormalizedFullLink(), [
+        "params",
+      ]);
+    }
+
+    it("accepts it where the record holds no value at the floored field", async () => {
+      expect(
+        await commit((tx) =>
+          runtime.getCell(space, "registry", registrySchema, tx).set({
+            note: "n",
+          })
+        ),
+      ).toBeUndefined();
+
+      expect(
+        await commit((tx) =>
+          stage(tx, runtime.getCell(space, "registry", undefined, tx))
+        ),
+      ).toBeUndefined();
+    });
+
+    it("accepts it through a link to the record written before the record's endorsed value", async () => {
+      expect(
+        await commit((tx) => {
+          runtime.getCell(space, "registry", registrySchema, tx).set({
+            note: "n",
+          });
+          runtime.getCell(space, "holder", holderSchema, tx).set({
+            note: "n",
+            registry: runtime.getCell(space, "registry", undefined, tx)
+              .getAsWriteRedirectLink(),
+          });
+        }),
+      ).toBeUndefined();
+      expect(
+        await commit((tx) =>
+          runtime.getCell(space, "registry", registrySchema, tx).key("admins")
+            .set(["alice"])
+        ),
+      ).toBeUndefined();
+
+      expect(
+        await commit((tx) =>
+          stage(
+            tx,
+            runtime.getCell(space, "holder", undefined, tx).key("registry"),
+          )
+        ),
+      ).toBeUndefined();
+    });
+
+    it("refuses it where the record's value at the floored field carries no endorsement", async () => {
+      expect(
+        await commit((tx) =>
+          runtime.getCell(space, "registry", unendorsingSchema, tx).set({
+            note: "n",
+            admins: ["mallory"],
+          })
+        ),
+      ).toBeUndefined();
+
+      expect(
+        await commit((tx) =>
+          stage(tx, runtime.getCell(space, "registry", undefined, tx))
+        ),
+      ).toContain("write floor failed at /params/registry/admins");
+    });
   });
 
   describe("labels of a staged reference", () => {
@@ -395,7 +1048,10 @@ describe("reference-initialization", () => {
       },
     };
 
-    /** Initializes the owner's message with protected-default authorship. */
+    /**
+     * Initializes the owner's message with protected-default authorship, in
+     * a transaction attributed to the owner as a handler run of theirs is.
+     */
     async function initializeOwnersMessage(schema: JSONSchema = inboxSchema) {
       const seed = runtime.edit();
       runtime.getCell(space, "inbox", undefined, seed).set({ note: "saved" });
@@ -403,6 +1059,7 @@ describe("reference-initialization", () => {
       expect((await seed.commit()).error).toBeUndefined();
 
       const first = runtime.edit();
+      first.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
       const inbox = runtime.getCell(space, "inbox", schema, first);
       recordNewProtectedDefaults(
         first,
@@ -1143,5 +1800,321 @@ describe("reference-initialization", () => {
         cancel();
       });
     }
+  });
+
+  describe("a list operation whose callback captures a protected list", () => {
+    // The callback binds the list's writer to the list, so the list reaches
+    // each sub-pattern's argument as a captured binding: a write redirect to
+    // the list, under the list's own policy. The list sits in the result
+    // because the writer binding names the handler the pattern exports.
+
+    /** The list's protection: its writer alone, or its writer and its owner. */
+    const protections = {
+      writer: "WriteAuthorizedBy<string[], typeof edit>",
+      owner: `RepresentsCurrentUser<
+        Cfc<
+          WriteAuthorizedBy<string[], typeof edit>,
+          { ownerPrincipal: CurrentPrincipal }
+        >
+      >`,
+    };
+
+    /**
+     * The program computing `rows` by `expression`, over a list under
+     * `protection`. `gated` shows the rows only once `reveal` is sent, as an
+     * edit form is shown, and `listDoc` documents the list's type, which its
+     * schema carries.
+     */
+    function capturingProgram(
+      expression: string,
+      protection: keyof typeof protections,
+      { gated = false, listDoc = "" } = {},
+    ) {
+      const rows = gated ? `ifElse(shown, ${expression}, [])` : expression;
+      return {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
+            import {
+              Cfc,
+              CurrentPrincipal,
+              handler,
+              ifElse,
+              pattern,
+              RepresentsCurrentUser,
+              Writable,
+              WriteAuthorizedBy,
+            } from "commonfabric";
+            const edit = handler<
+              { add?: string; remove?: string },
+              { items: Writable<string[]> }
+            >((event, { items }) => {
+              const kept = items.get().filter((item) => item !== event.remove);
+              items.set(event.add === undefined ? kept : [...kept, event.add]);
+            });
+            const show = handler<unknown, { shown: Writable<boolean> }>(
+              (_, { shown }) => {
+                shown.set(true);
+              },
+            );
+            ${listDoc}
+            type Items = ${protections[protection]};
+            export default pattern<Record<string, never>>(() => {
+              const items = new Writable<Items>([]).for("items");
+              const shown = new Writable<boolean>(false).for("shown");
+              return {
+                items,
+                rows: ${rows},
+                add: edit({ items }),
+                reveal: show({ shown }),
+              };
+            });
+          `,
+        }],
+      };
+    }
+
+    /** Compiles `capturingProgram()`'s program. */
+    function compileCapturing(
+      expression: string,
+      protection: keyof typeof protections,
+    ) {
+      return runtime.patternManager.compilePattern(
+        capturingProgram(expression, protection),
+      );
+    }
+
+    /**
+     * Runs the pattern with `rows` computed by `expression`, over a list under
+     * `protection`, adds two items through the list's writer as the owner and
+     * waits for both to commit, and returns the result and every error the
+     * scheduler reported.
+     */
+    async function runCapturing(
+      expression: string,
+      protection: keyof typeof protections = "writer",
+    ) {
+      const errors: unknown[] = [];
+      runtime.scheduler.onError((error) => errors.push(error));
+      const compiled = await compileCapturing(expression, protection);
+      const tx = runtime.edit();
+      const output = runtime.getCell<{
+        items: string[];
+        rows: (string | { item: string })[];
+        add: unknown;
+      }>(space, "output", compiled.resultSchema, tx);
+      const result = runtime.run(tx, compiled, {}, output);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      await runtime.idle();
+      result.key("add").send({ add: "a" });
+      await runtime.idle();
+      result.key("add").send({ add: "b" });
+      await runtime.idle();
+      // The second write's commit can still be in flight once the scheduler
+      // is idle; settling it keeps teardown from cutting it off.
+      await manager.synced();
+      return { result, errors, cancel };
+    }
+
+    /** The item each row shows: the row itself, or the row's `item`. */
+    function itemsOf(rows: readonly (string | { item: string })[]): string[] {
+      return rows.map((row) => typeof row === "string" ? row : row.item);
+    }
+
+    const operations = {
+      map: {
+        expression: "items.map((item) => ({ item, remove: edit({ items }) }))",
+        expected: ["a", "b"],
+      },
+      filter: {
+        expression: "items.filter((item) => items.get().indexOf(item) === 0)",
+        expected: ["a"],
+      },
+      flatMap: {
+        expression:
+          "items.flatMap((item) => [{ item, remove: edit({ items }) }])",
+        expected: ["a", "b"],
+      },
+    };
+
+    for (const [name, { expression, expected }] of Object.entries(operations)) {
+      it(`hands the captured list to the callback of \`${name}()\``, async () => {
+        const { result, errors, cancel } = await runCapturing(expression);
+
+        expect(itemsOf(await result.key("rows").pull())).toEqual(expected);
+        expect(errors).toEqual([]);
+        cancel();
+      });
+    }
+
+    it("lets a row's handler write the list through the captured binding, and refuses a write through it without the list's writer", async () => {
+      const { result, errors, cancel } = await runCapturing(
+        operations.map.expression,
+      );
+      const row = result.key("rows").key(0).resolveAsCell();
+
+      row.key("remove").send({ remove: "a" });
+      await runtime.idle();
+      expect(await result.key("items").pull()).toEqual(["b"]);
+
+      const tx = runtime.edit();
+      row.getArgumentCell<{ params: { items: string[] } }>()!.withTx(tx)
+        .key("params").key("items").set(["forged"]);
+      runtime.prepareTxForCommit(tx);
+
+      expect((await tx.commit()).error?.message).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity",
+      );
+      expect(await result.key("items").pull()).toEqual(["b"]);
+      expect(errors).toEqual([]);
+      cancel();
+    });
+
+    it("hands an owner-protected list to each row, whose handler writes the list for its owner and is refused for anyone else", async () => {
+      const { result, errors, cancel } = await runCapturing(
+        operations.map.expression,
+        "owner",
+      );
+      expect(itemsOf(await result.key("rows").pull())).toEqual(["a", "b"]);
+      expect(errors).toEqual([]);
+      const remove = (item: string) =>
+        result.key("rows").key(0).resolveAsCell().key("remove").send({
+          remove: item,
+        });
+
+      actingPrincipal = stager.did();
+      remove("a");
+      await runtime.idle();
+      await manager.synced();
+      expect(await result.key("items").pull()).toEqual(["a", "b"]);
+
+      actingPrincipal = signer.did();
+      remove("a");
+      await runtime.idle();
+      await manager.synced();
+      expect(await result.key("items").pull()).toEqual(["b"]);
+      cancel();
+    });
+
+    it("re-stages each row's captured list after a pattern version revises the list's schema", async () => {
+      const { result, errors, cancel } = await runCapturing(
+        operations.map.expression,
+      );
+      const revised = await runtime.patternManager.compilePattern(
+        capturingProgram(operations.map.expression, "writer", {
+          listDoc: "/** The list, revised. */",
+        }),
+      );
+
+      const tx = runtime.edit();
+      runtime.run(
+        tx,
+        revised,
+        {},
+        runtime.getCell(space, "output", revised.resultSchema, tx),
+      );
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      await runtime.idle();
+      await manager.synced();
+
+      expect(itemsOf(await result.key("rows").pull())).toEqual(["a", "b"]);
+      expect(errors).toEqual([]);
+      cancel();
+    });
+
+    it("stages an owner-protected list into the rows a non-owner's runtime shows, and refuses that non-owner's write through it", async () => {
+      // The owner's runtime adds the items and never shows the rows, so the
+      // rows are staged first by the non-owner's runtime, which shows them.
+      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      const ownerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const visitorStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const ownerRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: ownerStorage,
+        trustSnapshotProvider: () => ({
+          id: signer.did(),
+          actingPrincipal: signer.did(),
+        }),
+      });
+      const errors: string[] = [];
+      const visitorRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: visitorStorage,
+        errorHandlers: [
+          (error) => errors.push(String(error?.message ?? error)),
+        ],
+        trustSnapshotProvider: () => ({
+          id: stager.did(),
+          actingPrincipal: stager.did(),
+        }),
+      });
+      const program = capturingProgram(operations.map.expression, "owner", {
+        gated: true,
+      });
+      let ownerClosed = false;
+      try {
+        const compiled = await ownerRuntime.patternManager.compilePattern(
+          program,
+        );
+        const tx = ownerRuntime.edit();
+        const result = ownerRuntime.run(
+          tx,
+          compiled,
+          {},
+          ownerRuntime.getCell(space, "output", compiled.resultSchema, tx),
+        );
+        ownerRuntime.prepareTxForCommit(tx);
+        expect((await tx.commit()).error).toBeUndefined();
+        await ownerRuntime.idle();
+        for (const add of ["a", "b"]) {
+          result.key("add").send({ add });
+          await ownerRuntime.idle();
+        }
+        await ownerStorage.synced();
+        ownerRuntime.runner.stop(result);
+        await ownerRuntime.dispose({ closeStorage: false });
+        await ownerStorage.close();
+        ownerClosed = true;
+
+        await visitorRuntime.patternManager.compilePattern(program, { space });
+        const shown = visitorRuntime.getCellFromLink<{
+          items: string[];
+          rows: (string | { item: string })[];
+        }>(result.getAsNormalizedFullLink());
+        const cancel = shown.sink(() => {});
+        expect(await visitorRuntime.start(shown)).toBe(true);
+        await visitorRuntime.idle();
+        expect(await shown.key("rows").pull()).toEqual([]);
+        shown.key("reveal").send({});
+        await visitorRuntime.idle();
+        await visitorStorage.synced();
+        expect(itemsOf(await shown.key("rows").pull())).toEqual(["a", "b"]);
+        expect(errors).toEqual([]);
+
+        shown.key("rows").key(0).resolveAsCell().key("remove").send({
+          remove: "a",
+        });
+        await visitorRuntime.idle();
+        await visitorStorage.synced();
+        expect(await shown.key("items").pull()).toEqual(["a", "b"]);
+        cancel();
+      } finally {
+        if (!ownerClosed) {
+          await ownerRuntime.dispose({ closeStorage: false });
+          await ownerStorage.close();
+        }
+        await visitorRuntime.dispose({ closeStorage: false });
+        await visitorStorage.close();
+        await server.close();
+      }
+    });
   });
 });

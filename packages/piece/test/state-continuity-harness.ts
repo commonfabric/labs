@@ -82,7 +82,7 @@ import {
 // public exports, and the loopback-server auth handshake has exactly one
 // correct spelling — duplicating it here would be a second copy to drift.
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "../../runner/test/memory-v2-test-utils.ts";
 import {
@@ -123,19 +123,13 @@ class FileBackedStorageManager extends StorageManager {
   private constructor(options: Options, server: MemoryV2Server.Server) {
     super(options, new LoopbackSessions(() => server));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
 function serverOver(storeDir: string): MemoryV2Server.Server {
-  return new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
+  return newSharedServer({
     store: new URL(`file://${storeDir}/`),
   });
 }

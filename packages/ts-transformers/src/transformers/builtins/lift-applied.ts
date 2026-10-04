@@ -137,9 +137,12 @@ function createParameterForPlan(
     return reserveIdentifier(candidate, usedNames, factory);
   };
 
-  bindings.push(
-    ...createBindingElementsFromNames(captureTree.keys(), factory, register),
+  const captureBindings = createBindingElementsFromNames(
+    captureTree.keys(),
+    factory,
+    register,
   );
+  for (const binding of captureBindings) bindings.push(binding);
 
   for (const entry of fallbackEntries) {
     const bindingIdentifier = register(entry.paramName);
@@ -167,7 +170,11 @@ function createLiftAppliedInputArgs(
 ): readonly ts.Expression[] {
   const properties: ts.ObjectLiteralElementLike[] = [];
 
-  properties.push(...buildCapturePropertyAssignments(captureTree, factory));
+  const captureProperties = buildCapturePropertyAssignments(
+    captureTree,
+    factory,
+  );
+  for (const property of captureProperties) properties.push(property);
 
   for (const entry of fallbackEntries) {
     if (ts.isIdentifier(entry.ref) && entry.propertyName === entry.ref.text) {
@@ -325,7 +332,7 @@ function buildInputTypeNode(
     captureTree,
     context,
   );
-  typeElements.push(...captureTypeElements);
+  for (const typeElement of captureTypeElements) typeElements.push(typeElement);
 
   // Add type elements for fallback entries
   for (const entry of fallbackEntries) {

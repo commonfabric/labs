@@ -7,7 +7,7 @@ reason: "Record of the two clone rehearsals of the full Topics numbering procedu
 
 # Rehearsing the Topics numbering procedure on the #7774 source
 
-The procedure is `skills/topics/references/namespace-backfill.md`: move the
+The procedure is `docs/history/skills/topics/references/namespace-backfill.md`: move the
 board, move every Topic with `cf piece survey` and `cf piece retarget
 --dangerously-allow-incompatible-schema`, then run `backfillNames`. Before this
 run it had never been rehearsed against a clone in that shape.

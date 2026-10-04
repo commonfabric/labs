@@ -1,5 +1,6 @@
 import { debugStr } from "@commonfabric/data-model";
 import {
+  createTestSpace,
   env,
   type Page,
   type ProbeApi,
@@ -7,8 +8,6 @@ import {
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
 import { assert, assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -23,12 +22,11 @@ import {
   waitForRuntimeIdle,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 type EditorHost = Element & {
   collaborative?: boolean;
   participantName?: string;
-  presenceUrl?: string;
   updateComplete?: Promise<unknown>;
   value?: { runtime?: () => unknown };
   _collaboration?: {
@@ -137,7 +135,9 @@ async function reconciliationReachedNow(page: Page): Promise<boolean> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -160,7 +160,9 @@ async function editorContent(page: Page): Promise<string> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -182,7 +184,9 @@ async function dispatchEdit(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -201,7 +205,9 @@ async function appendEdit(page: Page, insert: string): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -218,14 +224,15 @@ async function appendEdit(page: Page, insert: string): Promise<void> {
 async function enablePresence(
   page: Page,
   participantName: string,
-  presenceUrl: string,
 ): Promise<void> {
-  await page.evaluate(async (participantName, presenceUrl) => {
+  await page.evaluate(async (participantName) => {
     const collect = (root: Document | ShadowRoot): Element[] => {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -234,9 +241,8 @@ async function enablePresence(
     ) as EditorHost | undefined;
     if (!editor) throw new Error("collaborative editor is not available");
     editor.participantName = participantName;
-    editor.presenceUrl = presenceUrl;
     await editor.updateComplete;
-  }, { args: [participantName, presenceUrl] });
+  }, { args: [participantName] });
 }
 
 async function selectEditorText(
@@ -249,7 +255,9 @@ async function selectEditorText(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -269,7 +277,9 @@ async function unmountEditor(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -278,122 +288,6 @@ async function unmountEditor(page: Page): Promise<void> {
     );
     editor?.remove();
   });
-}
-
-type RelayRecord = {
-  participantId: string;
-  revision: number;
-  name: string;
-  focused: boolean;
-  cursor: { epoch: number; version: number };
-  selection: unknown;
-  basis: "provisional" | "confirmed";
-};
-
-type RelayClient = {
-  participantId: string;
-  latest?: RelayRecord;
-};
-
-type PresenceRelay = {
-  url: string;
-  close(): Promise<void>;
-};
-
-function startPresenceRelay(): PresenceRelay {
-  const rooms = new Map<string, Map<WebSocket, RelayClient>>();
-  const broadcast = (
-    room: Map<WebSocket, RelayClient>,
-    message: unknown,
-    exclude?: WebSocket,
-  ) => {
-    const encoded = JSON.stringify(message);
-    for (const socket of room.keys()) {
-      if (socket !== exclude && socket.readyState === WebSocket.OPEN) {
-        socket.send(encoded);
-      }
-    }
-  };
-  const server = Deno.serve(
-    { hostname: "127.0.0.1", port: 0, onListen: () => {} },
-    (request) => {
-      const url = new URL(request.url);
-      const match = url.pathname.match(/^\/v1\/rooms\/([^/]+)$/);
-      if (!match) return new Response("Not found", { status: 404 });
-
-      const roomId = decodeURIComponent(match[1]);
-      const room = rooms.get(roomId) ?? new Map<WebSocket, RelayClient>();
-      rooms.set(roomId, room);
-      const { socket, response } = Deno.upgradeWebSocket(request);
-      const client: RelayClient = { participantId: crypto.randomUUID() };
-      room.set(socket, client);
-
-      const remove = () => {
-        if (!room.delete(socket)) return;
-        if (client.latest) {
-          broadcast(room, {
-            v: 1,
-            type: "participant.remove",
-            participantId: client.participantId,
-          });
-        }
-        if (room.size === 0) rooms.delete(roomId);
-      };
-      socket.addEventListener("open", () => {
-        socket.send(JSON.stringify({
-          v: 1,
-          type: "room.snapshot",
-          selfParticipantId: client.participantId,
-          participants: [...room.entries()].flatMap(([peer, state]) =>
-            peer !== socket && state.latest ? [state.latest] : []
-          ),
-        }));
-      });
-      socket.addEventListener("message", (event) => {
-        const message = JSON.parse(String(event.data)) as {
-          v: number;
-          type: string;
-          revision: number;
-          name: string;
-          focused: boolean;
-          cursor: { epoch: number; version: number };
-          selection: unknown;
-          basis: "provisional" | "confirmed";
-        };
-        if (message.v !== 1 || message.type !== "participant.upsert") {
-          socket.close(1002, "invalid_message");
-          return;
-        }
-        client.latest = {
-          participantId: client.participantId,
-          revision: message.revision,
-          name: message.name,
-          focused: message.focused,
-          cursor: message.cursor,
-          selection: message.selection,
-          basis: message.basis,
-        };
-        broadcast(room, {
-          v: 1,
-          type: "participant.upsert",
-          ...client.latest,
-        }, socket);
-      });
-      socket.addEventListener("close", remove);
-      socket.addEventListener("error", remove);
-      return response;
-    },
-  );
-  const address = server.addr as Deno.NetAddr;
-  return {
-    url: `ws://${address.hostname}:${address.port}`,
-    async close() {
-      for (const room of rooms.values()) {
-        for (const socket of room.keys()) socket.close(1001, "test ended");
-      }
-      await server.shutdown();
-    },
-  };
 }
 
 async function dispatchExternalBacklinkRename(
@@ -407,7 +301,9 @@ async function dispatchExternalBacklinkRename(
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -429,7 +325,9 @@ async function installNextApplyGate(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -541,7 +439,9 @@ async function listenForReconciliation(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -642,7 +542,9 @@ async function releaseCollaboration(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -662,7 +564,9 @@ async function confirmPendingCollaborationEdits(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -682,7 +586,9 @@ async function disableCollaboration(page: Page): Promise<void> {
       const result: Element[] = [];
       for (const element of root.querySelectorAll("*")) {
         result.push(element);
-        if (element.shadowRoot) result.push(...collect(element.shadowRoot));
+        if (element.shadowRoot) {
+          for (const nested of collect(element.shadowRoot)) result.push(nested);
+        }
       }
       return result;
     };
@@ -704,7 +610,6 @@ describe("cf-code-editor collaboration", () => {
   let bob: Identity;
   let cc: PiecesController;
   let pieces: Record<string, PieceController>;
-  let presenceRelay: PresenceRelay;
   const sinkCancels: Array<() => void> = [];
   const latestContent = new Map<string, string>();
   const contentWaiters = new Map<
@@ -731,46 +636,37 @@ describe("cf-code-editor collaboration", () => {
     });
   };
 
+  const navigateShell = async (
+    shell: ShellIntegration,
+    identity: Identity,
+    piece: PieceController,
+  ): Promise<void> => {
+    const view = { spaceDid: cc.getSpace(), pieceId: piece.id };
+    await shell.goto({ frontendUrl: FRONTEND_URL, view, identity });
+    await waitForActiveSpaceRoot(shell.page(), cc.getSpace());
+    await waitForRuntimeIdle(shell.page());
+    await waitForCondition(shell.page(), editorReady);
+    await waitForRuntimeIdle(shell.page());
+    await waitForCondition(shell.page(), collaborationReady);
+    await listenForCollaborationErrors(shell.page());
+  };
+
   const navigateBoth = async (piece: PieceController): Promise<void> => {
-    const view = { spaceName: SPACE_NAME, pieceId: piece.id };
     await Promise.all([
-      aliceShell.goto({ frontendUrl: FRONTEND_URL, view, identity: alice }),
-      bobShell.goto({ frontendUrl: FRONTEND_URL, view, identity: bob }),
-    ]);
-    await Promise.all([
-      waitForActiveSpaceRoot(aliceShell.page(), cc.getSpace()),
-      waitForActiveSpaceRoot(bobShell.page(), cc.getSpace()),
-    ]);
-    await Promise.all([
-      waitForRuntimeIdle(aliceShell.page()),
-      waitForRuntimeIdle(bobShell.page()),
-    ]);
-    await Promise.all([
-      waitForCondition(aliceShell.page(), editorReady),
-      waitForCondition(bobShell.page(), editorReady),
-    ]);
-    await Promise.all([
-      waitForRuntimeIdle(aliceShell.page()),
-      waitForRuntimeIdle(bobShell.page()),
-    ]);
-    await Promise.all([
-      waitForCondition(aliceShell.page(), collaborationReady),
-      waitForCondition(bobShell.page(), collaborationReady),
-    ]);
-    await Promise.all([
-      listenForCollaborationErrors(aliceShell.page()),
-      listenForCollaborationErrors(bobShell.page()),
+      navigateShell(aliceShell, alice, piece),
+      navigateShell(bobShell, bob, piece),
     ]);
   };
 
   beforeAll(async () => {
-    presenceRelay = startPresenceRelay();
     [alice, bob] = await Promise.all([
       Identity.generate({ implementation: "noble" }),
       Identity.generate({ implementation: "noble" }),
     ]);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(alice, {
+        grants: { [bob.did()]: "WRITE" },
+      }),
       apiUrl: new URL(API_URL),
       identity: alice,
     });
@@ -812,6 +708,10 @@ describe("cf-code-editor collaboration", () => {
         input: { content: "presence" },
         start: true,
       }),
+      presenceReload: await cc.create(source, {
+        input: { content: "presence reload" },
+        start: true,
+      }),
       burst: await cc.create(source, {
         input: { content: "burst" },
         start: true,
@@ -826,7 +726,6 @@ describe("cf-code-editor collaboration", () => {
       }),
     };
 
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     for (const [name, piece] of Object.entries(pieces)) {
       const result = cc.getResult(piece.getCell());
       sinkCancels.push(result.sink((value) => {
@@ -845,7 +744,6 @@ describe("cf-code-editor collaboration", () => {
   afterAll(async () => {
     for (const cancel of sinkCancels) cancel();
     await cc?.dispose();
-    await presenceRelay?.close();
   });
 
   it("converges concurrent same-base edits in both browsers and the ordinary Cell", async () => {
@@ -1044,8 +942,8 @@ describe("cf-code-editor collaboration", () => {
       ]);
 
       await Promise.all([
-        enablePresence(alicePage, "Alice", presenceRelay.url),
-        enablePresence(bobPage, "Bob", presenceRelay.url),
+        enablePresence(alicePage, "Alice"),
+        enablePresence(bobPage, "Bob"),
       ]);
       await Promise.all([
         selectEditorText(alicePage, 0, 4),
@@ -1069,6 +967,78 @@ describe("cf-code-editor collaboration", () => {
       await Promise.all([
         unmountEditor(alicePage),
         unmountEditor(bobPage),
+      ]);
+    }
+  });
+
+  it("drops a participant whose browser goes away and shows it again after its reload", async () => {
+    await navigateBoth(pieces.presenceReload);
+    const alicePage = aliceShell.page();
+
+    try {
+      // Presence takes its coordinates from the field's confirmed cursor,
+      // which a document has only once an edit has opened its epoch.
+      const content = "presence reload";
+      await dispatchEdit(alicePage, content.length, content.length, "!");
+      await Promise.all([
+        waitForCondition(alicePage, editorContainsTokens, {
+          args: [[`${content}!`]],
+        }),
+        waitForCondition(bobShell.page(), editorContainsTokens, {
+          args: [[`${content}!`]],
+        }),
+        awaitMaterialized(
+          "presenceReload",
+          (value) => value === `${content}!`,
+        ),
+      ]);
+
+      await Promise.all([
+        enablePresence(alicePage, "Alice"),
+        enablePresence(bobShell.page(), "Bob"),
+      ]);
+      await Promise.all([
+        selectEditorText(alicePage, 0, 4),
+        selectEditorText(bobShell.page(), 1, 3),
+      ]);
+      await Promise.all([
+        waitForCondition(alicePage, presenceConnected),
+        waitForCondition(bobShell.page(), presenceConnected),
+      ]);
+      await Promise.all([
+        waitForCondition(bobShell.page(), remoteSelectionVisible, {
+          args: ["Alice"],
+        }),
+        waitForCondition(alicePage, remoteSelectionVisible, {
+          args: ["Bob"],
+        }),
+      ]);
+
+      // Bob's page goes away mid-session. Its memory connection closes with
+      // it, which is what ends its membership, and the reloaded page joins
+      // afresh once its editor is given a name again.
+      await navigateShell(bobShell, bob, pieces.presenceReload);
+      await waitForCondition(alicePage, remoteSelectionAbsent, {
+        args: ["Bob"],
+      });
+
+      await enablePresence(bobShell.page(), "Bob");
+      await selectEditorText(bobShell.page(), 1, 3);
+      await waitForCondition(bobShell.page(), presenceConnected);
+      await Promise.all([
+        waitForCondition(alicePage, remoteSelectionVisible, {
+          args: ["Bob"],
+        }),
+        waitForCondition(bobShell.page(), remoteSelectionVisible, {
+          args: ["Alice"],
+        }),
+      ]);
+      assertEquals(await collaborationErrors(alicePage), []);
+      assertEquals(await collaborationErrors(bobShell.page()), []);
+    } finally {
+      await Promise.all([
+        unmountEditor(alicePage),
+        unmountEditor(bobShell.page()),
       ]);
     }
   });

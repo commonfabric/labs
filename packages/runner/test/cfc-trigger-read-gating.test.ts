@@ -196,6 +196,90 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
     }
   });
 
+  // The run was scheduled by a change to `items.length`, and the label sits on
+  // the array's membership, not on `length`. A read of an array's `length`
+  // observes its membership, so the egress is rejected, whatever `items` holds
+  // by the time the run prepares.
+  for (
+    const [holding, items] of [
+      ["the array", ["a", "b", "c"]],
+      ["a string that replaced the array", "gone"],
+    ] as const
+  ) {
+    it(`flag ON: a trigger read of a length carries its parent's membership label, the parent holding ${holding}`, async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        // Pinned: the commit below asserts the ceiling rejection, which only a
+        // gated trigger read produces.
+        cfcTriggerReadGating: true,
+        // Pinned: with the flow dial off, the trigger read reaches the sink gate
+        // only through the gated consumed set.
+        cfcFlowLabels: "off",
+        cfcSinkMaxConfidentiality: { fetchJson: [] },
+      });
+      try {
+        const seed = runtime.edit();
+        const itemsId = runtime.getCell(
+          signer.did(),
+          `h5-length-items-${typeof items}`,
+          undefined,
+          seed,
+        ).getAsNormalizedFullLink().id;
+        writeSeedEnvelopeDoc(seed, signer.did());
+        seedStoredEnvelope(seed, {
+          space: signer.did(),
+          scope: "space",
+          id: itemsId,
+          path: [],
+        }, {
+          value: { items },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["items"],
+                label: { confidentiality: ["medical"] },
+                origin: "declared",
+                observes: "enumerate",
+              }],
+            },
+          },
+        });
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        runtime.getCell(signer.did(), "h5-length-out", OUT_SCHEMA.schema, tx)
+          .set({ v: "computed" });
+        tx.addCfcTriggerReads([{
+          space: signer.did(),
+          id: itemsId,
+          type: "application/json",
+          path: ["value", "items", "length"],
+        }]);
+        enqueueSinkRequestPostCommitEffect(
+          tx,
+          "fetchJson",
+          "fetchJson:length",
+          createFrozenRequestSnapshot({ url: "https://example.com/exfil" }),
+          "fetchJson-start",
+          () => {},
+        );
+        tx.prepareCfc();
+        const result = await tx.commit();
+        expect(isCfcEnforcementRejection(result.error)).toBe(true);
+        expect(String((result.error as Error).message)).toContain(
+          "exceeds ceiling for fetchJson",
+        );
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+
   it("flag ON but no trigger read: an unrelated scheduled egress still passes", async () => {
     // The gate only folds in ACTUAL trigger reads — a run scheduled by a
     // non-confidential write (no confidential trigger) is not over-blocked.
@@ -230,9 +314,9 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
 
   it("flag ON: a cid: trigger read is excluded (content-addressed docs never gate)", async () => {
     // Trigger entries for content-addressed schema/program docs (cid:) are
-    // structural plumbing, dropped at ingest by addCfcTriggerReads
-    // (flowReadExcluded), so a run whose only trigger is a cid: address has an
-    // empty trigger set and egresses freely even with the gate on.
+    // structural plumbing, dropped at ingest by addCfcTriggerReads, so a run
+    // whose only trigger is a cid: address has an empty trigger set and
+    // egresses freely even with the gate on.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({
       storageManager,
@@ -270,9 +354,8 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
   });
 
   it("the enabled gate cannot be disabled mid-transaction (anti-downgrade pin)", async () => {
-    // The runtime enables the gate at tx creation; handler code that can
-    // reach the transaction via `cell.tx` must not be able to dial it back
-    // off before `prepareCfc()` — that would empty triggerReadSources and
+    // The runtime enables the gate at tx creation; code holding the
+    // transaction must not be able to dial it back off before `prepareCfc()` — that would empty triggerReadSources and
     // skip both H5 gates the deployment enabled (mirrors the write-floor
     // enforce pin).
     const storageManager = StorageManager.emulate({ as: signer });
@@ -330,7 +413,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
 
   it("getCfcState() is a read-only view — direct state mutation cannot bypass the pin", async () => {
     // `Readonly<CfcTxState>` is compile-time only: without a runtime guard,
-    // handler code reaching the tx via `cell.tx` could skip the pinned
+    // code holding the transaction could skip the pinned
     // setter and flip the gate (or truncate the trigger set, or un-mark
     // relevance, or forge the prepare status) directly on the object
     // `getCfcState()` returns (cubic/codex review on #4517).
@@ -498,5 +581,82 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
     };
     expect(await run(false)).not.toContain("requiredIntegrity failed");
     expect(await run(true)).toContain("requiredIntegrity failed");
+  });
+
+  it("gates a trigger read of a payload field named `value` at that field", async () => {
+    // The source's `secret` carries [medical] and its field `value` carries
+    // nothing. Gated at the payload root instead, the read would consume
+    // `secret` and miss the target's ceiling. The trigger read of `secret` is
+    // the control: it shows the ceiling refuses what it should.
+    const run = async (field: string) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        cfcTriggerReadGating: true,
+      });
+      try {
+        const seed = runtime.edit();
+        const srcCell = runtime.getCell(
+          signer.did(),
+          "h5-value-field-src",
+          undefined,
+          seed,
+        );
+        const srcId = srcCell.getAsNormalizedFullLink().id;
+        writeSeedEnvelopeDoc(seed, signer.did());
+        seedStoredEnvelope(seed, {
+          space: signer.did(),
+          scope: "space",
+          id: srcId,
+          path: [],
+        }, {
+          value: { value: "plain", secret: "rosebud" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["secret"],
+                label: { confidentiality: ["medical"] },
+              }],
+            },
+          },
+        });
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        const sink = runtime.getCell(
+          signer.did(),
+          "h5-value-field-sink",
+          {
+            type: "object",
+            properties: {
+              out: {
+                type: "string",
+                ifc: { maxConfidentiality: ["internal"] },
+              },
+            },
+            required: ["out"],
+          } as const satisfies JSONSchema,
+          tx,
+        );
+        sink.set({ out: "derived" });
+        tx.addCfcTriggerReads([{
+          space: signer.did(),
+          id: srcId as `${string}:${string}`,
+          type: "application/json",
+          path: ["value", field],
+        }]);
+        tx.prepareCfc();
+        const result = await tx.commit();
+        return String((result.error as Error | undefined)?.message ?? "");
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+    expect(await run("value")).not.toContain("maxConfidentiality failed");
+    expect(await run("secret")).toContain("maxConfidentiality failed");
   });
 });

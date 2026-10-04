@@ -97,7 +97,11 @@ export function isInertPlainObject(
  * Returns the constructor named by the given prototype -- the class an object
  * having it is an instance of -- or `undefined` where there is none to read: a
  * `null` prototype names no constructor, and an exotic one may have a
- * `constructor` that is not callable.
+ * `constructor` that is not callable, or whose own `prototype` is not this one.
+ * The last covers a prototype that only inherits its `constructor` from further
+ * up the chain, and a function with no `prototype` at all (an arrow or bound
+ * function). What comes back is therefore always a constructor whose
+ * `prototype` is the given one.
  *
  * This is the form for a caller that has the prototype in hand and wants
  * something else from it too, which is why the prototype is the parameter
@@ -105,12 +109,14 @@ export function isInertPlainObject(
  *
  * @param proto The prototype whose constructor is wanted.
  */
-export function constructorOfPrototype(
-  proto: object | null,
-): { prototype: unknown } | undefined {
+export function constructorOfPrototype<T extends object>(
+  proto: T | null,
+): { prototype: T } | undefined {
   const ctor = (proto === null) ? undefined : proto.constructor;
 
-  return (typeof ctor === "function") ? ctor : undefined;
+  return ((typeof ctor === "function") && (ctor.prototype === proto))
+    ? ctor
+    : undefined;
 }
 
 /**
@@ -128,8 +134,8 @@ export function constructorOfPrototype(
  *
  * @param value The object whose constructor is wanted.
  */
-export function constructorOfObject(
-  value: object,
-): { prototype: unknown } | undefined {
+export function constructorOfObject<T extends object>(
+  value: T,
+): { prototype: T } | undefined {
   return constructorOfPrototype(Object.getPrototypeOf(value));
 }

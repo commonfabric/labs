@@ -23,10 +23,9 @@
  *     Takes back everything setup put on the workstation: the key, the
  *     delivery identity, and the export it added to the profiles.
  *
- * Keys are a team-member workflow, and every part is self-service. A
- * person contributing without commit access needs no key: local tests run
- * identically without one, and CI records their pull requests' runs on
- * its own.
+ * With commit access every part is self-service. Without it, a team member
+ * dispatches the minting workflow with the requester's recipient and login,
+ * and the requester's own command collects the delivery as usual.
  */
 
 import { join } from "@std/path";
@@ -261,17 +260,20 @@ function mintWorkflowUrl(): string {
 }
 
 interface DispatchResult {
-  dispatched: boolean;
-  username?: string;
+  /** The run GitHub started, when the token could dispatch. */
+  runId?: number;
 
-  /** GitHub's clock at the dispatch, which bounds the run's creation. */
-  at?: number;
+  /**
+   * GitHub's clock at a refused dispatch. A run started by hand after the
+   * refusal cannot have been created before it.
+   */
+  refusedAt?: number;
 }
 
 /**
  * Asks GitHub to run the minting workflow. Dispatching takes repository
  * write access — that call is the authorization check — so a token that
- * can only read comes back undispatched and the caller falls back to the
+ * can only read comes back refused and the caller falls back to the
  * browser.
  */
 async function dispatchMint(
@@ -285,17 +287,20 @@ async function dispatchMint(
     token,
     "POST",
     `/repos/${REPO}/actions/workflows/${MINT_WORKFLOW_FILE}/dispatches`,
-    { ref: "main", inputs: { recipient, username } },
+    { ref: "main", inputs: { recipient, username }, return_run_details: true },
   );
-  const at = Date.parse(dispatched.headers.get("date") ?? "");
+  if (dispatched.status === 200) {
+    const { workflow_run_id } = await dispatched.json() as {
+      workflow_run_id?: unknown;
+    };
+    if (typeof workflow_run_id !== "number") {
+      throw new KeyToolError(
+        "Dispatching the minting workflow did not say which run it started",
+      );
+    }
+    return { runId: workflow_run_id };
+  }
   const body = await dispatched.text();
-  const result: DispatchResult = { dispatched: dispatched.status === 204 };
-  if (result.dispatched) result.username = username;
-  // The clock is kept whether the dispatch was taken or refused: a run
-  // that appears after this moment is this attempt's either way, and a
-  // refusal is followed by the same person starting the run themselves.
-  if (!Number.isNaN(at)) result.at = at;
-  if (result.dispatched) return result;
   // A token that may only read is answered 401, 403, or — on a
   // repository it cannot see — 404. Anything else is the workflow or
   // GitHub failing, which no amount of clicking in a browser fixes.
@@ -308,7 +313,8 @@ async function dispatchMint(
   console.log(
     `This token cannot dispatch the workflow (HTTP ${dispatched.status}).`,
   );
-  return result;
+  const at = Date.parse(dispatched.headers.get("date") ?? "");
+  return Number.isNaN(at) ? {} : { refusedAt: at };
 }
 
 /** What to print when the dispatch has to happen in a browser. */
@@ -321,9 +327,9 @@ Open the minting workflow and run it with your recipient:
     Recipient: ${recipient}
 
 Dispatching the workflow takes repository write access — that click is
-the authorization step. If you do not have commit access, no key is
-needed: your local tests run the same without one, and CI records your
-pull requests' runs on its own.`;
+the authorization step. If you do not have commit access, send the
+recipient and your GitHub login to a team member, who will run the
+workflow with both filled in.`;
 }
 
 interface MintRun {
@@ -359,6 +365,9 @@ interface RunSearch {
    * does not.
    */
   notBefore?: number;
+
+  /** The one run to examine, when this attempt knows which it is. */
+  runId?: number;
 }
 
 interface RunSearchResult {
@@ -376,6 +385,21 @@ async function listCandidateRuns(
   deps: KeyToolDeps,
   search: RunSearch,
 ): Promise<{ candidates: MintRun[]; serverDate?: number }> {
+  if (search.runId !== undefined) {
+    const res = await github(
+      deps,
+      search.token,
+      "GET",
+      `/repos/${REPO}/actions/runs/${search.runId}`,
+    );
+    if (!res.ok) {
+      await res.text();
+      throw new KeyToolError(
+        `Reading minting run ${search.runId} failed: HTTP ${res.status}`,
+      );
+    }
+    return { candidates: [await res.json() as MintRun] };
+  }
   // A delivery is kept for seven days, so a run older than that has
   // nothing left to collect; asking GitHub for that window keeps the
   // search to the runs that could still be answered, however many the
@@ -428,10 +452,11 @@ function namesRecipient(run: MintRun, recipient: string): boolean {
 
 /**
  * The requester's own minting run, newest first, by three tests in
- * descending order of certainty. A run whose name carries the recipient
- * is minting for it. A completed run that published this recipient's
- * delivery minted for it, whatever its name says — which is what a run
- * from a workflow version that does not name its recipient is found by.
+ * descending order of certainty. A run this attempt knows by its id, or
+ * whose name carries the recipient, is minting for it. A completed run
+ * that published this recipient's delivery minted for it, whatever its
+ * name says — which is what a run from a workflow version that does not
+ * name its recipient is found by.
  * Failing both, the newest run this person dispatched within this
  * attempt is the one they are waiting on, which is all that can be said
  * of a run that is still going and does not name what it is minting.
@@ -447,7 +472,8 @@ async function findMintRun(
   if (serverDate !== undefined) result.serverDate = serverDate;
 
   for (const run of candidates) {
-    const named = namesRecipient(run, search.recipient);
+    const known = run.id === search.runId ||
+      namesRecipient(run, search.recipient);
     if (run.status === "completed" && run.conclusion === "success") {
       const artifact = await deliveryArtifact(
         deps,
@@ -458,12 +484,12 @@ async function findMintRun(
       if (artifact !== undefined) {
         return { ...result, match: { run, artifact } };
       }
-      // A run that named this recipient and delivered nothing is still
-      // the run to report on; one that named nothing is unidentifiable.
-      if (named) return { ...result, match: { run } };
+      // A run known to be this recipient's that delivered nothing is
+      // still the run to report on; any other is unidentifiable.
+      if (known) return { ...result, match: { run } };
       continue;
     }
-    if (named) return { ...result, match: { run } };
+    if (known) return { ...result, match: { run } };
   }
 
   // Attributing a run by who started it and when takes a bound to be
@@ -796,7 +822,7 @@ export async function requestCommand(
       identity.recipient,
       username,
     );
-    if (dispatch.dispatched) {
+    if (dispatch.runId !== undefined) {
       console.log(
         `Minting workflow dispatched for ${username}; ` +
           "run `deno task test-records-key collect` once it finishes.",
@@ -974,8 +1000,7 @@ To rotate deliberately:
           runUrl(found.run)
         }`,
       );
-      const created = Date.parse(found.run.created_at ?? "");
-      if (!Number.isNaN(created)) watching.notBefore = created;
+      watching.runId = found.run.id;
     } else {
       const dispatch = await dispatchMint(
         deps,
@@ -983,16 +1008,19 @@ To rotate deliberately:
         identity.recipient,
         login,
       );
-      if (dispatch.dispatched) {
+      if (dispatch.runId !== undefined) {
         console.log(`Minting workflow dispatched for ${login}`);
+        watching.runId = dispatch.runId;
       } else {
         console.log(`${browserInstructions(identity.recipient)}
 
 Waiting for that run — this command collects the key on its own once it
 finishes. Ctrl-C stops watching; rerunning picks up where it left off.
 `);
+        if (dispatch.refusedAt !== undefined) {
+          watching.notBefore = dispatch.refusedAt;
+        }
       }
-      if (dispatch.at !== undefined) watching.notBefore = dispatch.at;
     }
     artifact = await awaitDelivery(deps, watching);
   }

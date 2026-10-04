@@ -18,6 +18,10 @@ import {
   HARNESS_BROWSER_ACCESS_LEASE_TYPE,
   HARNESS_BROWSER_ACCESS_PROFILE_MODES,
 } from "./contracts/browser-access.ts";
+import {
+  HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
+  isHarnessClientActionOutcomeKind,
+} from "./contracts/client-action.ts";
 import { normalizePromptSlotBinding } from "./contracts/prompt-slot.ts";
 import {
   HARNESS_SUBAGENT_PROFILES,
@@ -28,6 +32,7 @@ import {
   isSubagentOnlyToolId,
 } from "./contracts/tool-descriptor.ts";
 import type { HarnessFabricSessionConfig } from "./config.ts";
+import { refuseFlagsWithoutValue, refuseUndeclaredFlags } from "./cli-flags.ts";
 import {
   HARNESS_FABRIC_SESSION_OPTION_NAMES,
   resolveHarnessFabricSessionConfig,
@@ -191,6 +196,22 @@ const parsePositiveIntegerOption = (
   return parsed;
 };
 
+/** The interactive stdio entrypoint's flags that take a value. */
+const INTERACTIVE_STDIO_VALUED_FLAGS = [
+  ...HARNESS_FABRIC_SESSION_OPTION_NAMES,
+  "loom-authoring-config",
+  "host-mount",
+  "max-model-turns",
+  "chat-session-db",
+  "chat-max-in-memory-events",
+] as const;
+
+/** Every flag the interactive stdio entrypoint takes, without its dashes. */
+const INTERACTIVE_STDIO_FLAGS = [
+  "help",
+  ...INTERACTIVE_STDIO_VALUED_FLAGS,
+] as const;
+
 export const parseHarnessInteractiveChatStdioCliOptions = (
   args: readonly string[],
   env: Record<string, string | undefined> = Deno.env.toObject(),
@@ -209,6 +230,9 @@ export const parseHarnessInteractiveChatStdioCliOptions = (
   let help = false;
   const hostMountSpecs: string[] = [];
   let maxModelTurns: number | undefined;
+  // Before any word is read: each flag below takes the word after it as its
+  // value, so a flag with none would take the next flag instead.
+  refuseFlagsWithoutValue(args, INTERACTIVE_STDIO_VALUED_FLAGS);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--help" || arg === "-h") {
@@ -220,11 +244,6 @@ export const parseHarnessInteractiveChatStdioCliOptions = (
     );
     if (fabricOption !== undefined) {
       const prefix = `--${fabricOption}=`;
-      // A following flag is not an option value. Literal leading dashes can
-      // still be supplied with `--name=value`, as in the batch CLI.
-      if (!arg.startsWith(prefix) && args[index + 1]?.startsWith("-")) {
-        throw new Error(`--${fabricOption} requires a non-empty value`);
-      }
       fabricSessionArgs[fabricOption] = arg.startsWith(prefix)
         ? nonEmptyOptionValue(`--${fabricOption}`, arg.slice(prefix.length))
         : nonEmptyOptionValue(`--${fabricOption}`, args[++index]);
@@ -289,7 +308,17 @@ export const parseHarnessInteractiveChatStdioCliOptions = (
       );
       continue;
     }
-    throw new Error(`unsupported interactive chat stdio argument: ${arg}`);
+    if (arg.startsWith("-")) {
+      refuseUndeclaredFlags(
+        [arg.split("=")[0]],
+        INTERACTIVE_STDIO_FLAGS,
+        "the interactive stdio entrypoint",
+      );
+    }
+    throw new Error(
+      "unsupported interactive chat stdio argument: the entrypoint takes no " +
+        "positional arguments",
+    );
   }
   const fabricSession = help
     ? undefined
@@ -361,6 +390,7 @@ const SUPPORTED_REQUEST_METHODS = new Set<HarnessChatRequestMethod>([
   "start_turn",
   "cancel_turn",
   "close_session",
+  "resolve_client_action",
   "status",
   "list_events",
   "list_turns",
@@ -502,11 +532,15 @@ const isValidRequestParams = (
           isObjectNotArray(params.capabilities)) &&
         (params.browserAccess === undefined ||
           isValidBrowserAccessParam(params.browserAccess)) &&
+        (params.clientActions === undefined ||
+          typeof params.clientActions === "boolean") &&
         (params.metadata === undefined || isObjectNotArray(params.metadata));
     case "start_turn":
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "turnId") &&
         isValidTurnInputParam(params.input) &&
+        (params.clientActions === undefined ||
+          typeof params.clientActions === "boolean") &&
         (params.context === undefined || isObjectNotArray(params.context)) &&
         (params.policy === undefined ||
           isValidChatPolicyParam(params.policy)) &&
@@ -520,6 +554,14 @@ const isValidRequestParams = (
     case "close_session":
       return typeof params.sessionId === "string" &&
         hasOptionalString(params, "reason");
+    case "resolve_client_action":
+      return isNonEmptyString(params.sessionId) &&
+        isNonEmptyString(params.actionId) &&
+        isHarnessClientActionOutcomeKind(params.outcome) &&
+        (params.result === undefined ||
+          (typeof params.result === "string" &&
+            params.result.length <=
+              HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH));
     case "status":
       return hasOptionalString(params, "sessionId");
     case "list_events":
@@ -801,6 +843,7 @@ export const runHarnessInteractiveChatStdioCli = async (
   const provisioning = await resolveInteractiveProvisioning(
     options,
     cwd ?? Deno.cwd(),
+    Deno.env.toObject(),
   );
   await run({
     ...(options.sessionDbPath !== undefined

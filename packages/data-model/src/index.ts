@@ -1,4 +1,4 @@
-export { fabricAwareEqual, valueEqual } from "@/comparison";
+export { fabricAwareEqual, valueEqual, valueEqualByWalk } from "@/comparison";
 
 export {
   deepFreeze,
@@ -28,7 +28,10 @@ export {
   type CloneOptions,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
+  missingContainerIsArray,
+  type PathTrace,
   shallowMutableClone,
+  tracePath,
 } from "./value-clone.ts";
 
 // Not `@/value-debug`, which names late-bound forwarders: the package should

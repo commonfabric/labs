@@ -8,9 +8,9 @@ __pycache__
 cache
 artifact
 coverage
+coverage-raw
 _deno.lock
 .claude-prompt.tmp
-.bg-piece-service.pid
 .pr-desc.tmp
 dist/
 .claude/settings.local.json

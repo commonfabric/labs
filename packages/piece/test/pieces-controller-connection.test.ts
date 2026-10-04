@@ -1,8 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { Identity } from "@commonfabric/identity";
+import { stub } from "@std/testing/mock";
+
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
+import { StorageManager as EmulatedStorage } from "@commonfabric/runner/storage/cache.deno";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
@@ -150,6 +154,68 @@ describe("pieces-controller", () => {
               }
             });
           }
+        });
+
+        it("opens the DID a legacy space name resolves to, and creates no space there", async () => {
+          // The memory host is replaced by an emulated one and the health
+          // probe passes, so the controller opens the space for real.
+
+          const storageManager = EmulatedStorage.emulate({ as: identity });
+          using _open = stub(StorageManager, "open", () => storageManager);
+          using _healthy = stub(
+            Runtime.prototype,
+            "healthCheck",
+            () => Promise.resolve(true),
+          );
+
+          const pieces = await PiecesController.initialize({
+            apiUrl,
+            identity,
+            space: "team-lunch",
+            experimental: {},
+          });
+          try {
+            expect(pieces.getSpace()).toBe(await legacySpaceDid("team-lunch"));
+            expect(pieces.getSpaceName()).toBe("team-lunch");
+            expect(await pieces.runtime.spaceExists(pieces.getSpace())).toBe(
+              false,
+            );
+          } finally {
+            await pieces.runtime.dispose();
+          }
+        });
+
+        it("throws the space's authorization denial once its session has opened", async () => {
+          // A denial reaches no caller through `synced()`, so the controller
+          // asks the storage manager for it by name after the session opens.
+
+          const storageManager = EmulatedStorage.emulate({ as: identity });
+          using _open = stub(StorageManager, "open", () => storageManager);
+          using _healthy = stub(
+            Runtime.prototype,
+            "healthCheck",
+            () => Promise.resolve(true),
+          );
+          const space = (await Identity.fromPassphrase("a denied space")).did();
+          const denial = new Error("denied by the space's access control list");
+          const asked: string[] = [];
+          using _denied = stub(
+            storageManager,
+            "authorizationError",
+            (of) => {
+              asked.push(of);
+              return denial;
+            },
+          );
+
+          const opening = PiecesController.initialize({
+            apiUrl,
+            identity,
+            space,
+            experimental: {},
+          });
+          await expect(opening).rejects.toBe(denial);
+          expect(asked).toEqual([space]);
         });
 
         it("throws the connection error for a space given as a `did:key:` DID", async () => {

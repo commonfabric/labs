@@ -157,7 +157,7 @@ export class PatternBuilder {
       );
     } else {
       // Merge captures into top-level object (for lift-applied)
-      bindingElements.push(...captureBindings);
+      for (const binding of captureBindings) bindingElements.push(binding);
     }
 
     // 3. Create the destructured parameter

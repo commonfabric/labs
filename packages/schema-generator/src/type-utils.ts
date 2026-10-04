@@ -3,6 +3,7 @@ import ts from "typescript";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import type { MutableJSONSchema } from "@commonfabric/api";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
+import { declaresFabricPrimitiveBrand } from "./typescript/fabric-primitive-brand.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
 import type { CellWrapperKind } from "./typescript/cell-brand.ts";
 import { isCommonFabricSymbol } from "./typescript/common-fabric-symbols.ts";
@@ -12,6 +13,8 @@ import {
 } from "./typescript/default-brand.ts";
 import {
   getTypeAliasDeclaration,
+  holdsTypeParameter,
+  sameBesidesUndefined,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import {
@@ -190,11 +193,14 @@ export function safeGetPropertyType(
   }
 
   // Try to get type from declaration
+  const declTypeNode = decl && ts.isPropertySignature(decl)
+    ? decl.type
+    : undefined;
   let typeFromDecl: ts.Type | undefined;
-  if (decl && ts.isPropertySignature(decl) && decl.type) {
+  if (declTypeNode) {
     typeFromDecl = safeGetTypeFromTypeNode(
       checker,
-      decl.type,
+      declTypeNode,
       "property signature",
     );
   }
@@ -204,12 +210,21 @@ export function safeGetPropertyType(
   if (typeFromParent && typeFromDecl) {
     const parentStr = checker.typeToString(typeFromParent);
     const declStr = checker.typeToString(typeFromDecl);
+    // A declaration written in type parameters that the parent instantiates
+    // denotes another type even where the two print alike: `Box<U>` for
+    // another declaration's `U` prints its property `value: U` the same as
+    // `Box`'s own. An optional property's `?` adds `undefined` to it without
+    // instantiating anything.
+    const instantiated = declTypeNode !== undefined &&
+      holdsTypeParameter(declTypeNode, checker) &&
+      typeFromParent !== typeFromDecl &&
+      !(isOptional && sameBesidesUndefined(typeFromParent, typeFromDecl));
 
-    if (parentStr !== declStr) {
+    if (parentStr !== declStr || instantiated) {
       // For optional properties, the parent type may include "| undefined" which we don't want
       // The optionality is tracked separately in the schema via the required array
       // Check if parent is a union that contains undefined, and if removing it gives us the decl type
-      if (isOptional && typeFromParent.isUnion()) {
+      if (isOptional && !instantiated && typeFromParent.isUnion()) {
         const parentUnion = typeFromParent as ts.UnionType;
         const hasUndefined = parentUnion.types.some((t) =>
           !!(t.flags & ts.TypeFlags.Undefined)
@@ -305,6 +320,80 @@ export function safeGetPropertyType(
 
   // Absolute last resort - return 'any' type
   return checker.getAnyType();
+}
+
+/**
+ * The one member of `type` that is neither `undefined` nor `null`, or `type`
+ * itself where it is no union; `undefined` where no one member remains.
+ */
+export function soleNonNullishMember(type: ts.Type): ts.Type | undefined {
+  if (!type.isUnion()) return type;
+  const rest = type.types.filter((member) =>
+    (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) === 0
+  );
+  return rest.length === 1 ? rest[0] : undefined;
+}
+
+/**
+ * The type of property `name` of `instantiatedAs`, the type the checker
+ * instantiates at a position read under bindings
+ * (`GenerationContext.instantiatedAs`), less the `undefined` an optional
+ * property's `?` adds; `undefined` where it has no such property.
+ */
+export function instantiatedPropertyType(
+  instantiatedAs: ts.Type | undefined,
+  name: string,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  const property = instantiatedAs &&
+    checker.getPropertyOfType(instantiatedAs, name);
+  if (!property) return undefined;
+  const type = checker.getTypeOfSymbol(property);
+  return (property.flags & ts.SymbolFlags.Optional) !== 0
+    ? soleNonNullishMember(type) ?? type
+    : type;
+}
+
+/**
+ * The element type of `instantiatedAs`, the type the checker instantiates at
+ * an array, a readonly array, or a tuple read under bindings
+ * (`GenerationContext.instantiatedAs`): its number index type, which for a
+ * tuple is every element's.
+ */
+export function instantiatedElementType(
+  instantiatedAs: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  return instantiatedAs &&
+    checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.Number);
+}
+
+/**
+ * The type of the values `instantiatedAs`, the type the checker instantiates
+ * at a record or an object with an index signature read under bindings
+ * (`GenerationContext.instantiatedAs`), holds: its string or number index
+ * type, or, for a record over literal keys, which has none, the type its
+ * properties share, where every one of them has the same type.
+ */
+export function instantiatedValueType(
+  instantiatedAs: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!instantiatedAs) return undefined;
+  const indexed =
+    checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.String) ??
+      checker.getIndexTypeOfType(instantiatedAs, ts.IndexKind.Number);
+  if (indexed) return indexed;
+  const [first, ...rest] = checker.getPropertiesOfType(instantiatedAs).map(
+    (property) => checker.getTypeOfSymbol(property),
+  );
+  return first &&
+      rest.every((type) =>
+        checker.isTypeAssignableTo(first, type) &&
+        checker.isTypeAssignableTo(type, first)
+      )
+    ? first
+    : undefined;
 }
 
 /**
@@ -504,7 +593,7 @@ export function getNamedTypeKey(
   if (NativeTypeFormatter.isNativeType(name)) {
     if (
       !NativeTypeFormatter.isFabricPrimitiveTypeName(name) ||
-      NativeTypeFormatter.declaresFabricPrimitiveBrand(type)
+      declaresFabricPrimitiveBrand(type)
     ) {
       return undefined;
     }

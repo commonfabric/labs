@@ -4,8 +4,10 @@ import { navigate } from "@commonfabric/navigation";
 import { hasEntityUriScheme } from "@commonfabric/runner/entity-kind";
 import { type NameSchema, nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type CellHandle,
+  CellReadRefusedError,
   type FavoritePieceAddress,
 } from "@commonfabric/runtime-client";
 import { Task, TaskStatus } from "@lit/task";
@@ -657,7 +659,8 @@ export class XHeaderView extends BaseView {
 
   /**
    * The favorites subscription step, the favorited-piece test, the three
-   * click handlers, and the piece-name task, which a test drives directly.
+   * click handlers, the Escape handler, and the piece-name task, which a test
+   * drives directly.
    */
   get accessForTestingOnly(): {
     ensureFavoritesSubscription(): void;
@@ -665,6 +668,7 @@ export class XHeaderView extends BaseView {
     handleLogoClick(e: Event): void;
     handleToggleFavorite(e: Event): Promise<void>;
     copyReference(e: Event): Promise<void>;
+    handleKeyDown(e: KeyboardEvent): void;
     pieces: Task<
       readonly [RuntimeInternals | undefined, DID | undefined, boolean],
       PieceItem[]
@@ -676,13 +680,14 @@ export class XHeaderView extends BaseView {
       handleLogoClick: (e) => this.#handleLogoClick(e),
       handleToggleFavorite: (e) => this.#handleToggleFavorite(e),
       copyReference: (e) => this.#handleCopyReference(e),
+      handleKeyDown: this.#handleKeyDown,
       pieces: this.#pieces,
     };
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener("keydown", this.#handleKeyDown);
+    globalThis.addEventListener("keydown", this.#handleKeyDown);
     globalThis.addEventListener("resize", this.#handleResize);
     globalThis.addEventListener("click", this.#closeHeaderPieceDropdown);
   }
@@ -693,7 +698,7 @@ export class XHeaderView extends BaseView {
     this.headerPieceDropdownOpen = false;
     this.pieceListExpanded = false;
     this.#cleanupFavoritesSubscription();
-    this.removeEventListener("keydown", this.#handleKeyDown);
+    globalThis.removeEventListener("keydown", this.#handleKeyDown);
     globalThis.removeEventListener("resize", this.#handleResize);
     globalThis.removeEventListener("click", this.#closeHeaderPieceDropdown);
     if (this.#resizeTimer) clearTimeout(this.#resizeTimer);
@@ -712,21 +717,22 @@ export class XHeaderView extends BaseView {
     }, 150);
   };
 
-  /** Close the innermost open dropdown on Escape, prioritizing the piece
-   *  switcher over the main menu. Returns focus to the trigger on menu close. */
+  /** Close the innermost open dropdown on Escape, wherever focus is,
+   *  prioritizing the piece switcher over the main menu. Returns focus to the
+   *  trigger on menu close. An Escape another component has already handled,
+   *  or one that ends a text composition, is left alone. */
   #handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      if (this.headerPieceDropdownOpen) {
-        e.preventDefault();
-        this.headerPieceDropdownOpen = false;
-        return;
-      }
-      if (this.menuOpen) {
-        e.preventDefault();
-        this.menuOpen = false;
-        this.pieceListExpanded = false;
-        this.#focusTrigger();
-      }
+    if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+    if (this.headerPieceDropdownOpen) {
+      e.preventDefault();
+      this.headerPieceDropdownOpen = false;
+      return;
+    }
+    if (this.menuOpen) {
+      e.preventDefault();
+      this.menuOpen = false;
+      this.pieceListExpanded = false;
+      this.#focusTrigger();
     }
   };
 
@@ -753,6 +759,14 @@ export class XHeaderView extends BaseView {
   /** Names fetched on first open, cached until the runtime or space changes. */
   #piecesCache: PieceItem[] | undefined;
 
+  /**
+   * The pieces the lists show: the cached list, or, where the last list held
+   * a withheld name and so was not cached, that list.
+   */
+  get #shownPieces(): PieceItem[] {
+    return this.#piecesCache ?? this.#pieces.value ?? [];
+  }
+
   get #piecesVisible(): boolean {
     return this.headerPieceDropdownOpen ||
       (this.menuOpen && this.pieceListExpanded);
@@ -778,14 +792,25 @@ export class XHeaderView extends BaseView {
         if (id) ids.push(id);
       }
 
+      // A name the worker refuses is listed as withheld. A refusal can stand
+      // for a moment that passes, as a read made before the viewer's
+      // membership or a module policy has resolved, so a list holding one is
+      // not cached: the next open reads the names again.
+      let withheld = false;
       const results = await Promise.allSettled(
         ids.map(async (id) => {
           // Project the persisted result to its name so menu labels do not
           // materialize each piece's output graph or start its pattern.
           const piece = await rt.getPattern(space, id, { start: false });
           signal.throwIfAborted();
-          const name = await piece.cell().asSchema<NameSchema>(nameSchema)
-            .sync();
+          let name: { [NAME]?: string } | undefined;
+          try {
+            name = await piece.cell().asSchema<NameSchema>(nameSchema).sync();
+          } catch (error) {
+            if (!(error instanceof CellReadRefusedError)) throw error;
+            withheld = true;
+            return { id: piece.id(), name: CFC_POLICY_PLACEHOLDER_TEXT };
+          }
           return {
             id: piece.id(),
             name: name?.[NAME] ?? `Piece #${piece.id().slice(0, 6)}`,
@@ -794,13 +819,14 @@ export class XHeaderView extends BaseView {
       );
 
       signal.throwIfAborted();
-      this.#piecesCache = results
+      const pieces = results
         .filter(
           (r): r is PromiseFulfilledResult<PieceItem> =>
             r.status === "fulfilled",
         )
         .map((r) => r.value);
-      return this.#piecesCache;
+      if (!withheld) this.#piecesCache = pieces;
+      return pieces;
     },
     args: () => [this.rt, this.space, this.#piecesVisible] as const,
   });
@@ -1081,43 +1107,39 @@ export class XHeaderView extends BaseView {
                     : `/${this.spaceDid ?? ""}`}"
                   @click="${this.#handleSpaceClick}"
                 >${this.#spaceDisplayName}</a>
-                ${this.pieceTitle
-                  ? html`
-                    <span class="header-separator">/</span>
-                    <span class="header-piece-wrapper">
-                      <button
-                        class="header-piece-trigger"
-                        @click="${this.#handleToggleHeaderPieceDropdown}"
-                        aria-haspopup="true"
-                        aria-expanded="${this.headerPieceDropdownOpen}"
-                      >
-                        ${this.pieceTitle}
-                        <span
-                          class="header-piece-chevron ${this
-                              .headerPieceDropdownOpen
-                            ? "expanded"
-                            : ""}"
-                        >
-                          ${iconChevronDown()}
-                        </span>
-                      </button>
-                      ${this.headerPieceDropdownOpen
-                        ? html`
-                          <div class="header-piece-dropdown">
-                            <x-piece-list
-                              .pieces="${this.#piecesCache ?? []}"
-                              .loading="${!this.#piecesCache &&
-                                this.#pieces.status === TaskStatus.PENDING}"
-                              .activePieceId="${this.pieceId}"
-                              @piece-selected="${this
-                                .#handlePieceSelected}"
-                            ></x-piece-list>
-                          </div>
-                        `
-                        : nothing}
+                <span class="header-separator">/</span>
+                <span class="header-piece-wrapper">
+                  <button
+                    class="header-piece-trigger"
+                    @click="${this.#handleToggleHeaderPieceDropdown}"
+                    aria-haspopup="true"
+                    aria-expanded="${this.headerPieceDropdownOpen}"
+                  >
+                    ${this.pieceTitle || "Untitled"}
+                    <span
+                      class="header-piece-chevron ${this
+                          .headerPieceDropdownOpen
+                        ? "expanded"
+                        : ""}"
+                    >
+                      ${iconChevronDown()}
                     </span>
-                  `
-                  : nothing}
+                  </button>
+                  ${this.headerPieceDropdownOpen
+                    ? html`
+                      <div class="header-piece-dropdown">
+                        <x-piece-list
+                          .pieces="${this.#shownPieces}"
+                          .loading="${!this.#piecesCache &&
+                            this.#pieces.status === TaskStatus.PENDING}"
+                          .activePieceId="${this.pieceId}"
+                          @piece-selected="${this
+                            .#handlePieceSelected}"
+                        ></x-piece-list>
+                      </div>
+                    `
+                    : nothing}
+                </span>
               `
               : nothing}
           </div>
@@ -1167,7 +1189,7 @@ export class XHeaderView extends BaseView {
               ${this.pieceListExpanded
                 ? html`
                   <x-piece-list
-                    .pieces="${this.#piecesCache ?? []}"
+                    .pieces="${this.#shownPieces}"
                     .loading="${!this.#piecesCache &&
                       this.#pieces.status === TaskStatus.PENDING}"
                     .activePieceId="${this.pieceId}"

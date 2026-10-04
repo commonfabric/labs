@@ -74,6 +74,12 @@ and leans on everything shared.
    a new optional record field before a later change starts emitting it from
    test workflows. An older relay drops an unknown field before writing the
    create-only store object.
+
+   This repository does not wire its own surfaces this way: each is a suite of
+   its test topology, and the lanes that run the suites gather and mark every
+   record before the ship step ([covering a new test
+   surface](test-records.md#covering-a-new-test-surface)). An adopting
+   repository without such a topology uses the ship step's own inputs.
 6. **Local ownership.** The task entry points that people actually run
    stamp a spool when `CF_TEST_RECORDS_KEY_FILE` is present, ship it at
    the end, and sweep the spool root for orphans; see

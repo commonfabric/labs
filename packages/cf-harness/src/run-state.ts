@@ -192,6 +192,14 @@ export interface HarnessRunState {
   harnessHomeIdentity?: string;
   artifactRoot?: string;
 
+  /**
+   * Whether the run's final answer must name a piece with `assign_slug`, as
+   * the prompt loop last decided it. A resume that cannot back `assign_slug`
+   * cannot re-derive this from its own tools, so it keeps the recorded value.
+   * Absent from records written before the decision was recorded.
+   */
+  pieceOutputRequired?: boolean;
+
   /** Root-run structured-result configuration, retained across resume. */
   structuredResult?: {
     schema: JSONSchema;

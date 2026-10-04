@@ -9,7 +9,7 @@
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
-    "deno-test": "deno run --allow-env --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-sharded-test-files.ts PIECE_TEST_SHARD piece . -- --no-check --allow-env --allow-ffi --allow-read --allow-write --shuffle=$(deno task -q test-seed)"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env --allow-ffi --allow-read --allow-write"
   },
   "exports": {
     ".": "./src/index.ts",

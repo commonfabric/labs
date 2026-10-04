@@ -19,6 +19,7 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { LLM_DERIVED_RESULT_STAMP_SCHEMA } from "../src/builtins/llm-schemas.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // Epic D1b (docs/history/plans/cfc-future-work-implementation.md): the `llm`,
 // `generateText`, and `generateObject` builtins stamp their MODEL-OUTPUT
@@ -95,7 +96,7 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
     try {
       // Model-output write: builtin identity + the stamp schema at ["result"].
       const modelTx = runtime.edit();
-      modelTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(modelTx, {
         kind: "builtin",
         builtinId: "llm",
       });

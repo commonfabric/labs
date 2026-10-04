@@ -50,15 +50,22 @@ export class BigIntCodec extends BaseTerminalCodec<JsonCodecValue, string> {
     typeTag: string,
     state: string,
     _env: LiveEnvironment,
+    mutable = false,
   ): FabricValue {
     try {
       return bigintFromUnpaddedBase64url(state);
     } catch {
-      return new ProblematicValue(
+      return ProblematicValue.make(
         typeTag,
         state,
         `bigint: invalid base64: ${state}`,
+        mutable,
       );
     }
+  }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
   }
 }

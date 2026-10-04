@@ -125,7 +125,7 @@ export async function agentRunObservationCeiling(
   }
   const personal = { type: CFC_ATOM_TYPE.User, subject: options.requester };
   const member = space !== options.requester &&
-    spaceReaderRole(acl ?? undefined, space, options.requester) !== null;
+    spaceReaderRole(acl ?? undefined, options.requester) !== null;
   const hostCeiling: CfcObservationMaxConfidentiality = member
     ? [personal, { type: CFC_ATOM_TYPE.Space, id: space }]
     : [personal];
@@ -205,8 +205,9 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     workspace,
     "--artifact-root",
     join(runRoot, "artifacts"),
-    "--prompt",
-    record.task,
+    // One word, so that a task starting with `-` still reads as the value
+    // rather than as flags of its own.
+    `--prompt=${record.task}`,
     "--prompt-slot-role",
     "context",
     "--structured-result-path",

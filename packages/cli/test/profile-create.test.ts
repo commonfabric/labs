@@ -13,6 +13,7 @@ import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import {
   type Cell,
+  cellRuntime,
   type MemorySpace,
   Runtime,
   type RuntimeProgram,
@@ -212,7 +213,7 @@ describe("createProfile()", () => {
     expect(picked?.[0]).toBe(alan.space);
     expect(picked?.[1].getAsNormalizedFullLink().id).toBe(alan.id);
     expect(picked?.[1].getAsNormalizedFullLink().path).toEqual([]);
-    const redirectRuntime = picked![1].runtime;
+    const redirectRuntime = cellRuntime(picked![1]);
     const redirectTx = redirectRuntime.edit();
     const slot = redirectRuntime.getCell<unknown>(
       signer.did(),

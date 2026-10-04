@@ -16,6 +16,7 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import { toDocumentPath } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   type Options,
   type SessionFactory,
@@ -75,14 +76,9 @@ export const createAclServer = (
 ): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     store: new URL(`memory://${label}`),
-    // Test-only: trust the asserted principal instead of verifying a signature,
-    // exactly as packages/memory/test/v2-server-acl-test.ts does. The ACL
-    // decision under test is downstream of authentication.
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    // A signed open is verified; an unsigned one is trusted as the principal
+    // it names. The ACL decision under test is downstream of authentication.
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode },
     subscriptionRefreshDelayMs: 0,
@@ -92,7 +88,8 @@ export const createAclServer = (
  * Write a space's genesis ACL as the space identity itself — the one principal
  * the memory server lets initialize a missing ACL (`principal === space`). This
  * lets a test pin an ARBITRARY ACL shape rather than accept the bootstrap
- * default, which is what makes the wildcard cases testable.
+ * default, which names the owner alone, and is what makes the wildcard cases
+ * testable.
  */
 export const genesisAcl = async (
   factory: LoopbackSessionFactory,

@@ -26,6 +26,29 @@ import {
 } from "../src/fabric-graph.ts";
 import { stableFabricValue } from "../src/stable-fabric-value.ts";
 
+// `pushStableCellGraph` sets its writer identity through the runtime's
+// setter, which accepts only a transaction the runtime created. These
+// fixtures take one from a real runtime and replace the members the graph
+// write calls, so the fixture decides every outcome except that one.
+const withRuntimeTransaction = async (
+  body: (
+    fakeTransaction: (members: Record<string, unknown>) => unknown,
+  ) => Promise<void>,
+): Promise<void> => {
+  const signer = await Identity.fromPassphrase("agent connector graph fixture");
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  try {
+    await body((members) => Object.assign(runtime.edit(), members));
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
 Deno.test("stable values replace cells inside native errors", async () => {
   const signer = await Identity.fromPassphrase("agent connector error test");
   const storageManager = StorageManager.emulate({ as: signer });
@@ -489,159 +512,163 @@ function fakeCell(id = "of:parent") {
 }
 
 Deno.test("stable graph hydrates the owner-schema cell before writing", async () => {
-  let schemaBindings = 0;
-  let syncs = 0;
-  let writes = 0;
-  let hydrated = false;
-  const link = {
-    space: "did:test:space",
-    scope: "space",
-    id: "of:parent",
-    path: [],
-  };
-  const protectedCell = {
-    getAsNormalizedFullLink: () => link,
-    sync: () => {
-      syncs++;
-      hydrated = true;
-      return Promise.resolve();
-    },
-    withTx: () => protectedCell,
-    setRawUntyped: () => {
-      assertEquals(hydrated, true);
-      writes++;
-    },
-    applyCfcSchemaToExistingValue: () => assertEquals(hydrated, true),
-  };
-  const makeCell = () => ({
-    getAsNormalizedFullLink: () => link,
-    asSchema: () => {
-      schemaBindings++;
-      return protectedCell;
-    },
+  await withRuntimeTransaction(async (fakeTransaction) => {
+    let schemaBindings = 0;
+    let syncs = 0;
+    let writes = 0;
+    let hydrated = false;
+    const link = {
+      space: "did:test:space",
+      scope: "space",
+      id: "of:parent",
+      path: [],
+    };
+    const protectedCell = {
+      getAsNormalizedFullLink: () => link,
+      sync: () => {
+        syncs++;
+        hydrated = true;
+        return Promise.resolve();
+      },
+      withTx: () => protectedCell,
+      setRawUntyped: () => {
+        assertEquals(hydrated, true);
+        writes++;
+      },
+      applyCfcSchemaToExistingValue: () => assertEquals(hydrated, true),
+    };
+    const makeCell = () => ({
+      getAsNormalizedFullLink: () => link,
+      asSchema: () => {
+        schemaBindings++;
+        return protectedCell;
+      },
+    });
+    const firstCell = makeCell();
+    const secondCell = makeCell();
+    const transaction = fakeTransaction({
+      readValueOrThrow: () => undefined,
+      writeOrThrow: () => {},
+      prepareCfc: () => {},
+      abort: () => ({ ok: {} }),
+      commit: () => Promise.resolve({ ok: {} }),
+    });
+
+    await pushStableCellGraph(
+      // deno-lint-ignore no-explicit-any -- focused runtime fixture.
+      {
+        runtime: { edit: () => transaction },
+        spaceDid: "did:test:space",
+        ownerDid: "did:test:owner",
+      } as any,
+      [
+        {
+          // deno-lint-ignore no-explicit-any -- focused cell fixture.
+          cell: firstCell as any,
+          value: () => ({ value: "first" }),
+        },
+        {
+          // deno-lint-ignore no-explicit-any -- focused cell fixture.
+          cell: secondCell as any,
+          value: () => ({ value: "second" }),
+        },
+      ],
+    );
+
+    assertEquals(schemaBindings, 1);
+    assertEquals(syncs, 1);
+    assertEquals(writes, 2);
   });
-  const firstCell = makeCell();
-  const secondCell = makeCell();
-  const transaction = {
-    readValueOrThrow: () => undefined,
-    writeOrThrow: () => {},
-    setCfcImplementationIdentity: () => {},
-    prepareCfc: () => {},
-    abort: () => ({ ok: {} }),
-    commit: () => Promise.resolve({ ok: {} }),
-  };
-
-  await pushStableCellGraph(
-    // deno-lint-ignore no-explicit-any -- focused runtime fixture.
-    {
-      runtime: { edit: () => transaction },
-      spaceDid: "did:test:space",
-      ownerDid: "did:test:owner",
-    } as any,
-    [
-      {
-        // deno-lint-ignore no-explicit-any -- focused cell fixture.
-        cell: firstCell as any,
-        value: () => ({ value: "first" }),
-      },
-      {
-        // deno-lint-ignore no-explicit-any -- focused cell fixture.
-        cell: secondCell as any,
-        value: () => ({ value: "second" }),
-      },
-    ],
-  );
-
-  assertEquals(schemaBindings, 1);
-  assertEquals(syncs, 1);
-  assertEquals(writes, 2);
 });
 
 Deno.test("stable graph writes await one commit", async () => {
-  const commitStarted = Promise.withResolvers<void>();
-  const commitResult = Promise.withResolvers<{
-    ok: Record<string, never>;
-  }>();
-  let commitCount = 0;
-  const transaction = {
-    readValueOrThrow: () => undefined,
-    writeOrThrow: () => {},
-    writeValueOrThrow: () => {},
-    setCfcImplementationIdentity: () => {},
-    prepareCfc: () => {},
-    abort: () => ({ ok: {} }),
-    commit: () => {
-      commitCount++;
-      commitStarted.resolve();
-      return commitResult.promise;
-    },
-  };
-  const connection = {
-    runtime: {
-      edit: () => transaction,
-    },
-    spaceDid: "did:test:space",
-    ownerDid: "did:test:owner",
-  };
-  let settled = false;
-  const pending = pushStableCellGraph(
-    // deno-lint-ignore no-explicit-any -- focused runtime fixture.
-    connection as any,
-    [{
-      // deno-lint-ignore no-explicit-any -- focused cell fixture.
-      cell: fakeCell() as any,
-      value: () => ({ value: "ready" }),
-    }],
-  ).finally(() => settled = true);
-  await commitStarted.promise;
-  await Promise.resolve();
-  assertFalse(settled);
-  commitResult.resolve({ ok: {} });
-  await pending;
-  assertEquals(commitCount, 1);
+  await withRuntimeTransaction(async (fakeTransaction) => {
+    const commitStarted = Promise.withResolvers<void>();
+    const commitResult = Promise.withResolvers<{
+      ok: Record<string, never>;
+    }>();
+    let commitCount = 0;
+    const transaction = fakeTransaction({
+      readValueOrThrow: () => undefined,
+      writeOrThrow: () => {},
+      writeValueOrThrow: () => {},
+      prepareCfc: () => {},
+      abort: () => ({ ok: {} }),
+      commit: () => {
+        commitCount++;
+        commitStarted.resolve();
+        return commitResult.promise;
+      },
+    });
+    const connection = {
+      runtime: {
+        edit: () => transaction,
+      },
+      spaceDid: "did:test:space",
+      ownerDid: "did:test:owner",
+    };
+    let settled = false;
+    const pending = pushStableCellGraph(
+      // deno-lint-ignore no-explicit-any -- focused runtime fixture.
+      connection as any,
+      [{
+        // deno-lint-ignore no-explicit-any -- focused cell fixture.
+        cell: fakeCell() as any,
+        value: () => ({ value: "ready" }),
+      }],
+    ).finally(() => settled = true);
+    await commitStarted.promise;
+    await Promise.resolve();
+    assertFalse(settled);
+    commitResult.resolve({ ok: {} });
+    await pending;
+    assertEquals(commitCount, 1);
+  });
 });
 
 Deno.test("stable graph writes surface a commit failure without retrying", async () => {
-  const commitError = {
-    name: "ConflictError",
-    message: "commit rejected",
-    transaction: { operations: [{ type: "write" }] },
-  };
-  let commitCount = 0;
-  const connection = {
-    runtime: {
-      edit: () => ({
-        readValueOrThrow: () => undefined,
-        writeOrThrow: () => {},
-        writeValueOrThrow: () => {},
-        setCfcImplementationIdentity: () => {},
-        prepareCfc: () => {},
-        abort: () => ({ ok: {} }),
-        commit: () => {
-          commitCount++;
-          return Promise.resolve({ error: commitError });
-        },
-      }),
-    },
-    spaceDid: "did:test:space",
-    ownerDid: "did:test:owner",
-  };
-  const error = await assertRejects(
-    () =>
-      pushStableCellGraph(
-        // deno-lint-ignore no-explicit-any -- focused runtime fixture.
-        connection as any,
-        [{
-          // deno-lint-ignore no-explicit-any -- focused cell fixture.
-          cell: fakeCell() as any,
-          value: () => ({ value: "ready" }),
-        }],
-      ),
-    Error,
-    "commit rejected",
-  );
-  assertEquals(error.cause, commitError);
-  assertEquals(commitCount, 1);
+  await withRuntimeTransaction(async (fakeTransaction) => {
+    const commitError = {
+      name: "ConflictError",
+      message: "commit rejected",
+      transaction: { operations: [{ type: "write" }] },
+    };
+    let commitCount = 0;
+    const connection = {
+      runtime: {
+        edit: () =>
+          fakeTransaction({
+            readValueOrThrow: () => undefined,
+            writeOrThrow: () => {},
+            writeValueOrThrow: () => {},
+            prepareCfc: () => {},
+            abort: () => ({ ok: {} }),
+            commit: () => {
+              commitCount++;
+              return Promise.resolve({ error: commitError });
+            },
+          }),
+      },
+      spaceDid: "did:test:space",
+      ownerDid: "did:test:owner",
+    };
+    const error = await assertRejects(
+      () =>
+        pushStableCellGraph(
+          // deno-lint-ignore no-explicit-any -- focused runtime fixture.
+          connection as any,
+          [{
+            // deno-lint-ignore no-explicit-any -- focused cell fixture.
+            cell: fakeCell() as any,
+            value: () => ({ value: "ready" }),
+          }],
+        ),
+      Error,
+      "commit rejected",
+    );
+    assertEquals(error.cause, commitError);
+    assertEquals(commitCount, 1);
+  });
 });
 
 Deno.test("stable graph hydration bounds concurrent child syncs", async () => {

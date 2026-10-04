@@ -6,6 +6,9 @@
  */
 
 import { basename, dirname, isAbsolute, join, relative } from "@std/path";
+
+import { spliceAll } from "@commonfabric/utils/arrays";
+
 import {
   decodeLanguageInput,
   readOnlyReasonFor,
@@ -683,10 +686,11 @@ export function realGit(cwd: string): GitRunner {
               `Pager edits overlap committed changes in ${path}; no commit was amended.`,
             );
           }
-          lines.splice(
+          spliceAll(
+            lines,
             change.mappedStart,
             change.mappedEnd - change.mappedStart,
-            ...change.newLines,
+            change.newLines,
           );
         }
         const finalNewline = before.endsWith("\n") === after.endsWith("\n")

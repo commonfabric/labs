@@ -10,6 +10,7 @@ import "core-js/proposals/async-explicit-resource-management";
 
 import { getLogger } from "@commonfabric/utils/logger";
 import { unrefTimer } from "@commonfabric/utils/sleep";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 
 import {
   TransportNotificationType,
@@ -126,7 +127,12 @@ self.addEventListener("message", (event: MessageEvent) => {
 if (
   (typeof self !== "undefined") && (typeof self.postMessage === "function")
 ) {
+  const lifetimeLock = await holdWorkerLifetimeLock();
+
   // The transport's own traffic, not the runtime's: it tells the client this
   // entry has run and the listener above is installed.
-  postToClient({ type: TransportNotificationType.WorkerReady });
+  postToClient({
+    type: TransportNotificationType.WorkerReady,
+    ...(lifetimeLock === undefined ? {} : { lifetimeLock }),
+  });
 }

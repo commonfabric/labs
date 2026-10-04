@@ -219,13 +219,13 @@ describe("check-package-cycles", () => {
     const workspace = {
       members: [
         "runner",
-        "background-piece-service",
+        "sprocket-service",
         "a",
         "connectors/agents/connector",
       ],
       names: new Map([
         ["@commonfabric/runner", "runner"],
-        ["@commonfabric/background-piece", "background-piece-service"],
+        ["@commonfabric/sprocket", "sprocket-service"],
         ["@commonfabric/agents-connector", "connectors/agents/connector"],
       ]),
     };
@@ -247,10 +247,10 @@ describe("check-package-cycles", () => {
       expect(
         targetPackage(
           "packages/a/x.ts",
-          "@commonfabric/background-piece",
+          "@commonfabric/sprocket",
           workspace,
         ),
-      ).toBe("background-piece-service");
+      ).toBe("sprocket-service");
     });
 
     it("returns the nested member a bare specifier names", () => {

@@ -20,13 +20,20 @@ import type {
   DerivedInternalCellDescriptor,
 } from "./builder/types.ts";
 import {
+  type FabricExecPlainObject,
   type FabricExecValue,
   isPattern,
   type JSONSchema,
   type JSONValue,
+  type Pattern,
   type SchemaScope,
 } from "./builder/types.ts";
-import { type AnyCell, internCellLinkSchema } from "./cell.ts";
+import {
+  type AnyCell,
+  cellRuntime,
+  cellTx,
+  internCellLinkSchema,
+} from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import { readMaybeLink, resolveLink } from "./link-resolution.ts";
@@ -336,7 +343,7 @@ function sendValueToBindingInner<T>(
 
     const bindingLink = parseLink(binding, cell)!;
     const ref = resolveLink(
-      cell.runtime,
+      cellRuntime(cell),
       tx,
       bindingLink,
       "writeRedirect",
@@ -354,7 +361,7 @@ function sendValueToBindingInner<T>(
         !areNormalizedLinksSame(valueLink, scopedRef)
       ) {
         diffAndUpdate(
-          cell.runtime,
+          cellRuntime(cell),
           tx,
           scopedRef,
           value,
@@ -448,7 +455,7 @@ function sendValueToBindingInner<T>(
       }
     }
     diffAndUpdate(
-      cell.runtime,
+      cellRuntime(cell),
       tx,
       ref,
       value,
@@ -527,8 +534,16 @@ function sendValueToBindingInner<T>(
  *
  * A deferred `$alias` is left as it stands. It is not a link but a binding on
  * its way to a nested pattern, and what it carries is that pattern's structure.
+ *
+ * A record comes back a record: a link is reduced to another link, and any other
+ * record is copied member by member or returned as it is. Any other execution
+ * value comes back as an execution value.
  */
-export function causalFormOfBinding<T extends FabricExecValue>(binding: T): T {
+export function causalFormOfBinding(
+  binding: FabricExecPlainObject,
+): FabricExecPlainObject;
+export function causalFormOfBinding(binding: FabricExecValue): FabricExecValue;
+export function causalFormOfBinding(binding: FabricExecValue): FabricExecValue {
   function reduce(value: FabricExecValue): FabricExecValue {
     if (isSigilLink(value)) return sigilLinkAddressOnly(value);
 
@@ -571,7 +586,7 @@ export function causalFormOfBinding<T extends FabricExecValue>(binding: T): T {
     return reduced ?? value;
   }
 
-  return reduce(binding) as T;
+  return reduce(binding);
 }
 
 /**
@@ -597,14 +612,39 @@ export function causalFormOfBinding<T extends FabricExecValue>(binding: T): T {
  * @param options.targetSchema - Schema for the binding being produced. Source
  *   links still resolve through the argument/result links above, but emitted
  *   links are annotated with the corresponding target schema.
+ * The result keeps the kind of its argument where the argument is a pattern or
+ * a record. A pattern is walked key by key, so what comes back has the keys it
+ * had, each rebound, and is a pattern still. A record comes back a record: an
+ * alias binding becomes a link, and any other record is copied member by
+ * member or returned as it is. Any other execution value comes back as an
+ * execution value.
+ *
  * @returns The unwrapped binding.
  */
-export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
-  binding: T,
+export function unwrapOneLevelAndBindToDoc(
+  binding: Pattern,
   argumentCellLink: NormalizedFullLink | undefined,
   resultCell: AnyCell<unknown>,
   options?: UnwrapOneLevelOptions,
-): T {
+): Pattern;
+export function unwrapOneLevelAndBindToDoc(
+  binding: FabricExecPlainObject,
+  argumentCellLink: NormalizedFullLink | undefined,
+  resultCell: AnyCell<unknown>,
+  options?: UnwrapOneLevelOptions,
+): FabricExecPlainObject;
+export function unwrapOneLevelAndBindToDoc(
+  binding: FabricExecValue,
+  argumentCellLink: NormalizedFullLink | undefined,
+  resultCell: AnyCell<unknown>,
+  options?: UnwrapOneLevelOptions,
+): FabricExecValue;
+export function unwrapOneLevelAndBindToDoc(
+  binding: FabricExecValue,
+  argumentCellLink: NormalizedFullLink | undefined,
+  resultCell: AnyCell<unknown>,
+  options?: UnwrapOneLevelOptions,
+): FabricExecValue {
   const resultCellLink = canonicalSchemaLink(
     resultCell.getAsNormalizedFullLink(),
   )!;
@@ -805,7 +845,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
     } else return binding;
   }
 
-  return convert(binding, options?.targetSchema) as T;
+  return convert(binding, options?.targetSchema);
 }
 
 /**
@@ -879,7 +919,7 @@ export function findAllWriteRedirectCells<T>(
         if (seen.find((s) => areNormalizedLinksSame(s, link))) return;
         seen.push(link);
         if (options?.followRedirectChains === false) return;
-        const tx = (chainTx ??= baseCell.runtime.readTx(baseCell.tx));
+        const tx = (chainTx ??= cellRuntime(baseCell).readTx(cellTx(baseCell)));
         // Whether the target holds a further redirect is a question about
         // which reference sits there, so the probe stops at the reference and
         // leaves the target's content unread: it consumes the pointer's own
@@ -890,7 +930,7 @@ export function findAllWriteRedirectCells<T>(
         // resolution honors along the path, interned so that the schema-keyed
         // caches downstream of the walk stay warm.
         const target = resolveLink(
-          baseCell.runtime,
+          cellRuntime(baseCell),
           tx,
           link.schema === undefined
             ? link

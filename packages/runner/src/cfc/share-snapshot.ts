@@ -13,7 +13,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import type { Cell } from "../cell.ts";
+import { type Cell, cellRuntime } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
@@ -26,8 +26,10 @@ import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
 import { collectConsumedLabel } from "./prepare.ts";
+import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Destination whose stored identity or resolved space determines the audience. */
 export type SnapshotShareAudience =
@@ -107,7 +109,7 @@ function appendTarget(
   if (!link?.id || !link.space) {
     throw new Error("Snapshot recommendation binding is not a cell link");
   }
-  return cell.runtime.getCellFromLink(link);
+  return cellRuntime(cell).getCellFromLink(link);
 }
 
 /** Resolves an audience from persisted identity evidence, never authored schema. */
@@ -130,13 +132,14 @@ function resolveAudience(
   const metadata = readStoredCfcMetadata(tx, destination);
   const view = cfcLabelViewFromMetadata(metadata, destination.path);
   const subjects = new Set(
-    view?.entries.filter((entry) => entry.path.length === 0)
+    view?.entries.filter((entry) =>
+      entry.path.length === 0 && entry.observes !== "followRef"
+    )
       .flatMap((entry) => entry.label.integrity ?? [])
-      .filter((atom) =>
-        isObjectNotArray(atom) && atom.kind === "represents-principal" &&
-        isDID(atom.subject)
-      )
-      .map((atom) => (atom as { subject: string }).subject),
+      .flatMap((atom) => {
+        const subject = representsPrincipalSubject(atom);
+        return subject === undefined ? [] : [subject];
+      }),
   );
   if (subjects.size !== 1) {
     throw new Error(
@@ -148,7 +151,7 @@ function resolveAudience(
 
 /** Reads the exact snapshot and verifies ownership of every released clause. */
 function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
-  const runtime = source.runtime;
+  const runtime = cellRuntime(source);
   const tx = runtime.edit();
   try {
     const actor = tx.getCfcState().trustSnapshot?.actingPrincipal;
@@ -156,7 +159,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
       throw new Error("Snapshot sharing requires an authenticated actor");
     }
     const target = "user" in requested ? requested.user : requested.space;
-    if (target.runtime !== runtime) {
+    if (cellRuntime(target) !== runtime) {
       throw new Error("Snapshot handles must belong to the same runtime");
     }
     const sourceLink = source.withTx(tx).resolveAsCell()
@@ -233,10 +236,10 @@ export function prepareSnapshotShare(
   let boundAppendTargets: ConsentState["appendBooksTo"];
   if (appendBooksTo) {
     if (
-      appendBooksTo.recommended.runtime !== source.runtime ||
-      appendBooksTo.received.runtime !== source.runtime
+      cellRuntime(appendBooksTo.recommended) !== cellRuntime(source) ||
+      cellRuntime(appendBooksTo.received) !== cellRuntime(source)
     ) throw new Error("Snapshot append targets must use the source runtime");
-    const tx = source.runtime.edit();
+    const tx = cellRuntime(source).edit();
     let recommendedLink: NormalizedFullLink;
     let receivedLink: NormalizedFullLink;
     try {
@@ -311,7 +314,7 @@ export async function commitSnapshotShare(
       "Snapshot review is stale; review the value and audience again",
     );
   }
-  const runtime = state.source.runtime;
+  const runtime = cellRuntime(state.source);
   const tx = runtime.edit();
   try {
     if (tx.getCfcState().trustSnapshot?.actingPrincipal !== state.actor) {
@@ -329,7 +332,7 @@ export async function commitSnapshotShare(
         throw new Error("Snapshot review changed before commit");
       }
     }
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: SHARE_WRITER,
     });

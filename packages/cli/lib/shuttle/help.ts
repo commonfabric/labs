@@ -14,6 +14,8 @@
  * verb accepts, and the two would part company at the first option added.
  */
 
+import { maxOf } from "@commonfabric/utils/math";
+
 import type { VerbOption } from "./options.ts";
 
 /**
@@ -65,7 +67,7 @@ export interface VerbHelp {
  * what the list can carry about a verb it gives one line to.
  */
 export function renderVerbList(verbs: readonly VerbHelp[]): string {
-  const column = Math.max(...verbs.map((verb) => verb.usage.length)) +
+  const column = maxOf(verbs.map((verb) => verb.usage.length)) +
     SUMMARY_GAP;
   const lines = verbs.map((verb) =>
     `${verb.usage.padEnd(column)}${verb.summary}`
@@ -103,7 +105,7 @@ function optionsBlock(options: readonly VerbOption[]): string {
       option,
     ) => [spellingOf(option), option.description] as const),
   ];
-  const column = Math.max(...rows.map(([spelling]) => spelling.length)) +
+  const column = maxOf(rows.map(([spelling]) => spelling.length)) +
     SUMMARY_GAP;
   return `Options:\n${
     rows.map(([spelling, description]) =>

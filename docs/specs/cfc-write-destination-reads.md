@@ -11,8 +11,9 @@ This document covers one such class: the reads the write machinery makes of
 the region it is about to write. It says what the class is, where the runtime
 marks it, why excluding it does not let a label escape, and what it costs.
 
-The spec-side amendment this class needs is SC-41 in
-[`cfc-spec-changes.md`](./cfc-spec-changes.md).
+The spec carries the class in §18.6.2, "Conditional exclusions", as the
+write-destination read; SC-41 in
+[`cfc-spec-changes.md`](./cfc-spec-changes.md) records the entry it came from.
 
 What this unblocks is a whole-object write whose value the program did not
 read out of the destination. A read-modify-write spelled
@@ -50,17 +51,17 @@ value a caller handed to `set()` against what is stored at the destination and
 emits a change for each path where the two differ. The read it makes of the
 destination to do that carries the marker.
 
-**The array append snapshot.** `Cell.push()` reads the destination array to
-build its tail-relative append. The snapshot carries `writeDestinationRead`
-and `mergeableOpRead`: its existing entries stay at the same destination, and
-only caller-supplied entries are appended. The method returns no value, so
-neither existing content nor the array's length reaches the caller. This lets
-a writer append a scalar or a held cell reference to an owner-confidential
-array without observing its membership. The destination's write policy still
-applies, and explicit source reads still contribute their labels. Object
-anchoring's ancestry reads retain their ordinary classification. Value-dependent
-operations such as `addUnique()` still observe the destination and require its
-read ceiling.
+**The array append snapshot.** `Cell.push()` and `Cell.pushAll()` read the
+destination array to build their tail-relative append. The snapshot carries
+`writeDestinationRead` and `mergeableOpRead`: its existing entries stay at the
+same destination, and only caller-supplied entries are appended. Neither method
+returns a value, so neither existing content nor the array's length reaches the
+caller. This lets a writer append a scalar or a held cell reference to an
+owner-confidential array without observing its membership. The destination's
+write policy still applies, and explicit source reads still contribute their
+labels. Object anchoring's ancestry reads retain their ordinary classification.
+Value-dependent operations such as `addUnique()` still observe the destination
+and require its read ceiling.
 
 **The SQLite publication comparison.** A query snapshots its raw destination
 record before staging a request and compares that snapshot with the destination
@@ -167,8 +168,8 @@ compensation above.
 four exclusions public infrastructure, and says its read exclusion mirrors a
 write-side rule that the same addresses are not value-write targets. Here the
 addresses are the transaction's own write targets, so that sentence says the
-opposite of what this class needs, and SC-41 proposes the reason the class
-does rest on rather than borrowing that one.
+opposite of what this class needs, and §18.6.2 gives the class conditions of
+its own rather than borrowing that one.
 
 ## Flow relevance is unaffected
 

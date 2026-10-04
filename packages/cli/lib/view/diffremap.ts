@@ -31,7 +31,7 @@ export function remapStructure(ctx: HunkStructureContext): StructureNode[] {
   };
   const out: StructureNode[] = [];
   for (const root of ctx.doc.structure) {
-    out.push(...remapNode(root, 2, null, remapCtx));
+    for (const node of remapNode(root, 2, null, remapCtx)) out.push(node);
   }
   return out;
 }
@@ -98,7 +98,9 @@ export function remapNode(
   ) {
     const hoisted: StructureNode[] = [];
     for (const child of node.children) {
-      hoisted.push(...remapNode(child, depth, parentRange, ctx));
+      for (const mapped of remapNode(child, depth, parentRange, ctx)) {
+        hoisted.push(mapped);
+      }
     }
     return hoisted;
   }
@@ -148,7 +150,9 @@ export function remapNode(
     );
     const hoisted: StructureNode[] = [];
     for (const child of node.children) {
-      hoisted.push(...remapNode(child, depth, parentRange, ctx));
+      for (const mapped of remapNode(child, depth, parentRange, ctx)) {
+        hoisted.push(mapped);
+      }
     }
     return hoisted;
   }
@@ -156,12 +160,13 @@ export function remapNode(
   const nameOffset = remapNameOffset(node, ctx);
   const children: StructureNode[] = [];
   for (const child of node.children) {
-    children.push(...remapNode(
+    const remapped = remapNode(
       child,
       depth + 1,
       { start: startOffset, end: endOffset },
       ctx,
-    ));
+    );
+    for (const remappedNode of remapped) children.push(remappedNode);
   }
 
   const mapped: StructureNode = {

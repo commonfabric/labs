@@ -11,8 +11,10 @@ import {
 import { type NameSchema, stringSchema } from "@commonfabric/runner/schemas";
 import { parseCellReference } from "@commonfabric/runner/shared";
 import { slugIdForSpace, validateSlug } from "@commonfabric/runner/slugs";
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import {
   type Cancel,
+  type CellHandleRead,
   type ErrorNotification,
   type FavoritePieceAddress,
   NAME,
@@ -25,7 +27,7 @@ import { property, state } from "lit/decorators.js";
 import { CellEventTarget, CellUpdateEvent } from "../lib/cell-event-target.ts";
 import { DebuggerController } from "../lib/debugger-controller.ts";
 import { GlobalShortcutsController } from "../lib/global-shortcuts-controller.ts";
-import { prepareNamedSpace } from "../lib/named-space.ts";
+import { deliverOpenPath } from "../lib/open-path.ts";
 import {
   RuntimeInternals,
   type SlugReferenceRefusal,
@@ -225,6 +227,16 @@ interface ShownResolution {
 }
 
 /**
+ * The title a piece's name read gives: the name, or the placeholder a render
+ * shows where the display ceiling refuses what it holds, rather than the
+ * "Untitled" of a piece that has no name.
+ */
+function titleOf(read: CellHandleRead<string | undefined>): string | undefined {
+  if ("refused" in read) return CFC_POLICY_PLACEHOLDER_TEXT;
+  return "value" in read ? read.value : undefined;
+}
+
+/**
  * The origin a reference is opened under when it is read as a page. Only the
  * path is read, so which origin this is decides nothing.
  */
@@ -401,7 +413,6 @@ export class XAppView extends BaseView {
     > => {
       if (!rt || !space) return;
       try {
-        await prepareNamedSpace(app, rt, space);
         // The space home renders the root, so there it has to run. A
         // piece-focused view reads NOTHING from it — so it is not fetched
         // at all, and none of what the root's result reaches is demanded.
@@ -420,7 +431,7 @@ export class XAppView extends BaseView {
   });
 
   /**
-   * Whether the one-shot `?path=` deep link has been delivered; set after the
+   * Whether the one-shot `?path=` deep link has been delivered; set at the
    * first send so slug re-resolutions and task reruns never re-fire it.
    */
   #openPathDelivered = false;
@@ -428,22 +439,26 @@ export class XAppView extends BaseView {
   /** Deliver a `?path=` deep link into the loaded piece, once.
    *
    * Opt-in by contract: the piece must export an `openPath` stream on its
-   * result (e.g. Mobile Loom opens the given cabinet path in its page
-   * viewer). Pieces without the stream are untouched — the field simply
-   * goes undelivered. Fire-and-forget; a failed send must never affect
-   * pattern loading. */
-  #maybeDeliverOpenPath(pattern: PieceHandle<NameSchema>): void {
+   * result (`deliverOpenPath()`). A piece that exports none, or whose
+   * `openPath` is not a stream, is not written to, and nor is one whose field
+   * the display ceiling keeps from the shell. The link is claimed only once
+   * the answer is in, so a rerun that asked meanwhile, or a selection that
+   * moved on, sends nothing. Fire-and-forget; a failed send must never
+   * affect pattern loading. */
+  #maybeDeliverOpenPath(
+    pattern: PieceHandle<NameSchema>,
+    signal: AbortSignal,
+  ): void {
     if (this.#openPathDelivered) return;
     const view = this.app?.view;
     if (!view || !("openPath" in view) || !view.openPath) return;
-    const data = pattern.cell().get() as Record<string, unknown> | undefined;
-    if (!data || typeof data !== "object" || !("openPath" in data)) return;
-    this.#openPathDelivered = true;
-    (pattern.cell() as unknown as {
-      key(k: string): { send(v: unknown): Promise<void> };
-    })
-      .key("openPath")
-      .send({ path: view.openPath });
+    deliverOpenPath(pattern.cell(), view.openPath, () => {
+      if (signal.aborted || this.#openPathDelivered) return false;
+      this.#openPathDelivered = true;
+      return true;
+    }).catch((error) => {
+      console.error("[AppView] Failed to deliver the deep link:", error);
+    });
   }
 
   _selectedPattern = new Task(this, {
@@ -462,7 +477,6 @@ export class XAppView extends BaseView {
       // under the current address.
       this.#namedAMember = false;
       try {
-        await prepareNamedSpace(app, rt, space);
         if ("pieceSlug" in app.view && app.view.pieceSlug) {
           // The reference is resolved before the piece is asked for, because
           // which piece a slug names is a question about the space and not
@@ -540,7 +554,7 @@ export class XAppView extends BaseView {
           // answer, and saying so with another's identity is how a slow load
           // came to claim a newer answer was on screen.
           this.#markShown(reference, landed, signal);
-          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern);
+          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern, signal);
           return pattern;
         }
         if ("pieceId" in app.view && app.view.pieceId) {
@@ -560,7 +574,7 @@ export class XAppView extends BaseView {
           if (!signal.aborted && slug) {
             this.#replacePieceUrlWithSlug(app.view, slug);
           }
-          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern);
+          if (!signal.aborted) this.#maybeDeliverOpenPath(pattern, signal);
           return pattern;
         }
       } catch (error) {
@@ -667,13 +681,16 @@ export class XAppView extends BaseView {
       }, 1000);
 
       let sawInitialCallback = false;
-      watch.cancel = cell.subscribe(() => {
+      // A refusal of the slug's read is a change to what it names as far as
+      // this view can tell, so it re-resolves the slug as a value would.
+      const refresh = () => {
         if (!sawInitialCallback) {
           sawInitialCallback = true;
           return;
         }
         void this.#refreshSlugTarget(watch);
-      });
+      };
+      watch.cancel = cell.subscribe(refresh, { onRefused: refresh });
     }).catch((error) => {
       if (!this.#isCurrentSlugWatch(watch)) return;
       if (rt.signal.aborted) {
@@ -875,18 +892,13 @@ export class XAppView extends BaseView {
         return;
       }
       this.titleSubscription = new CellEventTarget(cell);
-      try {
-        this.pieceTitle = cell.get();
-      } catch {
-        // Cell not synced yet
-        this.pieceTitle = undefined;
-      }
+      this.pieceTitle = titleOf(cell.lastRead());
     }
   }
 
   #onPieceTitleChange = (e: Event) => {
     const event = e as CellUpdateEvent<string | undefined>;
-    this.pieceTitle = event.detail ?? "";
+    this.pieceTitle = titleOf(event.detail) ?? "";
   };
 
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
@@ -1154,6 +1166,9 @@ export class XAppView extends BaseView {
           : []}"
         .loadError="${loadError}"
         .runtimeError="${runtimeLoadError}"
+        .spaceName="${"spaceName" in this.app.view
+          ? this.app.view.spaceName
+          : undefined}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"
         .showSidebar="${config.showSidebar ?? false}"
         .embedded="${embedded}"

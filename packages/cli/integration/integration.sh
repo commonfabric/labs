@@ -179,18 +179,22 @@ setup_space() {
     error "API_URL must be defined."
   fi
 
-  SPACE=$(mktemp -u XXXXXXXXXX) # generates a random space
   IDENTITY=$(mktemp)
-  SPACE_ARGS="--api-url=$API_URL --identity=$IDENTITY --space=$SPACE"
   WORK_DIR=$(mktemp -d)
+
+  # Create a key, and a space it owns. Opening a space never creates one, so
+  # the space comes from `cf space create`, which prints its DID.
+  cf id new > "$IDENTITY"
+  SPACE=$(cf space create --quiet --api-url="$API_URL" --identity="$IDENTITY")
+  if [[ "$SPACE" != did:key:* ]]; then
+    error "cf space create printed no DID: $SPACE"
+  fi
+  SPACE_ARGS="--api-url=$API_URL --identity=$IDENTITY --space=$SPACE"
 
   echo "API_URL=$API_URL"
   echo "SPACE=$SPACE"
   echo "IDENTITY=$IDENTITY"
   echo "WORK_DIR=$WORK_DIR"
-
-  # Create a key
-  cf id new > "$IDENTITY"
 
   # Check space is empty
   if [ "$(cf piece ls $SPACE_ARGS)" != "" ]; then
@@ -277,6 +281,23 @@ create_stepped_counter_piece() {
 
 run_piece_values() {
   setup_space
+
+  # A name nobody has created a space for reaches no space, and filing a piece
+  # there is refused with a message saying so, rather than creating the space.
+  local fresh_name
+  fresh_name="no-space-$(new_invocation_id)"
+  local refused
+  if refused=$(cf piece new --main-export $CUSTOM_EXPORT \
+    --api-url="$API_URL" --identity="$IDENTITY" --space="$fresh_name" \
+    $PATTERN_SRC 2>&1); then
+    error "cf piece new into the fresh name $fresh_name should fail."
+  fi
+  if ! echo "$refused" | grep -q "No space answers to"; then
+    error "cf piece new into a fresh name should say no space answers: $refused"
+  fi
+  if ! echo "$refused" | grep -q "space create"; then
+    error "cf piece new into a fresh name should point at cf space create: $refused"
+  fi
 
   # Create a new piece using custom default export as input
   PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)
@@ -1349,16 +1370,17 @@ run_piece_data_files() {
 # markers close the previous step's record and the exit trap closes the last
 # one, so a failing step is recorded with the failure.
 #
-# `all` runs every step, and every step also runs under one of the sections CI
-# dispatches: piece-values, piece-call, and piece-links. Both hold in
-# packages/cli/test/integration-sections.test.ts, which reads this table and
-# the cli-integration-test matrix in .github/workflows/deno.yml.
+# `all` runs every step, and CI runs each step through the arm that runs it
+# alone: the test topology's `cli-core` suite (tasks/test-topology/cli.ts)
+# makes a unit of every such arm, and a lane is given those units. Both hold
+# in packages/cli/test/integration-sections.test.ts, which reads this table
+# and the `cli-core` units.
 #
 # Two kinds of arm live here. A **step arm** runs exactly one step, and
 # every step has one, so any step can be run and scheduled on its own. A
-# **group arm** runs several, for a person running the script by hand and
-# for the continuous-integration legs. Where a group arm and a step arm
-# would share a name, the step arm takes an `-only` suffix.
+# **group arm** runs several, for a person running the script by hand. Where
+# a group arm and a step arm would share a name, the step arm takes an
+# `-only` suffix.
 case "$SECTION" in
   all)
     cf_test_step_begin piece-values

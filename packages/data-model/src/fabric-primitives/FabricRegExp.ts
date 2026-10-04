@@ -6,6 +6,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -93,7 +94,7 @@ export class FabricRegExp extends BaseFabricPrimitive
     source?: string,
     flags?: string,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricRegExp);
 
     if (regexOrFlavor instanceof RegExp) {
       rejectExtraRegExpProperties(regexOrFlavor);
@@ -164,6 +165,11 @@ export class FabricRegExp extends BaseFabricPrimitive
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #jsonCodec = Object.freeze(
     new (class RegExpCodec
       extends BaseNonterminalCodec<never, FabricRegExpState> {
@@ -174,11 +180,11 @@ export class FabricRegExp extends BaseFabricPrimitive
 
       /** @inheritDoc */
       encode(value: FabricRegExp, _env: LiveEnvironment): FabricRegExpState {
-        return {
+        return Object.freeze({
           source: value.#source,
           flags: value.#flags,
           flavor: value.#flavor,
-        };
+        });
       }
 
       /**
@@ -226,6 +232,7 @@ export class FabricRegExp extends BaseFabricPrimitive
         typeTag: string,
         state: FabricRegExpState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const flavor = state.flavor ?? DEFAULT_FLAVOR;
         const source = state.source ?? "";
@@ -234,10 +241,11 @@ export class FabricRegExp extends BaseFabricPrimitive
         try {
           return new FabricRegExp(flavor, source, flags);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `RegExp: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -253,11 +261,11 @@ export class FabricRegExp extends BaseFabricPrimitive
 
       /** @inheritDoc */
       encode(value: FabricRegExp, _env: LiveEnvironment): RealmCodecValue {
-        return {
+        return Object.freeze({
           source: value.#source,
           flags: value.#flags,
           flavor: value.#flavor,
-        };
+        });
       }
 
       /** @inheritDoc */
@@ -293,6 +301,7 @@ export class FabricRegExp extends BaseFabricPrimitive
         typeTag: string,
         state: FabricRegExpState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const flavor = state.flavor ?? DEFAULT_FLAVOR;
         const source = state.source ?? "";
@@ -301,10 +310,11 @@ export class FabricRegExp extends BaseFabricPrimitive
         try {
           return new FabricRegExp(flavor, source, flags);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             (e instanceof Error) ? e.message : String(e),
+            mutable,
           );
         }
       }

@@ -13,7 +13,6 @@ import {
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
 import { cloneIfNecessary } from "@/value-clone.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import {
@@ -34,35 +33,42 @@ import { ProblematicValue } from "@/codec-common";
  * It is a {@link FabricInstance} (not a `FabricPrimitive`) precisely because
  * the payload is an **outgoing reference**: a link may carry a `schema`, an
  * arbitrary `FabricValue` that is not leaf data, so a link is a small object
- * graph rather than an immutable scalar. Like every instance, a `FabricLink` is
- * wholeheartedly mutable until frozen and immutable thereafter; the payload it
- * holds is its one nested `FabricValue`, frozen and cloned recursively by the
- * protocol members.
+ * graph rather than an immutable scalar.
+ *
+ * The payload's own layer -- which fields the link has -- is the link's
+ * internal state, and is frozen from construction on, since a link has no
+ * operation that changes it. The values in those fields are external
+ * references, held as supplied; the protocol members freeze and clone them
+ * recursively.
  */
 export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
-  /** The wrapped addressing payload (this link's sole outgoing reference). */
+  /** The wrapped addressing payload, frozen at its own layer. */
   #payload: FabricPlainObject;
 
   /**
    * Constructs an instance wrapping `payload`. The payload must be a plain
    * object with no prototype-pollution keys; otherwise the constructor throws
-   * (death before confusion). The payload is held by reference — like every
-   * `FabricInstance`, the instance is mutable until frozen, so the caller must
-   * not retain and mutate the payload once it has handed ownership over.
+   * (death before confusion). The link keeps a frozen shallow copy of the
+   * payload, or the payload itself when that is already frozen, so the caller
+   * remains free to change the object it passed. The payload's values are
+   * held as supplied.
    *
    * @param payload - The addressing payload to wrap.
    */
   constructor(payload: FabricPlainObject) {
     super();
     assertValidPayload(payload);
-    this.#payload = payload;
+    this.#payload = cloneIfNecessary(payload, { deep: false });
   }
 
   //
   // Instance members
   //
 
-  /** The wrapped addressing payload. */
+  /**
+   * The wrapped addressing payload. It is frozen at its own layer, so handing
+   * it out exposes nothing the link could change.
+   */
   get payload(): FabricPlainObject {
     return this.#payload;
   }
@@ -101,15 +107,18 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
     // Deep-clone the payload to the requested frozenness (no shared mutable
     // structure with the original; already-deep-frozen subtrees are shared
     // when `frozen` is `true`).
-    const payload = cloneIfNecessary(this.#payload, {
-      frozen,
-    }) as FabricPlainObject;
+    const payload = cloneIfNecessary(this.#payload, { frozen });
     return new FabricLink(payload);
   }
 
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 
   static #codec = Object.freeze(
     new (class LinkCodec
@@ -121,8 +130,9 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
 
       /** @inheritDoc */
       encode(value: FabricLink, _env: LiveEnvironment): FabricPlainObject {
-        // The payload IS the encoded state; its nested values are recursively
-        // encoded by the engine.
+        // The payload, frozen at its own layer since construction, is the
+        // encoded state; its nested values are recursively encoded by the
+        // engine.
         return value.#payload;
       }
 
@@ -135,18 +145,20 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
       decode(
         typeTag: string,
         state: FabricPlainObject,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         // The constructor validates the payload and throws on any violation,
         // so bad state falls into the `catch`.
         try {
           const result = new FabricLink(state);
-          return env.shouldDeepFreeze ? deepFreeze(result) : result;
+          return mutable ? result : Object.freeze(result);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Link: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }

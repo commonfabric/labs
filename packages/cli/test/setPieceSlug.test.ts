@@ -45,9 +45,9 @@ describe("setPieceSlug()", () => {
       apiUrl: new URL(import.meta.url),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "cli-set-slug",
+      spaceDid: (await Identity.generate()).did(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();

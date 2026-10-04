@@ -58,8 +58,14 @@ import {
 
 import { mergeDefaults } from "../src/schema.ts";
 import { mergeAnyOfMatches } from "../src/traverse.ts";
-import { snapshotQueryResult } from "../src/query-result-proxy.ts";
-import { extractDefaultValues } from "../src/runner-utils.ts";
+import {
+  isFabricInstanceOrView,
+  snapshotQueryResult,
+} from "../src/query-result-proxy.ts";
+import {
+  extractDefaultValues,
+  mergeSchemaDefaults,
+} from "../src/runner-utils.ts";
 import { sanitizeSchemaForLinks } from "../src/link-utils.ts";
 import {
   getValueAtPath,
@@ -360,7 +366,28 @@ describe("fabric special objects through the runner's walks", () => {
     // `query-result-proxy.ts` carries that gap and the marker for closing it,
     // and the identity case above pins it.
 
+    forEachSpecialObject(
+      FABRIC_PRIMITIVES,
+      (name) => `is not a \`${name}\` to \`isFabricInstanceOrView()\``,
+      (_kind, special) => {
+        expect(isFabricInstanceOrView(special)).toBe(false);
+      },
+    );
+
+    it("is not a plain record to `isFabricInstanceOrView()`", () => {
+      expect(isFabricInstanceOrView({ a: 1 })).toBe(false);
+      expect(isFabricInstanceOrView([1])).toBe(false);
+      expect(isFabricInstanceOrView(null)).toBe(false);
+      // An own `constructor` is data sharing the name, not the class, and
+      // cannot answer for an instance; the answer never reads the name.
+      expect(isFabricInstanceOrView({ constructor: FabricError })).toBe(false);
+    });
+
     for (const kind of FABRIC_INSTANCES) {
+      it(`is a \`${kind.name}\` to \`isFabricInstanceOrView()\``, () => {
+        expect(isFabricInstanceOrView(kind.make())).toBe(true);
+      });
+
       it(`is refused by \`mergeAnyOfMatches()\` for a \`${kind.name}\``, () => {
         const special = kind.make();
         expect(() => mergeAnyOfMatches([special, special])).toThrow(
@@ -472,6 +499,36 @@ describe("fabric special objects through the runner's walks", () => {
       expect(read instanceof FabricError).toBe(false);
     });
 
+    it("hands a stored `FabricError` through `mergeSchemaDefaults()` whole", () => {
+      // The read hands back a view whose prototype is `Object.prototype` (the
+      // identity case above), which the merge's plain-object test takes for a
+      // record, and the slot's schema declares a default inside it, which the
+      // record path would add. The merge asks `isFabricInstanceOrView()` first
+      // and hands the view back as the leaf `traverseDAG` made it.
+      const cell = runtime.getCell<{ err: unknown }>(
+        space,
+        "walks-merge-defaults-error",
+        undefined,
+        tx,
+      );
+      cell.set(
+        { err: FabricError.fromNativeError(new Error("boom")) } as never,
+      );
+
+      const view = cell.get();
+      const merged = mergeSchemaDefaults(view, undefined, {
+        type: "object",
+        properties: {
+          err: {
+            type: "object",
+            properties: { note: { type: "string", default: "filled" } },
+          },
+        },
+      }, { mergeMaterializedLinks: true });
+      expect(merged.err).toBe(view.err);
+      expect((merged.err as object).constructor.name).toBe("FabricError");
+    });
+
     it("appends a `FabricError` to a stored array", () => {
       const cell = runtime.getCell<unknown[]>(
         space,
@@ -504,7 +561,7 @@ describe("fabric special objects through the runner's walks", () => {
     it("writes below a `FabricError` stored by an earlier transaction", () => {
       // The cases around this one share the suite's `tx`, so the document's
       // value at transaction start is empty and no ancestor prefix ever holds
-      // an instance. `buildReactivityPathsForChange` reads those prefixes from
+      // an instance. `buildReactivityPathsForChanges` reads those prefixes from
       // the document as it stood when the transaction opened, so the walk it
       // feeds sees an instance only across a commit boundary.
 
@@ -556,77 +613,51 @@ describe("fabric special objects through the runner's walks", () => {
         .toBe(false);
     });
 
-    it("compares a stored `FabricError` read back as unequal to its twin", () => {
-      // A `FabricInstance` comes back proxied, and the proxy erases the
-      // class, so `specialObjectEqual()` declines a pair holding one and
-      // `fabricAwareEqual()` never reaches the value model for it. What that
-      // answers depends on how many operands are proxied, and the case below
-      // is the other half.
-      //
-      // TODO(danfuzz): this test asserts the WRONG behavior on purpose. It
-      // inverts once a proxied `FabricInstance` is perceived as one, at that
-      // `TODO` in `query-result-proxy.ts`.
+    it("compares a stored `FabricError` by its stored value", () => {
+      // A read hands back a `FabricInstance` proxied, and the proxy erases the
+      // class, so a view of one is not an operand of `fabricAwareEqual()`: it
+      // would reduce to a walk of a proxy with no own keys. The stored value
+      // is one, and the comparison reaches the value model for it.
 
+      const error = FabricError.fromNativeError(new Error("boom"));
       const cell = runtime.getCell<Record<string, unknown>>(
         space,
         "walks-compare-error",
         undefined,
         tx,
       );
-      cell.set({ v: FabricError.fromNativeError(new Error("boom")) } as never);
-      const read = cell.get().v;
+      cell.set({ v: error } as never);
+      const stored = (cell.getRaw() as { v: unknown }).v;
 
-      expect(isFabricSpecialObject(read)).toBe(false);
-      expect(
-        fabricAwareEqual(read, FabricError.fromNativeError(new Error("boom"))),
-      ).toBe(false);
+      expect(isFabricSpecialObject(stored)).toBe(true);
+      expect(fabricAwareEqual(stored, error)).toBe(true);
     });
 
-    it(
-      "compares two stored `FabricError`s read back as equal whatever they hold",
-      () => {
-        // Both operands proxied is the arm that inverts rather than coarsens.
-        // Neither passes `isFabricSpecialObject()`, so `fabricAwareEqual()`
-        // reduces to a property walk, and a proxy's `ownKeys` is empty on both
-        // sides -- two empty records, equal. Unproxied, the same two values
-        // compare unequal.
-        //
-        // Two raw errors built from one message compare unequal as well, which
-        // is correct rather than a second bug of the same kind:
-        // `fromNativeError` captures a stack, and two calls capture different
-        // ones.
-        //
-        // Which arm a comparison site meets turns on how many of its operands
-        // arrive through a cell read, so no single direction can be claimed
-        // for the sites that adopt this comparison.
-        //
-        // TODO(danfuzz): this test asserts the WRONG behavior on purpose, and
-        // this arm is the dangerous one: it is the `deepEqual` fail-open the
-        // markers at those sites described, reached by another route. It
-        // inverts at that `TODO` in `query-result-proxy.ts`.
+    it("compares two stored `FabricError`s by their stored values as unequal", () => {
+      // Two views of these would both reduce to a proxy with no own keys and
+      // compare equal whatever they hold, which is the fail-open that keeps a
+      // view out of `fabricAwareEqual()`.
 
-        const write = (id: string, message: string) => {
-          const cell = runtime.getCell<Record<string, unknown>>(
-            space,
-            id,
-            undefined,
-            tx,
-          );
-          cell.set(
-            { v: FabricError.fromNativeError(new Error(message)) } as never,
-          );
-          return cell.get().v;
-        };
+      const write = (id: string, message: string) => {
+        const cell = runtime.getCell<Record<string, unknown>>(
+          space,
+          id,
+          undefined,
+          tx,
+        );
+        cell.set(
+          { v: FabricError.fromNativeError(new Error(message)) } as never,
+        );
+        return (cell.getRaw() as { v: unknown }).v;
+      };
 
-        expect(
-          fabricAwareEqual(
-            write("walks-cmp-a", "AAA"),
-            write("walks-cmp-b", "ZZZ"),
-          ),
-        )
-          .toBe(true);
-      },
-    );
+      expect(
+        fabricAwareEqual(
+          write("walks-cmp-a", "AAA"),
+          write("walks-cmp-b", "ZZZ"),
+        ),
+      ).toBe(false);
+    });
 
     it("refuses to store a stub-codec instance at all", () => {
       // What a stored ancestor prefix can hold decides what the commit-time

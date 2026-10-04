@@ -92,6 +92,7 @@ export async function fileToDataUrl(
   let binary = "";
   const chunkSize = 0x8000;
   for (let i = 0; i < bytes.length; i += chunkSize) {
+    // deno-lint-ignore cf-spread/no-spread-arguments -- one chunk, at most chunkSize bytes, per call
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
   return `data:${file.type || "application/octet-stream"};base64,${

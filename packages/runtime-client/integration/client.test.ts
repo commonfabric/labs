@@ -12,7 +12,7 @@ import {
   IdentityCreateConfig,
   Session,
 } from "@commonfabric/identity";
-import { env, waitFor } from "@commonfabric/integration";
+import { createTestSpace, env, waitFor } from "@commonfabric/integration";
 import { Program } from "@commonfabric/js-compiler";
 import {
   experimentalOptionsFromEnv,
@@ -66,8 +66,9 @@ const VIEW_SCOPED_REQUESTED = SERVER_EXECUTION_RESOLVED &&
  * a step listed there for this file is skipped ONLY when this process runs
  * the ON posture, loudly (the entry's reason is printed), and only while
  * the entry exists — the OFF arm and an unlisted step always run. Never a
- * silent filter: the CI step prints every entry, and the validator
- * requires this file to name each listed step and call this guard.
+ * silent filter: the test topology declares the entry's leaf unavailable,
+ * and the validator requires this file to name each listed step and call
+ * this guard.
  */
 function onArmStepSkip(step: string): { ignore: boolean } {
   if (SERVER_EXECUTION_RESOLVED !== true) return { ignore: false };
@@ -135,6 +136,23 @@ interface PatternState {
 export default pattern<PatternState>(() => ({ version: "candidate" }));
 `;
 
+/** The part of the Home pattern's result that lists the user's spaces. */
+const HOME_SPACES_SCHEMA = {
+  type: "object",
+  properties: {
+    spaces: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          did: { type: "string" },
+        },
+      },
+    },
+  },
+} as const satisfies JSONSchema;
+
 describe("RuntimeClient", () => {
   describe("lifecycle", () => {
     it("initializes and reaches ready state", async () => {
@@ -144,21 +162,45 @@ describe("RuntimeClient", () => {
     });
   });
 
-  describe("named spaces", () => {
-    it("resolves and opens a runtime-derived named space", async () => {
+  describe("created spaces", () => {
+    it("creates a distinct space its creator alone owns, recorded in Home", async () => {
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
-      const name = `runtime-client-named-${crypto.randomUUID()}`;
-      const expected = await createSession({
-        identity: session.as,
-        spaceName: name,
-      });
+      const label = `runtime-client-created-${crypto.randomUUID()}`;
 
-      const space = await rt.resolveSpaceName(name);
-      assertEquals(space, expected.space);
-      const root = await rt.getSpaceRootPattern(space);
-      assertExists(root);
-      await rt.synced(space);
+      const labeled = await rt.createSpace(label);
+      const unlabeled = await rt.createSpace();
+      assert(labeled !== unlabeled, "each call creates another space");
+      for (const space of [labeled, unlabeled]) {
+        assert(space !== session.space && space !== identity.did());
+        const access = await rt.getSpaceAcl(space);
+        assertEquals(access.acl, { [identity.did()]: "OWNER" });
+        assertEquals(access.canEdit, true);
+        assertExists(await rt.getSpaceRootPattern(space));
+        await rt.synced(space);
+      }
+
+      // The worker sends each space to Home's `addSpace` stream; idle() is
+      // the barrier after which that handler's commit has landed.
+      await rt.idle();
+      const spaces = await (await rt.ensureHomePatternRunning())
+        .asSchema<{ spaces: { name?: string; did?: string }[] }>(
+          HOME_SPACES_SCHEMA,
+        )
+        .key("spaces")
+        .pull();
+      const entries = (spaces ?? []).filter((entry) =>
+        entry.did === labeled || entry.did === unlabeled
+      );
+      assertEquals(entries.length, 2);
+      assertEquals(entries.find((entry) => entry.did === labeled), {
+        name: label,
+        did: labeled,
+      });
+      assertEquals(entries.find((entry) => entry.did === unlabeled), {
+        name: "",
+        did: unlabeled,
+      });
     });
   });
 
@@ -188,7 +230,7 @@ describe("RuntimeClient", () => {
       const value = await new Promise((resolve) => {
         cell.subscribe((value) => {
           resolve(value);
-        });
+        }, { onRefused: () => {} });
       });
       assertEquals(value, input);
     });
@@ -253,7 +295,7 @@ describe("RuntimeClient", () => {
       const cancel = reader.subscribe((value) => {
         const record = value as Record<string, unknown> | undefined;
         if (record?.marker === "second") gotNext.resolve(record);
-      });
+      }, { onRefused: () => {} });
 
       const sent = {
         bytes: new FabricBytes(nextContent),
@@ -301,7 +343,7 @@ describe("RuntimeClient", () => {
         if (Array.isArray(value?.children) && value.children[0] != null) {
           childArrived.resolve();
         }
-      });
+      }, { onRefused: () => {} });
       try {
         await childArrived.promise;
         const value = VIEW_SCOPED_REQUESTED
@@ -382,7 +424,7 @@ describe("RuntimeClient", () => {
         if (!value) throw new Error("cell was not synced");
         receivedValues.push(value);
         if (receivedValues.length >= 3) gotThree.resolve();
-      });
+      }, { onRefused: () => {} });
 
       cell.set({ counter: 1 });
       cell.set({ counter: 2 });
@@ -420,13 +462,13 @@ describe("RuntimeClient", () => {
       let _updatedValue1 = undefined;
       const cancel1 = cell.subscribe((value) => {
         _updatedValue1 = value;
-      });
+      }, { onRefused: () => {} });
       let _updatedValue2 = undefined;
       const gotValue = defer<void>();
       const cancel2 = cell2.subscribe((value) => {
         _updatedValue2 = value;
         if (cell2.get() === "my-value") gotValue.resolve();
-      });
+      }, { onRefused: () => {} });
 
       await cell.set("my-value");
       await gotValue.promise;
@@ -509,7 +551,7 @@ describe("RuntimeClient", () => {
           gotInitialA.resolve();
         }
         checkBothUpdated();
-      });
+      }, { onRefused: () => {} });
 
       // Wait for initial value to arrive from backend
       await gotInitialA.promise;
@@ -526,7 +568,7 @@ describe("RuntimeClient", () => {
       const cancelB = cellB.subscribe((v) => {
         valuesB.push(v);
         checkBothUpdated();
-      });
+      }, { onRefused: () => {} });
 
       // cellB receives the cached value synchronously, in the subscribe() call
       assertEquals(
@@ -596,14 +638,13 @@ describe("RuntimeClient", () => {
       assertEquals(revisionSource.files, source.files);
     });
 
-    it("clones a piece into another named space and follows it", async () => {
+    it("clones a piece into another space and follows it", async () => {
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
       const sourcePiece = await rt.createPiece(TEST_PROGRAM, session.space, {
         run: true,
       });
-      const destinationName = `piece-clone-${crypto.randomUUID()}`;
-      const destinationSpace = await rt.resolveSpaceName(destinationName);
+      const destinationSpace = await createTestSpace(identity);
 
       const clone = await rt.clonePiece(
         sourcePiece.id(),
@@ -632,8 +673,7 @@ describe("RuntimeClient", () => {
         argument: { count: 7, label: "copied label" },
         run: true,
       });
-      const destinationName = `piece-clone-data-${crypto.randomUUID()}`;
-      const destinationSpace = await rt.resolveSpaceName(destinationName);
+      const destinationSpace = await createTestSpace(identity);
 
       const clone = await rt.clonePiece(
         sourcePiece.id(),
@@ -648,7 +688,11 @@ describe("RuntimeClient", () => {
         includeRef: true,
       });
 
-      assertEquals(response.value, { count: 7, label: "copied label" });
+      assertEquals("refused" in response, false);
+      assertEquals("value" in response && response.value, {
+        count: 7,
+        label: "copied label",
+      });
     });
 
     it("detaches a followed root through the runtime-client protocol", async () => {
@@ -1810,7 +1854,7 @@ export default pattern<Record<string, never>>(() => {
      */
     async function owningClient(session: Session) {
       const transport = await WebWorkerRuntimeTransport.connect();
-      const options = await clientOptionsFor(session);
+      const options = clientOptionsFor(session);
       const client = await RuntimeClient.initialize(transport, options);
       await client.synced(session.space);
       return { client, transport, options };
@@ -1863,12 +1907,12 @@ export default pattern<Record<string, never>>(() => {
         const sawOne = defer<void>();
         const cancelFirst = first.subscribe((value) => {
           if (value) firstSeen.push(value.counter);
-        });
+        }, { onRefused: () => {} });
         const cancelSecond = mirror.subscribe((value) => {
           if (!value) return;
           secondSeen.push(value.counter);
           if (value.counter === 1) sawOne.resolve();
-        });
+        }, { onRefused: () => {} });
 
         await first.set({ counter: 1 });
         await sawOne.promise;
@@ -1884,7 +1928,7 @@ export default pattern<Record<string, never>>(() => {
         const firstSeenBefore = firstSeen.length;
         const watchTwo = mirror.subscribe((value) => {
           if (value?.counter === 2) sawTwo.resolve();
-        });
+        }, { onRefused: () => {} });
         await first.set({ counter: 2 });
         await sawTwo.promise;
 
@@ -1924,7 +1968,9 @@ export default pattern<Record<string, never>>(() => {
           cause,
           counterSchema,
         );
-        const cancelMirror = mirror.subscribe(() => {});
+        const cancelMirror = mirror.subscribe(() => {}, {
+          onRefused: () => {},
+        });
         await second.idle();
 
         // The second document's departure is its own: its subscription stops,
@@ -1938,7 +1984,7 @@ export default pattern<Record<string, never>>(() => {
           if (!value) return;
           seen.push(value.counter);
           if (value.counter === 3) sawThree.resolve();
-        });
+        }, { onRefused: () => {} });
         await cell.set({ counter: 3 });
         await sawThree.promise;
         // Membership rather than the last value: a write's echo can arrive
@@ -1975,9 +2021,9 @@ export default pattern<Record<string, never>>(() => {
 });
 
 async function createTestSession(): Promise<Session> {
-  return await createSession({
+  return createSession({
     identity,
-    spaceName: globalThis.crypto.randomUUID(),
+    spaceDid: await createTestSpace(identity),
   });
 }
 
@@ -1986,27 +2032,14 @@ async function createTestSession(): Promise<Session> {
  * by asserting the security half of these, so the two callers build them from
  * one place rather than each stating a posture of its own.
  */
-async function clientOptionsFor(
+function clientOptionsFor(
   session: Session,
   extraOptions: Partial<RuntimeClientOptions> = {},
-): Promise<RuntimeClientOptions> {
-  // If a space identity was created, replace it with a transferrable
-  // key in Deno using the same derivation as Session. That derivation supports
-  // the legacy space names used during development and nothing else, and is
-  // removed once those development-only spaces have been migrated
-  // (docs/plans/random-space-identities.md).
-  if (session.spaceIdentity && session.spaceName) {
-    session.spaceIdentity = await (
-      await Identity.fromPassphrase("common user", keyConfig)
-    ).derive(session.spaceName, keyConfig);
-  }
-
+): RuntimeClientOptions {
   return {
     apiUrl: new URL(API_URL),
     identity: session.as,
-    spaceIdentity: session.spaceIdentity,
     spaceDid: session.space,
-    spaceName: session.spaceName,
     // Workers receive the same environment-selected flags as their host,
     // including explicit false overrides of a client-class default.
     experimental: EXPERIMENTAL,
@@ -2021,7 +2054,7 @@ async function createRuntimeClient(
   const transport = await WebWorkerRuntimeTransport.connect();
   const worker = await RuntimeClient.initialize(
     transport,
-    await clientOptionsFor(session, extraOptions),
+    clientOptionsFor(session, extraOptions),
   );
 
   await worker.synced(session.space);

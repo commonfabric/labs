@@ -31,8 +31,12 @@ import {
 } from "../builder/types.ts";
 import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
+import { resolveLink } from "../link-resolution.ts";
 import {
   createSigilLinkFromParsedLink,
+  isPrimitiveCellLink,
+  type NormalizedFullLink,
+  parseLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
@@ -48,7 +52,7 @@ import {
   isStorageTransactionInconsistent,
 } from "../storage/rejection.ts";
 import { isCfcRejectedCommitError } from "../scheduler/cfc-rejection-report.ts";
-import { onSchemaRegistryClear } from "../schema-registry.ts";
+import { schemaRegistryEpoch } from "../schema-registry.ts";
 import {
   enrollRuntimeOwnedStore,
   recordRuntimeOwnedStore,
@@ -56,10 +60,11 @@ import {
 import { scopedCell } from "./scope-policy.ts";
 import {
   createDocumentReadiness,
+  DocumentLoadError,
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -128,8 +133,15 @@ class WishError extends Error {
   }
 }
 
+/** The error a wish reports when the profile roster is confirmed empty. */
+const NO_PROFILE_ERROR = "No profile exists yet";
+
 /** A confirmed empty profile roster, for which Wish offers creation. */
-class NoProfileError extends WishError {}
+class NoProfileError extends WishError {
+  constructor() {
+    super(NO_PROFILE_ERROR);
+  }
+}
 
 //
 // Interval #now constants and helpers
@@ -225,6 +237,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#learned":
     case "#learnedSummary":
     case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -276,6 +289,10 @@ export function tagMatchesHashtag(
 type WishContext = {
   runtime: Runtime;
   readiness: ReturnType<typeof createDocumentReadiness>;
+
+  /** Candidate load failures encountered during this resolution. */
+  candidateFailures: Map<Cell<unknown>, DocumentLoadError>;
+
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -301,7 +318,7 @@ type SharedHashtagState = {
   result?: Cell<unknown>;
   candidates: Cell<unknown>[];
   error?: unknown;
-  [UI]?: VNode;
+  [UI]?: VNode | Cell<unknown>;
 };
 
 type SharedHashtagResolver = {
@@ -416,6 +433,28 @@ function profileCellIsValid(
 }
 
 /**
+ * Whether home `defaultPattern` keeps its default in a slot: whether its
+ * `defaultProfile` holds an object at its root, read in the cell the field
+ * names rather than through it. A home without the slot keeps its default as a
+ * link at the root of that cell, or has nothing there; one with the slot keeps
+ * such a link, chosen before the slot, as `legacyDefaultProfile`.
+ */
+function homeHasDefaultProfileSlot(
+  runtime: Runtime,
+  defaultPattern: Cell<unknown>,
+  tx: IExtendedStorageTransaction | undefined,
+): boolean {
+  const field = defaultPattern.key("defaultProfile");
+  const fieldRaw = field.getRaw();
+  const root = isPrimitiveCellLink(fieldRaw)
+    ? runtime.getCellFromLink(parseLink(fieldRaw, field), undefined, tx)
+      .getRaw()
+    : fieldRaw;
+  return isObjectOrArray(root) && !Array.isArray(root) &&
+    !isPrimitiveCellLink(root);
+}
+
+/**
  * Whether a `mru` / `defaultProfile` entry names the SAME profile as a candidate
  * from the home `profiles` list — compared by the profile's own SPACE, NOT by
  * `Cell.equals` or by entity id.
@@ -527,14 +566,33 @@ function getProfileCandidateCells(
     return { ordered: [], defaultValid: false };
   }
 
-  // Ordering inputs: the default link and the MRU list.
-  const defaultEntry = defaultPattern.key("defaultProfile");
-  const defaultCell = defaultEntry.resolveAsCell();
-  const defaultValid = profileCellIsValid(
-    defaultCell,
-    defaultEntry.getRaw() !== undefined,
-    homeSpaceCell.space,
+  // Ordering inputs: the default and the MRU list. The default is the link
+  // under `profile` in home's slot, or, while the slot holds none, the link a
+  // home keeps an earlier default in: `legacyDefaultProfile`, or
+  // `defaultProfile` itself for a home without the slot.
+  const hasSlot = homeHasDefaultProfileSlot(
+    ctx.runtime,
+    defaultPattern,
+    ctx.tx,
   );
+  const slotEntry = defaultPattern.key("defaultProfile").key("profile");
+  const slotCell = slotEntry.resolveAsCell();
+  const slotValid = hasSlot &&
+    profileCellIsValid(
+      slotCell,
+      slotEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
+  const legacyEntry = defaultPattern.key(
+    hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+  );
+  const defaultCell = slotValid ? slotCell : legacyEntry.resolveAsCell();
+  const defaultValid = slotValid ||
+    profileCellIsValid(
+      defaultCell,
+      legacyEntry.getRaw() !== undefined,
+      homeSpaceCell.space,
+    );
 
   const mruCell = defaultPattern.key("mru");
   const mruRaw = mruCell.asSchema(profileLinkListSchema).get();
@@ -571,7 +629,7 @@ function getProfileCandidateCells(
 function getDefaultProfileCell(ctx: WishContext): Cell<unknown> {
   const { ordered } = getProfileCandidateCells(ctx);
   if (ordered.length === 0) {
-    throw new NoProfileError("No profile exists yet");
+    throw new NoProfileError();
   }
   return ordered[0];
 }
@@ -591,9 +649,28 @@ function formatTarget(parsed: ParsedWishTarget): string {
     (parsed.path.length > 0 ? "/" + parsed.path.join("/") : "");
 }
 
-/**
- * Search favorites in home space for pieces matching a hashtag.
- */
+/** Checks a discovery candidate, retaining load failures for an empty search. */
+function requireDiscoveryCandidate(
+  cell: Cell<unknown>,
+  ctx: WishContext,
+): boolean {
+  try {
+    return ctx.readiness.requireDocument(cell, ctx.tx);
+  } catch (error) {
+    if (!(error instanceof DocumentLoadError)) throw error;
+    ctx.candidateFailures.set(cell, error);
+    return false;
+  }
+}
+
+/** Reports a candidate load failure when no readable match remains. */
+function throwNoDiscoveryMatch(ctx: WishContext, message: string): never {
+  const failure = ctx.candidateFailures.values().next().value;
+  if (failure) throw failure;
+  throw new WishError(message);
+}
+
+/** Searches favorites in home space for pieces matching a hashtag. */
 function searchFavoritesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
@@ -636,7 +713,13 @@ function searchFavoritesForHashtag(
   return measureWishPhase(
     "favorites-result-map",
     queryKey,
-    () => matches.map((match) => ({ cell: match.cell, pathPrefix })),
+    () =>
+      matches.flatMap((match) => {
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -677,6 +760,8 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
+        const resolved = pieceCell.resolveAsCell();
+        if (!requireDiscoveryCandidate(resolved, ctx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",
@@ -777,9 +862,13 @@ function searchProfileForHashtag(
     "profile-elements-result-map",
     queryKey,
     () =>
-      matches.flatMap((match) =>
-        match.cell ? [{ cell: match.cell, pathPrefix }] : []
-      ),
+      matches.flatMap((match) => {
+        if (!match.cell) return [];
+        const cell = match.cell.resolveAsCell();
+        return requireDiscoveryCandidate(cell, ctx)
+          ? [{ cell, pathPrefix }]
+          : [];
+      }),
   );
 }
 
@@ -803,9 +892,12 @@ function searchByHashtag(
   const allMatches: BaseResolution[] = [];
 
   if (searchFavorites) {
-    allMatches.push(
-      ...searchFavoritesForHashtag(ctx, searchTermWithoutHash, parsed.path),
+    const matches = searchFavoritesForHashtag(
+      ctx,
+      searchTermWithoutHash,
+      parsed.path,
     );
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchMentionables) {
@@ -814,7 +906,7 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   if (searchProfile) {
@@ -823,7 +915,7 @@ function searchByHashtag(
       searchTermWithoutHash,
       parsed.path,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   // Search mentionables in arbitrary DID spaces
@@ -836,7 +928,7 @@ function searchByHashtag(
       parsed.path,
       didSpaceCell,
     );
-    allMatches.push(...matches);
+    for (const match of matches) allMatches.push(match);
   }
 
   if (allMatches.length === 0) {
@@ -848,7 +940,10 @@ function searchByHashtag(
       parts.push(`${arbitraryDIDs.length} space(s)`);
     }
     const scopeDesc = parts.join(" or ") || "favorites";
-    throw new WishError(`No ${scopeDesc} found matching "${searchTerm}"`);
+    throwNoDiscoveryMatch(
+      ctx,
+      `No ${scopeDesc} found matching "${searchTerm}"`,
+    );
   }
 
   return allMatches;
@@ -888,16 +983,19 @@ function resolveHomeSpaceTarget(
 
       const match = favorites.find((entry) => {
         const userTags = entry.userTags ?? [];
-        for (const t of userTags) {
-          if (t.toLowerCase().includes(searchTerm)) return true;
-        }
-
         // Match the discovery tags snapshotted when favorited.
-        return (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        const tagged = userTags.some((t) =>
+          t.toLowerCase().includes(searchTerm)
+        ) || (entry.tags ?? []).some((t) => t.includes(searchTerm));
+        return tagged &&
+          requireDiscoveryCandidate(entry.cell.resolveAsCell(), ctx);
       });
 
       if (!match) {
-        throw new WishError(`No favorite found matching "${searchTerm}"`);
+        throwNoDiscoveryMatch(
+          ctx,
+          `No favorite found matching "${searchTerm}"`,
+        );
       }
 
       return [{
@@ -945,6 +1043,22 @@ function resolveHomeSpaceTarget(
       }];
     }
 
+    case "#chatManager": {
+      // The user's chat manager: the index of the FabriChat rooms they belong
+      // to. A hashtag search would not find it, since under `scope: ["~"]`
+      // that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #chatManager",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "chatManager"],
+      }];
+    }
+
     case "#learnedSummary": {
       // The free-form learned summary string (home `learned.summary`). This is
       // what `#profile` used to resolve to before it was repurposed for the
@@ -970,7 +1084,7 @@ function resolveHomeSpaceTarget(
       if (ordered.length === 0) {
         // No profile yet — throw so the #profile error path falls back to the
         // create surface (see profileCreateUI).
-        throw new NoProfileError("No profile exists yet");
+        throw new NoProfileError();
       }
       // Always expose the full, ordered roster as `candidates`. The wish action
       // below still makes `ordered[0]` the current profile and only renders the
@@ -1437,7 +1551,7 @@ function resolveBase(
 
     throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
   } finally {
-    ctx.readiness.requireLoadedReads(ctx.tx);
+    ctx.readiness.requireLoadedReads(ctx.tx, ctx.candidateFailures.keys());
   }
 }
 
@@ -1507,6 +1621,7 @@ function createSharedHashtagResolver(
     const sharedContext: WishContext = {
       runtime: ctx.runtime,
       readiness,
+      candidateFailures: new Map(),
       tx,
       parentCell: ctx.parentCell,
       scope: sharedScope,
@@ -1543,16 +1658,17 @@ function createSharedHashtagResolver(
                 index,
           ),
       );
+      // The phase keeps its name so its timings compare with earlier runs.
       const resultUI = measureWishPhase(
         "shared-result-ui-get",
         queryKey,
-        () => uniqueResultCells[0].key(UI).get(),
-      ) as VNode | undefined;
+        () => foundPieceUI(ctx.runtime, tx, uniqueResultCells[0]),
+      );
 
       stateCell.set({
         result: uniqueResultCells[0],
         candidates: uniqueResultCells,
-        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+        [UI]: resultUI,
       });
     } catch (error) {
       if (error instanceof DocumentPending) return;
@@ -1663,16 +1779,13 @@ export type SidecarSurfaceState = {
   openingEpoch?: number;
 };
 
-let schemaRegistryEpoch = 0;
-onSchemaRegistryClear(() => {
-  schemaRegistryEpoch += 1;
-});
-
 /** The pattern this slot has already opened, when it is still usable. */
 export function openedSidecarSurface(
   state: SidecarSurfaceState,
 ): Pattern | undefined {
-  return state.patternEpoch === schemaRegistryEpoch ? state.pattern : undefined;
+  return state.patternEpoch === schemaRegistryEpoch()
+    ? state.pattern
+    : undefined;
 }
 
 /**
@@ -1703,7 +1816,7 @@ export function openSidecarSurface(
 ): Promise<Pattern | undefined> {
   const opened = openedSidecarSurface(state);
   if (opened !== undefined) return Promise.resolve(opened);
-  const epoch = schemaRegistryEpoch;
+  const epoch = schemaRegistryEpoch();
   // An open started in an epoch that has since ended would answer with a
   // pattern whose schema references nothing can resolve, so it is left to
   // settle on its own and a fresh one is asked instead.
@@ -1722,7 +1835,7 @@ export function openSidecarSurface(
       // started one joins it, and otherwise a fresh one starts here. The
       // caller is handed a live answer either way, rather than a dead one or an
       // error account written over a surface still on its way.
-      if (epoch !== schemaRegistryEpoch) {
+      if (epoch !== schemaRegistryEpoch()) {
         return openSidecarSurface(runtime, state, piece, surface, options);
       }
       if (pattern !== undefined) {
@@ -1817,14 +1930,71 @@ function cellLinkUI(cell: Cell<unknown>): VNode {
   return h("cf-cell-link", { $cell: cell });
 }
 
+/** What a view slot holds, as far as choosing a view needs to know. */
+type ViewSlotKind = "link" | "view node" | "other";
+
+/**
+ * Returns what the slot at `slot` holds: `"link"` for a link, `"view node"`
+ * for a value whose `type` is `vnode`, and `"other"` for any other value or
+ * for nothing.
+ *
+ * Reads through `tx`, resolving links on the way to the slot but not a link
+ * the slot holds. It makes two reads: a shape read of the slot, which observes
+ * whether the slot exists and whether it holds a link, and, for a value that
+ * is a record, a read of its `type`. It reads nothing else inside the slot and
+ * hands back no part of it, so a caller that needs more reads it itself.
+ */
+function viewSlotKind(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  slot: NormalizedFullLink,
+): ViewSlotKind {
+  const address = resolveLink(runtime, tx, slot, "top", {
+    markIfcCrossings: true,
+  });
+  const held = tx.readValueOrThrow(address, { nonRecursive: true });
+  if (isPrimitiveCellLink(held)) return "link";
+  if (!isObjectOrArray(held) || Array.isArray(held)) return "other";
+  const type = tx.readValueOrThrow({
+    ...address,
+    path: [...address.path, "type"],
+  });
+  return type === "vnode" ? "view node" : "other";
+}
+
+/**
+ * Returns the view a wish shows for the piece it found: a reference to the
+ * piece's own `[UI]` slot when that slot holds a link or a view node, and a
+ * `cf-cell-link` to the piece otherwise.
+ *
+ * A wish result is a reference to what it found (CFC spec §8.2), and its view
+ * is a reference too, so the choice is made from the `[UI]` slot of the piece's
+ * own document, through `tx`, by {@link viewSlotKind}. A link in the slot is
+ * not followed: the document behind it can be one a computation derived from
+ * sealed data, and its labels are consumed where the view is rendered.
+ */
+function foundPieceUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  resultCell: Cell<unknown>,
+): VNode | Cell<unknown> {
+  // The reference carries no schema: a view is read under the renderer's own.
+  const ui = resultCell.asSchema(undefined).key(UI);
+  return viewSlotKind(runtime, tx, ui.getAsNormalizedFullLink()) === "other"
+    ? cellLinkUI(resultCell)
+    : ui;
+}
+
 function wishResultUI(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
   parsed: ParsedWishTarget,
   resultCell: Cell<unknown>,
-): VNode | undefined {
+): VNode | Cell<unknown> {
   if (isProfilePersonaTarget(parsed)) {
     return cellLinkUI(resultCell);
   }
-  return resultCell.key(UI).get() as VNode | undefined;
+  return foundPieceUI(runtime, tx, resultCell);
 }
 
 function projectWishCellValue(
@@ -2023,6 +2193,8 @@ export function wish(
     input?: {
       profiles: unknown;
       defaultProfile: unknown;
+      legacyDefaultProfile: unknown;
+      offersSetDefault: boolean;
       mru: unknown;
     };
     resultCell?: Cell<any>;
@@ -2081,6 +2253,9 @@ export function wish(
   const sidecarRunOptions = (surface: SidecarSurface) => ({
     parentPieceRootId: parentCell.getAsNormalizedFullLink().id,
     sourceOrigin: surface.origin,
+    // A sidecar the wish instantiates, in a continuation of its action, is
+    // no principal's act.
+    attributeInitialization: false,
   });
 
   addCancel(() => {
@@ -2137,7 +2312,6 @@ export function wish(
     recordRuntimeOwnedStore(tx, parentCell, scoped);
     enrollRuntimeOwnedStore(tx, parentCell, scoped);
     setResultCell(scoped, parentCell.withTx(tx));
-    setPatternCell(scoped, parentCell.withTx(tx).key("pattern"));
     scoped.set(value);
     surfaceWishStateCommitFailure(tx, scoped);
     sendResult(tx, scoped);
@@ -2790,13 +2964,31 @@ export function wish(
     );
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
+    // A home with the slot hands it over for "Set default" and its earlier
+    // default as `legacyDefaultProfile`. A home without hands over no slot and
+    // `offersSetDefault: false`, since a write through a cell whose root holds
+    // a link lands in the linked profile; its `defaultProfile` cell, holding
+    // the default that way, goes as `legacyDefaultProfile`.
+    const hasSlot = homeHasDefaultProfileSlot(
+      runtime,
+      homeDefaultPattern,
+      ctx.tx,
+    );
     slot.input = {
       profiles: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
       ),
-      defaultProfile: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+      defaultProfile: hasSlot
+        ? createSigilLinkFromParsedLink(
+          homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
+        )
+        : undefined,
+      legacyDefaultProfile: createSigilLinkFromParsedLink(
+        homeDefaultPattern.key(
+          hasSlot ? "legacyDefaultProfile" : "defaultProfile",
+        ).getAsNormalizedFullLink(),
       ),
+      offersSetDefault: hasSlot,
       mru: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
       ),
@@ -2827,6 +3019,8 @@ export function wish(
       return slot.input && {
         profiles: bindInputCell(slot.input.profiles),
         defaultProfile: bindInputCell(slot.input.defaultProfile),
+        legacyDefaultProfile: bindInputCell(slot.input.legacyDefaultProfile),
+        offersSetDefault: slot.input.offersSetDefault,
         mru: bindInputCell(slot.input.mru),
       };
     };
@@ -2954,6 +3148,7 @@ export function wish(
           const ctx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,
@@ -3117,11 +3312,13 @@ export function wish(
               profileHasValidDefault
             ) {
               // Single result or headless mode - fast path with unified shape
-              // Prefer the result cell's own [UI]; fall back to cf-cell-link
+              // The phase keeps its name so its timings compare with earlier
+              // runs.
               const resultUI = measureWishPhase(
                 "result-ui-get",
                 queryKey,
-                () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                () =>
+                  wishResultUI(runtime, tx, activeParsed, uniqueResultCells[0]),
               );
               measureWishPhase(
                 "send-fast",
@@ -3135,7 +3332,7 @@ export function wish(
                         schema,
                       ),
                       candidates: candidatesCell,
-                      [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                      [UI]: resultUI,
                     },
                     outputScope,
                     schema,
@@ -3166,10 +3363,18 @@ export function wish(
                 );
               } else {
                 // Surface not open yet — send first result, start opening it
+                // The phase keeps its name so its timings compare with earlier
+                // runs.
                 const resultUI = measureWishPhase(
                   "result-ui-get",
                   queryKey,
-                  () => wishResultUI(activeParsed, uniqueResultCells[0]),
+                  () =>
+                    wishResultUI(
+                      runtime,
+                      tx,
+                      activeParsed,
+                      uniqueResultCells[0],
+                    ),
                 );
                 measureWishPhase(
                   "send-fast-before-suggestion",
@@ -3183,7 +3388,7 @@ export function wish(
                           schema,
                         ),
                         candidates: candidatesCell,
-                        [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
+                        [UI]: resultUI,
                       },
                       outputScope,
                       schema,
@@ -3255,6 +3460,7 @@ export function wish(
           const suggestionCtx: WishContext = {
             runtime,
             readiness,
+            candidateFailures: new Map(),
             tx,
             parentCell,
             scope,

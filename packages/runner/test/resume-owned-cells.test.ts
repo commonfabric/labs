@@ -13,7 +13,7 @@ import { Runtime } from "../src/runtime.ts";
 import type { Cell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -74,8 +74,8 @@ class LoopbackStorageManager extends StorageManager {
   private constructor(options: Options, server: MemoryV2Server.Server) {
     super(options, new LoopbackSessionFactory(() => server));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
@@ -131,14 +131,7 @@ describe("resume owned-cell pre-sync", () => {
   let sm2: LoopbackStorageManager;
 
   beforeEach(() => {
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
     sm1 = LoopbackStorageManager.make(signer, server);
     sm2 = LoopbackStorageManager.make(signer, server);
   });
@@ -297,14 +290,7 @@ describe("resume owned-cell walk cycle-detection key", () => {
   let rt: Runtime;
 
   beforeEach(() => {
-    keyServer = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    keyServer = newSharedServer();
     keySm = LoopbackStorageManager.make(signer, keyServer);
     rt = new Runtime({
       apiUrl: new URL(import.meta.url),

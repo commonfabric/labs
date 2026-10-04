@@ -306,7 +306,7 @@ Deno.test("memory v2 client observes cancellation after session open", async () 
     const tracked = trackAbortListeners(
       controller,
       (removals) => {
-        if (removals === 2) controller.abort(testCase.reason);
+        if (removals === 1) controller.abort(testCase.reason);
       },
     );
     try {
@@ -2367,6 +2367,7 @@ class ControlledReconnectTransport implements Transport {
   #receiver: (payload: string) => void = () => {};
   #closeReceiver: (error?: Error) => void = () => {};
   #allowHello = true;
+  #helloAccepted = false;
 
   setReceiver(receiver: (payload: string) => void): void {
     this.#receiver = receiver;
@@ -2385,7 +2386,13 @@ class ControlledReconnectTransport implements Transport {
   }
 
   disconnect(): void {
+    this.reset();
     this.#closeReceiver(new Error("disconnect"));
+  }
+
+  /** Discards the scripted connection's accepted handshake. */
+  reset(): void {
+    this.#helloAccepted = false;
   }
 
   send(payload: string): Promise<void> {
@@ -2401,6 +2408,10 @@ class ControlledReconnectTransport implements Transport {
           queueMicrotask(() => this.#closeReceiver(new Error("offline")));
           return Promise.resolve();
         }
+        if (this.#helloAccepted) {
+          throw new Error("scripted connection already accepted hello");
+        }
+        this.#helloAccepted = true;
         this.#receiver(encodeMemoryBoundary(HELLO_OK));
         return Promise.resolve();
       case "session.open":

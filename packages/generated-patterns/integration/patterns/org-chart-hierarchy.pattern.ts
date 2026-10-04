@@ -211,7 +211,7 @@ const createsCycle = (
     if (current === candidateManager) return true;
     const next = children.get(current);
     if (next && next.length > 0) {
-      queue.push(...next);
+      for (const child of next) queue.push(child);
     }
   }
   return false;

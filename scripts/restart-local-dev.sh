@@ -20,7 +20,6 @@ CLEAR_CACHE=false
 CLEAR_ALL_SPACES=false
 FORCE=false
 WATCH=false
-BG_UPDATER=false
 # Flags this script has no opinion about, forwarded to start-local-dev.sh.
 # This script is a wrapper around that one, so its surface is the other's, and
 # refusing a flag it has not heard of makes every caller wait for this file to
@@ -49,10 +48,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --cf-harness)
             CF_HARNESS=true
-            shift
-            ;;
-        --bg-updater)
-            BG_UPDATER=true
             shift
             ;;
         --inspect)
@@ -165,9 +160,6 @@ if [[ "$FORCE" == "true" ]]; then
 fi
 if [[ "$WATCH" == "true" ]]; then
     START_ARGS="$START_ARGS --watch"
-fi
-if [[ "$BG_UPDATER" == "true" ]]; then
-    START_ARGS="$START_ARGS --bg-updater"
 fi
 if [[ "$CF_HARNESS" == "true" ]]; then
     START_ARGS="$START_ARGS --cf-harness"

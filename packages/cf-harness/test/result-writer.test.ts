@@ -157,9 +157,9 @@ describe("writeAgentResult()", () => {
       cfcFlowLabels: "persist",
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `result-writer-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
