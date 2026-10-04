@@ -195,8 +195,9 @@ function atNode(source: CfcLabelViewSource): CfcLabelViewSource {
  * caveat's source redacted, and, where `policy` refuses `cell`'s labels, as
  * {@link cellLabelRefusal} fits them, joined at its root, since the path an
  * entry sits at names a field, which is part of what the record holding it
- * holds (§4.6.4.1). A view whose read failed in part (`readFailed`) is
- * refused, as labels that could not be read are, and so joined. Fitting the cell as a whole is stricter than deciding a
+ * holds (§4.6.4.1). A view whose read failed in part (`readFailed`), or
+ * one of a place in a channel's own state, is refused, as labels that could
+ * not be read are, and so joined. Fitting the cell as a whole is stricter than deciding a
  * name on the record's node alone, as a host's list of a record's fields is
  * decided: a view can withhold a name that list shows. Every view the worker
  * hands a host, on a ref, a link in a value or a binding, is made here, so a
@@ -212,7 +213,11 @@ export function displayLabelView(
   if (policy === undefined || admitsEverything(policy)) return shown;
   const refusal = cellLabelRefusal(
     cell,
-    [{ view, readFailed, spaces: cfcLabelViewOriginSpaces(view) }],
+    [{
+      view,
+      readFailed: readFailed || inChannelState(cell),
+      spaces: cfcLabelViewOriginSpaces(view),
+    }],
     policy,
     sources,
   );

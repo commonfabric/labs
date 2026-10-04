@@ -14,6 +14,7 @@ import {
   canRenderConfidentialityAtom,
   cellLabelSources,
   confidentialityLabels,
+  displayLabelView,
 } from "../src/worker/display-fit.ts";
 import type { RenderPolicy } from "../src/worker/types.ts";
 
@@ -108,6 +109,20 @@ Deno.test("display fit - a channel's own state", async (t) => {
           {},
         ),
         false,
+      );
+      // Nor is a view of it shown with the fields its entries name.
+      const view = {
+        version: 1 as const,
+        entries: [{ path: ["entries"], label: { confidentiality: [] } }],
+      };
+      assertEquals(
+        displayLabelView(
+          effects,
+          { view, readFailed: false },
+          policyWith({ maxConfidentiality: [] }),
+          {},
+        ).entries.map((entry) => entry.path),
+        [[]],
       );
     });
   } finally {
