@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { CellHandle } from "@/cell-handle.ts";
+import { CellHandle, CellReadRefusedError } from "@/cell-handle.ts";
 import { type CellRef, RequestType } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
 
@@ -17,6 +17,19 @@ const recipient: CellRef = {
   scope: "space",
 };
 
+/** A client whose worker answers each request with `answer`. */
+function clientAnswering(
+  answer: (request: { type: string }) => unknown,
+): RuntimeClient {
+  const conn = {
+    on: () => {},
+    request: (request: { type: string }) => Promise.resolve(answer(request)),
+  } as unknown as never;
+  return new (RuntimeClient as unknown as {
+    new (conn: never, principal: undefined): RuntimeClient;
+  })(conn, undefined);
+}
+
 describe("snapshot-share", () => {
   it("prepares a preview and commits only its opaque confirmation id", async () => {
     const requests: unknown[] = [];
@@ -24,20 +37,12 @@ describe("snapshot-share", () => {
       type: "https://commonfabric.org/cfc/atom/User",
       subject: "recipient",
     };
-    const conn = {
-      on: () => {},
-      request: (request: { type: string }) => {
-        requests.push(request);
-        return Promise.resolve(
-          request.type === "snapshotShare:prepare"
-            ? { id: "prepared", value: { title: "Solaris" }, audience }
-            : { cell: recipient },
-        );
-      },
-    } as unknown as never;
-    const client = new (RuntimeClient as unknown as {
-      new (conn: never, principal: undefined): RuntimeClient;
-    })(conn, undefined);
+    const client = clientAnswering((request) => {
+      requests.push(request);
+      return request.type === "snapshotShare:prepare"
+        ? { id: "prepared", value: { title: "Solaris" }, audience }
+        : { cell: recipient };
+    });
 
     const preview = await client.prepareSnapshotShare(source, {
       user: recipient,
@@ -60,5 +65,14 @@ describe("snapshot-share", () => {
       { type: RequestType.SnapshotShareCancel, id: "cancelled" },
       { type: RequestType.SnapshotShareCommit, id: "prepared" },
     ]);
+  });
+
+  it("rejects a preview of a source the worker refuses the host", async () => {
+    const client = clientAnswering(() => ({
+      refused: { refusedBy: "display-ceiling" },
+    }));
+
+    await expect(client.prepareSnapshotShare(source, { user: recipient }))
+      .rejects.toThrow(CellReadRefusedError);
   });
 });
