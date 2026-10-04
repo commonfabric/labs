@@ -53,6 +53,7 @@ import { collectConsumedLabel } from "./prepare.ts";
 import { SNAPSHOT_SHARE_WRITER } from "./share-snapshot.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
+import { COMPILE_CACHE_WRITER } from "../compilation-cache/writer-identity.ts";
 
 /** Builtin implementation identity that alone writes reviewed intents. */
 export const REVIEWED_INTENT_WRITER = "cfc-reviewed-intent";
@@ -406,14 +407,14 @@ const stampingBuiltinOf = (pattern: AtomPattern): string | undefined => {
  * The builtins outside this runtime's module registry whose writes hold a
  * value a pattern chose: the host operations that copy a reviewed value, and
  * the compile cache, which writes what `compileAndRun` compiled from source a
- * pattern can supply (its identity is set in
+ * pattern can supply (`COMPILE_CACHE_WRITER`, shared with
  * `compilation-cache/cell-cache.ts`).
  */
 const HOST_COPYING_WRITERS: ReadonlySet<string> = new Set([
   SNAPSHOT_SHARE_WRITER,
   CUSTODY_SEAL_WRITER,
   REVIEWED_INTENT_WRITER,
-  "compile-cache",
+  COMPILE_CACHE_WRITER,
 ]);
 
 /**
@@ -690,10 +691,13 @@ const inspect = async (
     throw new Error("Reviewed intent handles must belong to the same runtime");
   }
   // The record's stamp is a flow label, so a runtime that would not persist
-  // one could only write records that never verify.
+  // one could only write records that never verify. And the record's own
+  // confidentiality, and the writer claims that keep it whole, hold only
+  // where CFC is enforced: `observe` diagnoses and lets the write through.
   if (
     runtime.cfcFlowLabels !== "persist" ||
-    runtime.cfcEnforcementMode === "disabled"
+    (runtime.cfcEnforcementMode !== "enforce-explicit" &&
+      runtime.cfcEnforcementMode !== "enforce-strict")
   ) {
     throw new Error(
       "Reviewed intent requires a runtime that enforces CFC and persists flow labels",
@@ -898,7 +902,9 @@ const parametersOf = (
       parameters[key] = bound[key];
       continue;
     }
-    const entered = input[key];
+    // Only a value the input holds as its own was entered; one it inherits
+    // through its prototype was not.
+    const entered = Object.hasOwn(input, key) ? input[key] : undefined;
     if (typeof entered !== "string") {
       throw new Error(
         debugStr`Reviewed intent commit requires text for $quote${key}`,
