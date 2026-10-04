@@ -534,11 +534,16 @@ export type HarnessCommandOutcomeRecord = Pick<
 /**
  * Provenance of a command result held as a `document` referent with label
  * source `command`: which command produced it, as whom, and against which
- * loom and version.
+ * loom and version. When present, `loomActor` identifies the executor actor
+ * using attribution's grammar and must agree with `actor`. It participates in
+ * result identity only when present.
  */
 export interface HarnessCommandResultProvenance {
   command: string;
   actor: HarnessCommandActor;
+
+  /** Executor actor: `user` or `agent:<slug>`, agreeing with `actor`. */
+  loomActor?: string;
 
   /** The loom the command acted on, when it named one. */
   loomId?: string;
@@ -1297,16 +1302,27 @@ export const readHarnessCommandResultProvenance = (
 ): HarnessCommandResultProvenance | undefined => {
   if (!isObjectNotArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const keys = ["command", "actor", "loomId", "version", "originLoomId"];
+  const keys = [
+    "command",
+    "actor",
+    "loomActor",
+    "loomId",
+    "version",
+    "originLoomId",
+  ];
   if (!hasOnlyKeys(record, keys) || !hasKeys(record, ["command", "actor"])) {
     return undefined;
   }
   const { command, actor } = record;
+  const loomActor = own(record, "loomActor");
   const loomId = own(record, "loomId");
   const version = own(record, "version");
   const originLoomId = own(record, "originLoomId");
   if (
     !isCommandId(command) || !isActor(actor) ||
+    (loomActor !== undefined &&
+      (typeof loomActor !== "string" || !LOOM_ACTOR.test(loomActor) ||
+        (actor === "user") !== (loomActor === "user"))) ||
     (loomId !== undefined && !isLoomId(loomId)) ||
     (version !== undefined && !isNonNegativeInteger(version)) ||
     (originLoomId !== undefined && !isLoomId(originLoomId))
@@ -1316,8 +1332,38 @@ export const readHarnessCommandResultProvenance = (
   return {
     command,
     actor,
+    ...(loomActor !== undefined ? { loomActor } : {}),
     ...(loomId !== undefined ? { loomId } : {}),
     ...(version !== undefined ? { version } : {}),
     ...(originLoomId !== undefined ? { originLoomId } : {}),
   };
+};
+
+/**
+ * Builds held-result provenance from an invocation, attribution and outcome,
+ * copying the executor actor when present. Returns `undefined` for parts the
+ * provenance reader refuses.
+ */
+export const harnessCommandResultProvenance = (
+  invocation: HarnessCommandInvocation,
+  attribution: HarnessCommandAttribution,
+  outcome: HarnessCommandOutcome,
+): HarnessCommandResultProvenance | undefined => {
+  const version = outcome.outputs?.version;
+  return readHarnessCommandResultProvenance({
+    command: invocation.command,
+    actor: attribution.actor,
+    ...(attribution.loomActor !== undefined
+      ? { loomActor: attribution.loomActor }
+      : {}),
+    ...(invocation.target !== undefined
+      ? { loomId: invocation.target.loomId }
+      : {}),
+    ...(Number.isSafeInteger(version) && (version as number) >= 0
+      ? { version }
+      : {}),
+    ...(attribution.originLoomId !== undefined
+      ? { originLoomId: attribution.originLoomId }
+      : {}),
+  });
 };

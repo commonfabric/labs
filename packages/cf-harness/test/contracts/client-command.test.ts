@@ -8,6 +8,7 @@ import {
   HARNESS_COMMAND_BODY_MAX_BYTES,
   harnessClientProtocolEcho,
   harnessCommandActorFor,
+  harnessCommandResultProvenance,
   legacyOutcomeOfHarnessCommandSettlement,
   readHarnessClientProtocolDeclaration,
   readHarnessCommandCatalog,
@@ -134,6 +135,74 @@ describe("client command contract", () => {
         expect(encoded(rebuilt)).toBe(fixtureText(name));
       });
     }
+
+    for (
+      const name of [
+        "result-provenance-agent",
+        "result-provenance-user",
+        "result-provenance-legacy",
+      ]
+    ) {
+      it(`reads and re-encodes ${name} exactly`, () => {
+        const provenance = readHarnessCommandResultProvenance(fixture(name));
+        expect(provenance).toBeDefined();
+        expect(encoded(provenance)).toBe(fixtureText(name));
+      });
+    }
+
+    it("copies attribution's `loomActor` into held-result provenance", () => {
+      const action = readHarnessTypedClientAction(
+        (fixture("request-invoke-query").event as Record<string, unknown>)
+          .action,
+      );
+      const body = readHarnessCommandResolveBody(
+        fixture("resolve-executed-success"),
+      );
+      if (
+        action?.kind !== "invoke_command" ||
+        body?.settlement.status !== "executed" ||
+        !("outcome" in body.settlement)
+      ) {
+        throw new Error("expected an executed invocation");
+      }
+      const { attribution, outcome } = body.settlement;
+      const provenance = harnessCommandResultProvenance(action.invocation, {
+        ...attribution,
+        loomActor: "agent:people-discovery",
+      }, outcome);
+      expect(provenance?.loomActor).toBe("agent:people-discovery");
+      expect(provenance?.actor).toBe("agent");
+      expect(provenance?.command).toBe(action.invocation.command);
+      expect(
+        harnessCommandResultProvenance(action.invocation, {
+          ...attribution,
+          loomActor: "user",
+        }, outcome),
+      ).toBeUndefined();
+    });
+
+    it("refuses a result's malformed or disagreeing `loomActor`", () => {
+      for (
+        const [actor, loomActor] of [
+          ["agent", "user"],
+          ["user", "agent:people-discovery"],
+          ["agent", "agent"],
+          ["agent", "agent:"],
+          ["agent", "agent:UPPER"],
+          ["agent", "agent:" + "x".repeat(65)],
+          ["agent", null],
+          ["agent", 7],
+        ]
+      ) {
+        expect(
+          readHarnessCommandResultProvenance({
+            command: "loom.inspect",
+            actor,
+            loomActor,
+          }),
+        ).toBeUndefined();
+      }
+    });
 
     it("reads the protocol declaration a task carries", () => {
       const task = fixture("protocol-task-request");
