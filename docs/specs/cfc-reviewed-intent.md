@@ -391,6 +391,9 @@ sent records say.
 
 ## Open questions for the CFC author
 
+The spec change this proposes, and these questions, get their entry in
+[`cfc-spec-changes.md`](cfc-spec-changes.md) in a follow-up change.
+
 1. May a first version ship with destination integrity that a deployment
    chooses the atom for, so that consent to the destination is display-only
    until address books carry robust integrity, or must §3.8.4 integrity be
