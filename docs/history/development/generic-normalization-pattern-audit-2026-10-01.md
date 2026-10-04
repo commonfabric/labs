@@ -3,6 +3,7 @@ status: historical
 created: 2026-10-01
 archived: 2026-10-01
 reason: "Corpus and compile-time audit of the generic-normalization follow-up to #8325."
+candidate-commit: b0a31fa02789ef74f0329cd2b1f6dfe2b14e07f3
 ---
 
 # Generic-normalization pattern audit

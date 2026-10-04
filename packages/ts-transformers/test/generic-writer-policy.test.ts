@@ -40,6 +40,37 @@ function valueSchema(
 
 describe("generic writer policy", () => {
   for (const position of ["input", "output"] as const) {
+    it(`keeps writer identities from every merged declaration in the ${position} schema`, async () => {
+      const output = await transformSource(
+        `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+interface Payload<T> { first: T }
+interface Payload<T> { second: T }
+type Input = Payload<WriteAuthorizedBy<string, typeof f>>;
+export default ${
+          position === "input"
+            ? "pattern<Input>(() => ({}))"
+            : "pattern<{}, Input>(() => ({} as Input))"
+        };`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      const root = valueSchema(schema, schema);
+      expect(root.required).toEqual(["first", "second"]);
+      for (const field of ["first", "second"]) {
+        expect(valueSchema(root.properties?.[field], schema)).toMatchObject({
+          type: "string",
+          ifc: {
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { file: "/test.tsx", path: ["f"] },
+            },
+          },
+        });
+      }
+    });
+
     it(`keeps a named writer policy under Readonly in the ${position} schema`, async () => {
       const output = await transformSource(
         `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";

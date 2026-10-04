@@ -2279,17 +2279,24 @@ export class SchemaGenerator {
       if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
         symbol = checker.getAliasedSymbol(symbol);
       }
-      const declaration = symbol?.declarations?.find((node) =>
-        ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node) ||
-        ts.isClassDeclaration(node)
-      );
-      if (!declaration || seen.has(declaration)) return;
-      seen.add(declaration);
+      const declarations =
+        symbol?.declarations?.filter((node) =>
+          ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node) ||
+          ts.isClassDeclaration(node)
+        ) ?? [];
+      if (declarations.length === 0 || declarations.every((d) => seen.has(d))) {
+        return;
+      }
+      for (const declaration of declarations) seen.add(declaration);
       const local = new Map<ts.TypeParameterDeclaration, BoundTypeArgument>();
       for (
-        const [index, parameter] of (declaration.typeParameters ?? []).entries()
+        const [index] of (declarations[0]!.typeParameters ?? []).entries()
       ) {
-        const written = node.typeArguments?.[index] ?? parameter.default;
+        const parameters = declarations.flatMap((declaration) =>
+          declaration.typeParameters?.[index] ?? []
+        );
+        const written = node.typeArguments?.[index] ??
+          parameters.find((parameter) => parameter.default)?.default;
         if (!written) continue;
         const under = node.typeArguments?.[index]
           ? outer
@@ -2303,8 +2310,10 @@ export class SchemaGenerator {
               checker.getTypeFromTypeNode(written),
         );
         if (argument) {
-          local.set(parameter, argument);
-          argumentsHere.set(parameter, argument);
+          for (const parameter of parameters) {
+            local.set(parameter, argument);
+            argumentsHere.set(parameter, argument);
+          }
         }
       }
       const bound = { arguments: local, declaredNode: reference };
@@ -2319,12 +2328,14 @@ export class SchemaGenerator {
           visitArgument(argument);
         }
       }
-      if (ts.isTypeAliasDeclaration(declaration)) {
-        const body = readAuthoredTypeNode(declaration.type, checker);
-        if (ts.isTypeReferenceNode(body)) visit(body, bound);
-      } else {
-        for (const clause of declaration.heritageClauses ?? []) {
-          for (const base of clause.types) visit(base, bound);
+      for (const declaration of declarations) {
+        if (ts.isTypeAliasDeclaration(declaration)) {
+          const body = readAuthoredTypeNode(declaration.type, checker);
+          if (ts.isTypeReferenceNode(body)) visit(body, bound);
+        } else {
+          for (const clause of declaration.heritageClauses ?? []) {
+            for (const base of clause.types) visit(base, bound);
+          }
         }
       }
     };

@@ -90,6 +90,21 @@ describe("type-arguments", () => {
           "number",
           { ...boxOfNumber, default: { value: 0 } },
         ],
+        [
+          "{ value: T } | Default<{ value: 0 }>",
+          "number",
+          { ...boxOfNumber, default: { value: 0 } },
+        ],
+        [
+          "Box<T> | Default<{ value: T }>",
+          "0",
+          {
+            type: "object",
+            properties: { value: { enum: [0], type: "number" } },
+            required: ["value"],
+            default: { value: 0 },
+          },
+        ],
       ] as const
     ) {
       it(`returns the schema of \`${declared}\` with \`T\` as \`${argument}\` written in place`, async () => {
@@ -107,6 +122,39 @@ describe("type-arguments", () => {
         });
       });
     }
+
+    it("uses a bound union argument to validate a full object default", async () => {
+      const schema = await schemaOfC(`
+        interface Input<T> { c: Box<T | string> | Default<{ value: 0 }> }
+        type Root = Input<number>;
+      `);
+      expect(schema).toEqual({
+        type: "object",
+        properties: {
+          value: { anyOf: [{ type: "number" }, { type: "string" }] },
+        },
+        required: ["value"],
+        default: { value: 0 },
+      });
+    });
+
+    it("validates a full default when the checker absorbs the bound literal into a wider union arm", async () => {
+      expect(
+        await schemaOfC(`
+        interface Input<T> { c: Box<T | number> | Default<{ value: 0 }> }
+        type Root = Input<0>;
+      `),
+      ).toEqual({
+        type: "object",
+        properties: {
+          value: {
+            anyOf: [{ type: "number", enum: [0] }, { type: "number" }],
+          },
+        },
+        required: ["value"],
+        default: { value: 0 },
+      });
+    });
 
     it("matches a member naming a generic declaration to its own instantiation among others of that declaration", async () => {
       // Matched to `Box<string>`, `Box<T>` would not cover the default, and the
@@ -183,6 +231,10 @@ describe("type-arguments", () => {
 
     it("throws for an object default the argument does not cover, as the property written in place does", async () => {
       const message = "Default object union member is not assignable";
+      await expect(schemaOfC(`
+        interface Input<T> { c: { value: T } | Default<{ value: 0 }> }
+        type Root = Input<string>;
+      `)).rejects.toThrow(message);
       await expect(
         schemaOfC(
           "interface Input<T> { c: T | Default<{}>; } type Root = Input<Box<number>>;",

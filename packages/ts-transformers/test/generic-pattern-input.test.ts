@@ -127,6 +127,18 @@ describe("generic pattern input", () => {
         { type: "number", default: 0 },
         undefined,
       ],
+      [
+        "Box<T> | Default<{ value: T }>",
+        "0",
+        false,
+        {
+          type: "object",
+          properties: { value: { type: "number", enum: [0] } },
+          required: ["value"],
+          default: { value: 0 },
+        },
+        undefined,
+      ],
     ] as const
   ) {
     it(`emits \`${declared}\` with \`T\` as \`${argument}\` as the property declared with \`${argument}\` in place`, async () => {
@@ -148,6 +160,36 @@ describe("generic pattern input", () => {
       expect(inPlace.input).toEqual(schema);
     });
   }
+
+  it("keeps a valid inline object default in the input and capture schemas", async () => {
+    // The capture reads the expanded brand union and retains its covered
+    // literal-object arm. Both arms accept numbers, so this reading has the
+    // same value constraint as the input's authored object reading.
+
+    const generic = await bindingSchemasOf(
+      "interface Input<T> { c: { value: T } | Default<{ value: 0 }> }",
+      "Input<number>",
+      false,
+    );
+    const inPlace = await bindingSchemasOf(
+      "interface Input { c: { value: number } | Default<{ value: 0 }> }",
+      "Input",
+      false,
+    );
+    expect(generic.input).toEqual(inPlace.input);
+    expect(generic.result).toEqual(inPlace.result);
+    expect(generic.input).toEqual({ ...boxOfNumber, default: { value: 0 } });
+    expect(generic.capture).toEqual({
+      anyOf: [
+        {
+          ...boxOfNumber,
+          properties: { value: { type: "number", enum: [0] } },
+        },
+        boxOfNumber,
+      ],
+      default: { value: 0 },
+    });
+  });
 
   it("emits a generic declaration's property through a non-generic input", async () => {
     const counter = {

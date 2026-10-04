@@ -323,7 +323,9 @@ the bindings of the scope where that node is written. A forwarded parameter
 retains that argument and scope. A parameter default reads under the preceding
 parameters. Inherited members use their base declaration's parameters, bound
 through the heritage arguments. A nested instantiation binds its parameters
-afresh.
+afresh. Merged interface declarations bind each declaration's parameter nodes
+by position. A default introduced by a later declaration is available to the
+whole interface, including a default referring to a preceding parameter.
 
 A bound parameter reads as its argument. Structural member syntax retains those
 bindings through object properties, literal index signatures, arrays, tuples,
@@ -331,8 +333,9 @@ unions and intersections, and through alias bodies such as `Array<T>`,
 `ReadonlyArray<T>`, `Record<string, T>`, `[T]` and `T | null`. Optional properties
 remain outside `required`. When the checker adds `undefined` for an optional
 property, the declared bound value retains that alternative, including an
-optional cell reference. Explicit `T | undefined` and optional tuple elements
-also retain `undefined`.
+optional cell reference. A synthetic reference with no checker instantiation
+reads that alternative from the member's optional flag. Explicit `T | undefined`
+and optional tuple elements also retain `undefined`.
 
 Library key arguments also read their bindings: `Pick<T, K>` and `Omit<T, K>`
 accept a `K` bound to a literal key union, and `Record<K, T>` accepts a bound
@@ -343,10 +346,17 @@ an unrelated binding does not make such a type deferred.
 
 `UnionFormatter` reads the types used for `Default` coverage and object-default
 checks through the same bindings. A reference such as `Box<T>` is matched to
-its own instantiation among the enclosing union's semantic members, so an
-argument for a different `Box` reading cannot validate its default. Default
+its own instantiation among the enclosing union's semantic members and their
+type arguments, so an argument for a different `Box` reading cannot validate
+its default. Union arguments and anonymous object members are compared under
+their bindings; an anonymous object must have the same declaration identity
+and matching member types. Default target and value reads also search the
+enclosing checker instantiation, including flattened marker arguments. Default
 coverage uses the authored target rather than a capture's narrowed observation;
 fields omitted from an observation do not invalidate a full object default.
+Compound full-object default coverage requires a checker-created instantiation;
+a raw synthetic generic reference with only its declaration type cannot supply
+that validation through syntax alone.
 Literal default nodes also read bound parameters. With `T` bound to `number`,
 `T | string | Default<string, "">` emits
 `{ type: ["number", "string"], default: "" }`; `PerUser<T>` with `T` bound to

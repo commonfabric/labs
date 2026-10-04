@@ -2779,6 +2779,86 @@ type CalculatorRequest = {
         );
       const BOX = "export interface Box<T = number> { value: T }";
 
+      it("keeps undefined beside optional bound values without a checker instantiation", async () => {
+        const schema = await generate(
+          {
+            "/main.ts": `
+              export interface Input<T> {
+                value?: T;
+                box?: { value: T };
+                cell?: Writable<T>;
+              }
+            `,
+          },
+          generic("Input", keyword(ts.SyntaxKind.NumberKeyword)),
+        );
+
+        expect(schema).toEqual({
+          type: "object",
+          properties: {
+            value: { type: ["number", "undefined"] },
+            box: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { value: { type: "number" } },
+                  required: ["value"],
+                },
+                { type: "undefined" },
+              ],
+            },
+            cell: {
+              anyOf: [
+                { type: "number", asCell: ["cell"] },
+                { type: "undefined" },
+              ],
+            },
+          },
+        });
+      });
+
+      it("reads every merged declaration under the supplied argument", async () => {
+        const schema = await generate(
+          {
+            "/main.ts": `
+              export interface Input<T> { first: T; }
+              export interface Input<T = number> { second: T; }
+            `,
+          },
+          generic("Input", keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        expect(schema).toEqual({
+          type: "object",
+          properties: {
+            first: { type: "string" },
+            second: { type: "string" },
+          },
+          required: ["first", "second"],
+        });
+      });
+
+      it("reads defaults introduced by a later merged declaration", async () => {
+        const schema = await generate(
+          {
+            "/main.ts": `
+              export interface Input<T, U> { first: T; }
+              export interface Input<T = string, U = T> { second: U; }
+            `,
+          },
+          generic("Input"),
+        );
+
+        expect(schema).toEqual({
+          type: "object",
+          properties: {
+            first: { type: "string" },
+            second: { type: "string" },
+          },
+          required: ["first", "second"],
+        });
+      });
+
       it("reads an argument wider than the parameter's constraint", async () => {
         // Read by the constraint, `name` would drop `extra` from every read.
         const schema = await generate(

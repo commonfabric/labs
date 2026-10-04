@@ -2668,9 +2668,12 @@ Special path:
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
 - Plain generic declarations read members under their argument bindings,
-  including inherited interface and class members and structural alias bodies.
+  including inherited interface and class members, merged interface
+  declarations and structural alias bodies.
   Member defaults, scope wrappers and `Default` union validation use those
-  bindings. Printed captures bind checker-created argument types when authored
+  bindings. Default validation recovers instantiated compound arguments and
+  anonymous members from the checker's union members and type arguments.
+  Printed captures bind checker-created argument types when authored
   argument nodes are unavailable. Mapped views such as
   `Readonly<Input<number>>` retain the input declaration's member bindings;
   synthetic generic references resolve and bind their declarations from module

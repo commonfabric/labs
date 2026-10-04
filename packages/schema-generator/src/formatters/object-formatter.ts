@@ -33,7 +33,6 @@ import { isInternalMemberName } from "../typescript/property-name.ts";
 import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
-  isUnionWithUndefined,
 } from "../typescript/property-optionality.ts";
 import {
   holdsTypeParameter,
@@ -369,10 +368,7 @@ export class ObjectFormatter implements TypeFormatter {
       }
 
       // Delegate to the main generator (specific formatters handle wrappers/defaults)
-      const readsOptionalBound = readsBoundNode && isOptionalSymbol(prop) &&
-        isUnionWithUndefined(
-          safeGetPropertyType(prop, type, checker, propTypeNode),
-        );
+      const readsOptionalBound = readsBoundNode && isOptionalSymbol(prop);
       const generated = readsOptionalBound
         ? this.#schemaGenerator.formatOptionalProperty(
           resolvedPropType,
