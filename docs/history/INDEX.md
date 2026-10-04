@@ -4,6 +4,8 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Audits and reports
 
+- [Generic-normalization baseline cleanup](development/generic-normalization-baseline-cleanup-2026-10-03.md) — PR #8395 after Opus's second review: remove 14 never-shipped candidate records, restore the existing acceptance registry, and record only the final contracts.
+
 - [Generic-normalization review audit](development/generic-normalization-review-audit-2026-10-03.md) — PR #8395 after Opus review and rebase onto main 8d2cc3f864: 403 compiled entry points, 86 changed outputs classified, identical IFC metadata kinds, values and counts, and a notebook deletion mutation control.
 
 - [Generic-normalization pattern audit](development/generic-normalization-pattern-audit-2026-10-01.md) — 397 compiled entry points against main 75199b828d; every changed schema classified across 83 entry points, 14 compatible contract records appended, and one paired compile-time measurement.

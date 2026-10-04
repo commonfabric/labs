@@ -956,8 +956,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
-    // This entry names pre-slot contracts not assigned to another entry,
-    // keeping the pattern/baseline pairs disjoint.
+    // A THIRD entry for home, naming only the baselines recorded under or
+    // after the entry above; the other 23 report the same path and stay with
+    // the two entries that name them, keeping the pairs disjoint.
     //
     // Home's default profile moves from a link stored at the root of its own
     // cell to a link under `profile` in a slot cell (`DefaultProfileSlot`),
@@ -969,7 +970,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     baselines: [
       "20261001T190916Z-5k9_Adl37zMhsNgG",
       "20261001T210138Z-P3RELdPaFKfIXROk",
-      "20261002T030859Z-0aFLnq2HTDw4iEju",
       "20261002T164437Z-Ppiw9bONPOzUfI_d",
       "20261003T000427Z-oEfsHL584h6qI8sa",
       "20261003T003223Z-fDj2SHhwNCXbd-O3",
@@ -986,8 +986,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
-    // This entry names pre-slot contracts not assigned to another entry.
-    // The picker's `defaultProfile` argument is home's slot,
+    // A THIRD entry for the picker, naming only baselines the two entries
+    // above leave out. The picker's `defaultProfile` argument is home's slot,
     // which holds the default's link under `profile`, rather than the link.
     pattern: "system/profile-picker.tsx",
     baselines: [
@@ -997,7 +997,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260922T075652Z-qC_3l84MczfDgjvh",
       "20260923T173753Z-1_LxUmwIZJz7WCut",
       "20260923T205258Z-B19D5XwDS0LdQdeY",
-      "20261002T030859Z-Am2mYYcxRoMIAoQs",
       "20261003T000427Z-YEfgzmp3UjJCJFgP",
     ],
     paths: ["argument.defaultProfile"],
