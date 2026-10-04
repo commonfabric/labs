@@ -944,15 +944,18 @@ function markAuthoredDocumentSchema(
  * back to its source. Read back are:
  *
  * - a `toSchema` call;
- * - a value of a primitive type, which holds no schema;
+ * - a value of a primitive type, which holds no schema, where nothing it is
+ *   bound to can be read instead;
  * - an object or array literal, member by member, spreads included;
  * - a `const` binding or an import of one, through its initializer;
  * - a member access: the member an object literal reached that way holds,
  *   and otherwise the whole object it is read from;
- * - a call: its arguments, and, for a function written in the program, each
- *   expression it returns, where its parameters stand for those arguments
- *   (`bound`). A function only declared, as the library's are, writes no
- *   `toSchema` call, so what it returns comes from its arguments;
+ * - a call: its arguments, a callback among them through what it returns,
+ *   and, for a function written in the program, each expression it returns,
+ *   where its parameters stand for those arguments and its defaults
+ *   (`bound`). A function only declared writes no `toSchema` call; one
+ *   commonfabric declares, or one that returns a primitive, returns what it
+ *   is given, and any other declared one cannot be read back;
  * - a conditional or a `??`/`||` choice, both ways.
  *
  * Each is seen through `as`, `satisfies`, `!` and parentheses. Anything
@@ -974,11 +977,11 @@ function readSchemaSources(
   ) =>
     !!inner &&
     readSchemaSources(inner, checker, calls, innerBound, depth + 1);
+  const isPrimitive = () => isPrimitiveType(checker.getTypeAtLocation(value));
   if (isToSchemaCall(value)) {
     calls.push(value);
     return true;
   }
-  if (isPrimitiveType(checker.getTypeAtLocation(value))) return true;
   if (ts.isObjectLiteralExpression(value)) {
     return value.properties.every((property) =>
       ts.isPropertyAssignment(property)
@@ -997,14 +1000,19 @@ function readSchemaSources(
     const symbol = ts.isShorthandPropertyAssignment(value.parent)
       ? checker.getShorthandAssignmentValueSymbol(value.parent)
       : checker.getSymbolAtLocation(value);
-    return value.text === "undefined" ||
-      (!!symbol && bound.has(symbol)) ||
-      next(constInitializer(value, checker));
+    if (value.text === "undefined" || (!!symbol && bound.has(symbol))) {
+      return true;
+    }
+    // A binding is read through what it is bound to before its type is
+    // trusted: an assertion can give a schema a primitive type.
+    const initializer = constInitializer(value, checker);
+    return initializer ? next(initializer) : isPrimitive();
   }
   if (
     ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)
   ) {
-    return next(staticMemberOf(value, checker, depth) ?? value.expression);
+    const member = staticMemberOf(value, checker, depth);
+    return member ? next(member) : isPrimitive() || next(value.expression);
   }
   if (ts.isConditionalExpression(value)) {
     return next(value.whenTrue) && next(value.whenFalse);
@@ -1016,29 +1024,48 @@ function readSchemaSources(
   ) {
     return next(value.left) && next(value.right);
   }
+  // A function's parameters stand for what it is given: its defaults, read
+  // here, and the arguments of the call that reads its result.
+  const readFunction = (
+    parameters: readonly ts.ParameterDeclaration[],
+    body: ts.ConciseBody,
+  ) => {
+    const parameterSymbols = new Set(bound);
+    for (const parameter of parameters) {
+      if (
+        !(parameter.initializer === undefined || next(parameter.initializer)) ||
+        !bindingDefaultsOf(parameter.name).every((initializer) =>
+          next(initializer)
+        )
+      ) {
+        return false;
+      }
+      for (const name of bindingNamesOf(parameter.name)) {
+        const symbol = checker.getSymbolAtLocation(name);
+        if (symbol) parameterSymbols.add(symbol);
+      }
+    }
+    return returnedExpressions(body).every((returned) =>
+      next(returned, parameterSymbols)
+    );
+  };
   if (ts.isCallExpression(value)) {
-    const fn = calledFunction(value.expression, checker);
+    const fn = calledFunction(value, checker);
     if (!fn) return false;
     if (
-      !value.arguments.every((argument) =>
-        isFunctionLikeExpression(argument) || next(argument)
-      )
+      !value.arguments.every((argument) => {
+        const callback = unwrapExpression(argument);
+        return ts.isArrowFunction(callback) ||
+            ts.isFunctionExpression(callback)
+          ? readFunction(callback.parameters, callback.body)
+          : next(argument);
+      })
     ) {
       return false;
     }
-    if (fn === "declared") return true;
-    const parameters = new Set(bound);
-    for (const parameter of fn.parameters) {
-      for (const name of bindingNamesOf(parameter.name)) {
-        const symbol = checker.getSymbolAtLocation(name);
-        if (symbol) parameters.add(symbol);
-      }
-    }
-    return returnedExpressions(fn.body).every((returned) =>
-      next(returned, parameters)
-    );
+    return fn === "declared" || readFunction(fn.parameters, fn.body);
   }
-  return false;
+  return isPrimitive();
 }
 
 /** Whether `type` is primitive, so a value of it holds no schema. */
@@ -1052,14 +1079,15 @@ function isPrimitiveType(type: ts.Type): boolean {
 }
 
 /**
- * The function `callee` calls, through imports: one written in the program,
- * as a function declaration or a `const` binding of a function or arrow
+ * The function `call` calls, through imports: one written in the program, as
+ * a function declaration or a `const` binding of a function or arrow
  * function, with its body, or `"declared"` for one only declared in a
- * declaration file, as the library's are. `undefined` where neither can be
- * told.
+ * declaration file whose result holds only what it is given: commonfabric's,
+ * by the module its callee is imported from, or one that returns a primitive.
+ * `undefined` where none of those can be told.
  */
 function calledFunction(
-  callee: ts.Expression,
+  call: ts.CallExpression,
   checker: ts.TypeChecker,
 ):
   | {
@@ -1068,7 +1096,7 @@ function calledFunction(
   }
   | "declared"
   | undefined {
-  const target = unwrapExpression(callee);
+  const target = unwrapExpression(call.expression);
   const name = ts.isPropertyAccessExpression(target) ? target.name : target;
   let symbol = checker.getSymbolAtLocation(name);
   if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
@@ -1081,7 +1109,10 @@ function calledFunction(
       declaration.getSourceFile().isDeclarationFile
     )
   ) {
-    return "declared";
+    return isImportedFromCommonFabric(target, checker) ||
+        isPrimitiveType(checker.getTypeAtLocation(call))
+      ? "declared"
+      : undefined;
   }
   if (!ts.isIdentifier(target)) return undefined;
   const declaration = symbol?.valueDeclaration;
@@ -1098,6 +1129,47 @@ function calledFunction(
         ts.isFunctionExpression(initializer))
     ? { parameters: initializer.parameters, body: initializer.body }
     : undefined;
+}
+
+/** The default values a destructured parameter's elements are given. */
+function bindingDefaultsOf(name: ts.BindingName): ts.Expression[] {
+  if (ts.isIdentifier(name)) return [];
+  return name.elements.flatMap((element) =>
+    ts.isOmittedExpression(element) ? [] : [
+      ...(element.initializer ? [element.initializer] : []),
+      ...bindingDefaultsOf(element.name),
+    ]
+  );
+}
+
+/**
+ * Whether `callee`, read to the binding it starts from, is imported from a
+ * commonfabric module.
+ */
+function isImportedFromCommonFabric(
+  callee: ts.Expression,
+  checker: ts.TypeChecker,
+): boolean {
+  let root = callee;
+  while (ts.isPropertyAccessExpression(root)) {
+    root = unwrapExpression(root.expression);
+  }
+  if (!ts.isIdentifier(root)) return false;
+  return (checker.getSymbolAtLocation(root)?.declarations ?? []).some(
+    (declaration) => {
+      let current: ts.Node | undefined = declaration;
+      while (current && !ts.isImportDeclaration(current)) {
+        current = current.parent;
+      }
+      const module = current && ts.isImportDeclaration(current) &&
+          ts.isStringLiteral(current.moduleSpecifier)
+        ? current.moduleSpecifier.text
+        : undefined;
+      return module === "commonfabric" ||
+        !!module?.startsWith("commonfabric/") ||
+        !!module?.startsWith("@commonfabric/");
+    },
+  );
 }
 
 /** The identifiers a parameter's name binds, destructured ones included. */
@@ -1146,9 +1218,10 @@ function staticMemberOf(
     ? access.argumentExpression.text
     : undefined;
   const holder = objectLiteralOf(access.expression, checker, depth + 1);
-  return key === undefined || !holder
+  const member = key === undefined || !holder
     ? undefined
     : memberOfObjectLiteral(holder, key, checker, depth + 1);
+  return member === "absent" ? undefined : member;
 }
 
 /**
@@ -1175,29 +1248,33 @@ function objectLiteralOf(
 /**
  * The expression `literal`'s member `key` holds: its own property, which
  * comes last wins, or a spread after it whose object literal holds the key.
- * `undefined` where a spread that could hold it cannot be read.
+ * `"absent"` where the literal holds no member of that name, and `undefined`
+ * where a member that may be it cannot be read: a spread that cannot be read,
+ * or a member whose name cannot be read statically.
  */
 function memberOfObjectLiteral(
   literal: ts.ObjectLiteralExpression,
   key: string,
   checker: ts.TypeChecker,
   depth: number,
-): ts.Expression | undefined {
+): ts.Expression | "absent" | undefined {
   for (let i = literal.properties.length - 1; i >= 0; i--) {
     const property = literal.properties[i]!;
     if (ts.isSpreadAssignment(property)) {
       const spread = objectLiteralOf(property.expression, checker, depth);
       if (!spread) return undefined;
       const member = memberOfObjectLiteral(spread, key, checker, depth + 1);
-      if (member) return member;
+      if (member !== "absent") return member;
       continue;
     }
-    if (staticPropertyName(property.name) !== key) continue;
+    const name = staticPropertyName(property.name);
+    if (name === undefined) return undefined;
+    if (name !== key) continue;
     if (ts.isPropertyAssignment(property)) return property.initializer;
     if (ts.isShorthandPropertyAssignment(property)) return property.name;
     return undefined;
   }
-  return undefined;
+  return "absent";
 }
 
 /**
@@ -2486,19 +2563,29 @@ function holdsFreshWriterPolicy(
         const member = name === undefined
           ? undefined
           : checker.getPropertyOfType(object, name);
-        // A member the type does not name is read against its index
-        // signature, and with none, against its value's own type.
-        const memberType = (initializer: ts.Expression) =>
-          member
-            ? checker.getTypeOfSymbol(member)
-            : checker.getIndexTypeOfType(object, ts.IndexKind.String) ??
-              checker.getIndexTypeOfType(object, ts.IndexKind.Number) ??
-              checker.getTypeAtLocation(initializer);
+        // A member the type does not name is read against the index
+        // signatures it may fall under, a number's first, and with none,
+        // against its value's own type.
+        const withinMember = (initializer: ts.Expression) => {
+          if (member) {
+            return within(initializer, checker.getTypeOfSymbol(member));
+          }
+          const numeric = name === undefined || !Number.isNaN(Number(name));
+          const indexTypes = [
+            ...(numeric
+              ? [checker.getIndexTypeOfType(object, ts.IndexKind.Number)]
+              : []),
+            checker.getIndexTypeOfType(object, ts.IndexKind.String),
+          ].filter((type): type is ts.Type => type !== undefined);
+          return indexTypes.length > 0
+            ? indexTypes.some((type) => within(initializer, type))
+            : within(initializer, checker.getTypeAtLocation(initializer));
+        };
         if (ts.isPropertyAssignment(property)) {
-          return within(property.initializer, memberType(property.initializer));
+          return withinMember(property.initializer);
         }
         if (ts.isShorthandPropertyAssignment(property)) {
-          return within(property.name, memberType(property.name));
+          return withinMember(property.name);
         }
         // A method holds no data; an accessor's value is read from its type.
         return holdsWriterPolicy(checker.getTypeAtLocation(property), checker);

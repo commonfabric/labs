@@ -14,6 +14,7 @@ import { transformFiles, transformSource } from "./utils.ts";
 
 const PRELUDE = `/// <cts-enable />
 import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, schema as schemaOf, toSchema, wish } from "commonfabric";
+type Schema = ReturnType<typeof toSchema>;
 const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
 type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPrincipal: CurrentPrincipal }>>;
 `;
@@ -135,6 +136,11 @@ describe("document writer policy", () => {
         `{ byId: Dict<${POLICY}> }`,
       ],
       ["an index signature", "", `{ byId: { [key: string]: ${POLICY} } }`],
+      [
+        "a number index signature beside a string one",
+        "",
+        `{ byIndex: { [key: string]: unknown; [index: number]: ${POLICY} } }`,
+      ],
       ["a tuple", "", `{ pair: [${POLICY}] }`],
       [
         "a generic alias of a tuple",
@@ -328,6 +334,31 @@ export default pattern<{}>(() => {
           `second([0, toSchema<${UNREAD}>()])`,
         ],
         [
+          "a function whose parameter defaults to it",
+          `const make = (schema = toSchema<${UNREAD}>()) => schema;`,
+          "make()",
+        ],
+        [
+          "a callback a library function is given",
+          "",
+          `String(() => toSchema<${UNREAD}>()) as unknown as Schema`,
+        ],
+        [
+          "a constant whose type an assertion makes primitive",
+          `const hidden = toSchema<${UNREAD}>() as unknown as string;`,
+          "hidden as unknown as Schema",
+        ],
+        [
+          "a property whose type an assertion makes primitive",
+          `const schemas = { input: toSchema<${UNREAD}>() as unknown as string };`,
+          "schemas.input as unknown as Schema",
+        ],
+        [
+          "a property a spread with a computed key may replace",
+          `const key = "input" as string;\nconst schemas = { input: toSchema<{ value: string }>(), ...{ [key]: toSchema<${UNREAD}>() } };`,
+          "schemas.input",
+        ],
+        [
           "a shorthand property",
           `const input = toSchema<${UNREAD}>();\nconst schemas = { input };`,
           "schemas.input",
@@ -389,6 +420,11 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
           "a property a spread of a `let` binding may hold",
           `let base = { input: toSchema<${UNREAD}>() };\nconst schemas = { ...base };`,
           "schemas.input",
+        ],
+        [
+          "a method the default library declares",
+          "",
+          `[toSchema<${UNREAD}>()].map((schema) => schema)[0]!`,
         ],
         [
           "a `new` expression",
@@ -587,6 +623,10 @@ export default pattern<{}>((): ${UNREAD} => ({ byId: {} }));`);
           `return { box: ${"{ nested: ".repeat(20)}"" as ${POLICY}${
             " }".repeat(20)
           } };`,
+        ],
+        [
+          "returns through a constant whose declared type has a numeric index signature beside a string one",
+          `const fresh: { [key: string]: unknown; [index: number]: ${POLICY} } = { 1: "" as never };\n  return { box: fresh };`,
         ],
         [
           "returns through a constant whose declared type is an index signature",
