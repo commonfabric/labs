@@ -20,6 +20,7 @@ import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   type Options,
   type SessionFactory,
@@ -43,21 +44,18 @@ interface RecordedOperation {
 class RecordingLoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap: boolean;
   readonly aclOperations: RecordedOperation[] = [];
-  #aclDocId: string;
 
   readonly #server: MemoryV2Server.Server;
 
   constructor(
     server: MemoryV2Server.Server,
-    space: MemorySpace,
-    // `false` suppresses the storage manager's ACL genesis at session open
+    // `false` suppresses the storage manager's Home genesis at session open
     // (storage/v2.ts returns early when the factory does not advertise
-    // support), which is the only way to reach a real server holding a space
-    // whose ACL document does not exist yet.
+    // support), which is the only way to mount a runtime as a space's own
+    // identity on a real server holding no ACL document for it.
     supportsAclBootstrap = true,
   ) {
     this.#server = server;
-    this.#aclDocId = `of:${space}`;
     this.supportsAclBootstrap = supportsAclBootstrap;
   }
 
@@ -95,7 +93,7 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
     ) => {
       for (const operation of commit.operations ?? []) {
         const op = operation as RecordedOperation;
-        if (op.id === this.#aclDocId) {
+        if (op.id === `of:${space}`) {
           this.aclOperations.push({ op: op.op, id: op.id, scope: op.scope });
         }
       }
@@ -120,11 +118,7 @@ class TestStorageManager extends StorageManager {
 const createServer = (label: string): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     store: new URL(`memory://${label}`),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,
@@ -136,15 +130,11 @@ const createServer = (label: string): MemoryV2Server.Server =>
  */
 const withGenesisedSpace = async (label: string) => {
   const user = await Identity.fromPassphrase(`${label} user`);
-  const spaceIdentity = await Identity.fromPassphrase(`${label} space`);
-  const space = spaceIdentity.did();
 
   const server = createServer(label);
-  const factory = new RecordingLoopbackSessionFactory(server, space);
-  const storageManager = TestStorageManager.overServer(
-    { as: user, spaceIdentity },
-    factory,
-  );
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const storageManager = TestStorageManager.overServer({ as: user }, factory);
+  const space = await storageManager.createSpace({ [user.did()]: "OWNER" });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
@@ -159,8 +149,8 @@ const withGenesisedSpace = async (label: string) => {
   const extraTeardown: Array<() => Promise<void>> = [];
   const openSecondClient = async () => {
     const otherManager = TestStorageManager.overServer(
-      { as: user, spaceIdentity },
-      new RecordingLoopbackSessionFactory(server, space),
+      { as: user },
+      new RecordingLoopbackSessionFactory(server),
     );
     const otherRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -198,17 +188,18 @@ const withGenesisedSpace = async (label: string) => {
  * A real server holding a space whose ACL document has never been written, and
  * a runtime mounted AS THE SPACE IDENTITY. Two things make the un-genesised
  * state reachable: the factory does not advertise `supportsAclBootstrap`, so
- * the storage manager's genesis at session open is skipped entirely; and the
- * server grants an implicit OWNER to a principal equal to the space
- * (`#resolveCapability`), which is also the only principal its
- * `#validateAclCommit` lets initialize a missing ACL. The caller owns teardown.
+ * the storage manager's Home genesis at session open is skipped entirely; and
+ * the server grants OWNER to a principal equal to the space while the space
+ * has no ACL document and no history (`#resolveCapability`), which is also the
+ * only principal its `#validateAclCommit` lets initialize a missing ACL. The
+ * caller owns teardown.
  */
 const withUnGenesisedSpace = async (label: string) => {
   const spaceIdentity = await Identity.fromPassphrase(`${label} space`);
   const space = spaceIdentity.did();
 
   const server = createServer(label);
-  const factory = new RecordingLoopbackSessionFactory(server, space, false);
+  const factory = new RecordingLoopbackSessionFactory(server, false);
   const storageManager = TestStorageManager.overServer(
     { as: spaceIdentity },
     factory,
@@ -278,16 +269,13 @@ Deno.test("ACLManager surfaces rejected writes with the server's error name", as
   // a deterministic refusal in `editWithRetry`'s retry loop. Against a real
   // server the refusal is genuine — the ACL validity rule in
   // `#validateAclCommit` — instead of a hand-written mock result.
-  const ctx = await withUnGenesisedSpace("runner-acl-mutation-rejected");
-  const alice = await Identity.fromPassphrase("runner-acl-mutation-rej alice");
+  const ctx = await withGenesisedSpace("runner-acl-mutation-rejected");
   try {
-    await ctx.acl.set(alice.did(), "OWNER");
-
     let failure: Error | undefined;
     try {
       // Downgrading the only concrete OWNER leaves the ACL ownerless, which
       // the server refuses as a ProtocolError.
-      await ctx.acl.set(alice.did(), "WRITE");
+      await ctx.acl.set(ctx.user.did(), "WRITE");
     } catch (error) {
       failure = error as Error;
     }
@@ -302,7 +290,7 @@ Deno.test("ACLManager surfaces rejected writes with the server's error name", as
       /concrete OWNER/.test(failure.message),
       `unexpected message: ${failure.message}`,
     );
-    assertEquals(await ctx.readStoredAcl(), { [alice.did()]: "OWNER" });
+    assertEquals(await ctx.readStoredAcl(), { [ctx.user.did()]: "OWNER" });
   } finally {
     await ctx.dispose();
   }
@@ -391,7 +379,6 @@ Deno.test("a batched value-path ACL write throws and leaves the earlier run appl
     assertEquals(ctx.factory.since(marker), []);
     assertEquals(await ctx.readStoredAcl(), {
       [ctx.user.did()]: "OWNER",
-      "*": "WRITE",
     });
   } finally {
     await ctx.dispose();
@@ -407,7 +394,6 @@ Deno.test("ACL grant after genesis emits one whole-document set", async () => {
 
     assertEquals(await ctx.readStoredAcl(), {
       [ctx.user.did()]: "OWNER",
-      "*": "WRITE",
       [bob.did()]: "READ",
     });
 
@@ -449,30 +435,68 @@ Deno.test("ACL capability can be changed and revoked after genesis", async () =>
 
     assertEquals(await ctx.acl.get(), {
       [ctx.user.did()]: "OWNER",
-      "*": "WRITE",
     });
   } finally {
     await ctx.dispose();
   }
 });
 
-Deno.test("removing the bootstrap wildcard makes a space private", async () => {
-  // The reason this bug mattered: genesis writes `"*": "WRITE"`, so a named
-  // space is born world-writable, and this is the only operation that closes
-  // it. While ACL mutation was broken there was no route to a private space
-  // through any product surface.
+Deno.test("a wildcard WRITE grant admits a stranger until the owner removes it", async () => {
+  // A space is born owned by its creator alone. Granting `"*"` is how its
+  // owner opens it to everyone, and removing that grant is how the owner
+  // closes it again. Both edits are whole-document sets like any other grant.
   const ctx = await withGenesisedSpace("runner-acl-mutation-lockdown");
+  const stranger = await Identity.fromPassphrase(
+    "runner-acl-mutation-lockdown stranger",
+  );
+  const strangerFactory = new RecordingLoopbackSessionFactory(ctx.server);
+  const strangerWrite = async (id: string) => {
+    const connection = await strangerFactory.create(ctx.space, stranger);
+    try {
+      await connection.session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id, value: { value: { public: true } } }],
+      });
+    } finally {
+      await connection.client.close();
+    }
+  };
   try {
-    assertEquals(
-      "*" in (await ctx.readStoredAcl() as Record<string, string>),
-      true,
+    assertEquals(await ctx.readStoredAcl(), { [ctx.user.did()]: "OWNER" });
+    await assertRejects(
+      () => strangerWrite("of:stranger-before-grant"),
+      Error,
+      `${stranger.did()} lacks READ`,
     );
 
-    const marker = ctx.factory.mark();
-    await ctx.acl.remove("*");
+    const grantMarker = ctx.factory.mark();
+    await ctx.acl.set("*", "WRITE");
+    assertEquals(await ctx.readStoredAcl(), {
+      [ctx.user.did()]: "OWNER",
+      "*": "WRITE",
+    });
+    assertEquals(ctx.factory.since(grantMarker).map((o) => o.op), ["set"]);
+    await strangerWrite("of:stranger-while-granted");
+    assertEquals(
+      (await ctx.server.readDocument(ctx.space, "of:stranger-while-granted"))
+        ?.value,
+      { public: true },
+    );
 
+    const removeMarker = ctx.factory.mark();
+    await ctx.acl.remove("*");
     assertEquals(await ctx.readStoredAcl(), { [ctx.user.did()]: "OWNER" });
-    assertEquals(ctx.factory.since(marker).map((o) => o.op), ["set"]);
+    assertEquals(ctx.factory.since(removeMarker).map((o) => o.op), ["set"]);
+    await assertRejects(
+      () => strangerWrite("of:stranger-after-removal"),
+      Error,
+      `${stranger.did()} lacks READ`,
+    );
+    assertEquals(
+      await ctx.server.readDocument(ctx.space, "of:stranger-after-removal"),
+      null,
+    );
   } finally {
     await ctx.dispose();
   }
@@ -492,11 +516,8 @@ Deno.test("ACL mutation preserves sibling envelope fields", async () => {
       ctx.space,
       `of:${ctx.space}`,
     );
-    const writer = new RecordingLoopbackSessionFactory(ctx.server, ctx.space);
-    const spaceIdentity = await Identity.fromPassphrase(
-      "runner-acl-mutation-siblings space",
-    );
-    const connection = await writer.create(ctx.space, spaceIdentity);
+    const writer = new RecordingLoopbackSessionFactory(ctx.server);
+    const connection = await writer.create(ctx.space, ctx.user);
     try {
       await connection.session.transact({
         localSeq: 1,
@@ -540,7 +561,7 @@ Deno.test("ACL mutation does not mutate the caller's stored value", async () => 
     await ctx.acl.set(bob.did(), "WRITE");
     assertEquals(
       before,
-      { [ctx.user.did()]: "OWNER", "*": "WRITE" },
+      { [ctx.user.did()]: "OWNER" },
       "the previously returned ACL must not be mutated in place",
     );
   } finally {
@@ -571,7 +592,6 @@ Deno.test("concurrent ACL writers do not lose each other's grants", async () => 
     // Neither grant may be clobbered by the other's whole-document write.
     assertEquals(await ctx.readStoredAcl(), {
       [ctx.user.did()]: "OWNER",
-      "*": "WRITE",
       [bob.did()]: "READ",
       [carol.did()]: "WRITE",
     });
@@ -647,7 +667,6 @@ Deno.test("a value-path write to the ACL document is refused in-process", async 
     assertEquals(ctx.factory.since(marker), []);
     assertEquals(await ctx.readStoredAcl(), {
       [ctx.user.did()]: "OWNER",
-      "*": "WRITE",
     });
   } finally {
     await ctx.dispose();

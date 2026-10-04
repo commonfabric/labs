@@ -1,12 +1,9 @@
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { parseFlagValue } from "@commonfabric/runner/experimental-posture";
 
-import { optionalPresenceUrl } from "./presence-url.ts";
-
 declare global {
   var $ENVIRONMENT: string | undefined;
   var $API_URL: string | undefined;
-  var $PRESENCE_URL: string | undefined;
   var $COMMIT_SHA: string | undefined;
   var $EXPERIMENTAL_MODERN_CELL_REP: string | undefined;
   var $EXPERIMENTAL_AGENT_BUILTIN: string | undefined;
@@ -16,15 +13,13 @@ declare global {
   var $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: string | undefined;
   var $EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: string | undefined;
   var $EXPERIMENTAL_READER_SCHEMA_PRECEDENCE: string | undefined;
+  var $EXPERIMENTAL_SHARED_MEMORY_CONNECTION: string | undefined;
 }
 
 const ENVIRONMENT_DEFINE = typeof $ENVIRONMENT === "string"
   ? $ENVIRONMENT
   : undefined;
 const API_URL_DEFINE = typeof $API_URL === "string" ? $API_URL : undefined;
-const PRESENCE_URL_DEFINE = typeof $PRESENCE_URL === "string"
-  ? $PRESENCE_URL
-  : undefined;
 const COMMIT_SHA_DEFINE = typeof $COMMIT_SHA === "string"
   ? $COMMIT_SHA
   : undefined;
@@ -63,9 +58,6 @@ export const API_URL: URL = new URL(
     `${globalThis.location.protocol}//${globalThis.location.host}`,
 );
 
-/** Optional browser-visible endpoint for ephemeral editor co-presence. */
-export const PRESENCE_URL = optionalPresenceUrl(PRESENCE_URL_DEFINE);
-
 export const COMMIT_SHA: string | undefined = COMMIT_SHA_DEFINE;
 
 /**
@@ -93,6 +85,11 @@ export const EXPERIMENTAL = {
   webViewScopedReplication: flagValue(
     typeof $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION === "string"
       ? $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION
+      : undefined,
+  ),
+  sharedMemoryConnection: flagValue(
+    typeof $EXPERIMENTAL_SHARED_MEMORY_CONNECTION === "string"
+      ? $EXPERIMENTAL_SHARED_MEMORY_CONNECTION
       : undefined,
   ),
   // Server-execution v2 (docs/specs/server-side-execution/): the

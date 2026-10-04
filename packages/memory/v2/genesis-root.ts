@@ -1,5 +1,5 @@
 import { isFabricPlainObject } from "@commonfabric/data-model";
-import { decodeMemoryBoundary, type GenesisRoot } from "../v2.ts";
+import { decodeTrustedMemoryBoundary, type GenesisRoot } from "../v2.ts";
 import type { Engine } from "./engine.ts";
 
 /** The immutable custom-root reservation in the durable genesis receipt. */
@@ -8,9 +8,9 @@ export function readGenesisRoot(engine: Engine): GenesisRoot | undefined {
     'SELECT original FROM "commit" WHERE seq = 1',
   ).get() as { original: string } | undefined;
   if (row === undefined) return undefined;
-  let commit: ReturnType<typeof decodeMemoryBoundary>;
+  let commit: ReturnType<typeof decodeTrustedMemoryBoundary>;
   try {
-    commit = decodeMemoryBoundary(row.original);
+    commit = decodeTrustedMemoryBoundary(row.original);
   } catch {
     throw new Error("Invalid genesis receipt");
   }

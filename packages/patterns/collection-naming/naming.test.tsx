@@ -204,11 +204,9 @@ export default pattern(() => {
   // with nothing sent, the second reports nothing and is asked. Remove that
   // branch and both come back under `pending`.
   //
-  // Held here rather than in Topics' own tests because Topics cannot reach it:
-  // `SHOW_TOPIC_NUMBERS` gates a topic's published name, so every topic there
-  // reads as recording none however much it stores. The members below are
-  // stand-ins that publish one, which is what a member does wherever names are
-  // shown — the exemplar's item, and Topics once the switch is on.
+  // Held over stand-in members rather than over a collection's own, so the
+  // branch is guarded where the library declares it rather than only where a
+  // collection happens to exercise it.
   // Each member is its own cell: a member has to be an addressable document
   // for the walk to resolve it and for a send to reach it, and an element of
   // an inline array is neither.

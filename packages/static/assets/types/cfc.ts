@@ -473,6 +473,7 @@ export declare const CFC_CANONICAL_ALIAS_NAMES: readonly [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -592,6 +593,15 @@ export type TrustedActionWrite<
 > = TrustedActionWriteWithIntegrity<T, Binding, Action, Pattern, [
   Pattern,
 ]>;
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [
+    unknown,
+    ...unknown[],
+  ],
+> = Cfc<T, {
+  readonly writePolicyAnyOf: Policies;
+}>;
 export type TrustedActionUiContract<
   T,
   Action extends string,

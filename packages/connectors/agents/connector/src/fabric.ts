@@ -50,6 +50,7 @@ import {
 import { AsyncSerialQueue } from "./serial-queue.ts";
 import { isAbsolute as isPosixAbsolute } from "@std/path/posix";
 import { isAbsolute as isWindowsAbsolute } from "@std/path/windows";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 export interface AgentFabricCells {
   index: Cell<unknown>;
@@ -588,7 +589,7 @@ async function claimAgentFabricRoots(
     },
   }];
   const tx = conn.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -1659,7 +1660,7 @@ export class AgentFabricTarget implements CommandTarget {
       throw new Error("command writer authorization is invalid");
     }
     const tx = this.conn.runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: authorization.moduleIdentity,
       sourceFile: authorization.file,
@@ -1718,7 +1719,7 @@ export class AgentFabricTarget implements CommandTarget {
     await cell.sync();
     await this.conn.runtime.storageManager.synced();
     const claim = this.conn.runtime.edit();
-    claim.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(claim, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -1805,7 +1806,9 @@ export class AgentFabricTarget implements CommandTarget {
     this.#assertCommandCellBound();
     const values: unknown[] = [];
     for (const { cell } of this.#boundQueues()) {
-      values.push(...await readStableActions(this.conn, cell));
+      for (const action of await readStableActions(this.conn, cell)) {
+        values.push(action);
+      }
     }
     return values;
   }

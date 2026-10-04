@@ -315,6 +315,11 @@ export class DebugConverter {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Returns the index at which `value` ends were it cut to its first
    * `maxLines` lines: the index just past the line break which ends that many

@@ -125,10 +125,11 @@ const readDocument = async (
     }
     state.bytes += filled;
     state.files += 1;
-    state.sections.push(...splitMarkdownSections({
+    const sections = splitMarkdownSections({
       path: corpusPath,
       integrity: [operatorProvisionedReferenceAtom(root.hostPath)],
-    }, new TextDecoder().decode(bytes.subarray(0, filled))));
+    }, new TextDecoder().decode(bytes.subarray(0, filled)));
+    for (const section of sections) state.sections.push(section);
   } finally {
     file.close();
   }

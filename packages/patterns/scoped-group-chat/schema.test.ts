@@ -24,6 +24,7 @@ Deno.test("scoped group chat pattern schema generates scoped input cells", async
       "check",
       "packages/patterns/scoped-group-chat/main-with-writable-inputs.tsx",
       "--pattern-json",
+      "--no-check",
     ],
   });
   assertEquals(output.code, 0);

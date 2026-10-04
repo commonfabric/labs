@@ -74,7 +74,12 @@ export function collectViewRenderReads(
         const binding = name.startsWith("$");
         const event = name.startsWith("on");
         const property = binding ? name.slice(1) : name;
-        const schema = componentReadContracts[value.name]?.[property];
+        // A prop that is itself a nested render's reference is read by that
+        // render, which the walk does not follow.
+        const contract = componentReadContracts[value.name]?.[property];
+        const schema = contract?.renders?.some((path) => path.length === 0)
+          ? undefined
+          : contract?.schema;
         if (binding || event) {
           const slot = isCell(prop) ? prop.withTx(tx) : propsCell?.key(name);
           if (slot === undefined) continue;

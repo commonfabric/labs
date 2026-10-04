@@ -9,6 +9,7 @@ import type { ImplementationIdentity } from "../src/cfc/mod.ts";
 import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("cfc structure stamp attribution");
 const space = signer.did();
@@ -124,7 +125,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     expect((await setup.commit()).error).toBeUndefined();
 
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(identity);
+    setCfcImplementationIdentity(tx, identity);
     const brief = runtime.getCell(space, "brief", briefSchema, tx).get();
     const id = runtime.getCell(space, cause, undefined, tx)
       .getAsNormalizedFullLink().id;
@@ -147,7 +148,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     key: (note: string) => string,
   ): Promise<void> => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(identity);
+    setCfcImplementationIdentity(tx, identity);
     const brief = runtime.getCell(space, "brief", briefSchema, tx).get();
     runtime.getCell<Record<string, number>>(space, cause, undefined, tx)
       .key(key(brief.note)).set(2);
@@ -159,7 +160,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
   // whether the gated write committed.
   const publishCounts = async (cause: string): Promise<boolean> => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(PUBLISH);
+    setCfcImplementationIdentity(tx, PUBLISH);
     const counts = runtime.getCell<Counts>(space, cause, undefined, tx);
     counts.getRaw({ nonRecursive: true });
     const approve = counts.key("approve").get();
@@ -175,7 +176,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
   // store; returns whether the gated write committed.
   const publishKeys = async (cause: string): Promise<boolean> => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(PUBLISH);
+    setCfcImplementationIdentity(tx, PUBLISH);
     const node = runtime.getCell<Record<string, number>>(
       space,
       cause,
@@ -212,7 +213,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     expect((await setup.commit()).error).toBeUndefined();
 
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(TALLY);
+    setCfcImplementationIdentity(tx, TALLY);
     runtime.getCell(space, "brief", briefSchema, tx).get();
     const id = runtime.getCell(space, "counts", undefined, tx)
       .getAsNormalizedFullLink().id;
@@ -224,7 +225,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     });
     tx.writeOrThrow(at(), {});
     tx.writeOrThrow(at("approve"), 1);
-    tx.setCfcImplementationIdentity(HAND_COUNT);
+    setCfcImplementationIdentity(tx, HAND_COUNT);
     tx.writeOrThrow(at("reject"), 0);
     expect((await tx.commit()).error).toBeUndefined();
 
@@ -244,7 +245,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
   // labels, which is the case the persist loop used to skip.
   const tallyWholeObject = async (cause: string): Promise<void> => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(TALLY);
+    setCfcImplementationIdentity(tx, TALLY);
     const brief = runtime.getCell(space, "brief", briefSchema, tx).get();
     runtime.getCell<Counts>(space, cause, undefined, tx).set({
       approve: brief.vote === "approve" ? 1 : 0,
@@ -260,7 +261,7 @@ describe("TransformedBy on the stamps of an object a function wrote", () => {
     const id = runtime.getCell(space, cause, undefined, runtime.edit())
       .getAsNormalizedFullLink().id;
     const tx = runtime.edit();
-    if (identity !== undefined) tx.setCfcImplementationIdentity(identity);
+    if (identity !== undefined) setCfcImplementationIdentity(tx, identity);
     tx.writeOrThrow({
       space,
       scope: "space",

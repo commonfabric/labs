@@ -43,8 +43,6 @@ export default function TestWishAndGenerateObjectContextual() {
     const explicitObject = generateObject<{
         title: string;
     }>({
-        model: "gpt-4o-mini",
-        prompt: "Return a title",
         schema: {
             type: "object",
             properties: {
@@ -53,7 +51,9 @@ export default function TestWishAndGenerateObjectContextual() {
                 }
             },
             required: ["title"]
-        } as const satisfies __cfHelpers.JSONSchema
+        } as const satisfies __cfHelpers.JSONSchema,
+        model: "gpt-4o-mini",
+        prompt: "Return a title"
     }).for("explicitObject", true);
     const preSchemaObject = generateObject<{
         label: string;

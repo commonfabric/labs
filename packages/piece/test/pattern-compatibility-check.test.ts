@@ -329,19 +329,16 @@ describe("setsrc compatibility preflight", () => {
   let runtime: Runtime;
   let pieces: PiecesController;
 
-  let spaceName: string;
-
   beforeEach(async () => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
-    spaceName = `pattern-compat-check-${crypto.randomUUID()}`;
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -671,7 +668,7 @@ describe("setsrc compatibility preflight", () => {
     });
     try {
       const freshPieces = new PiecesController(
-        await createSession({ identity: signer, spaceName }),
+        createSession({ identity: signer, spaceDid: pieces.getSpace() }),
         freshRuntime,
       );
       await freshPieces.synced();
@@ -748,7 +745,7 @@ describe("setsrc compatibility preflight", () => {
     });
     try {
       const freshPieces = new PiecesController(
-        await createSession({ identity: signer, spaceName }),
+        createSession({ identity: signer, spaceDid: pieces.getSpace() }),
         freshRuntime,
       );
       await freshPieces.synced();

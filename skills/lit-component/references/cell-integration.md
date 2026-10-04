@@ -134,8 +134,10 @@ return html`
 Always use transactions for mutations:
 
 ```typescript
+import { type Cell, cellRuntime } from "@commonfabric/runner";
+
 function mutateCell<T>(cell: Cell<T>, mutator: (cell: Cell<T>) => void): void {
-  const tx = cell.runtime.edit();
+  const tx = cellRuntime(cell).edit();
   mutator(cell.withTx(tx));
   tx.commit();
 }

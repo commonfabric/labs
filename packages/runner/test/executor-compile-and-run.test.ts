@@ -10,8 +10,9 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { maxOf } from "@commonfabric/utils/math";
 
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -355,9 +356,11 @@ describe("executor-compile-and-run", () => {
     const engine = await server.engineForSpace(space);
     const seq = Math.max(
       0,
-      ...Engine.selectCommitsSince(engine, { fromSeq: 0 })
-        .filter((commit) => commit.class === "authored")
-        .map((commit) => commit.seq),
+      maxOf(
+        Engine.selectCommitsSince(engine, { fromSeq: 0 })
+          .filter((commit) => commit.class === "authored")
+          .map((commit) => commit.seq),
+      ),
     );
     expect(seq).toBeGreaterThan(0);
     await waitUntil(
@@ -898,7 +901,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           ).toBe(scope);
 
           const firstDelivered = Promise.withResolvers<string>();
-          piece.result.key("compiled").key("result").key("bump").send(
+          sendEvent(
+            piece.result.key("compiled").key("result").key("bump"),
             {},
             (tx) => {
               firstDelivered.resolve(tx.status().status);
@@ -911,7 +915,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           expect(other.result.key("compiled").get()?.result?.answer).toBe(0);
 
           const secondDelivered = Promise.withResolvers<string>();
-          other.result.key("compiled").key("result").key("bump").send(
+          sendEvent(
+            other.result.key("compiled").key("result").key("bump"),
             {},
             (tx) => {
               secondDelivered.resolve(tx.status().status);
@@ -949,16 +954,20 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await variantsFor(childId, 2);
 
       const aliceDelivered = Promise.withResolvers<string>();
-      piece.result.key("compiled").key("result").key("bump").send({}, (tx) => {
-        aliceDelivered.resolve(tx.status().status);
-      });
+      sendEvent(
+        piece.result.key("compiled").key("result").key("bump"),
+        {},
+        (tx) => {
+          aliceDelivered.resolve(tx.status().status);
+        },
+      );
       expect(await aliceDelivered.promise).not.toBe("error");
       await childValue(piece.result, 1);
       expect(bob.result.key("compiled").get()?.result?.answer).toBe(0);
       const bobBump = bob.result.key("compiled").key("result").key("bump")
         .resolveAsCell();
       const bobDelivered = Promise.withResolvers<string>();
-      bobBump.send({}, (tx) => {
+      sendEvent(bobBump, {}, (tx) => {
         bobDelivered.resolve(tx.status().status);
       });
       expect(await bobDelivered.promise).not.toBe("error");
@@ -969,7 +978,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(bob.result, 10, bob.runtime);
       await variantsFor(childId, 1);
       const bobReplacedDelivered = Promise.withResolvers<string>();
-      bobBump.send({}, (tx) => {
+      sendEvent(bobBump, {}, (tx) => {
         bobReplacedDelivered.resolve(tx.status().status);
       });
       expect(await bobReplacedDelivered.promise).not.toBe("error");
@@ -1081,7 +1090,7 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
     answer: number,
   ) {
     const delivered = Promise.withResolvers<string>();
-    result.key("compiled").key("result").key("bump").send({}, (tx) => {
+    sendEvent(result.key("compiled").key("result").key("bump"), {}, (tx) => {
       delivered.resolve(tx.status().status);
     });
     expect(await delivered.promise).not.toBe("error");

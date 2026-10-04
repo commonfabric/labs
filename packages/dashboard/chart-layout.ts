@@ -38,6 +38,7 @@ export function tileContentRules(
     chartHeight + 9
   }px;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
   .tile-detail-list>div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile-detail-list .dot{margin-right:6px;vertical-align:middle}
   .chart>span:last-child{bottom:${CHART_BOTTOM_INSET}px!important}
   .cells{display:grid;grid-template-columns:repeat(${TRUST_COLS},min(${CELL_GRID_MAX_SIZE}px,calc((100% - ${
     (TRUST_COLS - 1) * CELL_GRID_GAP

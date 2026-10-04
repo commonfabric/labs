@@ -50,12 +50,10 @@ import {
   checkPattern,
   type Finding,
   parseArgs,
-  parseShard,
   partitionAcceptedBreaks,
   type PatternContract,
   readBaselines,
   selectItems,
-  type Shard,
   shouldRecord,
   writeBaseline,
 } from "./pattern-compat-lib.ts";
@@ -66,10 +64,8 @@ const formatError = (error: unknown): string =>
 async function main() {
   let update: boolean;
   let only: string[];
-  let shard: Shard;
   try {
     ({ update, only } = parseArgs(Deno.args));
-    shard = parseShard(Deno.env.get("PATTERN_COMPAT_SHARD"));
   } catch (error) {
     console.error(formatError(error));
     Deno.exit(2);
@@ -87,7 +83,7 @@ async function main() {
   }
   // The registries are judged before any pattern is: an entry that names a
   // required pattern or points at no decision record is wrong regardless of
-  // what this shard's findings turn out to be.
+  // what this run's findings turn out to be.
   const registryReport = reportBreakRegistryFindings({
     requiredPatternKeys: required.keys,
     recordExists: recordExistsUnder(),
@@ -108,7 +104,6 @@ async function main() {
       ACCEPTED_CONTRACT_BREAKS.map((accepted) => accepted.pattern),
     ),
     only,
-    shard,
   );
   // An item with no file is a pattern that is gone. It has no contract, and
   // is judged below on its baselines and accepted breaks alone.
@@ -118,12 +113,7 @@ async function main() {
     .filter((item) => !present.has(item))
     .map((item) => patternKey(item));
 
-  const shardLabel = shard.count > 1
-    ? ` [shard ${shard.index + 1}/${shard.count}]`
-    : "";
-  console.log(
-    `Checking update compatibility for ${items.length} patterns${shardLabel}.`,
-  );
+  console.log(`Checking update compatibility for ${items.length} patterns.`);
 
   const runtime = await createRuntime();
   const engine = runtime.harness;
@@ -284,7 +274,7 @@ async function main() {
       if (finding.kind !== "incompatible") continue;
       breaksUsed.add(acceptedBreakKey(finding.pattern, finding.baseline));
     }
-    forgivenBreaks.push(...forgiven);
+    for (const forgivenBreak of forgiven) forgivenBreaks.push(forgivenBreak);
 
     if (update && current !== undefined) {
       if (shouldRecord(patternFindings)) {
@@ -300,13 +290,13 @@ async function main() {
       // below — `--update` adds evidence, it never clears a finding.
       const kept = patternFindings.filter((f) => f.kind !== "missing-baseline");
       if (kept.length > 0) failedKeys.add(key);
-      findings.push(...kept);
+      for (const finding of kept) findings.push(finding);
       appendRecord(key);
       continue;
     }
 
     if (patternFindings.length > 0) failedKeys.add(key);
-    findings.push(...patternFindings);
+    for (const finding of patternFindings) findings.push(finding);
     appendRecord(key);
   }
 
@@ -331,12 +321,11 @@ async function main() {
       );
     }
   }
-  // Asked per PATTERN rather than of the whole list, because CI never runs the
-  // whole list in one process: the Pattern Update Compatibility job always sets
-  // `PATTERN_COMPAT_SHARD`, so a check gated on an unsharded run would never
-  // execute where it matters. A pattern belongs to exactly one shard, so the
-  // shard that examined it can say whether its pairs were needed, and the
-  // shards between them cover every entry.
+  // Asked per pattern rather than of the whole list, because a lane runs only
+  // the patterns `--only` gave it, so a check gated on a run of the whole list
+  // would not execute where the patterns are divided between lanes. The run
+  // that examined a pattern can say whether its pairs were needed, and the
+  // runs between them cover every entry.
   //
   // An entry whose pattern file is gone is left out: with no contract, its
   // pairs are never used, and it is reported as orphaned instead. Retiring a

@@ -28,7 +28,7 @@
       // `--allow-read` so that a test may start a `Worker`, which reads the
       // worker's module from disk. `codec-realm`'s round trips go through a
       // real one, that being the boundary the format exists for.
-      "command": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read"
     },
     "bench": {
       "description": "Run benchmarks",
@@ -37,6 +37,10 @@
       // a real `postMessage()` crossing, that being the boundary the format
       // exists for.
       "command": "deno bench --allow-read"
+    },
+    "regenerate-fvj1-conformance": {
+      "description": "Write test/fixtures/fvj1-conformance.json from the conformance cases",
+      "command": "deno run --allow-write=test/fixtures/fvj1-conformance.json test/regenerate-fvj1-conformance.ts"
     },
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test"
   },

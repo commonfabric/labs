@@ -324,8 +324,8 @@ registered, and refs to it stay unresolved.
 
 ### 5.3.3 Cycle Detection
 
-Graph traversal must handle cycles. Two cycle detection mechanisms are used,
-both derived from `traverse.ts`:
+Graph traversal must handle cycles. Three cycle detection mechanisms are used,
+all derived from `traverse.ts`:
 
 #### CycleTracker
 
@@ -380,6 +380,28 @@ type PointerCycleTracker = CompoundCycleTracker<
   any // The traversal result for this node
 >;
 ```
+
+#### Branches returning to their own position
+
+A combinator branch evaluates the same value at the same address as the schema
+it belongs to, so neither tracker sees it come back. A union whose handle
+branch names the union itself (`type Recursive = Cell<Recursive> | null`)
+returns to its own traversal without descending. The traverser keeps the memo
+keys of the traversals in progress at the current position, and a branch that
+reaches one of them stands for that traversal's result, which the traversal
+that began the position reaches as a fixed point in rounds. The first round
+takes the branch as no match. Each later round takes the result the traversal
+it comes back to had in the latest round that reached it, and a traversal
+reached again within a round takes its result from earlier in the round, so a
+round traverses each schema at the position once. Rounds repeat until one
+leaves no traversal a branch came back to matching where what stood in for it
+did not. The result then matches as the schema unrolled does and selects the
+properties it selects; where matching branches project one property
+differently, the round's merges decide which projection is kept, since an
+unrolling need not settle on one. A `oneOf`, which can reject in one round what
+it accepted in the round before, keeps the round before that rejection. A result
+that took something standing in for a traversal holds only for its round, so it
+is returned but not memoized.
 
 ### 5.3.4 Schema Narrowing
 

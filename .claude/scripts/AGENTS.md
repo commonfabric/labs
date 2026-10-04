@@ -36,6 +36,11 @@ that the check covers it. The check builds its list of paths from `git
 ls-files`, so a path the repository ignores rather than tracks is not in it:
 name the tracked part of such a path and write the rest as prose.
 
+`deno task check` type-checks every file here. A unit test of a hook's own
+functions sits beside the hook, as `pattern-user-post-bash.test.ts` does, and
+the `tasks` workspace member's test task runs it, since `.claude/` belongs to
+no member.
+
 `deno fmt` and `deno lint` both exclude `.claude/`, so neither reports anything
 about a file here.
 

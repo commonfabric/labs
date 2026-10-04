@@ -10,9 +10,13 @@ A less-like viewer for the dense output of '--show-transformed' and saved source
 files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
-Markdown, JSON, JSONC, YAML, Python and Swift files use syntax highlighting
-selected from language metadata. Python interpreter shebangs select Python, and
-'swift' and 'xcrun swift' shebangs select Swift. Node, Deno and Bun shebangs
+Markdown, JSON, JSONC, YAML, Python, Swift, Kotlin, TOML, shell, Java
+properties, ProGuard and XML files use syntax highlighting selected from
+language metadata. Kotlin covers Gradle's '.gradle.kts' build scripts, shell
+covers Bash and POSIX shell, and XML covers Android manifests and resources, SVG
+and Apple property lists. Python interpreter shebangs select Python, 'swift' and
+'xcrun swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, and 'sh',
+'bash', 'dash' and 'ash' shebangs select shell. Node, Deno and Bun shebangs
 select the TypeScript and JavaScript language family.
 Known binary filenames, NUL-containing input and invalid UTF-8 select the binary
 language. Its rendered view is a read-only hex dump with control pictures for

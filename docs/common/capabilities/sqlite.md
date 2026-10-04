@@ -139,18 +139,22 @@ Every result row is written into the space as a document of its own — which
 is what gives a per-row label somewhere to sit — so the row count of a
 statement is a durable cost of the space rather than the cost of one render. A
 query that returns a million distinct rows writes a million documents, and they
-stay written after the view that asked for them is gone. A re-run whose rows
-are unchanged writes no row documents: a row of an unlabeled database is keyed
-on its content, so equal rows share one document and a row the result held
-before takes its old document back; a row of a labeled database is keyed on
-its position, so a change rewrites the documents at the positions it moved
-rows across and mints none; a row under a row label is keyed on its position
-and its label, so a row whose label changes takes a new document. Two things
-re-key every row of a labeled database at once and write it again: changing
-the query's projection, and re-declaring the handle's `tables`. A row
-projecting a
-column name a Fabric record reserves (`constructor`, `__proto__`) crosses the
-wire as a list of entries and is stored the same way.
+stay written after the view that asked for them is gone. The query writes a
+row document once and never rewrites it. It is keyed on the row's content and,
+for a row of a labeled database, on its label, beside a per-space secret that
+keeps the id from saying anything about the row. Equal rows share one
+document, a row the result held before takes its old document back, and a
+re-run whose rows are unchanged writes no row documents. A row whose data or
+label changed is another document, and the one it had stays in the space. A
+reference a pattern keeps to a row therefore does not change when the query
+runs again: read the query's `result` for the current rows. The query is not
+the only writer that can reach a row document, though: other code holding a
+reference to one can write to it. Three things re-key every row of a labeled
+database at once and write it again: changing which database the query
+reads, changing the query's projection, and re-declaring the handle's
+`tables`. A row projecting a column name a Fabric
+record reserves (`constructor`, `__proto__`) crosses the wire as a list of
+entries and is stored the same way.
 
 A statement therefore bounds its rows, and a filter is not a bound. A `WHERE`
 clause narrows the candidates and says nothing about how many survive it: a
@@ -164,9 +168,8 @@ proportionate to what the view displays. A view that needs more of the store
 than that pages through it — a bound the reader moves. Paging bounds what one
 query writes rather than what the space accumulates: every page fetched
 materializes its rows, and nothing reclaims the rows of a page the reader has
-left. Returning to an earlier page issues a fresh query; its rows land on the
-documents they had before where their content is the key, and rewrite the
-documents at their positions where their position is. The durable cost is
+left. Returning to an earlier page issues a fresh query, and its rows land on
+the documents they had before. The durable cost is
 the number of distinct row documents the pages materialize, which grows with
 every page whose rows the space has not held.
 
@@ -286,12 +289,21 @@ and dropping the rows that exceed it.
 
 Where the label lands decides where to look for it. Each result row splits into
 its own entity doc and the column's label sits on that doc, at the column's own
-path. The query document labels `result` membership with the join of every
-source-row label, including rows skipped by the query contract, and labels the
-`withheld` count with that same join. A reader outside the join therefore
-cannot observe the array's membership, length, or withheld count. An addressed
-row's payload retains only that row's own labels. `cf cell get-label <cell>
-<path>/result/<i>/<col>` follows the links the path crosses and reports the
+path. The query document labels `result` membership with the join of the
+source rows' labels and the label of the query's own statement and parameters,
+and labels the `withheld` count with that same join. A shared result joins
+every source row's label, including rows skipped by the query contract; a
+session-scoped result joins the labels of the rows it holds. Which row sits at
+a position of `result` carries the label of the query's statement and
+parameters and that row's label. A
+reader outside the join therefore cannot observe the array's membership,
+length, or withheld count, and code that reads any of them carries the join
+into what it writes: a row count of a query over labeled columns carries the
+columns' labels, and so does anything computed by mapping over `result`,
+which reads its membership. A row read through `result` by its position
+carries the label of the query's statement and parameters and that row's own
+labels, and not the other rows'. `cf cell get-label <cell> <path>/result/<i>/<col>` follows the links
+the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.
 

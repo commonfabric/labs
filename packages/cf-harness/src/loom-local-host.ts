@@ -348,6 +348,11 @@ export const createLoomLocalCfHarnessHost = async (
   const harnessHome = await canonicalHarnessHome(options.harnessHome);
   const identity = await homeIdentity(harnessHome);
   const processEnv = { ...(options.env ?? Deno.env.toObject()) };
+  // HOME is cleared from what this host hands on (below), but the runsc
+  // runtime's default CFC policy is a machine-level install under the real
+  // one. Kept aside so both lanes find it, as the stdio and batch
+  // entrypoints do from their own environment.
+  const hostHome = nonEmpty(processEnv.HOME);
   if (nonEmpty(processEnv.CF_HARNESS_MODEL_PROVIDER) !== undefined) {
     throw new HarnessControlError(
       "provider-configuration-required",
@@ -543,6 +548,7 @@ export const createLoomLocalCfHarnessHost = async (
           ? { readRunArtifacts: () => Promise.resolve(resolved.artifacts!) }
           : {}),
         env: cliEnv(resolved.binding.modelProvider),
+        ...(hostHome !== undefined ? { sandboxHomeDir: hostHome } : {}),
         loomLocalHostBinding: resolved.binding,
         credentialStore,
         ...(resolved.resolver !== undefined
@@ -572,6 +578,11 @@ export const createLoomLocalCfHarnessHost = async (
         // Same base the batch path resolves relative sources against, so a
         // spec means the same thing on either entrypoint.
         options.cliDependencies?.cwd ?? Deno.cwd(),
+        // The sandbox runtime is read from the same environment the batch
+        // path hands its CLI, so both lanes of one Loom instance execute in
+        // the sandbox the instance selected.
+        processEnv,
+        hostHome !== undefined ? { homeDir: hostHome } : {},
       );
       const provider = await configuredProvider();
       const binding: LoomLocalHostBinding = {

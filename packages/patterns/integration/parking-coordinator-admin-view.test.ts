@@ -1,5 +1,5 @@
-import { env } from "@commonfabric/integration";
-import { Identity } from "@commonfabric/identity";
+import { createTestSpace, env } from "@commonfabric/integration";
+import { type DID, Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -19,7 +19,7 @@ import {
   waitForTextAbsent,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
 
@@ -28,14 +28,16 @@ describe("parking coordinator admin view integration test", () => {
   shell.bindLifecycle();
 
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let pieceId: string;
   let pieceSinkCancel: (() => void) | undefined;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -98,7 +100,7 @@ describe("parking coordinator admin view integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid,
         pieceId,
       },
       identity,
@@ -129,7 +131,7 @@ describe("parking coordinator admin view integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid,
         pieceId,
       },
       identity,

@@ -25,6 +25,11 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { basename, join } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
+  refuseUndeclaredFlags,
+} from "../src/cli-flags.ts";
 import type { HarnessRunReport } from "../src/contracts/run-report.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import type { HarnessResearchRecord } from "../src/research/runner.ts";
@@ -1389,11 +1394,13 @@ export const renderReportLines = (
   const lines: string[] = [`artifact root: ${report.artifactRoot}`];
   for (const family of report.families) {
     lines.push("", `===== RUN ${family.familyId} (${family.runs.length} runs)`);
-    for (const run of family.runs) lines.push(...renderRunLines(run));
-    lines.push(...renderTotalsLines(family.totals));
+    for (const run of family.runs) {
+      for (const line of renderRunLines(run)) lines.push(line);
+    }
+    for (const line of renderTotalsLines(family.totals)) lines.push(line);
   }
   lines.push("", `===== ALL ${report.families.length} FAMILIES`);
-  lines.push(...renderTotalsLines(report.totals));
+  for (const line of renderTotalsLines(report.totals)) lines.push(line);
   return lines;
 };
 
@@ -1401,11 +1408,26 @@ export const main = async (
   args: readonly string[],
   log: (line: string) => void = console.log,
 ): Promise<number> => {
+  const undeclared: string[] = [];
   const flags = parseArgs([...args], {
     boolean: ["json"],
     string: ["artifact-root"],
     default: { "artifact-root": DEFAULT_ARTIFACT_ROOT },
+    unknown: recordUndeclaredFlags(undeclared),
   });
+  // Before anything is measured: a misspelled `--artifact-root` would
+  // otherwise measure the default tree.
+  try {
+    refuseFlagsWithoutValue(args, ["artifact-root"]);
+    refuseUndeclaredFlags(
+      undeclared,
+      ["json", "artifact-root"],
+      "`measure-runs`",
+    );
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
   const report = await measureArtifactRoot(
     flags["artifact-root"],
     flags._.map(String),

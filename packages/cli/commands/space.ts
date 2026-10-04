@@ -1,8 +1,8 @@
 // `cf space` — the commands that act on a space.
 //
 // The noun is what the verb acts on, rather than what it ranges over.
-// `recreate-root` and `set-home` rebuild a space's root and home patterns
-// against a running server; `clone`, `verify`, `reset` and `fingerprint` work
+// `create` makes a new space on a running server; `recreate-root` and
+// `set-home` rebuild a space's root and home patterns against one; `clone`, `verify`, `reset` and `fingerprint` work
 // on the same space as a store on disk. Both are the space, reached at
 // different moments in its life, which is what puts them under one noun.
 //
@@ -42,7 +42,11 @@ import {
 
 import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
-import { buildRecreateRootCommand, buildSetHomeCommand } from "./piece.ts";
+import {
+  buildCreateSpaceCommand,
+  buildRecreateRootCommand,
+  buildSetHomeCommand,
+} from "./piece.ts";
 
 function out(json: boolean, data: unknown, render: () => void): void {
   if (json) console.log(JSON.stringify(data, null, 2));
@@ -490,6 +494,8 @@ export const space = new Command()
       db.close();
     }
   })
+  /* space create */
+  .command("create", buildCreateSpaceCommand("space create"))
   /* space recreate-root */
   .command(
     "recreate-root",

@@ -232,6 +232,24 @@ describe("navigation", () => {
     );
   });
 
+  it("adds a history entry for a DID link from a legacy name that has not resolved", () => {
+    // Until the name resolves, nothing says which space it shows, so the DID
+    // link is taken to name another page.
+    withNavigation(
+      "http://common.test/my-space",
+      { view: { spaceName: "my-space" } },
+      (_navigation, recorded) => {
+        globalThis.dispatchEvent(
+          new CustomEvent("cf-navigate", { detail: { spaceDid: SPACE_DID } }),
+        );
+        expect(recorded.push).toEqual([{
+          state: { spaceDid: SPACE_DID },
+          url: `/${SPACE_DID}`,
+        }]);
+      },
+    );
+  });
+
   it("adds no history entry when carried-over embed mode names the address already showing", () => {
     withNavigation(
       "http://common.test/.embed/my-space/fid1:abc",

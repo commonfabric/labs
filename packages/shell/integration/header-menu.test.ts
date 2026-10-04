@@ -2,13 +2,18 @@ import { assert, assertEquals } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { env, waitForCondition } from "@commonfabric/integration";
+import {
+  createLegacyTestSpace,
+  createTestSpace,
+  env,
+  waitForCondition,
+} from "@commonfabric/integration";
 import type { Page } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 
 import "../src/globals.ts";
 
-const { FRONTEND_URL, SPACE_NAME } = env;
+const { FRONTEND_URL } = env;
 
 /** Pierce shadow DOM to find an element by selector. */
 function pierce(page: Page, selector: string) {
@@ -42,7 +47,7 @@ describe("header menu tests", () => {
     identity = await Identity.generate({ implementation: "noble" });
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME },
+      view: { spaceDid: await createTestSpace(identity) },
       identity,
     });
   }
@@ -92,7 +97,14 @@ describe("header menu tests", () => {
 
   it("shows space name in desktop breadcrumb", async () => {
     const page = shell.page();
-    await loginAndGoto();
+    identity = await Identity.generate({ implementation: "noble" });
+    const name = `header-menu-${crypto.randomUUID()}`;
+    await createLegacyTestSpace(identity, name);
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { spaceName: name },
+      identity,
+    });
 
     // Rendered, not merely present: `deepText` reads the text of an element
     // laid out at no size just as it reads a visible one, so without this the
@@ -103,7 +115,7 @@ describe("header menu tests", () => {
         probe.collect(".header-space").some((el) =>
           probe.isRendered(el) && probe.deepText(el).trim() === name
         ),
-      { args: [SPACE_NAME] },
+      { args: [name] },
     );
   });
 
@@ -151,7 +163,9 @@ describe("header menu tests", () => {
         const results = Array.from(root.querySelectorAll(selector));
         for (const el of root.querySelectorAll("*")) {
           if (el.shadowRoot) {
-            results.push(...findInShadow(el.shadowRoot, selector));
+            for (const result of findInShadow(el.shadowRoot, selector)) {
+              results.push(result);
+            }
           }
         }
         return results;
@@ -194,23 +208,27 @@ describe("header menu tests", () => {
     const trigger = await pierce(page, ".header-piece-trigger");
     await trigger.click();
 
-    // Dropdown should appear, laid out rather than merely present
+    // Dropdown should appear, laid out rather than merely present, with the
+    // trigger reporting it expanded. Both are read from the page as it stands
+    // rather than through a held element.
     await waitForCondition(page, (probe) => {
       const dropdowns = probe.collect(".header-piece-dropdown");
       return dropdowns.length > 0 &&
-        dropdowns.every((el) => probe.isRendered(el));
+        dropdowns.every((el) => probe.isRendered(el)) &&
+        probe.collect(".header-piece-trigger").every((el) =>
+          el.getAttribute("aria-expanded") === "true"
+        );
     });
 
-    // Re-query trigger since Lit may have re-rendered
-    const updatedTrigger = await pierce(page, ".header-piece-trigger");
-    assertEquals(
-      await updatedTrigger.evaluate(
-        (el: Element) => el.getAttribute("aria-expanded"),
-      ),
-      "true",
-    );
-
-    // Close via Escape
+    // Close via Escape, pressed with focus outside the header, as it is in a
+    // browser that does not focus a clicked button, or after tabbing away.
+    await page.evaluate(() => {
+      let active = document.activeElement;
+      while (active?.shadowRoot?.activeElement) {
+        active = active.shadowRoot.activeElement;
+      }
+      if (active instanceof HTMLElement) active.blur();
+    });
     await page.keyboard.press("Escape");
 
     // Dropdown should be gone

@@ -4,6 +4,7 @@ import { fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
+  collectRecords,
   gather,
   headCommitOfEvent,
   parseGatherArgs,
@@ -278,6 +279,32 @@ describe("test-records-gather", () => {
       const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
         .trimEnd().split("\n");
       expect(lines.length).toBe(1);
+    });
+  });
+
+  describe("collectRecords()", () => {
+    it("returns every record of a spool holding half a million", async () => {
+      // A spool holds a record for every test its job ran, and a job can
+      // run more tests than one call takes as arguments.
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      const count = 500_000;
+      try {
+        const writer = FragmentWriter.open(dir);
+        for (let at = 0; at < count; at++) {
+          writer?.append({
+            line: "record",
+            test: { k: "unit", s: "cli", n: `bakes ${at}` },
+            outcome: "pass",
+            durationMs: 1,
+          });
+        }
+        writer?.close();
+        const { records } = await collectRecords({ spoolDir: dir, junit: [] });
+        expect(records.length).toBe(count);
+        expect(records.at(-1)?.test.n).toBe(`bakes ${count - 1}`);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 

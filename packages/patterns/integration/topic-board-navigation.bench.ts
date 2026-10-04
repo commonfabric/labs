@@ -47,7 +47,7 @@ import {
   type ProbeApi,
   waitForCondition,
 } from "@commonfabric/integration";
-import type { Identity } from "@commonfabric/identity";
+import type { DID, Identity } from "@commonfabric/identity";
 import {
   crossrefTargets,
   parseTopicBoardDemand,
@@ -245,18 +245,17 @@ const note = (message: string): void => {
 
 const seedingStartedAt = performance.now();
 note(
-  `seeding ${TOPIC_COUNT} topics with ${DEMAND} demand into space ${env.SPACE_NAME} at ${env.API_URL}`,
+  `seeding ${TOPIC_COUNT} topics with ${DEMAND} demand at ${env.API_URL}`,
 );
 const fixture: TopicBoardFixture = await seedTopicBoardOutOfProcess({
   apiUrl: new URL(env.API_URL),
-  spaceName: env.SPACE_NAME,
   passphrase: PASSPHRASE,
   topicCount: TOPIC_COUNT,
   demand: DEMAND,
 });
 const identity: Identity = await seedIdentity(PASSPHRASE);
 note(
-  `seeded board ${fixture.boardId} in ${
+  `seeded board ${fixture.boardId} in space ${fixture.spaceDid} in ${
     Math.round(performance.now() - seedingStartedAt)
   }ms; ${ITERATIONS} iterations per segment after ${WARMUP} warm-up`,
 );
@@ -285,7 +284,6 @@ function commentBoard(): Promise<TopicBoardFixture> {
     const startedAt = performance.now();
     const seeded = await seedTopicBoardOutOfProcess({
       apiUrl: new URL(env.API_URL),
-      spaceName: `${env.SPACE_NAME}-comment`,
       passphrase: PASSPHRASE,
       topicCount: TOPIC_COUNT,
       demand: DEMAND,
@@ -479,12 +477,12 @@ async function showTopic(
 ): Promise<void> {
   const pieceId = board.topics[index].fid;
   await navigation.page.evaluate(
-    async (spaceName: string, piece: string) => {
-      await globalThis.app.setView({ spaceName, pieceId: piece });
+    async (spaceDid: DID, piece: string) => {
+      await globalThis.app.setView({ spaceDid, pieceId: piece });
     },
-    { args: [board.spaceName, pieceId] },
+    { args: [board.spaceDid, pieceId] },
   );
-  await waitForPieceView(navigation.page, board.spaceName, pieceId);
+  await waitForPieceView(navigation.page, board.spaceDid, pieceId);
 }
 
 /**

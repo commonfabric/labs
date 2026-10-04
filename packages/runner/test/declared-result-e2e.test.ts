@@ -17,6 +17,7 @@
  * the whole handling on the live object instead).
  */
 
+import { sendEvent } from "../src/cell.ts";
 import {
   afterEach,
   beforeEach,
@@ -236,7 +237,7 @@ describe("compiled CTS action<E, R> results in receipts", () => {
   ) {
     // One session throughout: a caller's id addresses its outcome within the
     // session that chose it, and every id dispatched here is distinct.
-    stream.send(payload, (t: IExtendedStorageTransaction) => {
+    sendEvent(stream, payload, (t: IExtendedStorageTransaction) => {
       outcomes.push({
         status: t.status().status,
         receiptLink: t.handlingReceiptLink,

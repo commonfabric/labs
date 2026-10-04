@@ -34,13 +34,14 @@ describe("mergeable op registry consistency", () => {
   });
 
   it("the catalog and the runner registry cover the same wire ops", () => {
-    expect([...catalogWireOps].sort()).toEqual([...MERGEABLE_WIRE_OPS].sort());
+    expect([...new Set(catalogWireOps)].sort()).toEqual(
+      [...MERGEABLE_WIRE_OPS].sort(),
+    );
   });
 
-  it("maps each method to a distinct wire op", () => {
+  it("names each method once", () => {
     const methods = MERGEABLE_OP_METHODS.map((op) => op.method);
     expect(new Set(methods).size).toBe(methods.length);
-    expect(new Set(catalogWireOps).size).toBe(catalogWireOps.length);
   });
 });
 

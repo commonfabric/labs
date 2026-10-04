@@ -7,6 +7,7 @@ import {
   type JSONSchema,
   type MemorySpace,
   Runtime,
+  sendEvent,
   type Stream,
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -17,11 +18,22 @@ import {
   readStoredCfcMetadata,
 } from "@commonfabric/runner/cfc";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 const signer = await Identity.fromPassphrase("loom-root-contract");
 const foreignSigner = await Identity.fromPassphrase("loom-root-foreign");
 const profileOwner = await Identity.fromPassphrase("loom-root-profile-owner");
 const thirdOwner = await Identity.fromPassphrase("loom-root-third-owner");
+const homeSpace = (await Identity.fromPassphrase("loom-root-home-space"))
+  .did() as MemorySpace;
 const rootSchema = {
   type: "object",
   required: [
@@ -112,8 +124,8 @@ const writeOwnedProfile = async (
       properties: { name: ownerProtected({ type: "string" }, owner) },
     };
   const tx = runtime.edit();
-  tx.setCfcTrustSnapshot({ id: `trust-${owner}`, actingPrincipal: owner });
-  tx.setCfcImplementationIdentity({
+  setCfcTrustSnapshot(tx, { id: `trust-${owner}`, actingPrincipal: owner });
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: PROFILE_WRITER,
   });
@@ -145,23 +157,78 @@ const writeOwnedProfile = async (
   return profile;
 };
 
+/**
+ * Writes a string cell owned by `owner` through the trusted profile editor,
+ * as profile-home stores each owner-protected field in a cell of its own.
+ */
+const writeOwnedString = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  id: string,
+  owner: string,
+): Promise<Cell<unknown>> => {
+  const tx = runtime.edit();
+  setCfcTrustSnapshot(tx, { id: `trust-${owner}`, actingPrincipal: owner });
+  setCfcImplementationIdentity(tx, {
+    kind: "builtin",
+    builtinId: PROFILE_WRITER,
+  });
+  const cell = runtime.getCell(
+    space,
+    id,
+    ownerProtected({ type: "string" }, owner) as JSONSchema,
+    tx,
+  );
+  cell.set("Owner");
+  const target = cell.getAsNormalizedFullLink();
+  tx.recordCfcWritePolicyInput({
+    kind: "trusted-event",
+    target: {
+      space: target.space,
+      scope: target.scope,
+      id: target.id,
+      path: [],
+    },
+    eventId: `edit-${id}`,
+    provenance: {
+      origin: "dom",
+      trusted: true,
+      ui: {
+        pattern: "ProfileHome",
+        eventIntegrity: ["ProfileHome"],
+        uiContractDataset: { uiAction: "EditProfile" },
+      },
+    },
+  });
+  tx.prepareCfc();
+  const result = await tx.commit();
+  if (result.error) throw result.error;
+  return cell;
+};
+
 type LabelEntry = {
   path: readonly (string | number)[];
   origin?: string;
   label: { integrity?: readonly unknown[] };
 };
 
-/** The `represents-principal` subjects among `entries`' integrity atoms. */
-const representedSubjects = (entries: readonly LabelEntry[]): string[] =>
+/** The subjects of `kind` claims among `entries`' integrity atoms. */
+const claimSubjects = (
+  entries: readonly LabelEntry[],
+  kind: "authored-by" | "represents-principal",
+): string[] =>
   entries.flatMap((entry) =>
     (entry.label.integrity ?? []).flatMap((atom) => {
       const claim = atom as { kind?: unknown; subject?: unknown };
-      return claim.kind === "represents-principal" &&
-          typeof claim.subject === "string"
+      return claim.kind === kind && typeof claim.subject === "string"
         ? [claim.subject]
         : [];
     })
   );
+
+/** The `represents-principal` subjects among `entries`' integrity atoms. */
+const representedSubjects = (entries: readonly LabelEntry[]): string[] =>
+  claimSubjects(entries, "represents-principal");
 
 /** Sends `event` to `stream` and waits for its transaction to settle. */
 const sendAndSettle = (
@@ -170,7 +237,7 @@ const sendAndSettle = (
   eventId: string,
 ): Promise<void> =>
   new Promise<void>((resolve, reject) =>
-    stream.send(event, (tx) => {
+    sendEvent(stream, event, (tx) => {
       const status = tx.status();
       if (status.status === "error") reject(status.error);
       else resolve();
@@ -189,9 +256,9 @@ describe("loom-root", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: manager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "loom-root-test",
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.ready;
@@ -250,7 +317,7 @@ describe("loom-root", () => {
     const panels = await output.key("panels").pull();
     const duplicate = await output.key("duplicatePanel").pull();
     await new Promise<void>((resolve, reject) =>
-      duplicate.send({ panel: panels[1] }, (tx) => {
+      sendEvent(duplicate, { panel: panels[1] }, (tx) => {
         const status = tx.status();
         if (status.status === "error") reject(status.error);
         else resolve();
@@ -258,7 +325,7 @@ describe("loom-root", () => {
     );
     await runtime.idle();
     const replay = await new Promise<unknown>((resolve) =>
-      duplicate.send({ panel: panels[1] }, (tx) => {
+      sendEvent(duplicate, { panel: panels[1] }, (tx) => {
         resolve(tx.status());
       }, { eventId: "duplicate-foreign", session: signer.did() })
     );
@@ -299,7 +366,7 @@ describe("loom-root", () => {
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
     await new Promise<void>((resolve, reject) =>
-      addPiece.send({ piece: target, as: profile }, (tx) => {
+      sendEvent(addPiece, { piece: target, as: profile }, (tx) => {
         const status = tx.status();
         if (status.status === "error") reject(status.error);
         else resolve();
@@ -329,6 +396,115 @@ describe("loom-root", () => {
     );
   });
 
+  it("links an occurrence whose `addedBy` label names the caller alone or nobody, and refuses one it contests or names in a form no runtime mints", async () => {
+    /** Stores a URL occurrence at `cause` whose label map is `entries`. */
+    const occurrence = async (cause: string, entries: unknown[]) => {
+      const cell = runtime.getCell(pieces.getSpace(), cause);
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, pieces.getSpace());
+      seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
+        value: {
+          kind: "url",
+          url: `https://example.com/${cause}`,
+          addedBy: signer.did(),
+        },
+        ...(entries.length === 0 ? {} : {
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries },
+          },
+        }),
+      } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell;
+    };
+    /** A declared entry at `path` whose integrity is `atoms`. */
+    const at = (path: string[], ...atoms: unknown[]) => ({
+      path,
+      label: { integrity: atoms },
+      origin: "declared",
+    });
+    const by = (subject: string) => ({ kind: "authored-by", subject });
+    const output = root.asSchema(rootSchema);
+    const addPanel = await output.key("addPanel").pull();
+    const refused = [
+      await occurrence("contested", [
+        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
+      ]),
+      await occurrence("misspelled", [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+      ]),
+      await occurrence("root-contested", [
+        at([], by(foreignSigner.did())),
+        at(["addedBy"], by(signer.did())),
+      ]),
+    ];
+    // A refused event aborts its transaction; the handler's own error
+    // reaches the scheduler's error handlers.
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    for (const [index, panel] of refused.entries()) {
+      errors.length = 0;
+      const refusal = await sendAndSettle(
+        addPanel,
+        { panel },
+        `refused-${index}`,
+      ).then(() => undefined, (error: unknown) => error);
+      expect(refusal).toBeDefined();
+      expect(
+        errors.some((error) =>
+          error.includes("whose adder its label contests")
+        ),
+      ).toBe(true);
+    }
+    expect((await output.key("panels").pull()).length).toBe(0);
+    const linked = [
+      await occurrence("own", [at(["addedBy"], by(signer.did()))]),
+      await occurrence("claimed", []),
+    ];
+    for (const [index, panel] of linked.entries()) {
+      await sendAndSettle(addPanel, { panel }, `linked-${index}`);
+    }
+    await runtime.idle();
+    const panels = await output.key("panels").pull();
+    expect(panels.length).toBe(2);
+    expect(
+      panels.map((panel, index) => panel.resolveAsCell().equals(linked[index])),
+    ).toEqual([true, true]);
+  });
+
+  it("records the registering principal as a panel's adder, with an `authored-by` entry declared at the field", async () => {
+    const target = runtime.getCell(
+      pieces.getSpace(),
+      "loom-root-registered-target",
+    );
+    await pieces.add([target]);
+    const panels = await root.asSchema(rootSchema).key("panels").pull();
+    expect(panels.length).toBe(1);
+    const panel = panels[0].resolveAsCell();
+    const value = await panel.asSchema({
+      type: "object",
+      properties: { addedBy: { type: "string" } },
+    }).pull();
+    expect(value.addedBy).toBe(signer.did());
+    const read = runtime.edit();
+    const entries = (readStoredCfcMetadata(
+      read,
+      panel.getAsNormalizedFullLink(),
+    )?.labelMap.entries ?? []) as readonly LabelEntry[];
+    read.abort();
+    expect(
+      claimSubjects(
+        entries.filter((entry) =>
+          entry.origin !== "link" &&
+          entry.path.length === 1 && entry.path[0] === "addedBy"
+        ),
+        "authored-by",
+      ),
+    ).toEqual([signer.did()]);
+  });
+
   for (const atRoot of [false, true]) {
     it(
       `keeps the actor apart from the linked profile's owner when the profile is labeled ${
@@ -349,7 +525,7 @@ describe("loom-root", () => {
         const output = root.asSchema(rootSchema);
         const addPiece = await output.key("addPiece").pull();
         await new Promise<void>((resolve, reject) =>
-          addPiece.send({ piece: target, as: owned }, (tx) => {
+          sendEvent(addPiece, { piece: target, as: owned }, (tx) => {
             const status = tx.status();
             if (status.status === "error") reject(status.error);
             else resolve();
@@ -396,6 +572,147 @@ describe("loom-root", () => {
       },
     );
   }
+
+  /**
+   * Deploys the real profile-home pattern, as `own_profile` names a person's
+   * Fabric profile: its result document holds each field as a redirect link
+   * to the cell that stores it. With `space`, it is deployed there, as a
+   * person's profile lives in their own home space.
+   */
+  const deployProfileHome = async (
+    cause: string,
+    space: MemorySpace = pieces.getSpace(),
+  ): Promise<Cell<unknown>> => {
+    const program = await resolveLocalProgram(
+      runtime.harness.resolve.bind(runtime.harness),
+      {
+        root: fromFileUrl(new URL("../../patterns/", import.meta.url)),
+        main: fromFileUrl(
+          new URL("../../patterns/system/profile-home.tsx", import.meta.url),
+        ),
+      },
+    );
+    const compiled = await runtime.patternManager.compilePattern(program, {
+      space,
+    });
+    const home = space === pieces.getSpace()
+      ? await pieces.runPersistent(compiled, { initialName: "Home" }, cause)
+      : await runtime.runSynced(
+        runtime.getCell(space, cause),
+        compiled,
+        { initialName: "Home" },
+      );
+    await runtime.idle();
+    return home;
+  };
+
+  /** A plain document labeled with integrity only. */
+  const writePlainProfile = async (id: string): Promise<Cell<unknown>> => {
+    const tx = runtime.edit();
+    const profile = runtime.getCell(pieces.getSpace(), id, profileSchema, tx);
+    profile.set({ name: "Plain" });
+    const result = await tx.commit();
+    if (result.error) throw result.error;
+    return profile;
+  };
+
+  /** The subjects the panel's declared entry at exactly the field names. */
+  const declaredAdders = (panel: Cell<unknown>): string[] => {
+    const read = runtime.edit();
+    const entries = (readStoredCfcMetadata(
+      read,
+      panel.getAsNormalizedFullLink(),
+    )?.labelMap.entries ?? []) as readonly LabelEntry[];
+    read.abort();
+    return representedSubjects(
+      entries.filter((entry) =>
+        entry.origin !== "link" &&
+        entry.path.length === 1 && entry.path[0] === "addedByProfile"
+      ),
+    );
+  };
+
+  it("labels the adder whether `as` names a plain document or a profile-home profile, in the Loom's space or another", async () => {
+    const plain = await writePlainProfile("loom-root-plain-control");
+    const home = await deployProfileHome("loom-root-profile-home");
+    const elsewhere = await deployProfileHome(
+      "loom-root-profile-home-elsewhere",
+      homeSpace,
+    );
+    const profiles = [plain, home, elsewhere];
+    const output = root.asSchema(rootSchema);
+    const addPiece = await output.key("addPiece").pull();
+    for (const [index, profile] of profiles.entries()) {
+      await sendAndSettle(
+        addPiece,
+        {
+          piece: runtime.getCell(
+            pieces.getSpace(),
+            `loom-root-as-target-${index}`,
+          ),
+          as: profile,
+        },
+        `add-as-${index}`,
+      );
+      await runtime.idle();
+    }
+    const panels = (await output.key("panels").pull()).map((panel) =>
+      panel.resolveAsCell()
+    );
+    expect(panels.length).toBe(profiles.length);
+    // Each panel links the profile it was added under, and its declared
+    // entry names whoever acted: the plain control, the profile-home profile
+    // in the Loom's space, and the one in another space, each on its own.
+    expect(
+      panels.map((panel, index) =>
+        panel.key("addedByProfile").resolveAsCell().equals(profiles[index])
+      ),
+    ).toEqual([true, true, true]);
+    expect(panels.map(declaredAdders)).toEqual([
+      [signer.did()],
+      [signer.did()],
+      [signer.did()],
+    ]);
+  });
+
+  it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {
+    // Shaped as another person's profile-home result: each field is a
+    // redirect link to a cell its owner wrote through the trusted editor, so
+    // the cell carries the owner's `represents-principal`.
+    const nameCell = await writeOwnedString(
+      runtime,
+      homeSpace,
+      "loom-root-borrowed-name",
+      profileOwner.did(),
+    );
+    const tx = runtime.edit();
+    const borrowed = runtime.getCell(
+      homeSpace,
+      "loom-root-borrowed-profile",
+      profileSchema,
+      tx,
+    );
+    (borrowed as Cell<unknown>).setRaw({
+      name: nameCell.getAsWriteRedirectLink(),
+    });
+    const written = await tx.commit();
+    if (written.error) throw written.error;
+
+    const output = root.asSchema(rootSchema);
+    await sendAndSettle(
+      await output.key("addPiece").pull(),
+      {
+        piece: runtime.getCell(pieces.getSpace(), "loom-root-borrowed-target"),
+        as: borrowed,
+      },
+      "add-as-borrowed",
+    );
+    await runtime.idle();
+    const panel = (await output.key("panels").pull())[0].resolveAsCell();
+    expect(panel.key("addedByProfile").resolveAsCell().equals(borrowed))
+      .toBe(true);
+    expect(declaredAdders(panel)).toEqual([signer.did()]);
+  });
 
   it("keeps each panel's adder and profile owner with that panel when an earlier panel is removed or the list is reordered", async () => {
     // The middle panel is added under no profile, so a label that stayed with

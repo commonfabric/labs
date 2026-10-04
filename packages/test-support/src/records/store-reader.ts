@@ -36,7 +36,12 @@ export interface TimedObject {
 
 /** Every item under a prefix, in name order, paginating as needed. */
 async function listItems(
-  options: { bucket: string; prefix: string; fetch?: typeof fetch },
+  options: {
+    bucket: string;
+    prefix: string;
+    matchGlob?: string;
+    fetch?: typeof fetch;
+  },
   fields: string,
 ): Promise<{ name: string; size?: string; timeCreated?: string }[]> {
   const doFetch = options.fetch ?? fetch;
@@ -47,6 +52,9 @@ async function listItems(
       `${STORAGE}/b/${encodeURIComponent(options.bucket)}/o`,
     );
     url.searchParams.set("prefix", options.prefix);
+    if (options.matchGlob !== undefined) {
+      url.searchParams.set("matchGlob", options.matchGlob);
+    }
     url.searchParams.set("fields", `items(${fields}),nextPageToken`);
     url.searchParams.set("maxResults", "1000");
     if (pageToken !== undefined) url.searchParams.set("pageToken", pageToken);
@@ -111,10 +119,16 @@ export async function listObjectTimes(options: {
   });
 }
 
-/** Lists every object name under a prefix. */
+/**
+ * Lists every object name under a prefix, or only those the glob
+ * `matchGlob` matches where one is given. The store applies the glob, so a
+ * reader looking for a few objects among a day's thousands fetches the
+ * names of the few.
+ */
 export async function listObjects(options: {
   bucket: string;
   prefix: string;
+  matchGlob?: string;
   fetch?: typeof fetch;
 }): Promise<string[]> {
   return (await listItems(options, "name")).map((item) => item.name);

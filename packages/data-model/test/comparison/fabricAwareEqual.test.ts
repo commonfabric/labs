@@ -264,7 +264,7 @@ describe("fabricAwareEqual()", () => {
       const [a, b] = distinct();
 
       expect(() => fabricAwareEqual(new Proxy(a, {}), new Proxy(b, {})))
-        .toThrow(TypeError);
+        .toThrow("Detected counterfeit `FabricPrimitive`");
     });
 
     it("returns `true` for two distinct ones where it does not", () => {

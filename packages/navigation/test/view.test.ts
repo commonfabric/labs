@@ -624,15 +624,15 @@ describe("view", () => {
     );
   });
 
-  it("addresses a space by name, by DID, or by neither", () => {
+  it("addresses a space by its DID when it has one, else by name", () => {
     expect(spaceViewRef("space", undefined)).toEqual({ spaceName: "space" });
     expect(spaceViewRef(undefined, SPACE_DID)).toEqual({
       spaceDid: SPACE_DID,
     });
     expect(spaceViewRef(undefined, undefined)).toBeUndefined();
-    // A name wins over a DID given alongside it, which is what keeps a
-    // readable URL where the caller knows the name.
-    expect(spaceViewRef("space", SPACE_DID)).toEqual({ spaceName: "space" });
+    // A DID given alongside a name is the address; the name is only what the
+    // space is called.
+    expect(spaceViewRef("space", SPACE_DID)).toEqual({ spaceDid: SPACE_DID });
   });
 
   it("addresses a space by DID when its name is one", () => {
@@ -642,7 +642,7 @@ describe("view", () => {
       spaceDid: SPACE_DID,
     });
     expect(spaceViewRef(SPACE_DID, "did:key:z6MkOther" as typeof SPACE_DID))
-      .toEqual({ spaceDid: SPACE_DID });
+      .toEqual({ spaceDid: "did:key:z6MkOther" });
     // The prefix is compared exactly, so this one stays an ordinary name.
     expect(spaceViewRef("DID:key:z6Mk", undefined)).toEqual({
       spaceName: "DID:key:z6Mk",

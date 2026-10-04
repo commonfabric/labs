@@ -1,5 +1,11 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
+import type { CellSubscribeOptions } from "@commonfabric/runtime-client";
+import {
+  authorPrincipalCandidates,
+  PRINCIPAL_CLAIM_KINDS,
+  principalClaimSubject,
+  representsPrincipalSubject,
+} from "@commonfabric/runner/cfc/represents-principal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { css, html } from "lit";
 
@@ -19,7 +25,7 @@ type CfcLabelResolvableValue = {
 type CfcLabelSubscribableValue = {
   subscribe(
     callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
-    options?: { includeCfcLabel?: boolean },
+    options: CellSubscribeOptions,
   ): () => void;
 };
 
@@ -74,21 +80,35 @@ const hasReadableClaim = (
   (typeof (value as { get?: unknown }).get === "function" ||
     typeof (value as { sync?: unknown }).sync === "function");
 
+/**
+ * The subject a claim of `kind` names, read as every check here reads it:
+ * `principalClaimSubject` for a kind in `PRINCIPAL_CLAIM_KINDS`, and for
+ * `represents-principal` only a well-formed DID, as
+ * `representsPrincipalSubject` requires. The runtime refuses a
+ * pattern-authored claim of those kinds in any spelling that names someone
+ * else and guards no other kind, so an atom of any other kind names nobody.
+ */
+const authorshipClaimSubject = (
+  atom: unknown,
+  kind: string,
+): string | undefined => {
+  if (!PRINCIPAL_CLAIM_KINDS.has(kind)) return undefined;
+  return kind === "represents-principal"
+    ? representsPrincipalSubject(atom)
+    : principalClaimSubject(atom, kind);
+};
+
 const labelHasRootIntegrityKind = (
   view: CfcLabelView,
   kind: string,
 ): boolean =>
   view.entries.some((entry) =>
-    entry.path.length === 0 &&
-    (entry.label.integrity ?? []).some((atom) => {
-      if (typeof atom === "string") {
-        return atom.startsWith(`${kind}:`);
-      }
-      if (!isObjectNotArray(atom)) {
-        return false;
-      }
-      return (atom as Record<string, unknown>).kind === kind;
-    })
+    // An entry a link carried describes the linked document, so it does not
+    // stand in for reading that document's own label.
+    entry.path.length === 0 && entry.observes !== "followRef" &&
+    (entry.label.integrity ?? []).some((atom) =>
+      authorshipClaimSubject(atom, kind) !== undefined
+    )
   );
 
 const mergeLabelViews = (
@@ -306,33 +326,18 @@ const principalAuthorClaim = (
   };
 };
 
+/**
+ * Whether `atom` says its value was written by the author `author` claims:
+ * the subject `authorshipClaimSubject` reads from it is one of the claim's
+ * author ids.
+ */
 export const integrityAtomMatchesAuthor = (
   atom: unknown,
   author: unknown,
   kind: string = DEFAULT_AUTHORSHIP_KIND,
 ): boolean => {
-  const authorIds = authorIdsForClaim(author);
-  if (authorIds.length === 0) {
-    return false;
-  }
-
-  if (typeof atom === "string") {
-    return authorIds.some((authorId) => atom === `${kind}:${authorId}`);
-  }
-
-  if (!isObjectNotArray(atom)) {
-    return false;
-  }
-
-  const atomRecord = atom as Record<string, unknown>;
-  if (objectField(atomRecord, "kind") !== kind) {
-    return false;
-  }
-
-  return AUTHOR_FIELDS.some((field) => {
-    const atomAuthor = objectField(atomRecord, field);
-    return atomAuthor !== undefined && authorIds.includes(atomAuthor);
-  });
+  const subject = authorshipClaimSubject(atom, kind);
+  return subject !== undefined && authorIdsForClaim(author).includes(subject);
 };
 
 const rootEntries = (view: CfcLabelView) =>
@@ -344,10 +349,7 @@ const hasAuthorshipIntegrity = (
 ): boolean =>
   entries.some((entry) =>
     (entry.label.integrity ?? []).some((atom) =>
-      typeof atom === "string"
-        ? atom.startsWith(`${kind}:`)
-        : isObjectNotArray(atom) &&
-          objectField(atom as Record<string, unknown>, "kind") === kind
+      authorshipClaimSubject(atom, kind) !== undefined
     )
   );
 
@@ -396,7 +398,8 @@ export const authorshipStateForLabel = (
  *   integrity verification.
  * @prop {"ok"|"blocked"} textIntegrityState - Renderer-reported descendant text
  *   integrity state.
- * @attr {string} kind - Integrity object kind; defaults to `authored-by`.
+ * @attr {string} kind - Integrity object kind, `authored-by` (the default) or
+ *   `represents-principal`; any other kind never verifies.
  */
 export class CFCFCAuthorship extends BaseElement {
   static override styles = [
@@ -685,7 +688,19 @@ export class CFCFCAuthorship extends BaseElement {
     // the new label.
     this._unsubscribeValue = value.subscribe(() => {
       void this.refreshLabel();
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A value the worker will not show carries no attestation here, and
+      // none is read for it: the watch on the cell it resolved to ends too. A
+      // later readable value starts one again.
+      onRefused: () => {
+        this.#endLabelWatch("value");
+        this._labelRequestId++;
+        const previous = this.cfcLabel;
+        this.cfcLabel = undefined;
+        this.requestUpdate("cfcLabel", previous);
+      },
+    });
     return true;
   }
 
@@ -716,7 +731,18 @@ export class CFCFCAuthorship extends BaseElement {
       const previous = this._authorClaim;
       this._authorClaim = claim;
       this.requestUpdate("author", previous);
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // An author the worker will not show makes no claim here, and the
+      // watch on the cell it resolved to ends.
+      onRefused: () => {
+        this.#endLabelWatch("author");
+        this._authorRequestId++;
+        const previous = this._authorClaim;
+        this._authorClaim = undefined;
+        this.requestUpdate("author", previous);
+      },
+    });
     return true;
   }
 
@@ -814,8 +840,9 @@ export class CFCFCAuthorship extends BaseElement {
    * marks the cell loaded and runs `refresh`, whose store read does see the
    * label; a read that still finds none once the cell has loaded ends the
    * watch. The watch ends too when a read finds the label, when `source`
-   * resolves to a different cell or to none, and when the element
-   * disconnects. An element that is not connected starts none.
+   * resolves to a different cell or to none, when the worker refuses the
+   * watched cell's read, or `source`'s own, and when the element disconnects.
+   * An element that is not connected starts none.
    */
   #watchUnloadedLabel(
     source: LabelSource,
@@ -846,7 +873,13 @@ export class CFCFCAuthorship extends BaseElement {
         watch.loaded = true;
         refresh();
       }
-    }, { includeCfcLabel: true });
+    }, {
+      includeCfcLabel: true,
+      // A refused cell loads nothing the host may read, so the watch ends.
+      onRefused: () => {
+        if (this.#labelWatches[source] === watch) this.#endLabelWatch(source);
+      },
+    });
     // The first delivery is synchronous, and may already have ended the watch.
     if (this.#labelWatches[source] === watch) {
       watch.cancel = cancel;

@@ -21,7 +21,7 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import { ensureCompilerStack } from "../harness/deferred-compiler-stack.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -369,7 +369,6 @@ export function fetchProgram(
     );
     for (const cell of [pending, result, error, cache]) {
       setResultCell(cell, parentCell);
-      setPatternCell(cell, parentCell.key("pattern"));
       cell.sync();
     }
     cells = { pending, result, error, cache };

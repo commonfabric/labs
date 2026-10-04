@@ -77,7 +77,7 @@ export const joinCfcObservedConfidentiality = (
   const joined: CfcConfClause[] = [];
   for (const part of parts) {
     if (Array.isArray(part)) {
-      joined.push(...part);
+      for (const atom of part) joined.push(atom);
     }
   }
   return uniqueCfcAtoms(joined);
@@ -116,7 +116,9 @@ export const cfcConfidentialityForObservationNode = (
     observes === "value" && isObjectOrArray(options.schema) &&
     isObjectOrArray(options.schema.ifc)
   ) {
-    joined.push(...(options.schema.ifc.confidentiality ?? []));
+    for (const atom of options.schema.ifc.confidentiality ?? []) {
+      joined.push(atom);
+    }
   }
 
   if (options.labelView !== undefined) {
@@ -130,7 +132,7 @@ export const cfcConfidentialityForObservationNode = (
           ((entry.observes === "shape" || entry.observes === "enumerate") &&
             entry.path.length === logicalPath.length);
       if (consumed) {
-        joined.push(...(entry.label.confidentiality ?? []));
+        for (const atom of entry.label.confidentiality ?? []) joined.push(atom);
       }
     }
   }

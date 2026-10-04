@@ -138,9 +138,9 @@ const withSkillCell = async (
     storageManager,
   });
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: signer,
-      spaceName: `skill-handle-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate()).did(),
     }),
     fabricRuntime,
   );
@@ -812,9 +812,9 @@ describe("prompt-loop delegate_task skillHandle", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `skill-handle-embed-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );

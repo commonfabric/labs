@@ -25,15 +25,11 @@ export function createOAuth2Routes(providerName: string) {
             schema: z
               .object({
                 authCellId: z.string().describe("The authentication cell ID"),
-                integrationPieceId: z
-                  .string()
-                  .describe("The piece ID of the integration piece"),
               })
               .openapi({
                 example: {
                   authCellId:
                     '{"/" : {"link@1" : {"id" : "of:bafe...", "space" : "did:key:bafe...", "path" : ["path", "to", "value"]}}}',
-                  integrationPieceId: "integration-piece-123",
                 },
               }),
           },
@@ -232,56 +228,7 @@ export function createOAuth2Routes(providerName: string) {
     },
   });
 
-  // Background integration route is shared (not per-provider), kept in Google for backward compat
-  const backgroundIntegration = createRoute({
-    path: "/api/integrations/bg",
-    method: "post",
-    tags,
-    request: {
-      body: {
-        content: {
-          "application/json": {
-            schema: z
-              .object({
-                pieceId: z.string().describe("The piece ID"),
-                space: z.string().describe("The space DID"),
-                integration: z.string().describe("The integration name"),
-              })
-              .openapi({
-                example: {
-                  pieceId: "fid1:abc...",
-                  space: "did:",
-                  integration: "rss",
-                },
-              }),
-          },
-        },
-      },
-    },
-    responses: {
-      [HttpStatusCodes.OK]: {
-        content: {
-          "application/json": {
-            schema: z.union([
-              z.object({ success: z.boolean(), message: z.string() }),
-              z.object({ error: z.string() }),
-            ]),
-          },
-        },
-        description: "Background integration response",
-      },
-      [HttpStatusCodes.BAD_REQUEST]: {
-        content: {
-          "application/json": {
-            schema: z.object({ error: z.string() }),
-          },
-        },
-        description: "Invalid request parameters",
-      },
-    },
-  });
-
-  return { login, callback, refresh, logout, backgroundIntegration };
+  return { login, callback, refresh, logout };
 }
 
 export type OAuth2Routes = ReturnType<typeof createOAuth2Routes>;
@@ -289,5 +236,3 @@ export type OAuth2LoginRoute = OAuth2Routes["login"];
 export type OAuth2CallbackRoute = OAuth2Routes["callback"];
 export type OAuth2RefreshRoute = OAuth2Routes["refresh"];
 export type OAuth2LogoutRoute = OAuth2Routes["logout"];
-export type OAuth2BackgroundIntegrationRoute =
-  OAuth2Routes["backgroundIntegration"];

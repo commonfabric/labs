@@ -1,3 +1,5 @@
+import { toDocumentPath } from "@commonfabric/memory/v2";
+
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -167,6 +169,7 @@ export function getTransactionWriteDetails(
         address: {
           ...attestation.address,
           space,
+          path: toDocumentPath(attestation.address.path),
         },
         value: attestation.value as TransactionWriteDetail["value"],
         previousValue: previousValues.get(key),
@@ -174,4 +177,39 @@ export function getTransactionWriteDetails(
       yield detail;
     }
   })();
+}
+
+/**
+ * The spaces `tx` recorded a write in, including one whose every write
+ * returned to where it started. A write elided as equal to the current value
+ * is never recorded and names no space. Throws when `tx` offers no record of
+ * its writes at all.
+ */
+export function getTransactionWrittenSpaces(
+  tx: TxLike,
+): readonly MemorySpace[] {
+  // Asked of the inner transaction: an extended one reports an empty attempt
+  // log where its inner transaction keeps none, which would read as "wrote
+  // nothing".
+  const attempts = getTransactionWriteAttempts(unwrap(tx));
+  if (attempts !== undefined) {
+    return [...new Set(attempts.map((attempt) => attempt.space))];
+  }
+  // The reactivity log is the remaining record. Its `writes` list only
+  // changed paths, so a space whose every write returned to where it started
+  // is missed unless one of them also recorded an attempted write.
+  const log = getDirectTransactionReactivityLog(tx);
+  if (log === undefined) {
+    throw new Error(
+      "The transaction keeps no write-attempt log, replayable journal or " +
+        "reactivity log, so the spaces it wrote cannot be known",
+    );
+  }
+  return [
+    ...new Set(
+      [...log.writes, ...(log.attemptedWrites ?? [])].map((write) =>
+        write.space
+      ),
+    ),
+  ];
 }

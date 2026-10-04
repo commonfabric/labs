@@ -27,6 +27,7 @@ import {
   readRun,
 } from "./api.ts";
 import { consolePath, pageMount } from "./mount.ts";
+import { markdownTemplate, revealedText } from "./markdown.ts";
 import { stepPolicyView, withheldView } from "./steps-view.ts";
 import type { ConsoleStep } from "../steps.ts";
 import type { ConsoleTurnResultPiece } from "../turn-result.ts";
@@ -42,6 +43,14 @@ export type ConsoleLiveEntry =
   | { kind: "turn"; key: string; turnId: string; startedAt: string }
   | {
     kind: "assistant";
+    key: string;
+    turnId?: string;
+    text: string;
+    subagent?: LiveSubagent;
+  }
+  | {
+    /** What the model was thinking before it acted, as the provider sums it up. */
+    kind: "thought";
     key: string;
     turnId?: string;
     text: string;
@@ -79,6 +88,18 @@ export type ConsoleLiveEntry =
     outcome?: "completed" | "question" | "gave-up";
 
     text?: string;
+
+    /**
+     * A completed turn's answer, in Markdown, when the turn named no piece:
+     * the final text as written.
+     */
+    answer?: string;
+
+    /**
+     * The strings the return referents in `text` or `answer` stand for, by
+     * token, which the owner reads in place of the handles the parent held.
+     */
+    revealed?: Readonly<Record<string, string>>;
     pieces: readonly ConsoleTurnResultPiece[];
 
     /** The space the pieces are in, which composing an address needs. */
@@ -318,6 +339,14 @@ export const consoleLiveEntries = (
         }
         break;
       }
+      case "assistant_reasoning":
+        entries.push({
+          kind: "thought",
+          ...named,
+          text: event.text,
+          ...under(event.subagent),
+        });
+        break;
       case "assistant_completed": {
         // The completed event carries the whole message, so it settles the
         // text rather than adding to it — however many deltas preceded it.
@@ -401,9 +430,25 @@ export const consoleLiveEntries = (
         break;
       }
       case "turn_completed": {
-        // Normal final answers already appear in the assistant feed. A
-        // finish_task question or reason lives in a tool result, so the
-        // closing block renders that sentence alongside any piece links.
+        // A finish_task answer, question, or reason lives in a tool result, so
+        // the closing block renders that sentence alongside any piece links.
+        // Any other completed turn is answered in its final text, which the
+        // closing block renders in place of the assistant block it streamed
+        // as: the block holds the parent's words, the answer holds them as
+        // the owner reads them.
+        const answered = event.result.outcome !== "question" &&
+          event.result.outcome !== "gave-up" &&
+          event.result.answer === undefined &&
+          event.result.finalText.trim() !== "";
+        if (answered) {
+          const streamed = entries.findLastIndex((entry) =>
+            entry.kind === "assistant" && entry.turnId === event.turnId &&
+            entry.subagent === undefined
+          );
+          if (streamed >= 0) {
+            entries.splice(streamed, 1);
+          }
+        }
         entries.push({
           kind: "ended",
           key: named.key,
@@ -411,9 +456,16 @@ export const consoleLiveEntries = (
           status: "completed",
           outcome: event.result.outcome ?? "completed",
           ...(event.result.outcome === "question" ||
-              event.result.outcome === "gave-up"
+              event.result.outcome === "gave-up" ||
+              (event.result.outcome === "completed" &&
+                event.result.answer !== undefined)
             ? { text: event.result.finalText }
+            : answered
+            ? { answer: event.result.finalText }
             : {}),
+          ...(event.result.revealed === undefined
+            ? {}
+            : { revealed: event.result.revealed }),
           pieces: event.result.pieces,
           spaceName: event.result.spaceName,
         });
@@ -792,8 +844,7 @@ export class ConsoleLive extends LitElement {
           <span class="tool">${entry.title ?? entry.toolName}</span>
           ${elapsed === undefined ? nothing : html`
             <span class="muted">${elapsed}s elapsed</span>
-          `}
-          ${entry.status === "running" ? nothing : html`
+          `} ${entry.status === "running" ? nothing : html`
             <span class="badge ${entry.status === "completed"
               ? "ok"
               : "denied"}">${entry.status}</span>
@@ -834,6 +885,16 @@ export class ConsoleLive extends LitElement {
             ${entry.text}
           </div>
         `;
+      case "thought":
+        return html`
+          <div
+            class="live-entry thought ${entry.subagent === undefined
+              ? ""
+              : "child"}"
+          >
+            ${entry.text}
+          </div>
+        `;
       case "tool":
         return this.#toolEntry(entry);
       case "subagent":
@@ -866,7 +927,14 @@ export class ConsoleLive extends LitElement {
                 : entry.status}</span>
             </div>
             ${entry.text === undefined ? nothing : html`
-              <div class="live-final">${entry.text}</div>
+              <div class="live-final">${revealedText(
+                entry.text,
+                entry.revealed,
+              )}</div>
+            `} ${entry.answer === undefined ? nothing : html`
+              <div class="live-final live-answer">
+                ${markdownTemplate(entry.answer, { revealed: entry.revealed })}
+              </div>
             `} ${entry.pieces.map((piece) =>
               html`
                 <a
@@ -900,8 +968,8 @@ export class ConsoleLive extends LitElement {
       `} ${this.piecesBaseRefused
         ? html`
           <p class="empty bad">
-            The address named a <code>piecesBase</code> that is not an absolute
-            http or https URL. Piece links go to the address the run recorded.
+            The address named a <code>piecesBase</code> that is not an absolute http or
+            https URL. Piece links go to the address the run recorded.
           </p>
         `
         : nothing}

@@ -30,7 +30,10 @@ export class Felt {
       }
 
       // Find the longest line to determine box width (minimum 50 for the header)
-      const maxLineLength = Math.max(50, ...lines.map((line) => line.length));
+      const maxLineLength = lines.reduce(
+        (longest, line) => Math.max(longest, line.length),
+        50,
+      );
       const boxWidth = maxLineLength + 4; // +4 for padding on both sides
 
       console.log();

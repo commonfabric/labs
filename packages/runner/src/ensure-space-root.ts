@@ -70,6 +70,31 @@ export const DEFAULT_APP_PATTERN_SOURCE = systemPatternSource(
 );
 
 /**
+ * The error opening a DID reports when the DID has no history: no space
+ * answers to it, and opening it creates none. Its `name` is what identifies it
+ * across a worker boundary, which carries an error's name and message and
+ * nothing else.
+ */
+export class SpaceNotFoundError extends Error {
+  #space: MemorySpace;
+
+  constructor(space: MemorySpace, label?: string) {
+    super(
+      label === undefined
+        ? `No space answers to ${space}`
+        : `No space answers to the name ${JSON.stringify(label)} (${space})`,
+    );
+    this.name = "SpaceNotFoundError";
+    this.#space = space;
+  }
+
+  /** The DID no space answers to. */
+  get space(): MemorySpace {
+    return this.#space;
+  }
+}
+
+/**
  * Resolve a stored pattern source to the URL to fetch it from, against
  * `base`. A `system:` ref expands to its patterns route; anything else (a
  * custom `defaultAppUrl`) is resolved as the URL it already is. The caller

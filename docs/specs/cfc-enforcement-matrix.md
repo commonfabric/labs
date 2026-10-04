@@ -71,7 +71,8 @@ every `Runtime` resolves its dials, and it throws when `cfcEnforcementMode` is
 stated and is not one of the four names above; `setCfcEnforcementMode`
 ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts))
 throws the same way for the mid-transaction lever, which is on the public
-transaction interface and so reachable from pattern code. A transaction holding
+transaction interface and so reachable from any code holding a transaction. A
+transaction holding
 any other name would be on no rung: `cfcEnforcementStrictness` has no answer for
 such a name and returns `undefined`, so every floor comparison against it reads
 false — including the audit-S3 anti-downgrade floor, which therefore never
@@ -169,7 +170,7 @@ dial is not yet producing. The states a deployment is expected to pass through:
 | **Explicit + flow** | `enforce-explicit` | `persist` | `off` | `false` | Flow labels persisted (H2, inv-9 active); floor not yet dialed. |
 | **Explicit + floor observe** | `enforce-explicit` | `persist` | `observe` | `false` | Add the write floor as diagnostics (D3 dial-up step). |
 | **Explicit + floor enforce** | `enforce-explicit` | `persist` | `enforce` | `false` | Floor rejects; complete on flow-endorsed writes (flow persists). |
-| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server hosts ([toolshed/index.ts](../../packages/toolshed/index.ts), [background-piece-service main.ts](../../packages/background-piece-service/src/main.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
+| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server host ([toolshed/index.ts](../../packages/toolshed/index.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
 
 Trigger gating may flip to `true` at any of these states (ordering constraint
 #4: it is sound anywhere) — the table shows it flipping at the end state
@@ -291,20 +292,17 @@ The strict-only delta is:
   declared-monotonicity gates too. Recorded in
   [`cfc-spec-changes.md`](./cfc-spec-changes.md) SC-39.
 
-  The raw meta seam is outside the check at EVERY rung, so a meta path
+  The raw meta seam is outside the check at EVERY rung, so a meta write
   raises neither a strict reject nor a persist-and-flag diagnostic. The
-  measurement quantifies over paths a schema could have declared a policy
-  at, and no value schema describes the document-root siblings of `value`
-  that `setMetaRaw` addresses. One route does reach a ceiling there: a
-  document-root declared entry resolves at every meta path by longest
-  prefix. It is skipped anyway. That entry sits at logical `[]`, the
-  payload root, and reaches the seam only because canonicalization strips a
-  leading `value` — so it is not a declaration about the seam, and honoring
-  it would make a piece updatable or not according to whether its pattern
-  carries a root `ifc`. Declaring on a single result field, which is how a
-  pattern normally labels one, leaves the seam's ceiling empty, and the
-  piece is then un-updatable under strict because the pattern updater,
-  `setsrc`, and setup over an existing piece all stamp meta.
+  document-root siblings of `value` that `setMetaRaw` addresses are the
+  document's own members rather than payload, so a write to one names no
+  payload path (spec §4.6.5): it is no flow stamp target, and nothing is
+  measured for it. No declared entry reaches it either, since a
+  document-root declared entry labels the payload root. Measuring the seam
+  would leave a piece un-updatable under strict whenever its pattern
+  declares on a single result field, which is how a pattern normally labels
+  one, because the pattern updater, `setsrc`, and setup over an existing
+  piece all write meta.
 
   Two id classes are outside the check at every rung too, and that is the
   same rule over a document rather than over a path. A computed cell is the
@@ -325,10 +323,10 @@ The strict-only delta is:
   entries document refuses every mark a served run writes to record that it
   handled an event, and every entry a same-space served emission carries into
   the document on its own transaction. Both are ordinary operation rather
-  than edge cases. One predicate covers those two classes, the marked class
-  below, and the meta seam above (`isDeclarablePolicyPath` in `prepare.ts`),
-  because all of them answer one question: could a schema have declared a
-  policy here.
+  than edge cases. One predicate covers those two classes and the marked
+  class below (`isDeclarablePolicyStore` in `prepare.ts`), because all of
+  them answer one question: could a schema have declared a policy on this
+  document.
 
   Two id classes is what this is, rather than a rule about documents the
   runtime mints. The runtime mints many more and route 2 below is what most
@@ -478,14 +476,13 @@ The strict-only delta is:
   stamp.
 
   A declared entry can still reach one of these documents, from a
-  schema-carrying write to it, and the skip is unconditional over that route
-  as it is over the meta seam's document-root route. Honoring it would make a
-  derivation admit its own inputs' taint or refuse it according to whether
-  the schema behind it happens to carry an `ifc`, while the atoms arriving in
-  the join come from what the transaction read rather than from anything that
-  schema describes. The residual is that a declaration which did reach such a
-  document stops being a write ceiling; it stays a read floor, and the
-  persisted stamp is unaffected.
+  schema-carrying write to it, and the skip is unconditional over that route.
+  Honoring it would make a derivation admit its own inputs' taint or refuse it
+  according to whether the schema behind it happens to carry an `ifc`, while
+  the atoms arriving in the join come from what the transaction read rather
+  than from anything that schema describes. The residual is that a declaration
+  which did reach such a document stops being a write ceiling; it stays a read
+  floor, and the persisted stamp is unaffected.
 
   What the skip does NOT do is release the value. A derivation's result
   leaves the fabric only through a sink, and a sink measures the join it is
@@ -506,19 +503,16 @@ The strict-only delta is:
   other gate — at `disabled` and `observe` it records nothing that
   withholds.
 
-  The exemption is not a hole. A path counts as meta only while no payload
-  write landed on it too, so a transaction writing both leaves the path
-  measured. The collapse of a deeper path against a covering ancestor runs
-  over the measured paths only, so an exempt meta path cannot shadow a value
-  write beneath it. Meta paths remain flow stamp targets, so the join still
-  persists there and the egress, display, and observation gates read the
-  unchanged label. And the seam sits in the same document, space, and
-  replica set as the value surface beside it, so it reaches no reader that
-  surface did not. One residual comes with it: where a payload field carries
-  a `MetaField` name, an exempt meta write can raise the stored derived
-  label at their shared logical path past what that field declares. The
-  direction is over-taint, so reads stay protected; giving the envelope seam
-  a path space of its own is what removes the collision.
+  The exemption is not a hole. The seam is the runtime's to read and write,
+  and no pattern compiles against it. A meta read consumes no payload label
+  just as a meta write stamps none, so no payload label is dropped on the
+  way through the seam, and a payload field that carries a `MetaField` name
+  is measured and labeled like any other. The seam sits in the same
+  document, space, and replica set as the value surface beside it, so it
+  reaches no reader that surface did not. One residual comes with it, which
+  the CFC owner accepted: until a stored entry can name a document's own
+  member, a runtime write of label-derived data into a meta field arrives
+  unlabeled ([`cfc-spec-changes.md`](./cfc-spec-changes.md) SC-55).
 
   What the check measures is bounded on the read side as well, and not only
   at this rung: the write machinery's own reads of the region it is writing
@@ -607,9 +601,8 @@ The strict-only delta is:
   What bounds the route, and what it declares once inside:
 
   - **Who recorded the marker.** The recording method is on the public
-    transaction interface, and pattern-authored code reaches the
-    transaction its cells are bound to, so an input's own fields say only
-    what its recorder wrote. The runtime passes an authorization alongside,
+    transaction interface, so an input's own fields say only what its
+    recorder wrote. The runtime passes an authorization alongside,
     the way `setMetaRaw` marks a meta write, and a marker without it counts
     for nothing however it is addressed. This is the difference between a
     gate that ACTS on an input and one that measures it: the two sibling
@@ -665,7 +658,7 @@ The strict-only delta is:
     transaction that settles a request reads its destination's hash as a read
     of the write destination, so the clauses the control state accumulates
     never reach the rows. The second thing that store's ceiling was refusing
-    was the membership of a SHARED result selected by a labeled parameter,
+    was the membership of a result selected by a labeled parameter,
     which no transaction's join can supply once the settle carries nothing;
     the builtin declares it on `/result`'s shape itself, beside the rows'
     own labels. Most
@@ -898,6 +891,5 @@ Grounded in the four implemented dials — `cfcEnforcementMode`
 SC-13 rollout constraint in `cfc-spec-changes.md` and the current host
 postures: shell
 ([lib-shell/src/runtime.ts](../../packages/lib-shell/src/runtime.ts):
-`enforce-strict` + flow `persist`); toolshed and background-piece-service
-(no CFC options passed, so the `Runtime` defaults, `enforce-strict` + flow
-`persist`).
+`enforce-strict` + flow `persist`); toolshed (the `productionServer` preset's
+pins, `enforce-strict` + flow `persist`).

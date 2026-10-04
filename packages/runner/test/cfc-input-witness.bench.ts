@@ -26,6 +26,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("cfc-input-witness-bench");
 const space = signer.did();
@@ -84,7 +85,7 @@ for (const count of [500, 2000, 4000]) {
   const measure = (timer?: Deno.BenchContext): void => {
     const tx = runtime.edit();
     try {
-      tx.setCfcImplementationIdentity(READER);
+      setCfcImplementationIdentity(tx, READER);
       tx.readOrThrow({ ...address, path: ["value"] });
       tx.writeOrThrow({ ...output, path: ["value"] }, 1);
       timer?.start();

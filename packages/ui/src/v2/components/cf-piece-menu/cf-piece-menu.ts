@@ -1,9 +1,10 @@
 import {
+  CFC_POLICY_PLACEHOLDER_TEXT,
   getPieceBoundary,
   subscribePieceBoundary,
 } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity";
-import { assertNotDID, isDID } from "@commonfabric/identity/did";
+import { isDID } from "@commonfabric/identity/did";
 import {
   appViewToUrlPath,
   navigate,
@@ -12,7 +13,7 @@ import {
   preserveAppViewMode,
   urlToAppView,
 } from "@commonfabric/navigation";
-import { parseFabricRef } from "@commonfabric/runner/shared";
+import { type JSONSchema, parseFabricRef } from "@commonfabric/runner/shared";
 import {
   $conn,
   CellHandle,
@@ -49,6 +50,12 @@ import {
   formatTimestamp,
   patternRefLabel,
 } from "./origin-view.ts";
+import {
+  HIDDEN_BY_POLICY,
+  NOT_READ,
+  PanelRead,
+  WAITING,
+} from "./panel-read.ts";
 
 /** The marker on the rendered piece while its built-in menu is open. */
 export const PIECE_MENU_OPEN_ATTRIBUTE = "data-cf-piece-menu-open";
@@ -181,6 +188,9 @@ function toDisplay(
   depth: number,
   streamKeys?: ReadonlySet<string>,
 ): unknown {
+  if (value === HIDDEN_BY_POLICY) return "[hidden by policy]";
+  if (value === NOT_READ) return "[could not be read]";
+  if (value === WAITING) return "[waiting]";
   if (isStreamHandle(value)) return "[stream]";
   if (isCellHandle(value)) {
     const ref = value.ref();
@@ -239,6 +249,12 @@ export function payloadHint(action: PieceAction): string | undefined {
   return names.length > 0 ? `{ ${names.join(", ")} }` : undefined;
 }
 
+/** The Home pattern's stream that takes a space out of the user's list. */
+const HOME_REMOVE_SPACE = {
+  type: "object",
+  properties: { removeSpace: { asCell: ["stream"] } },
+} as const satisfies JSONSchema;
+
 /**
  * CFPieceMenu — the menu a right-click opens on a space, and usually on a
  * piece in it. Its piece entries hold the panels for what it can show and do
@@ -262,6 +278,7 @@ export function payloadHint(action: PieceAction): string | undefined {
  * `cf-piece-context-menu` announcement and shows its own; see
  * `docs/features/host-embedding.md`.
  */
+
 export class CFPieceMenu extends BaseElement {
   static override styles = css`
     :host {
@@ -927,14 +944,20 @@ export class CFPieceMenu extends BaseElement {
   @state()
   private accessor readError: string | undefined = undefined;
 
+  /**
+   * The piece's argument as the panels show it, when it is not read live: a
+   * raw metadata value, or `HIDDEN_BY_POLICY` when the worker refused even
+   * the argument's address. A live read is in `#argumentRead`.
+   */
   @state()
   private accessor argumentValue: unknown = undefined;
 
   @state()
   private accessor argumentLoaded = false;
 
+  /** Bumped when a live read changes what it holds, to render again. */
   @state()
-  private accessor resultValue: unknown = undefined;
+  private accessor dataRevision = 0;
 
   @state()
   private accessor dataError: string | undefined = undefined;
@@ -1021,11 +1044,11 @@ export class CFPieceMenu extends BaseElement {
   /** The schema-bearing handle of the piece's argument cell, when resolved. */
   #argumentCell: CellHandle | undefined;
 
-  /** Cancels the live result subscription. */
-  #cancelResult: (() => void) | undefined;
+  /** The live read of the piece's result. */
+  #resultRead: PanelRead | undefined;
 
-  /** Cancels the live argument subscription. */
-  #cancelArgument: (() => void) | undefined;
+  /** The live read of the piece's argument, when its cell is addressable. */
+  #argumentRead: PanelRead | undefined;
 
   /** True while a dispatch is in flight, so a rapid double-click sends once. */
   #dispatching = false;
@@ -1331,7 +1354,7 @@ export class CFPieceMenu extends BaseElement {
       const range = globalThis.document?.createRange?.();
       if (range) {
         range.selectNodeContents(target);
-        targetRects.push(...Array.from(range.getClientRects()));
+        for (const rect of range.getClientRects()) targetRects.push(rect);
         range.detach();
       }
     }
@@ -1420,16 +1443,15 @@ export class CFPieceMenu extends BaseElement {
     // any of its remaining steps run, or a late completion could subscribe
     // after this cleanup and leak.
     this.#dataGeneration++;
-    this.#cancelResult?.();
-    this.#cancelResult = undefined;
-    this.#cancelArgument?.();
-    this.#cancelArgument = undefined;
+    this.#resultRead?.cancel();
+    this.#resultRead = undefined;
+    this.#argumentRead?.cancel();
+    this.#argumentRead = undefined;
     this.#pieceCell = undefined;
     this.#argumentCell = undefined;
     this.#dataRequested = false;
     this.argumentValue = undefined;
     this.argumentLoaded = false;
-    this.resultValue = undefined;
     this.dataError = undefined;
     this.dispatchNote = undefined;
   }
@@ -1735,10 +1757,10 @@ export class CFPieceMenu extends BaseElement {
       if (!fresh()) return;
       const pieceCell = (piece?.cell() as CellHandle | undefined) ?? cell;
       this.#pieceCell = pieceCell;
-      this.#cancelResult = pieceCell.subscribe((value) => {
-        if (!fresh()) return;
-        this.resultValue = value;
-      });
+      const changed = () => {
+        if (fresh()) this.dataRevision++;
+      };
+      this.#resultRead = new PanelRead(pieceCell, changed);
       const response = await rt[$conn]().request<RequestType.CellGet>({
         type: RequestType.CellGet,
         cell: pieceCell.ref(),
@@ -1749,20 +1771,27 @@ export class CFPieceMenu extends BaseElement {
       if (response.cell) {
         // The argument's own schema-bearing ref: its schema carries the
         // stream declarations for argument-side handlers, and the handle
-        // gives the panel a live view instead of a one-shot snapshot.
+        // gives the panel a live view instead of a one-shot snapshot. A
+        // refused read still names it, so the panel reads its fields one by
+        // one. The handle starts with what this read found, the refusal as
+        // much as a value, so the panel never shows it as an argument that
+        // holds nothing while its own read is on the way.
         const argumentCell = new CellHandle(
           rt,
           response.cell,
-          CellHandle.deserialize(
-            new CellHandle(rt, response.cell),
-            response.value,
-          ),
+          response.refused !== undefined ? { refused: response.refused } : {
+            value: CellHandle.deserialize(
+              new CellHandle(rt, response.cell),
+              response.value,
+            ),
+          },
         );
         this.#argumentCell = argumentCell;
-        this.#cancelArgument = argumentCell.subscribe((value) => {
-          if (!fresh()) return;
-          this.argumentValue = value;
-        });
+        this.#argumentRead = new PanelRead(argumentCell, changed);
+      } else if ("refused" in response) {
+        // Refused before the argument could be named: shown as hidden, not
+        // as an argument that holds nothing.
+        this.argumentValue = HIDDEN_BY_POLICY;
       } else {
         this.argumentValue = CellHandle.deserialize(pieceCell, response.value);
       }
@@ -1832,9 +1861,17 @@ export class CFPieceMenu extends BaseElement {
       argument: this.#argumentCell,
     };
     const scan = (value: unknown, source: "result" | "argument") => {
-      if (!isObjectNotArray(value)) return;
       const declared = this.#schemaProperties(parents[source]);
-      for (const [name, item] of Object.entries(value)) {
+      // The schema's stream declarations name handlers whether or not the
+      // value could be read: a refused value still has them.
+      const names = new Set([
+        ...(isObjectNotArray(value) ? Object.keys(value) : []),
+        ...Object.keys(declared).filter((name) =>
+          schemaDeclaresStream(declared[name])
+        ),
+      ]);
+      for (const name of names) {
+        const item = isObjectNotArray(value) ? value[name] : undefined;
         const declaredStream = schemaDeclaresStream(declared[name]);
         let handle: CellHandle | undefined;
         if (isCellHandle(item)) {
@@ -1873,8 +1910,8 @@ export class CFPieceMenu extends BaseElement {
         actions.push({ name, source, handle, eventSchema });
       }
     };
-    scan(this.resultValue, "result");
-    scan(this.argumentValue, "argument");
+    scan(this.#resultRead?.shown(), "result");
+    scan(this.#argumentRead?.shown() ?? this.argumentValue, "argument");
     return actions;
   }
 
@@ -2040,33 +2077,50 @@ export class CFPieceMenu extends BaseElement {
     await this.cloneIntoNewSpace({ copyData: mode === "copy-data" });
   }
 
-  /** Clone the selected piece into a unique named space and open the copy. */
+  /**
+   * Clone the selected piece into a new space and open the copy. The space is
+   * created for the copy, and is listed in the user's Home space list under
+   * `label`. A clone that fails takes the space back out of that list: the
+   * space cannot be deleted, and a list holding one empty space per failed
+   * attempt would be the failure's only visible result.
+   */
   async cloneIntoNewSpace(
     {
       copyData = false,
-      spaceName = `piece-copy-${crypto.randomUUID()}`,
-    }: { copyData?: boolean; spaceName?: string } = {},
+      label = "Piece copy",
+    }: { copyData?: boolean; label?: string } = {},
   ): Promise<void> {
     const cell = this.cell;
     if (!cell || this.clonePending) return;
-    // The name is derived into a space key AND put in the URL as a name; a DID
-    // would mean two different spaces on those two routes.
-    assertNotDID(spaceName, "A space name");
     this.cloneMode = copyData ? "copy-data" : "fresh";
     this.clonePending = true;
     this.cloneError = undefined;
     try {
       const runtime = cell.runtime();
-      const destinationSpace = await runtime.resolveSpaceName(spaceName);
+      const destinationSpace = await runtime.createSpace(label);
       const clone = await runtime.clonePiece(
         cell.id(),
         cell.space(),
         destinationSpace,
         { copyData, scope: cell.ref().scope },
-      );
+      ).catch(async (error: unknown) => {
+        // The clone's failure is what the dialog reports; failing to unlist
+        // the space as well is reported beside it rather than in its place.
+        try {
+          const home = (await runtime.ensureHomePatternRunning())
+            .asSchema<{ removeSpace: { did: string } }>(HOME_REMOVE_SPACE);
+          await home.key("removeSpace").sendStrict({ did: destinationSpace });
+        } catch (unlistError) {
+          console.error(
+            "[cf-piece-menu] The failed clone's space stays in Home:",
+            unlistError,
+          );
+        }
+        throw error;
+      });
       this.clonePending = false;
       this.close();
-      navigate({ spaceName, pieceId: clone.id() });
+      navigate({ spaceDid: destinationSpace, pieceId: clone.id() });
     } catch (error) {
       this.cloneError = cell.runtime().signal.aborted
         ? "The clone was canceled because the runtime stopped."
@@ -2506,23 +2560,27 @@ export class CFPieceMenu extends BaseElement {
     if (this.dataError) return this.#renderDataError("data");
     return html`
       <h3 class="section-title">Argument</h3>
-      ${this.argumentLoaded
+      ${this.argumentLoaded && (this.#argumentRead?.ready ?? true)
         ? html`
-          <pre class="source">${formatPieceValue(this.argumentValue)}</pre>
+          <pre class="source">${formatPieceValue(
+            this.#argumentRead?.shown() ?? this.argumentValue,
+          )}</pre>
+          ${this.#renderRefusedNote(this.#argumentRead)}
         `
         : html`
           <p>Reading argument…</p>
         `}
       <h3 class="section-title">Result</h3>
-      ${this.resultValue === undefined
+      ${!this.#resultRead?.ready
         ? html`
           <p>Waiting for a value…</p>
         `
         : html`
           <pre class="source">${formatPieceValue(
-            this.resultValue,
+            this.#resultRead.shown(),
             this.#declaredStreamKeys(),
           )}</pre>
+          ${this.#renderRefusedNote(this.#resultRead)}
         `}
       <p class="note">
         Values stay live while the menu is open.
@@ -2533,9 +2591,23 @@ export class CFPieceMenu extends BaseElement {
     `;
   }
 
+  /**
+   * Says, beneath a read the worker refused as a whole, that it is shown
+   * field by field, where it is.
+   */
+  #renderRefusedNote(read: PanelRead | undefined) {
+    if (!read?.shownByField) return nothing;
+    return html`
+      <p class="note">
+        ${CFC_POLICY_PLACEHOLDER_TEXT}: part of this value. Each field it
+        holds is shown on its own, and a field the policy hides is marked.
+      </p>
+    `;
+  }
+
   #renderActions(): TemplateResult {
     if (this.dataError) return this.#renderDataError("handlers");
-    if (!this.argumentLoaded && this.resultValue === undefined) {
+    if (!this.argumentLoaded && !this.#resultRead?.loaded) {
       return html`
         <p>Reading handlers…</p>
       `;

@@ -116,6 +116,18 @@ export const collectDeclaredMonotonicityViolations = (input: {
     if (stored.origin !== "declared") {
       continue;
     }
+    // A declared entry with no label values declares no policy to keep: it
+    // marks a writer-claimed position so a write there is routed to the
+    // claim (the persist loop mints one for a claimed position that holds
+    // nothing yet). The writer's first write, which mints the position's
+    // real label — an `addIntegrity` claim among it — is a creation as far
+    // as monotonicity is concerned, not an addition to an empty claim.
+    if (
+      (stored.label.confidentiality?.length ?? 0) === 0 &&
+      (stored.label.integrity?.length ?? 0) === 0
+    ) {
+      continue;
+    }
     const storedPath = canonicalizeLogicalPath(stored.path);
     const key = JSON.stringify(storedPath);
     const group = storedByPath.get(key);

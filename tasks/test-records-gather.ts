@@ -162,7 +162,7 @@ export async function collectRecords(
     for (const warning of spooled.warnings) {
       console.warn(`test records: ${warning}`);
     }
-    records.push(...spooled.records);
+    for (const record of spooled.records) records.push(record);
   }
   for (const spec of options.junit) {
     let matched = 0;
@@ -180,7 +180,9 @@ export async function collectRecords(
             fileByName,
           };
           if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
-          records.push(...ingestJUnit(xml, ingestOptions));
+          for (const record of ingestJUnit(xml, ingestOptions)) {
+            records.push(record);
+          }
         } catch (error) {
           console.warn(
             `test records: ingesting ${entry.path} failed: ${error}`,

@@ -268,6 +268,7 @@ describe("custody-seal", () => {
         "sources",
         "stance",
         "terms",
+        "witnessedRelease",
       ]);
       expect(preview.actor).toBe(alice.did());
       expect(preview.room).toBe(S);
@@ -284,17 +285,98 @@ describe("custody-seal", () => {
       expect(preview.policy).toEqual(P);
       expect(preview.stance).toEqual({ choice: "sushi" });
       expect(preview.sources).toEqual([]);
+      // The fixture's policy has no rules, so nothing it releases is unwitnessed.
+      expect(preview.witnessedRelease).toBe(true);
 
       const sealed = await processor.handleRequest({
         type: RequestType.CustodySealCommit,
         id: preview.id,
-      }, first) as { cell: CellRef };
-      const receipt = runtime.getCellFromLink(sealed.cell);
-      expect(sealed.cell.space).toBe(alice.did());
+      }, first) as { receipt: CellRef; box: CellRef; instance: string };
+      const receipt = runtime.getCellFromLink(sealed.receipt);
+      expect(sealed.receipt.space).toBe(alice.did());
       expect(receipt.get()).toMatchObject({
         policy: P,
         instance: preview.instance,
       });
+      // The box a pattern's projector reads: the instance's one document in
+      // the room space, holding the entry the receipt names.
+      expect(sealed.instance).toBe(preview.instance);
+      expect(sealed.box.space).toBe(S);
+      expect(sealed.box.path).toEqual([]);
+      const box = runtime.getCellFromLink(sealed.box);
+      expect(Object.keys(box.getRaw() as object)).toEqual([
+        (receipt.get() as { entryKey: string }).entryKey,
+      ]);
+    });
+  });
+
+  it("writes the link to the box into the room's box cell the host names", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      // The room document whose cell receives the link.
+      const cells = runtime.getCell(S, "room-cells");
+      const setup = runtime.edit();
+      cells.withTx(setup).set({} as never);
+      expect((await setup.commit()).error).toBeUndefined();
+      const roomBox = cells.key("box");
+      const preview = await processor.handleRequest({
+        type: RequestType.CustodySealPrepare,
+        ...refs,
+        box: createCellRef(roomBox),
+      }, first) as CustodySealPreview;
+      const sealed = await processor.handleRequest({
+        type: RequestType.CustodySealCommit,
+        id: preview.id,
+      }, first) as { receipt: CellRef; box: CellRef; instance: string };
+      await roomBox.sync();
+      const tx = runtime.edit();
+      const linked = roomBox.withTx(tx).resolveAsCell()
+        .getAsNormalizedFullLink();
+      tx.abort();
+      expect(linked.space).toBe(S);
+      expect(linked.id).toBe(sealed.box.id);
+    });
+  });
+
+  it("routes an answer publication to the seal, which reads the room itself", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      const output = runtime.getCell(S, "custody-room-choice");
+      // Nothing is sealed yet, so the seal refuses: the request carried the
+      // room's cells, and the worker read them.
+      await expect(processor.handleRequest({
+        type: RequestType.CustodyAnswerPublish,
+        terms: refs.terms,
+        policy: refs.policy,
+        output: createCellRef(output),
+      }, first)).rejects.toThrow("every seat to have sealed");
+    });
+  });
+
+  it("reads no answer for an instance nothing has published", async () => {
+    await withFixture(async ({ processor, refs }) => {
+      expect(
+        await processor.handleRequest({
+          type: RequestType.CustodyAnswerRead,
+          terms: refs.terms,
+          policy: refs.policy,
+        }, first),
+      ).toEqual({});
+    });
+  });
+
+  it("refuses publication and reading once the worker is disposed", async () => {
+    await withFixture(async ({ processor, runtime, refs }) => {
+      await processor.dispose();
+      await expect(processor.handleCustodyAnswerPublish({
+        type: RequestType.CustodyAnswerPublish,
+        terms: refs.terms,
+        policy: refs.policy,
+        output: createCellRef(runtime.getCell(S, "custody-room-choice")),
+      })).rejects.toThrow("Custody sealing is unavailable");
+      await expect(processor.handleCustodyAnswerRead({
+        type: RequestType.CustodyAnswerRead,
+        terms: refs.terms,
+        policy: refs.policy,
+      })).rejects.toThrow("Custody sealing is unavailable");
     });
   });
 
@@ -576,7 +658,7 @@ describe("custody-seal", () => {
           type: RequestType.CustodySealCommit,
           id: retained.id,
         }, second),
-      ).toHaveProperty("cell");
+      ).toHaveProperty("box");
     });
   });
 });

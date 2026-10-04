@@ -1,0 +1,1 @@
+{"date":"2026-09-29","from":{"k":"unit","s":"runner","n":"ConsumedLabelIndex > constructor() > preserves payload coordinates when entries are already canonical"},"to":{"k":"unit","s":"runner","n":"ConsumedLabelIndex > constructor() > keeps a leading `value` segment of an entry's path as a field name"}}

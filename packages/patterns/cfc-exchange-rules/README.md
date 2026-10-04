@@ -20,6 +20,49 @@ handler copying a raw input, or a different version of the module does not
 satisfy the rule. `blessed-object.tsx` does the same for a function returning an
 object, whose object node is released along with its fields.
 
+`custody-answer-room.tsx` is a room whose members seal their stances into the
+policy's custody through the host's `cf-custody-seal`, and whose policy releases
+only what its projector computes over the sealed box, one of the listed answers,
+and only to the seal, when everything confidential the projector read was
+written by the seal (`TransformedBy{builtin cfc-custody-seal}` as the rule's
+input witness). It shows the pattern side of the
+[custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
+cells, the policy read from a declaring cell's label, the box link the seal
+writes into the room, and the answer the seal publishes once per instance
+through `cf-custody-answer`, which the room renders instead of its reactive
+projection. The seal publishes only once every seat has sealed, when every rule
+of the room's policy requires the seal's witness and releases only to the seal,
+and a rule of that policy releases the answer to the seal. No member reads the
+projection itself: the seal declassifies it once per instance into the answer
+slot, so the answer published for an instance never changes. The component finds
+that slot through the room's `terms` and `policy`, which a member's own code can
+repoint at another instance; the claims naming `propose` on the room's arguments
+are defense in depth, and the spec says what they leave open.
+
+`custody-projector.tsx` is the same room, demo-grade: its rule names the
+projector alone rather than requiring the seal's input witness, and it renders
+its reactive projection. Under that rule a member's own code can feed the
+projector a crafted box and learn another member's entry from the answers, and
+the host publishes no answer for it. It is kept as recorded because the rule is
+part of the policy its `policy` cell declares, so changing the rule would change
+the policy a room of it already sealed under.
+
+`witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
+the tally only when every confidential location the tally read was written by
+the module's `commit` step, and every one `commit` read was written by its
+`submit` step. Public inputs do not constrain the witness, so it does not prove
+that every value the tally read came from `commit`. A relay between the two, a
+vote planted beside the committed ones, a vote list written by other code, and a
+brief other code added before `commit` ran are refused, though the tally's own
+identity would release each of them. The briefs are objects in a list, which the
+runtime stores behind references, and a reference `submit` stored carries its
+stamp as the object does. `submit` is attributed only when its transaction reads
+something labeled: storing a pushed brief reads the document holding the list,
+which here holds the committed input's default. Without that default its first
+write carries no stamp, and the second level releases nothing.
+`docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
+and what it does not.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -45,4 +88,7 @@ deno task cf check packages/patterns/cfc-exchange-rules/direct-release.tsx --sho
 deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
 deno task cf test packages/patterns/cfc-exchange-rules/blessed-object.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/custody-projector.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/custody-answer-room.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx
 ```

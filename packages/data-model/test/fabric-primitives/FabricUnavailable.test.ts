@@ -400,6 +400,17 @@ describe("FabricUnavailable", () => {
           expect(codec.encode(explicit, env))
             .toStrictEqual({ reason: "error", errorKind: "decode" });
         });
+
+        it("returns a frozen record for each shape of state", () => {
+          const shapes = [
+            UNAVAILABLE_SYNCING,
+            new FabricUnavailable("error", "network"),
+            new FabricUnavailable("error", "network", "boom"),
+          ];
+          for (const value of shapes) {
+            expect(Object.isFrozen(codec.encode(value, env))).toBe(true);
+          }
+        });
       });
 
       describe("canDecode()", () => {
@@ -616,6 +627,17 @@ describe("FabricUnavailable", () => {
               .toStrictEqual(
                 FabricUnavailable[JSON_CODEC].encode(original, env),
               );
+          }
+        });
+
+        it("returns a frozen record for each shape of state", () => {
+          const shapes = [
+            UNAVAILABLE_SYNCING,
+            new FabricUnavailable("error", "network"),
+            new FabricUnavailable("error", "network", "boom"),
+          ];
+          for (const value of shapes) {
+            expect(Object.isFrozen(codec.encode(value, env))).toBe(true);
           }
         });
       });

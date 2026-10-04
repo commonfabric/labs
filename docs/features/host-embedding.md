@@ -158,17 +158,19 @@ also guarded by `packages/shell/test/runtime-navigation.test.ts`.
 **Contract.** A right-click on a piece rendered by `cf-render` opens
 `cf-piece-menu` for that piece. **View source** shows the piece's retained
 authored files. **Origin and history** shows its active origin and recorded
-source revisions. **Clone fresh piece into new space** creates a copy with
-default input data in a unique named space owned by the current user, then
-navigates to it. **Clone piece and copy data into new space** takes detached
-snapshots of the selected piece's current input and stateful internal data.
-Computed values are recomputed in the new space. Data linked from another space
-is rejected because it cannot be captured atomically. Both actions move clone
-progress and failures from the context menu into a dialog. The copy follows
-the selected piece when that piece is detached. When the selected piece already
-follows an origin, the copy follows that same origin. A piece with an active
-origin also has **Stop following source**. That action keeps the exact current
-source and clears the active origin.
+source revisions. **Clone fresh piece into new space** creates a space with a
+random DID, owned by the current user and listed in their Home space list,
+creates a copy with default input data there, then navigates to it by the
+space's DID. A clone that fails takes the space back out of the Home space list.
+**Clone piece and copy data into new space** takes detached snapshots of the
+selected piece's current input and stateful internal data. Computed values are
+recomputed in the new space. Data linked from another space is rejected because
+it cannot be captured atomically. Both actions move clone progress and failures
+from the context menu into a dialog. The copy follows the selected piece when
+that piece is detached. When the selected piece already follows an origin, the
+copy follows that same origin. A piece with an active origin also has **Stop
+following source**. That action keeps the exact current source and clears the
+active origin.
 
 Historical entries can restore an exact retained source version or resume
 following an earlier web or fabric origin. Each entry can show its exact
@@ -462,8 +464,8 @@ no concept guard is satisfied and every custody seal is refused.
 `RuntimeClient.prepareCustodySeal({ draft, terms, policy, allowedSources })`
 prepares a [custody seal](../specs/cfc-custody-seal.md). Each field is a cell
 reference: the actor's draft, the room's terms document, a cell holding the
-room's policy reference, and the actor's source policy, which must be in the
-actor's home space. The worker reads each and returns an opaque `id`, the actor,
+room's policy reference or declaring the policy in its label, and the actor's
+source policy, which must be in the actor's home space. The worker reads each and returns an opaque `id`, the actor,
 the room space, the room's readers from its access list, the terms, the instance
 digest, the policy, the sources the draft draws on, and the exact stance. The
 worker read every field and checked the seal's invariants over them. The terms'
@@ -472,7 +474,8 @@ verifies that the room's policy releases only those answers.
 
 The trusted host shows that preview and requires a trusted user confirmation
 before calling `RuntimeClient.commitCustodySeal(id)`, which returns the
-actor's receipt. The worker builds the renderer-trusted `CustodySeal` gesture
+actor's receipt, the instance's box and the instance. The box is what the
+room's projector reads; the entry's blinded key is not returned. The worker builds the renderer-trusted `CustodySeal` gesture
 itself; the request carries no event. The seal is bound to what the actor
 reviewed: at commit it reads the draft, the terms, the room's readers, the
 policy cell and the source policy again, and a changed value in any of them,

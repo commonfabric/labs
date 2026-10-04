@@ -15,6 +15,7 @@
  */
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { maxOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { handleTokensIn } from "../../console/steps.ts";
@@ -1553,7 +1554,7 @@ const missingInvocationContexts = (run: RunEvidence): readonly number[] => {
   const held = new Set(retained.map((context) => context.sequence));
   const highest = retained.length === 0
     ? 0
-    : Math.max(...retained.map((context) => context.sequence));
+    : maxOf(retained.map((context) => context.sequence));
   const gaps: number[] = [];
   for (let sequence = 1; sequence <= highest; sequence += 1) {
     if (!held.has(sequence)) {

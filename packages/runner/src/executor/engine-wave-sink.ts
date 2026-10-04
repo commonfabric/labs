@@ -34,11 +34,19 @@
 // Stage G also forwards the wave's durable outbound-append rows
 // (serving-loop.md §5, FP1): `batch.outboxAppends` land INSIDE the same
 // engine transaction as the wave commit, via applyWaveCommit.
+//
+// No batch this sink commits writes a space's ACL document, in any memory
+// ACL mode (INV-12 on the served plane, serving-loop.md §3d): the wave's
+// seal refuses the run that writes one, the engine's derived admission
+// refuses one in a home batch, and `commitWave` below refuses one in a
+// foreign batch, each naming the operation.
 
+import { aclDocId } from "@commonfabric/memory/acl";
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import {
   applyCommit,
   applyWaveCommit,
+  DerivedAclDocumentWriteError,
   hasIntrusionSince,
   readState,
   RowLabelCommitError,
@@ -78,6 +86,15 @@ export function waveCommitFailureResult(
       },
     };
   }
+  if (error instanceof DerivedAclDocumentWriteError) {
+    return {
+      error: {
+        name: "AclDocumentWriteRefused",
+        message: error.message,
+        failedOperation: error.operationIndex,
+      },
+    };
+  }
   if (
     error instanceof RowLabelCommitError && error.operationIndex !== undefined
   ) {
@@ -109,6 +126,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       scopeKeyByOpIndex: ReadonlyMap<number, string>,
     ) => { attachments: Map<string, string>; detach: () => void })
     | undefined;
+  readonly #onHomeRefused: (() => void) | undefined;
 
   /**
    * Replay keying — the stage-F choice, made and enforced here: the
@@ -163,12 +181,18 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       operations: readonly Operation[],
       scopeKeyByOpIndex: ReadonlyMap<number, string>,
     ) => { attachments: Map<string, string>; detach: () => void };
+
+    /** Called when applying a home batch throws, before `commitWave`
+     * returns the refusal, so that whatever the refusal changes is in
+     * place by the time the caller reads it. */
+    onHomeRefused?: () => void;
   }) {
     this.#engineFor = options.engineFor;
     this.#sessionId = options.sessionId;
     this.#principal = options.principal;
     this.#localSeq = options.localSeqRef ?? { value: 0 };
     this.#sqliteAttachmentsFor = options.sqliteAttachmentsFor;
+    this.#onHomeRefused = options.onHomeRefused;
   }
 
   currentHeads(
@@ -261,7 +285,9 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // never lands in a FRESH store ahead of its genesis ACL — the
         // space's commit #1 is the ACL, signed by the space's own keys
         // and naming the acting user OWNER. The session plane enforces
-        // this in `#validateAclCommit`'s precedence clause; of the two
+        // this in `#validateAclCommit`'s precedence clause, in the
+        // `observe` and `enforce` memory ACL modes; this mirror holds in
+        // every mode, `off` included. Of the two
         // other engine-direct committers, this sink is the one that
         // writes provisioning DATA batches (the third,
         // `Server.commitDelegatedAppend`, appends outbox-carried events
@@ -270,11 +296,12 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // this refusal the sink silently
         // bypassed the invariant (a served `.inSpace()` create whose
         // data commit won the race with the provider mount's genesis
-        // minted an ACL-less space). The wave commit step forces the
-        // genesis for every creation-granted target before applying, so
-        // hitting this refusal means the forcing failed or no bootstrap
-        // authority exists — foreign failure ⇒ home withheld ⇒ replay
-        // (§2b's existing failure semantics). Populated ACL-less legacy
+        // minted an ACL-less space). A served `.inSpace()` target is
+        // created, genesis included, before its handler re-runs, and the
+        // accept gate refuses a write into a space no store holds, so
+        // hitting this refusal means a write aimed at a space nobody
+        // created got past the gate — foreign failure ⇒ home withheld ⇒
+        // replay (§2b's existing failure semantics). Populated ACL-less legacy
         // spaces (serverSeq > 0) are not this refusal's subject — the
         // accept gate already fails closed on them.
         if (
@@ -290,6 +317,26 @@ export class EngineWaveCommitSink implements WaveCommitSink {
                 "acting user OWNER — before any data commit (INV-13 " +
                 "mirrored at the sink; OW31, protocol.md §2's genesis " +
                 "clause, §2b)",
+            },
+          });
+        }
+        // No foreign batch writes the target space's ACL document: the
+        // delegated admission checks carriage and nothing of INV-12's shape
+        // or of the carried actor's level, so it is refused here, naming the
+        // operation, in every memory ACL mode. The engine refuses the same
+        // write in a derived (home) batch.
+        const aclId = aclDocId(batch.space);
+        const aclOperation = batch.operations.findIndex((op) =>
+          op.op !== "sqlite" && op.id === aclId
+        );
+        if (aclOperation !== -1) {
+          return Promise.resolve({
+            error: {
+              name: "AclDocumentWriteRefused",
+              message: `foreign wave batch into ${batch.space} refused: ` +
+                `operation ${aclOperation} writes ${aclId}, the space ACL ` +
+                "document, which no wave batch may write (INV-12)",
+              failedOperation: aclOperation,
             },
           });
         }
@@ -404,6 +451,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       }
       return Promise.resolve({ ok: { seq: applied.seq } });
     } catch (error) {
+      if (batch.home) this.#onHomeRefused?.();
       return Promise.resolve(waveCommitFailureResult(error));
     }
   }

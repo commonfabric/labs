@@ -28,6 +28,7 @@ The status corrections in this register are bounded to the rows below:
 | OW28-supersession-family / OW28-instance-family | Partial: shared fetch, `fetchProgram`, and direct LLM user/session isolation are covered. Caller-specific lifecycle, initialization, and remaining provider/tool read obligations are detailed below. |
 | OW30 | Stream sibling validation is fixed; the non-Stream counter/container observation remains unresolved. |
 | OW31 residual (vii) | Read-triggered remount is implemented; automatic replay of the entire watch set remains separate. |
+| OW41 | Partial: a demand pass over unchanged demand, with no warm key captured since the last pass, does no per-row work — the memory server keeps each session's share of the demand set and the SpaceServer reconciles only the keys whose rows changed and the newly captured warm keys (serving-loop.md §7, `demandKeysReconciled`). A session whose demand changes is still rebuilt and compared whole, so a pass after a change costs that session's closure; the first pass of a tenure and the pass after one whose reconcile threw partway reconcile every key. |
 | OW55 | Open: serving pattern-source trust, with root creation and wish sidecars among its consumers. |
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
 | OW58 | Closed: resolved-error notice commits release the drain guard. |
@@ -243,6 +244,18 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   watermark-only advance over the withdrawn derivations;
   re-activation's fresh-runtime recompute-on-demand is the only
   post-abort arm), pinned with a deterministic mid-wave interleave.
+  The same test pins that re-activation: the client's session is
+  still live, so the host re-activates the space with a fresh tenure,
+  after the failure-park backoff, with no further trigger. Two sibling
+  tests pin the same re-activation after a serving-loop failure and
+  after a failed activation; each opens the client's session with a
+  read, so that no write races the park and re-activates the space by
+  the admission path instead. A space with no client session comes
+  back the same way for a warm request its tenure received and did not
+  serve: `packages/runner/test/executor-warm-request.test.ts` pins that
+  after a loop failure, after a failed activation, and after an
+  activation that threw before parking. It also pins that an idle park
+  ends the request.
 - serving-loop §6 step 2's re-mark: PARTIAL by design in Phase 1 —
   activation runs `selectStaleBasisInstances` and surfaces the stale
   set (counted, logged), and recovery CORRECTNESS rides
@@ -1229,7 +1242,12 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   with the pre-blip tenure, so the first real seal after a same-process
   reacquire aborts `lease-lost` and PARKS the space — the "survived
   blip keeps serving" path is reachable only on a space quiet across the
-  tick; owner: the P7 renew-blip / wedge arms.
+  tick; owner: the P7 renew-blip / wedge arms. (a) CLOSED
+  (2026-09-24): a derived commit the engine refuses while the row no
+  longer names the holder live runs the renew arm, so the tenure ends
+  at the first refused commit and its wave aborts and parks
+  (serving-loop §2); pinned in `executor-serving-loop.test.ts` with
+  both renewal drivers held off.
   **CLOSED — leg 2 of 2 LANDED (fan-out stage B, 2026-08-17; owner
   ruling 2026-08-16 "if a space scoped calculation gets narrowed to
   user, it'll have to run for all users that demand it").** The
@@ -2433,11 +2451,11 @@ delta):
   is minted for every acting run, so an admitted-iff-carriage gate
   authorized nothing): → COVERED. The gate admits iff carriage AND
   the acting identity holds a structural write grant for the TARGET
-  space (`Server.foreignWriteAuthorityFor`: owner-by-identity /
-  fresh-store creation, DID-shape-checked and probed WITHOUT
-  materializing a store (F1c) / the target's own ACL grant,
-  mode-independent — no service-DID blanket, no populated-legacy
-  compat; fail-closed otherwise), and `foreignWrites: "accept"`
+  space (`Server.foreignWriteAuthorityFor`: the target's own ACL
+  grant, mode-independent — no service-DID blanket, no
+  populated-legacy compat; fail-closed otherwise, a malformed DID or
+  a space with no store included, both probed WITHOUT materializing
+  a store (F1c)), and `foreignWrites: "accept"`
   REFUSES construction without the probe — the vacuous configuration
   is unrepresentable. `executor-wave.test.ts`: full carriage admitted
   with the foreign scoped row keyed from the CARRIED identity (the
@@ -2447,9 +2465,10 @@ delta):
   admitted beside it (red under the grant-check-neutralized
   mutation — the pre-fix shape); partial carriage refused at
   ACCUMULATION with the wave surviving vacuous (red under the
-  carriage-arm mutation); the probe's own arms (owner / creation /
+  carriage-arm mutation); the probe's own arms (no store /
   non-creating second probe / garbage name / no-ACL fail-closed /
-  ACL WRITE grant / no-row refusal) pinned in
+  ACL WRITE grant / no-row refusal / nothing for the space's own DID)
+  pinned in
   `executor-cross-space.test.ts`; the sink's
   scoped-op-without-carriage refusal re-pinned DIRECTLY as the
   backstop ("Phase 5 backstop" test). The serving loop passes
@@ -2997,19 +3016,19 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   scoping report's RECOMMENDATION on file — SUPERSEDED by the READ
   ruling below (RULED 2026-08-19: ACL-only service reads); (iv)
   flagged residual for the
-  owner's eye: the genesis ACL's `"*": WRITE` wildcard (the client's
-  own rollout default) leaves the service — and every authenticated
-  principal — with WRITE on the new space via the wildcard; "the user
-  is OWNER, the service is not" holds, "the service cannot write P"
-  does not follow, and narrowing the wildcard is a separate policy
-  question. Pins for the build: "a served `.inSpace()` genesis: actor
+  owner's eye: a genesis ACL carrying a `"*": WRITE` wildcard leaves
+  the service — and every authenticated principal — with WRITE on the
+  new space via the wildcard; "the user is OWNER, the service is not"
+  holds, "the service cannot write P" does not follow. CLOSED: the
+  fallback genesis document is `{ [actor]: "OWNER" }`, which grants
+  nobody else anything. Pins for the build: "a served `.inSpace()` genesis: actor
   = the space DID, ACL owner = the acting user, the service principal
   appears nowhere in the ACL, and the space's commit #1 IS the ACL
   commit"; "the service principal cannot write into a user home space"
   (session plane refused under `enforce`; a carriage-less wave write
   refused at accumulation; a carriage-bearing write acting as another
-  user refused on the `acl` arm); a creation-granted foreign batch
-  never lands before the genesis; kill/replay between genesis, data
+  user refused by the target's ACL); a foreign batch never lands
+  before the genesis; kill/replay between genesis, data
   and home commits converges on ONE user-owned ACL; and the served-wish
   + lunch gates as acceptance (no `lacks READ` in the toolshed log,
   `foreignWriteRefusals` 0, a store dump with no `of:<P>` owned by the
@@ -3052,7 +3071,7 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   frame tx's wave run context WITHOUT the read-scope-ratchet side
   effect, F8); a serving runtime with no actor REFUSES to resolve;
   the bootstrap ACL's non-home arm names the registered owner
-  (`{ [actor]: "OWNER", "*": "WRITE" }`), the home arm and every
+  (`{ [actor]: "OWNER" }`), the home arm and every
   client byte-identical. Pins: `memory-v2-acl-bootstrap.test.ts`
   (red-first: the pre-fix run minted `{ [service]: "OWNER" }`),
   `executor-cross-space.test.ts` (the serving no-actor refusal).
@@ -3096,11 +3115,26 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   carriage in scope, and the client precedent is exact (the program
   commit is the user's own session client-side) — so the system-class
   alternative was not needed for this class.
+  **Random space identities, 2026-09-28.** Items (a) and (b) now run
+  through space creation rather than a registered derived key: a served
+  `.inSpace()` resolution calls `Runtime.createSpace({ owner: actingUser,
+  grants })`, which generates a random key, commits the genesis ACL
+  `{ [actor]: "OWNER", ...grants }` through the ordinary route before the
+  handler re-runs, and drops the key; a serving runtime with no actor
+  creates nothing. The handler's re-run records the allocation in the
+  calling space, and its foreign writes are then granted by the
+  space's ACL. `registerSpaceIdentity`, `ensureSpaceInitialized`, the
+  wave's forcing of a target's genesis and the gate's grant for a space
+  with no store are gone: a write into a space nobody created refuses at
+  the accept gate, and the sink's refusal of a foreign batch into a
+  seq-0 / no-ACL engine remains as the backstop.
+  [`docs/specs/random-space-identities.md`](../random-space-identities.md)
+  is the design.
   RESIDUALS, flagged (see the build report's running list): (i) the
-  `"*": WRITE` wildcard residual (finding iv) STANDS — pinned live in
-  the executor mutation test: a mis-threaded genesis owner is visible
-  in the ACL content while the wildcard still grants the write;
-  narrowing it is the separate policy question. (ii) the
+  `"*": WRITE` wildcard residual (finding iv) is CLOSED — pinned live
+  in the executor mutation test: a mis-threaded genesis owner is
+  visible in the ACL content, and the ACL refuses the acting user's
+  write. (ii) the
   `loadPatternByIdentity` repair path and `compilePattern`'s own
   persist do not carry the carriage (no run context is reachable at
   those triggers today) — their foreign-write case stays fail-closed
@@ -3116,14 +3150,16 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   (nothing needs one — smaller surface, permissive clause). (v) SHARED
   NAMED spaces (equal `inSpace("name")` across users deliberately map
   to ONE space) now transfer OWNER power — ACL-rewrite included — to
-  whichever user's flow wins the genesis race; peers hold `"*": WRITE`.
+  whichever user's flow wins the genesis race; peers hold only what
+  the owner grants them.
   Inherent in the ruling composed with the pre-existing shared-name
   behavior; convergence clean; SURFACED TO OWNER 2026-08-21 (the
   independent review's F2 — the wildcard residual's sharper sibling;
   build report FLAG-8). RATIFIED by the CFC owner 2026-08-21
   ("ratify", relayed by the coordinator with the RULING-5 batch):
   first-creator-owns IS the shared-named-space contract — the genesis
-  race's winner holds owner power, peers hold `"*": WRITE` — a settled
+  race's winner holds owner power, peers hold only what the owner
+  grants them — a settled
   behavior now, not a residual awaiting a fix. (vi) a via-"owner" crossing into a
   never-materialized home store is granted without genesis forcing and
   then refused forever by the sink's INV-13 mirror — a fail-closed
@@ -3132,10 +3168,13 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   (vii) CLOSED for read-triggered remount. An admitted ACL change latches
   `Provider.noteAclChanged`; the next load discards a session terminated by
   an ACL verdict and reopens through the server's full `session.open`
-  admission. The watched-document tracker is cleared so a previously watched
-  document is fetched again on its next read. `executor-session-remount.test.ts`
-  pins the ACL-change/host path, owner rebinding, denial without widened
-  authority, and refetch after remount. Automatic replay of the entire dead
+  admission. A document load already in flight when the revocation lands
+  fails on the terminated session; that failure consumes the remount, and the
+  load is made once more on the new session. The watched-document tracker is
+  cleared so a previously watched document is fetched again on its next read.
+  `executor-session-remount.test.ts` pins the ACL-change/host path, owner
+  rebinding, denial without widened authority, the in-flight load in both
+  outcomes, and refetch after remount. Automatic replay of the entire dead
   session's watch set remains a distinct follow-up; read-triggered refetch
   does not establish that stronger guarantee.
   Acceptance beyond the executor pins rides the PR's CI ON lanes and
@@ -3703,8 +3742,9 @@ discharge OW28. The flip's changes and validation record follow:
   CONSEQUENCE through the soak: `coverage-check` now `needs` the OFF
   pattern lane, so ANY red in that lane also SKIPS Coverage Check and
   reds Status — board 33239003881 shows exactly that shape behind the
-  owned-elsewhere firebreak red. The coupling retires when the OWED
-  re-homing above lands. (3) CLI
+  owned-elsewhere firebreak red. The coupling retired with the lane
+  refactor (commonfabric/labs#8108): the coverage gate is a step of
+  `Status`, which runs it whatever the lanes did. (3) CLI
   `core-piece-values`: the "cannot project in a fresh session"
   refusal DISSOLVES under ON by design (the serving loop
   materializes the session-derived result; a fresh session projects
@@ -7231,7 +7271,16 @@ supply; OW29/OW32/OW34 closed):
     not retried in place. Non-stale refusals and promise rejections remain
     terminal in every posture, and client/OFF retains terminal behavior for
     stale reads: a graph whose setup writes never landed is a zombie unless
-    the serving side's materialization supplies the repair path. Explicit wave
+    the serving side's materialization supplies the repair path. A refusal
+    that names only policy manifests is the exception in every posture: the
+    instantiation installed a manifest another participant installed first,
+    and a manifest never changes once present, so a catch-up that loads it
+    repairs the commit with no serving side, and a catch-up that cannot load
+    it fails the start with the load's reason. A refusal that also names the
+    piece's own documents is the stale read it would be without the
+    manifest. The start loads the manifests its pattern names before it
+    instantiates, so this retry answers only a manifest installed after
+    those loads. Explicit wave
     abandon is classified separately and warned without incrementing the
     serving runtime's structure-load-failure observer. A recoverable failure
     is warned on the same terms while its one retry is outstanding, and is
@@ -7244,7 +7293,11 @@ supply; OW29/OW32/OW34 closed):
     terminal-behavior companion, and a second-refusal companion for the
     commit-time arm. The readiness assertions name a real conflicted
     document, so the catch-up's named-document pull is exercised rather
-    than skipped. And OW46's
+    than skipped. The manifest exception is pinned flag-OFF in
+    `cfc-policy-manifest-shared-install.test.ts`, by a second participant
+    starting a piece whose per-user part carries the policy, together with a
+    refusal over the piece's own documents beside the manifest staying
+    terminal. And OW46's
     `structure-load-stuck` counter is BLIND here: it fires 6× per run
     in BOTH arms and in the reds names only the HOST's space, because
     it counts deferred structure loads of DEMANDED roots and this
@@ -9687,7 +9740,7 @@ supply; OW29/OW32/OW34 closed):
     provider refactored onto it, so a trust-config change invalidates
     per-run served digests exactly as ambient ones — INV-G); the
     SpaceServer's `#stampRun` attaches the per-run snapshot via
-    `tx.setCfcTrustSnapshot(...)` with the ruled precedence —
+    `setCfcTrustSnapshot(tx, ...)` with the ruled precedence —
     `delegated.acting.user`, else the handler's acting
     (LT6-inherited pairs included), else a demanded derivation's
     `scopeKeyIdentity.principal` (the Q2 arm — ships, severable),

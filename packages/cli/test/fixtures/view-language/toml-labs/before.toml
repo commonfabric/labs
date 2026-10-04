@@ -1,0 +1,12 @@
+[tools]
+deno = "2.8.1"
+
+# Puts this checkout's `bin/cf` on PATH, so `cf` resolves to the worktree you
+# are standing in. Shell completion needs a `cf` on PATH to work at all — see
+# "Installing cf on PATH" in packages/cli/README.md.
+#
+# mise is not guaranteed (README.md blesses a direct Deno install, and
+# tasks/check.sh only reads the pin out of this file), so this is a convenience
+# for mise users, not the mechanism. Non-mise users symlink bin/cf themselves.
+[env]
+_.path = ["bin"]

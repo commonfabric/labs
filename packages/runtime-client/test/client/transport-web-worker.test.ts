@@ -4,6 +4,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
+import { defer } from "@commonfabric/utils/defer";
 
 import {
   ClientTransportNotificationType,
@@ -81,6 +82,14 @@ function posted(data: unknown): MessageEvent {
   });
 }
 
+/** The worker's ready notification, naming a lock nothing holds. */
+function readyNotification(): unknown {
+  return {
+    type: TransportNotificationType.WorkerReady,
+    lifetimeLock: crypto.randomUUID(),
+  };
+}
+
 function handlerOf(
   transport: WebWorkerRuntimeTransport,
 ): (event: MessageEvent) => void {
@@ -101,6 +110,12 @@ describe("WebWorkerRuntimeTransport", () => {
       // Anything else leaves it pending, the notification being the one message
       // that says the worker's entry has run.
       handle(posted({ msgId: 1 }));
+      handle(
+        posted({
+          type: TransportNotificationType.WorkerReady,
+          lifetimeLock: 1,
+        }),
+      );
       await Promise.resolve();
       expect(settled).toBe(false);
 
@@ -146,6 +161,42 @@ describe("WebWorkerRuntimeTransport", () => {
     });
   });
 
+  describe("dispose()", () => {
+    it("settles only once the worker has released the lock its ready notification names", async () => {
+      const { connection, worker } = connectWithFakeWorker();
+
+      // The test holds the lock in the worker's place, and releasing it stands
+      // in for the worker's runtime being torn down.
+      const lifetimeLock = crypto.randomUUID();
+      const held = defer<void>();
+      const teardown = defer<void>();
+      const holding = navigator.locks.request(lifetimeLock, () => {
+        held.resolve();
+        return teardown.promise;
+      });
+      await held.promise;
+      worker.dispatchEvent(
+        posted({ type: TransportNotificationType.WorkerReady, lifetimeLock }),
+      );
+      const transport = await connection;
+
+      let disposed = false;
+      const disposal = transport.dispose().then(() => {
+        disposed = true;
+      });
+
+      expect(worker.terminated).toBe(true);
+      const { pending } = await navigator.locks.query();
+      expect(pending?.map(({ name }) => name)).toContain(lifetimeLock);
+      expect(disposed).toBe(false);
+
+      teardown.resolve();
+      await holding;
+      await disposal;
+      expect(disposed).toBe(true);
+    });
+  });
+
   describe("what a decode delivers", () => {
     it("emits a message the consumer cannot edit", () => {
       // `BaseRequest` states this as one contract for both directions: a
@@ -156,7 +207,7 @@ describe("WebWorkerRuntimeTransport", () => {
       const emitted: unknown[] = [];
       transport.on("message", (m) => emitted.push(m));
       const handle = handlerOf(transport);
-      handle(posted({ type: TransportNotificationType.WorkerReady }));
+      handle(posted(readyNotification()));
 
       handle(posted({ msgId: 3, data: { nested: { a: [1, 2] } } }));
 
@@ -177,7 +228,7 @@ describe("WebWorkerRuntimeTransport", () => {
 
       // Ready first: before that there is no dispatch to keep standing, and a
       // decode failure lands on `ready()` instead (see below).
-      handle(posted({ type: TransportNotificationType.WorkerReady }));
+      handle(posted(readyNotification()));
 
       // Not an encoding at all, which is what a non-conforming sender or a
       // damaged one would deliver. The worker proves each payload encodable
@@ -222,7 +273,7 @@ describe("WebWorkerRuntimeTransport", () => {
       const emitted: unknown[] = [];
       transport.on("message", (m) => emitted.push(m));
       handlerOf(transport)(
-        posted({ type: TransportNotificationType.WorkerReady }),
+        posted(readyNotification()),
       );
 
       // A decode failure can throw a value with no `toString` to reach, and

@@ -446,22 +446,16 @@ export interface TopicInput {
   boardCrossrefs?: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
 
   /**
-   * The number the board calls this topic by, stored here. The board's create
-   * allocates it over the board's namespace and passes it in, in the
-   * transaction that creates the topic; `recordName` writes it onto a topic
-   * filed before the board numbered anything. A number is permanent and never
-   * reused, so this copy stays the number the board's namespace holds for the
-   * topic.
-   *
-   * STORING a number and SHOWING one are separate, and only the showing is
-   * gated: `SHOW_TOPIC_NUMBERS` decides what the topic publishes, and while it
-   * is off this input still holds the number and `recordName` still writes it.
-   * Nothing published carries it then, which is what the board's numbering
-   * step loses and `BackfillNamesResult` in `./main.tsx` states.
+   * The number the board calls this topic by, stored here and published as
+   * the topic's `shortName`. The board's create allocates it over the board's
+   * namespace and passes it in, in the transaction that creates the topic;
+   * `recordName` writes it onto a topic filed before the board numbered
+   * anything. A number is permanent and never reused, so this copy stays the
+   * number the board's namespace holds for the topic.
    *
    * Absent on a topic nobody has numbered: one filed before the namespace
    * existed and not yet recorded, and one composed with no board at all. Such
-   * a topic reports no number and renders without failing.
+   * a topic publishes no number and renders without failing.
    *
    * Plain rather than `Writable`, because every reader of it wants the string
    * — the topic's own report of its number, a board's row demand, a mention
@@ -658,14 +652,10 @@ export interface TopicPiece extends TopicSummary {
    * as a badge, and a mention universe carries it, which is what a mention
    * pill and a `#42` query read.
    *
-   * Absent while `SHOW_TOPIC_NUMBERS` is off, and for a topic whose input
-   * holds no number: the property is simply not there. Every consumer treats
-   * that as no name — the badge renders nothing, and the topic's universe row
-   * carries the empty name, which matches no `#42` query and gives a mention
-   * pill no number.
-   *
-   * This is the number the topic SHOWS. `TopicInput.shortName` is the number
-   * it HOLDS, and the two part company whenever the switch is off.
+   * Absent for a topic whose input holds no number: the property is simply
+   * not there. Every consumer treats that as no name — the badge renders
+   * nothing, and the topic's universe row carries the empty name, which
+   * matches no `#42` query and gives a mention pill no number.
    *
    * Optional rather than defaulted, and the difference is the compatibility
    * proof's: this is what a board's stored list is validated against, and a
@@ -884,8 +874,7 @@ export interface TopicOutput extends TopicPiece {
    * permanent: the step then allocates a different one, writes it into the
    * namespace, and is refused here for as long as the disagreement stands, so
    * `top/<n>` and the topic's own badge name different numbers and nothing in
-   * the board reconciles them. `skills/topics/references/namespace-backfill.md`
-   * carries that repair, which is by hand.
+   * the board reconciles them. The repair is by hand.
    *
    * Outside the projection for the reason `removeComment` states: a board
    * stores `TopicPiece`, so a required verb added there would refuse every
@@ -952,64 +941,6 @@ export const TOPICS_THEME = {
     accentForeground: "#fdfcf8",
   },
 };
-
-/**
- * Whether Topics shows a topic's number: the badge in the topic's header and
- * on its board card, the number beside a mention's label, and the topics a
- * `#42` query offers in the body editor.
- *
- * Off while only some topics have a number, because a number on some of a
- * board's topics and not on the rest confuses the people reading it. The board
- * numbers every topic it creates, but a topic filed before the board numbered
- * anything has no number until `backfillNames` numbers it and that topic
- * stores what it was asked to.
- *
- * Off, a topic publishes no `shortName`, and that is the whole mechanism:
- * every place a number shows reads a topic's `shortName` — its header, the
- * board's card and `index` row, and each entry of a mention universe, whether
- * the board's copies or a plain list of topics. The gate sits on the
- * publication rather than on each display because a universe handed the raw
- * member list has no row to blank: `cf-code-editor` takes a mention's short
- * name off the destination piece there, which
- * `docs/specs/collection-naming.md` reserves for a universe row
- * (https://github.com/commontoolsinc/labs/issues/7771).
- *
- * The numbers themselves are untouched. The board still allocates one on every
- * create, records it in `names`, and lists it beside its topic in
- * `namesTable`; a topic still stores its own in the `shortName` INPUT, which
- * this does not gate, and `recordName` still writes it; and a number still
- * addresses its topic as `top/<n>`.
- *
- * WHAT IT COSTS, which is the reason to turn it on rather than leave it:
- * a topic's published `shortName` is the only signal the board's numbering
- * step can read, so while this is off `backfillNames` cannot tell a topic that
- * stores its number from one that does not. It asks every topic every run and
- * reports every number under `pending`. Repeating it is safe and not idle: a
- * topic that already stores the number declines it and writes nothing further,
- * a topic whose number never landed stores it now, and the asking is itself a
- * write either way. `BackfillNamesResult` in `./main.tsx` says what an operator
- * reads instead, and `skills/topics/references/namespace-backfill.md` says what
- * a re-run writes per topic.
- *
- * WHAT TURNING IT ON WILL NEED IN TESTS, which is the part nothing else will
- * remind anyone of. This is a module constant, so a pattern test cannot vary
- * it: it is baked into the compiled program, and every Topics test therefore
- * runs the `false` branch only. Nothing today guards the `true` branch of the
- * publication below, and nothing can. When this flips, three things become
- * assertable and should be asserted in `./naming.test.tsx` in the same change:
- * a topic publishing the number it stores; the board's `index` row and mention
- * universe row carrying it; and `backfillNames` reporting a stored number
- * under `named` with an empty `pending`, which is the report this switch
- * currently costs. Several cases there read numbers out of cells the test
- * supplies purely because nothing published carries one; those can then read
- * the publication directly. The library's own already-recorded branch is held
- * meanwhile in `../collection-naming/naming.test.tsx`, over stand-in members
- * that publish a name, because Topics cannot reach it.
- *
- * TODO(mike): Turn this on once every topic on the deployed Topics board has a
- * number. Doing so restores the step's report by itself; nothing else changes.
- */
-export const SHOW_TOPIC_NUMBERS: boolean = false;
 
 // ===== Pure helpers =====
 
@@ -2330,10 +2261,7 @@ export default pattern<TopicInput, TopicOutput>(
       references,
       mentioned,
       boardCrossrefs,
-      // The number this topic STORES; `shortName` below is what it shows.
-      // Named apart because `upgradeLegacyAuthors` already uses `storedName`
-      // for an author's name.
-      shortName: storedNumber,
+      shortName,
       [SELF]: self,
     },
   ) => {
@@ -2367,12 +2295,6 @@ export default pattern<TopicInput, TopicOutput>(
     const profileAvatar = profileWish.result?.avatar ?? "";
     const hasProfile = profileName.trim().length > 0;
     const createdByView = createdByOf({ createdBy });
-    // The number the topic shows and publishes, out of the number it stores.
-    // Every reader of a topic's number reads this, so gating it here hides the
-    // number from all of them, whatever the topic's mention universe is wired
-    // to. The store is untouched: `recordName` writes the input and reads it
-    // back to stay idempotent, both while the switch is off.
-    const shortName = SHOW_TOPIC_NUMBERS ? storedNumber : undefined;
 
     // --- Streams (external API; also usable headlessly via CLI) ---
 
@@ -2419,7 +2341,7 @@ export default pattern<TopicInput, TopicOutput>(
     const unmention = unmentionHandler({ upgrade, mentioned });
 
     /** Store the number the board calls this topic by. */
-    const recordName = recordNameHandler({ upgrade, shortName: storedNumber });
+    const recordName = recordNameHandler({ upgrade, shortName });
 
     // --- UI-side actions (close over session drafts) ---
 

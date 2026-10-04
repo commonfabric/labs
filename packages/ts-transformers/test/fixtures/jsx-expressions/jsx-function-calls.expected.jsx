@@ -413,7 +413,9 @@ const __cfLift_19 = __cfHelpers.lift<{
     state: {
         values: number[];
     };
-}, number>(({ state }) => Math.max(...state.values), {
+}, number>(({ state }) => 
+// deno-lint-ignore cf-spread/no-spread-arguments -- the fixture covers a spread argument
+Math.max(...state.values), {
     type: "object",
     properties: {
         state: {

@@ -111,6 +111,16 @@ posture, including each multi-user participant. Programmatic callers use
 `TestRunnerOptions.cfcFlowLabels` with the runtime names `off`, `observe`, or
 `persist`.
 
+The `cfc` logger warns once per kind of denial in each test file, naming the
+kind but not the reasons. `--cfc-denials` prints every denial as it happens,
+repeats included: a heading naming the kind, each reason the gate gave, the
+structured detail paired with a reason where the gate recorded one (what it
+refused, and the reads that carried the offending clauses), and the remaining
+inputs behind the decision. That covers a denial of the pattern's own setup,
+which otherwise leaves a run with no steps and no reason, as well as one the
+runtime retries. A multi-user participant's lines carry its name. A run that
+fails on a `cfc` warning without the flag says to run again with it.
+
 A pattern test can create its own labeled store without a connector. Declare a
 column's `ifc` alongside its SQLite type and seed rows in an action:
 
@@ -178,23 +188,38 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-and Swift files use their own syntax highlighting. A Swift package manifest is
-Swift source under its `.swift` extension, and a module's `.swiftinterface` is
-Swift as well. Web manifests, TLDraw documents, Deno lock files, editor
+Swift, Kotlin, TOML, shell, Java properties, ProGuard, and XML files use their
+own syntax highlighting. Shell covers Bash and POSIX shell scripts named `.sh`,
+`.bash`, or `.command`, and Bash's startup files, such as `.bashrc` and
+`.profile`. A heredoc's body is colored as a string, with the expansions its
+delimiter allows. A Swift package manifest is Swift source under its `.swift`
+extension, and a module's `.swiftinterface` is Swift as well. Gradle build and
+settings scripts are Kotlin scripts under the `.kts` extension. Gradle version
+catalogs and Cargo manifests are TOML, as are Cargo lock files. The ProGuard
+language covers the keep rules that ProGuard and R8 read: `proguard-rules.pro`
+and `consumer-rules.pro` select it by name, and another `.pro` file uses it when
+one of its lines starts with one of ProGuard's option names, because Qt project
+files and Prolog use that suffix as well. XML covers Android manifests,
+resources, and layouts, SVG images, and Apple property lists, entitlements, and
+privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
 workspace files, and Swift package resolutions use the JSON highlighting their
 suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
 in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
 its name alone leaves it as plain text. Transformed compiler output piped
 without a filename keeps TypeScript highlighting when its module header
 identifies it. Python interpreter shebangs select Python for otherwise
-unrecognized names, and `swift` and `xcrun swift` shebangs select Swift. Node,
-Deno, and Bun shebangs select the TypeScript and JavaScript language family.
-Other filename-free source and named files with unrecognized syntax are shown as
-plain text. For piped source, `--filename` selects syntax as though the input
-had that name. `--language` selects a language by its stable identifier or
-alias. Both options keep the pipe read-only and suppress unified-diff
-auto-detection. An explicit language takes priority when both options are
-present. Use `--diff` instead when the pipe is a unified diff.
+unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
+`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
+shell, which covers Git hooks and other extensionless programs. Node, Deno, and
+Bun shebangs select the TypeScript and JavaScript language family. A diff reads
+a shebang for a file whose path selects no language, from a hunk that starts at
+the file's first line, from the workspace file, or from the old Git blob. Other
+filename-free source and named files with unrecognized syntax are shown as plain
+text. For piped source, `--filename` selects syntax as though the input had that
+name. `--language` selects a language by its stable identifier or alias. Both
+options keep the pipe read-only and suppress unified-diff auto-detection. An
+explicit language takes priority when both options are present. Use `--diff`
+instead when the pipe is a unified diff.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
@@ -363,7 +388,7 @@ writes the place as `//<space>/<piece>@<scope>/…`.
 | `unwatch <handle>`            | Disarms the watch a `watches` row numbered. The row carries the cell its watch is armed on, so it names the watch it showed.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `more`                        | Writes the next page of a listing or a value that did not fit, a listing continuing under the numbers it already gave its rows.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `xpwd`                        | The external working location, whole — the one working position outside the fabric.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `xcd <path>`                  | Moves the external working location, and writes where it landed. The operand is read on that plane already, so `xcd ../foo` and `xcd /tmp` stay on the plane it stands on. A whole schemed path names its own plane, which may be the one it stands on (`xcd file:~/data`) or another (`xcd https://example.test/a/b/`). A scheme is legal only on an absolute complete path.                                                                                                                                                                                   |
+| `xcd <path>`                  | Moves the external working location, and writes where it landed. The operand is read on that plane already, so `xcd ../foo` and `xcd /tmp` need no scheme. A whole schemed path works too (`xcd file:~/data`), and must be absolute. The location stands on `file:` and nowhere else: a plane is moved through, and `https:` answers a read rather than what stands under a path.                                                                                                                                                                               |
 | `where [<dimension> <value>]` | With no operand, the whole ambient record: the connection, the place `pwd` prints, the external location `xpwd` prints, and what this run is watching. With a dimension and a value, it sets the light ones — `where scope @session` moves the scope as `cd .@session` does, and `where external file:/tmp` moves the external location as `xcd` does. The api endpoint, the identity and the space are fixed at launch, and restarting is what switches them.                                                                                                  |
 | `help [<verb>]`               | Lists the verbs, or writes one verb's page. `<verb> --help` writes the same page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
@@ -415,13 +440,16 @@ members of one collection start two.
 
 Shuttle holds a second working position, outside the fabric: `xcd` moves it and
 `xpwd` prints it. Its argument is on that plane already, so a plain path moves
-it without naming a scheme — `xcd ../foo`, `xcd /tmp` — and a whole schemed path
-names its own plane, which may be the one it stands on or another. A scheme is
-legal only on an absolute complete path, so `xcd file:/tmp/out` names a place
-and `xcd file:out` is refused. A run starts on the `file:` plane, at the
-directory the shell was started from. The two positions move independently: `cd`
-leaves the external location where it was, and `xcd` leaves the place where it
-was.
+it without naming a scheme — `xcd ../foo`, `xcd /tmp` — and a schemed path must
+be absolute, so `xcd file:/tmp/out` names a place and `xcd file:out` is refused.
+A run starts at the directory the shell was started from.
+
+The location stands on `file:` and nowhere else, because a plane is stood in by
+moving through it and only `file:` answers what is under a path: `https:` has no
+listing and no traversal, so `xcd https://…` is refused for what the plane
+cannot answer rather than for anything shuttle has left undone. The two
+positions move independently: `cd` leaves the external location where it was,
+and `xcd` leaves the place where it was.
 
 A line is split POSIX-style — whitespace separates, quotes group — so a value
 holding a space is one operand when it is quoted, and anything shuttle prints as
@@ -849,7 +877,38 @@ what `cf inspect value-at --seq` and `diff --from` take, so the piece can be
 read at exactly the commit that applied the update, or diffed against what has
 landed since.
 
+## Creating a space
+
+`cf space create [--label <label>]` creates a space and prints its DID. The DID
+comes from a freshly generated key, not from the label or anything else a caller
+could recompute, and the space is born granting the identity the command
+connects as, and nobody else, OWNER. The command records the new space in that
+identity's Home space list, under `--label` when one is given, and in its Home
+site table as served by the `--api-url` deployment. Creating twice creates two
+spaces, whatever their labels.
+
+Opening a space never creates one, with the exception of the identity's Home
+space, which comes into being the first time its user opens it. `--space` takes
+a DID or a legacy space name, and a legacy name resolves, without the network,
+to the DID it has always reached. A name or DID that reaches no space opens
+nothing: `cf piece new` there reports that no space answers to it, and names
+`cf space create` as the way to make one.
+
 ## Where a piece is created
+
+`cf piece new <main> --input-file <path>` reads a JSON object and uses it as the
+piece's initial argument. Setup commits these values before starting or
+registering the piece, so a viewer opens the populated document. A missing file,
+invalid JSON, or a non-object value refuses before creation. Omitting the flag
+uses the pattern's defaults. The file is read once; later edits to it are not
+synchronized.
+
+`--request-key <key>` retains a creation receipt on both client-executed and
+server-executed deployments. Retrying the same key returns the same piece and
+resumes incomplete registration without replacing its current content. Keep the
+same input and source when retrying; use a new key for a new document. The
+receipt identifies the original creation: supplying different input with an
+existing key does not update the note or create another one.
 
 Against a deployment that runs the serving loop — one whose published posture
 selects `EXPERIMENTAL_SERVER_EXECUTION`, which the connection adopts —
@@ -1544,6 +1603,24 @@ The source cell's schema remains authoritative for Common Fabric metadata. A
 caller cannot introduce or override `ifc`, `asCell`, `scope`, or `default`
 through `--schema`.
 
+A selection only reads its source. What it writes are cells of its own: an
+argument linking to the source, and results holding a copy of what it read. The
+schemas on those cells are derived from the source's, and they keep the part of
+`ifc` that restricts a reader — `confidentiality`, and the `observes` class
+beside it — so a selected value stays under the label of the field it came from.
+They leave out the keys that bind or vouch for the writer of the source field:
+`writeAuthorizedBy`, `writePolicyAnyOf`, `uiContract`, `ownerPrincipal`,
+`requiredIntegrity`, `maxConfidentiality`, `integrity`, `addIntegrity`,
+`exactCopyOf`, `projection`, `collection` and `flowPrecisionClaim`. A position
+the source schema writes as a reference to a content-addressed schema document
+is read through that document, so a claim the document states is left out the
+same way. Where the reading process does not hold that document, the reference
+is kept as written, and a write claim inside it refuses the read rather than
+being dropped. The selection is not that writer, so selecting a field that only
+its owner's handler may write, as every owner-protected field of a profile is,
+is not refused on that account, and the copy asserts none of the integrity the
+source's writer vouched for.
+
 #### Which keywords a `--schema` projection may contain
 
 **The reader constructs the schema it applies rather than forwarding the one a
@@ -1836,15 +1913,18 @@ reason. Narrowing past the circle with a projection beside the predicate —
 cwd-independent, with no Deno startup noise and roughly half the per-invocation
 cost. (`--cli-only` is a legacy alias for the same thing.)
 
-It exists for CI, which downloads it in `cli-integration-test` (on
-`$GITHUB_PATH`) and `pattern-unit-test` (as `CF_BINARY`). A CI run never edits
-the source the binary was built from, so it cannot go stale mid-run.
+It exists for release: on a push to `main`, the `build-cf` job builds it and
+`attest-binaries` signs and publishes it. CI's lanes run `bin/cf` from source
+rather than the binary, and the `binaries` suite compiles it as a test that it
+still compiles.
 
-That does not hold for a working tree you are editing, and there is no
-invalidation story to catch it — see "Why not `dist/cf`" under Installing `cf`
-on PATH. Use `bin/cf` or `deno task cf` locally. If you do build it, rebuild
-after every `git pull`: a stale binary rejects newer flags and can hit
-wire-protocol skew against an updated server.
+On a push to `main`, nothing edits the source between building the binary and
+shipping it, so the binary shipped cannot be stale. That does not hold for a
+working tree you are editing, and there is no invalidation story to catch it —
+see "Why not `dist/cf`" under Installing `cf` on PATH. Locally, use `bin/cf` or
+`deno task cf`. If you do build it, rebuild after every `git pull`: a stale
+binary rejects newer flags and can hit wire-protocol skew against an updated
+server.
 
 ## Launcher Contract
 
@@ -2060,10 +2140,11 @@ line), a missing `cf` shows up as "completion doesn't work", not as an error.
 `cf completion bash|zsh` therefore warns on stderr when it cannot find itself on
 PATH.
 
-(CI does resolve `cf` by name — `integration/integration.sh` runs `command cf`
-against a binary the workflow puts on `$GITHUB_PATH` — but it builds that PATH
-itself, and local runs of those same scripts set `CF_CLI_INTEGRATION_USE_LOCAL`
-to force the source CLI.)
+(CI resolves `cf` by name too. `integration/integration.sh` runs `command cf`,
+and the lane's `cf` capability puts the checkout's `bin/` directory at the front
+of the PATH it hands the suite, so CI runs `bin/cf` from source as well. Local
+runs of those same scripts can set `CF_CLI_INTEGRATION_USE_LOCAL` to run
+`deno task cli` in place of `cf`.)
 
 `bin/cf` is the install, with `bin/cfsh` beside it for the interactive shell.
 Both run from source, so neither goes stale against the checkout. One route,
@@ -2157,10 +2238,9 @@ Nor is mtime a usable substitute: `revertWorkspace` restores `deno.jsonc` and
 the compile-cache version module _after_ the binary is written, so `dist/cf` is
 older than its own inputs the moment the build finishes.
 
-CI is a different case and legitimately uses the binary — a workflow run never
-mutates the source it was built from. `cli-integration-test` puts it on
-`$GITHUB_PATH` and `pattern-unit-test` passes it as `CF_BINARY`. That reasoning
-does not transfer to a working tree you are actively editing.
+A release is a different case: nothing edits the source between building the
+binary and shipping it. That reasoning does not transfer to a working tree you
+are actively editing.
 
 ## Shell completion
 

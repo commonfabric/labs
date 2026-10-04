@@ -26,6 +26,7 @@ import {
   isNavigateRequestNotification,
   isOperationUpdateNotification,
   isPendingWritesNotification,
+  isPresenceUpdateNotification,
   isSpaceAccessLostNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
@@ -33,7 +34,9 @@ import {
   NotificationType,
   OperationUpdateNotification,
   PendingWritesNotification,
+  PresenceUpdateNotification,
   RequestType,
+  RuntimeErrorCode,
   type RuntimeSecurityContext,
   SerializedDomEvent,
   SpaceAccessLostNotification,
@@ -44,7 +47,7 @@ import {
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import { RuntimeTransport } from "./transport.ts";
 import { EventEmitter } from "./emitter.ts";
-import { $onCellUpdate, CellHandle } from "@/cell-handle.ts";
+import { $onCellRefused, $onCellUpdate, CellHandle } from "@/cell-handle.ts";
 import { cellRefToKey } from "@/shared/utils.ts";
 
 const ipcLogger = getLogger("runtime-client");
@@ -134,6 +137,7 @@ export type RuntimeConnectionEvents = {
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
   operationupdate: [OperationUpdateNotification];
+  presenceupdate: [PresenceUpdateNotification];
   eventneedsattention: [EventNeedsAttentionNotification];
   eventintentoutcome: [EventIntentOutcomeNotification];
 };
@@ -411,16 +415,24 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       if (!instances.has(cell)) {
         this.#recordSubscriptionDiagnostic(key, "localSubscribes");
         instances.add(cell);
-        // Copy the cached value (and label) from an existing subscriber to the
-        // new one so late subscribers get the initial value.
+        // Copy what an existing subscriber holds (and its label) to the new
+        // one so late subscribers get the initial value, or the refusal that
+        // stands in its place. One that has read nothing yet has nothing to
+        // copy; the new one hears the worker's answer with it.
         const existingInstance = instances.values().next().value;
-        if (existingInstance) {
-          const cachedValue = existingInstance.get();
-          if (cachedValue !== undefined) {
-            cell[$onCellUpdate](cachedValue, {
-              cfcLabel: existingInstance.cfcLabel,
-            });
-          }
+        const existing = existingInstance?.lastRead();
+        if (existing !== undefined && "refused" in existing) {
+          cell[$onCellRefused](existing.refused);
+        } else if (
+          existing !== undefined && "value" in existing &&
+          "unread" in cell.lastRead()
+        ) {
+          // A value seeds only a handle that holds nothing yet: what another
+          // handle holds may be a write it made or a copy it was made with,
+          // which ends no refusal the new one holds.
+          cell[$onCellUpdate](existing.value, {
+            cfcLabel: existingInstance?.cfcLabel,
+          });
         }
       }
       return;
@@ -602,6 +614,8 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("pendingwriteschange", message);
       } else if (isOperationUpdateNotification(message)) {
         this.emit("operationupdate", message);
+      } else if (isPresenceUpdateNotification(message)) {
+        this.emit("presenceupdate", message);
       } else if (isEventNeedsAttentionNotification(message)) {
         this.emit("eventneedsattention", message);
       } else {
@@ -642,9 +656,12 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       const error = new Error(message.error) as Error & { code?: string };
       if (message.code) {
         error.code = message.code;
-        // A coded request failure is also a host-level lifecycle signal. The
+      }
+      if (message.code === RuntimeErrorCode.CompilerStackLoadFailed) {
+        // A compiler-stack failure is also a host-level lifecycle signal. The
         // caller still receives the rejected request, while RuntimeInternals
         // can replace a worker whose module map cannot recover in place.
+        // Every other code is the caller's to act on alone.
         this.emit("error", {
           type: NotificationType.ErrorReport,
           message: message.error,
@@ -665,11 +682,22 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
   };
 
   #handleCellUpdate(message: CellUpdateNotification): void {
-    const { cell: cellRef, value } = message;
+    const subscribed = this.#subscribed.get(cellRefToKey(message.cell));
+    if (message.refused !== undefined) {
+      // What each subscriber held of the cell goes, which an `undefined`
+      // value below would leave in place.
+      for (const instance of subscribed ?? []) {
+        instance[$onCellRefused](message.refused);
+      }
+      return;
+    }
+    const value = message.value;
     if (value === undefined) {
-      // A value can be reported as `undefined` only when there's been a
-      // conflict, and will be followed by the settled value. Ignore
-      // `undefined` callbacks here.
+      // The worker reports `undefined` for a cell that holds nothing, for a
+      // document it has not loaded yet, and after a conflict, before the
+      // settled value. A handle cannot tell these apart, so the update is
+      // dropped and the handle holds what it held: one that has read
+      // nothing stays unread until a read answers it.
       return;
     }
 
@@ -680,7 +708,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       ? { cfcLabel: message.cfcLabel }
       : undefined;
 
-    const subscribed = this.#subscribed.get(cellRefToKey(cellRef));
     if (subscribed && subscribed.size > 0) {
       for (const instance of subscribed) {
         instance[$onCellUpdate](value, labelUpdate);

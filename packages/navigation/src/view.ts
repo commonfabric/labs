@@ -77,6 +77,10 @@ export type AppView =
  * How a view addresses a space, given a name and a DID that may both be
  * present and may both be absent.
  *
+ * A DID is the space's identity, so when one is given it is the address, and
+ * the name is only what the space is called. A name is the address only when
+ * no DID is known; it then resolves as a legacy space name.
+ *
  * A name that is a DID addresses the space by DID. Taken as a name it would
  * instead name the space a key derived from that string reaches, which is a
  * different space; and the URL it produced would be read back as a space DID
@@ -97,9 +101,9 @@ export function spaceViewRef(
   spaceName: string | undefined,
   spaceDid: DID | undefined,
 ): { spaceName: string } | { spaceDid: DID } | undefined {
+  if (spaceDid) return { spaceDid };
   if (isDID(spaceName)) return { spaceDid: spaceName };
   if (spaceName) return { spaceName };
-  if (spaceDid) return { spaceDid };
   return undefined;
 }
 

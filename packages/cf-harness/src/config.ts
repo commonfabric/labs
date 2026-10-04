@@ -41,6 +41,10 @@ import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import type { DockerRunscSandboxConfig } from "./sandbox/types.ts";
 
 export const DEFAULT_GATEWAY_BASE_URL = "https://llm.stage.commontools.dev/";
+
+/** The model selected for a new run when neither flags nor environment name one. */
+export const DEFAULT_HARNESS_MODEL = "gpt-6.1-sol";
+
 export const DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE =
   "enforce-strict" as const satisfies CfcEnforcementMode;
 export type HarnessGatewayAuthMode = "bearer" | "none";

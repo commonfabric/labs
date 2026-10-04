@@ -198,7 +198,7 @@ export async function authorizeSpaceWriter(
     return deny(`acl malformed or ownerless: ${error}`);
   }
   if (acl === null) return deny("space has no ACL (never initialized)");
-  const role = spaceReaderRole(acl, space, callerDid, deps.serviceDids);
+  const role = spaceReaderRole(acl, callerDid, deps.serviceDids);
   if (role !== "owner" && role !== "writer") {
     return deny(`caller role on ${space} is ${role ?? "none"}, need writer`);
   }
@@ -305,7 +305,6 @@ export async function authorizeSpaceOwner(
   // Permissive resolution: this predicts the memory server's own decision.
   const operatorRole = spaceReaderRole(
     acl,
-    space,
     deps.operatorDid,
     deps.serviceDids,
   );

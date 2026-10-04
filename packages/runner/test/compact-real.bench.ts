@@ -9,7 +9,7 @@
  *
  * This bench preserves that comparison on the *current* production write
  * path: `tx.writeValuesOrThrow()` -> `writeBatch` ->
- * `applyMutablePathWrite()` (i.e. mutate-in-place along the spine, with
+ * a planned write's `apply()` (i.e. mutate-in-place along the spine, with
  * the rest of the doc structurally shared). If a future change makes
  * compaction look profitable again, this bench is where it should show.
  *

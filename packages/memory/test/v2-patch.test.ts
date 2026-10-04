@@ -16,6 +16,8 @@ import {
   assertStrictEquals,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 
 import { FabricInstance } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -396,6 +398,61 @@ Deno.test("memory v2 append creates the array when absent", () => {
   assertEquals(nested, { value: { items: [1, 2] } });
 });
 
+Deno.test("memory v2 append and splice take more values than one call's arguments can hold", () => {
+  const values = Array.from({ length: 200_000 }, (_, i) => i);
+
+  const appended = applyPatch({ value: [-1] }, [
+    { op: "append", path: "/value", values },
+  ]) as { value: number[] };
+  assertEquals(appended.value.length, 200_001);
+  assertEquals(appended.value[0], -1);
+  assertEquals(appended.value.at(-1), 199_999);
+
+  const spliced = applyPatch({ value: [-1, -2, -3] }, [
+    { op: "splice", path: "/value", index: 1, remove: 1, add: values },
+  ]) as { value: number[] };
+  assertEquals(spliced.value.length, 200_002);
+  assertEquals(spliced.value[1], 0);
+  assertEquals(spliced.value.at(-2), 199_999);
+  assertEquals(spliced.value.at(-1), -3);
+});
+
+describe("memory v2 append onto a slot holding `undefined`", () => {
+  // A slot holding `undefined` is what a writer leaves by setting a list to
+  // `undefined`. A writer appending to it sees no list, as at a missing path.
+
+  it("creates the array at an object key", () => {
+    expect(applyPatch({ value: undefined }, [
+      { op: "append", path: "/value", values: ["x"] },
+    ])).toEqual({ value: ["x"] });
+    expect(applyPatch({ value: { items: undefined, n: 1 } }, [
+      { op: "append", path: "/value/items", values: [1, 2] },
+    ])).toEqual({ value: { items: [1, 2], n: 1 } });
+  });
+
+  it("creates the array at an array index", () => {
+    expect(applyPatch({ value: ["a", undefined] }, [
+      { op: "append", path: "/value/1", values: ["x"] },
+    ])).toEqual({ value: ["a", ["x"]] });
+  });
+
+  it("throws when the path goes through a slot holding `undefined`", () => {
+    expect(() =>
+      applyPatch({ value: undefined }, [
+        { op: "append", path: "/value/items", values: ["x"] },
+      ])
+    ).toThrow("path is not traversable at /value/items");
+  });
+
+  it("throws for `null`, which is a value and not an absence", () => {
+    expect(() =>
+      applyPatch({ value: null }, [
+        { op: "append", path: "/value", values: ["x"] },
+      ])
+    ).toThrow();
+  });
+});
+
 Deno.test("memory v2 append rejects a non-array target", () => {
   let threw = false;
   try {
@@ -436,6 +493,14 @@ Deno.test("memory v2 add-unique creates the array when absent", () => {
   assertEquals(out, { value: ["x"] });
 });
 
+describe("memory v2 add-unique onto a slot holding `undefined`", () => {
+  it("creates the array, holding each distinct value once", () => {
+    expect(applyPatch({ value: undefined }, [
+      { op: "add-unique", path: "/value", values: ["x", "x", "y"] },
+    ])).toEqual({ value: ["x", "y"] });
+  });
+});
+
 Deno.test("memory v2 add-unique compares by stored value (objects)", () => {
   const out = applyPatch({ value: [{ id: 1 }] }, [
     { op: "add-unique", path: "/value", values: [{ id: 1 }, { id: 2 }] },
@@ -462,6 +527,42 @@ Deno.test("memory v2 add-unique compares special objects by content", () => {
     new FabricBytes(new Uint8Array([1, 2])),
     new FabricBytes(new Uint8Array([3, 4])),
     new FabricEpochNsec(1234n),
+  ]);
+});
+
+Deno.test("memory v2 add-unique adds only absent elements when adding many", () => {
+  // Enough distinct values that elements are looked up in a set of them
+  // rather than compared one by one; the result is the same.
+  const incoming = Array.from({ length: 20 }, (_, i) => ({ id: i }));
+  const out = applyPatch({ value: [{ id: 3 }, "x", { id: 17 }] }, [
+    {
+      op: "add-unique",
+      path: "/value",
+      values: [...incoming, { id: 5 }, "x", -0, 0, NaN, NaN],
+    },
+  ]) as { value: unknown[] };
+  assertEquals(out.value, [
+    { id: 3 },
+    "x",
+    { id: 17 },
+    ...incoming.filter(({ id }) => id !== 3 && id !== 17),
+    -0,
+    0,
+    NaN,
+  ]);
+  assert(Object.is(out.value[out.value.length - 3], -0));
+});
+
+Deno.test("memory v2 add-unique adds a hole among the values as `undefined`", () => {
+  const out = applyPatch({ value: ["a"] }, [
+    // deno-lint-ignore no-sparse-arrays
+    { op: "add-unique", path: "/value", values: ["b", , "b"] },
+  ]) as { value: unknown[] };
+  assertEquals(out.value.length, 3);
+  assertEquals([out.value[1], 2 in out.value, out.value[2]], [
+    "b",
+    true,
+    undefined,
   ]);
 });
 
@@ -610,6 +711,17 @@ Deno.test("memory v2 remove-by-value on the weird numbers", () => {
   ]) as { value: number[] };
   assertEquals(zero.value.length, 1);
   assert(Object.is(zero.value[0], -0), "only the +0 may be removed");
+});
+
+Deno.test("memory v2 remove-by-value keeps holes, closing up only removed slots", () => {
+  // deno-lint-ignore no-sparse-arrays
+  const out = applyPatch({ value: ["a", , "b", "a", , "c"] }, [
+    { op: "remove-by-value", path: "/value", value: "a" },
+  ]) as { value: string[] };
+  assertEquals(out.value.length, 4);
+  assertEquals([0 in out.value, 1 in out.value], [false, true]);
+  assertEquals([2 in out.value, 3 in out.value], [false, true]);
+  assertEquals([out.value[1], out.value[3]], ["b", "c"]);
 });
 
 Deno.test("memory v2 remove-by-value is a no-op when absent", () => {

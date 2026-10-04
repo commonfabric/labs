@@ -228,6 +228,43 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("getStorageDiagnostics()", () => {
+    const snapshot = {
+      pendingCommitCount: 1,
+      pendingCommits: [{ kind: "event-intent", id: 1, ageMs: 5 }],
+      pendingCommitsOmitted: 0,
+      pendingCrossSpaceCount: 0,
+      spaces: [],
+      spacesOmitted: 0,
+    };
+
+    for (const diagnostics of [snapshot, null]) {
+      it(
+        diagnostics === null
+          ? "returns `null` when the worker's storage manager has no diagnostics"
+          : "returns the snapshot the worker reports",
+        async () => {
+          const requests: unknown[] = [];
+          const conn = {
+            on: () => {},
+            request: (message: unknown) => {
+              requests.push(message);
+              return Promise.resolve({ diagnostics });
+            },
+          } as unknown as never;
+          const client = new (RuntimeClient as unknown as {
+            new (conn: never, options: unknown): RuntimeClient;
+          })(conn, undefined);
+
+          expect(await client.getStorageDiagnostics()).toEqual(diagnostics);
+          expect(requests).toEqual([
+            { type: RequestType.GetStorageDiagnostics },
+          ]);
+        },
+      );
+    }
+  });
+
   describe("setMemoryMessageCompression", () => {
     it("asks the worker to change live memory WebSocket compression", async () => {
       const requests: unknown[] = [];
@@ -828,9 +865,8 @@ describe("RuntimeClient", () => {
     });
   });
 
-  describe("resolveSpaceName", () => {
-    it("resolves the name inside the worker runtime", async () => {
-      const space = "did:key:z6Mk-runtime-client-named-space";
+  describe("createSpace", () => {
+    function clientCreating(space: string) {
       const requests: unknown[] = [];
       const conn = {
         on: () => {},
@@ -842,11 +878,99 @@ describe("RuntimeClient", () => {
       const client = new (RuntimeClient as unknown as {
         new (conn: never, options: unknown): RuntimeClient;
       })(conn, undefined);
+      return { client, requests };
+    }
 
-      expect(await client.resolveSpaceName("notebook")).toBe(space);
+    it("sends the label to the worker and returns the DID it created", async () => {
+      const space = "did:key:z6Mk-runtime-client-created-space";
+      const { client, requests } = clientCreating(space);
+
+      expect(await client.createSpace("notebook")).toBe(space);
       expect(requests).toEqual([{
-        type: RequestType.ResolveSpaceName,
-        name: "notebook",
+        type: RequestType.CreateSpace,
+        label: "notebook",
+      }]);
+    });
+
+    it("sends no label when none is given", async () => {
+      const space = "did:key:z6Mk-runtime-client-unlabeled-space";
+      const { client, requests } = clientCreating(space);
+
+      expect(await client.createSpace()).toBe(space);
+      expect(requests).toEqual([{ type: RequestType.CreateSpace }]);
+    });
+  });
+
+  describe("registerSpaceHostDetailed", () => {
+    function clientReturning(registration: unknown) {
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ registration });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+      return { client, requests };
+    }
+
+    const space = "did:key:z6Mk-runtime-client-routed-space";
+
+    it("sends the hint and returns the worker's registration", async () => {
+      const { client, requests } = clientReturning({ accepted: true });
+
+      expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
+        .toEqual({ accepted: true });
+      expect(requests).toEqual([{
+        type: RequestType.RegisterSpaceHostDetailed,
+        space,
+        host: "http://b.test/",
+      }]);
+    });
+
+    it("returns each refusal with its reason", async () => {
+      for (
+        const refusal of [
+          {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://known.test/",
+          },
+          { accepted: false, reason: "default-route-in-use" },
+          { accepted: false, reason: "no-remote-resolution" },
+          { accepted: false, reason: "unspecified" },
+        ]
+      ) {
+        const { client } = clientReturning(refusal);
+        expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
+          .toEqual(refusal);
+      }
+    });
+  });
+
+  describe("retrySpaceAccess", () => {
+    it("asks the worker to retry the space", async () => {
+      const space = "did:key:z6Mk-runtime-client-retried-space";
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve(undefined);
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+
+      await client.retrySpaceAccess(space);
+
+      expect(requests).toEqual([{
+        type: RequestType.RetrySpaceAccess,
+        space,
       }]);
     });
   });
@@ -1081,23 +1205,19 @@ describe("RuntimeClient", () => {
 
 describe("attachOptionsFrom()", () => {
   // What it drops is the point: a document that attaches holds no signer, so
-  // neither `Identity` survives the mapping. `findKeyMaterial` refuses a frame
-  // holding one; this is what keeps one from being built.
+  // the `Identity` does not survive the mapping. `findKeyMaterial` refuses a
+  // frame holding one; this is what keeps one from being built.
 
   it("returns the acting principal as a DID and keeps no `Identity`", async () => {
     const identity = await Identity.fromPassphrase("attach-options-signer");
-    const spaceIdentity = await Identity.fromPassphrase("attach-options-space");
     const attach = attachOptionsFrom({
       apiUrl: new URL("http://backend.test/"),
       identity,
-      spaceIdentity,
       spaceDid: identity.did(),
     });
 
     expect(attach.identity).toBe(identity.did());
     expect(Object.values(attach)).not.toContain(identity);
-    expect(Object.values(attach)).not.toContain(spaceIdentity);
-    expect("spaceIdentity" in attach).toBe(false);
     expect(findKeyMaterial(attach)).toBeUndefined();
   });
 
@@ -1122,5 +1242,20 @@ describe("attachOptionsFrom()", () => {
     expect(attach.cfcFlowLabels).toBe("persist");
     expect(attach.cfcReadMaxConfidentiality).toEqual([identity.did()]);
     expect(attach.cfcReadOnExceed).toBe("skip");
+  });
+
+  it("carries the page's settings, which the attaching client keeps", async () => {
+    const identity = await Identity.fromPassphrase("attach-options-page");
+    const options = {
+      apiUrl: new URL("http://backend.test/"),
+      identity,
+      spaceDid: identity.did(),
+    };
+
+    expect(
+      attachOptionsFrom({ ...options, iframeOuterFrameUrl: "/outer-frame" })
+        .iframeOuterFrameUrl,
+    ).toBe("/outer-frame");
+    expect(attachOptionsFrom(options).iframeOuterFrameUrl).toBeUndefined();
   });
 });

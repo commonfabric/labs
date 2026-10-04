@@ -32,10 +32,6 @@ import { FabricKeyPair } from "@/fabric-primitives";
 
 /** Mock runtime for decode calls. */
 class MockRuntime extends BaseLiveEnvironment {
-  constructor() {
-    super(true);
-  }
-
   override getCell(): never {
     throw new Error("getCell not implemented in test runtime");
   }

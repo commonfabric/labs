@@ -10,9 +10,10 @@
  * read a served result back). The explicit-env ON lanes never exercised
  * this unset-flag path; the flip changes exactly it.
  *
- * Runs only in the "Deployed Topology Posture Gates" CI job (deno.yml),
- * which sets API_URL; it is in `integration/`, which the package's `test`
- * task does not match, so the workspace Test job never runs it. Locally:
+ * Runs only in the test topology's `deployed-topology` suite, whose
+ * `toolshed` capability starts a server and sets API_URL; it is in
+ * `integration/`, which the package's `deno-test` task does not match, so
+ * the workspace unit suite never runs it. Locally:
  *   API_URL=http://localhost:8000 deno test --allow-env --allow-net \
  *     --allow-read --allow-write --allow-ffi --allow-run \
  *     integration/fabric-session-posture-gate.test.ts
@@ -20,6 +21,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { createTestSpace } from "@commonfabric/integration/test-space";
 import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
@@ -53,7 +55,9 @@ describe(
       const factory = createHarnessFabricSessionFactory({
         apiUrl: API_URL!,
         identityKeyPath: tempIdentity.path,
-        space: `cf-harness-posture-gate-${Date.now()}`,
+        space: await createTestSpace(tempIdentity.identity, {
+          apiUrl: API_URL!,
+        }),
       });
       const session = await factory();
       try {

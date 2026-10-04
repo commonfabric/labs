@@ -1,5 +1,7 @@
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 
+import { canonicalizeDocumentPath } from "../cfc/canonical.ts";
 import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
@@ -38,8 +40,13 @@ export function trustedEventWriteCandidatesFromTransaction(
   const seen = new Map<string, number>();
   const detailSpaces = new Set<MemorySpace>(fallbackSpaces);
 
-  const addCandidate = (write: NormalizedFullLink | IMemorySpaceAddress) => {
-    const path = write.path[0] === "value" ? write.path.slice(1) : write.path;
+  // A link names a field by its logical path; a transaction address is rooted
+  // at the stored document, so the caller hands over the path already mapped
+  // to logical form.
+  const addCandidate = (
+    write: NormalizedFullLink | IMemorySpaceAddress,
+    path: readonly string[],
+  ) => {
     const candidate: NormalizedFullLink = {
       space: write.space,
       id: write.id,
@@ -72,7 +79,7 @@ export function trustedEventWriteCandidatesFromTransaction(
 
   if (hasAnnotatedWrites(handler)) {
     for (const write of handler.writes) {
-      addCandidate(write);
+      addCandidate(write, write.path);
       detailSpaces.add(write.space);
     }
   }
@@ -84,7 +91,10 @@ export function trustedEventWriteCandidatesFromTransaction(
       ...(transactionLog.attemptedWrites ?? []),
     ]
   ) {
-    addCandidate(write);
+    // The reactivity log records the journal's document-rooted paths. A write
+    // to one of the document's own members names no link.
+    const path = canonicalizeDocumentPath(toDocumentPath(write.path));
+    if (path !== undefined) addCandidate(write, path);
     detailSpaces.add(write.space);
   }
 
@@ -95,14 +105,15 @@ export function trustedEventWriteCandidatesFromTransaction(
         id: input.target.id as URI,
         path: input.target.path,
         ...(input.schema !== undefined ? { schema: input.schema } : {}),
-      });
+      }, input.target.path);
       detailSpaces.add(input.target.space);
     }
   }
 
   for (const space of detailSpaces) {
     for (const detail of getTransactionWriteDetails(tx, space)) {
-      addCandidate(detail.address);
+      const path = canonicalizeDocumentPath(detail.address.path);
+      if (path !== undefined) addCandidate(detail.address, path);
     }
   }
 

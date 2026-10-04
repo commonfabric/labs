@@ -781,12 +781,12 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     expect(unmarked).toContainEqual("memb-secret");
   });
 
-  it("a dereference trace covers a slot probe under either marking", async () => {
-    // The dereference trace is the whole of the standalone/machinery
-    // boundary (CFC §4.6.3), so it decides alone: a probe the trace covers
-    // consumes nothing at the slot, neither the pointer label nor the
-    // membership template, whether or not it carries `machineryRead`. The
-    // follow's taint arrives through the reads of the target.
+  it("consumes the membership template at a followed slot, unless the probe is machinery", async () => {
+    // A dereference retains the restrictions of the reference it follows
+    // (CFC §4.6.3, §8.2.4): the probe of the followed slot consumes what a
+    // standalone probe of it does, the pointer label and the membership
+    // template. A probe carrying `machineryRead` consumes nothing, traced or
+    // not.
 
     const rt = makeRuntime();
     const elId = await seedDoc(rt, "gp-el-tc", { n: 4 }, [
@@ -808,7 +808,9 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
       });
     };
 
-    expect(await flowJoinOf(rt, tracedProbe)).toEqual([]);
+    const followed = await flowJoinOf(rt, tracedProbe);
+    expect(followed).toContainEqual("memb-secret");
+    expect(followed).toContainEqual("el-label");
     expect(
       await flowJoinOf(
         rt,

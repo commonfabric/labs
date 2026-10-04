@@ -8,6 +8,7 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("piece sync pattern");
@@ -54,9 +55,9 @@ describe("syncPattern", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "sync-pattern-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -76,10 +77,10 @@ describe("syncPattern", () => {
 
     // A cell that setup never touched: it carries no `patternIdentity` at all,
     // so a resolution that went through the piece could not succeed.
-    const bare = runtime.getCell(
+    const bare = patchableCell(runtime.getCell(
       pieces.getSpace(),
       "sync-pattern-bare-" + crypto.randomUUID(),
-    );
+    ));
     let syncs = 0;
     const originalSync = bare.sync.bind(bare);
     bare.sync = () => {

@@ -29,6 +29,7 @@ import {
   renderCellReference,
 } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/utils/encoding";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {
@@ -84,6 +85,7 @@ import type {
 import {
   applyPieceInput,
   checkPiecePattern,
+  createSpace,
   describePiece,
   type EntryConfig,
   executePieceCallable,
@@ -379,7 +381,7 @@ function fieldSectionLines(
   fields: PieceFieldDescription[],
 ): string[] {
   if (fields.length === 0) return [];
-  const width = Math.max(...fields.map((field) => field.name.length));
+  const width = maxOf(fields.map((field) => field.name.length));
   const lines: string[] = ["", label];
   for (const field of fields) {
     lines.push(`  ${field.name.padEnd(width)}  ${field.type}`);
@@ -448,8 +450,12 @@ export function pieceDescribeLines(
       lines.push(`  ${line}`);
     }
   }
-  lines.push(...fieldSectionLines("STATE", description.state ?? []));
-  lines.push(...fieldSectionLines("INPUTS", description.inputs ?? []));
+  for (const line of fieldSectionLines("STATE", description.state ?? [])) {
+    lines.push(line);
+  }
+  for (const line of fieldSectionLines("INPUTS", description.inputs ?? [])) {
+    lines.push(line);
+  }
   lines.push("", "VERBS");
   if (shown.length === 0) {
     lines.push(
@@ -458,9 +464,9 @@ export function pieceDescribeLines(
         : "  <no callable verbs>",
     );
   } else {
-    lines.push(...describedVerbLines(shown));
+    for (const line of describedVerbLines(shown)) lines.push(line);
   }
-  lines.push(...notes.map((note) => `(${note})`));
+  for (const note of notes) lines.push(`(${note})`);
   return lines;
 }
 
@@ -1524,13 +1530,18 @@ TIPS:
  * and the space. `piece` declares them as globals its subcommands inherit;
  * `cf cell get`, `cf cell set` and `cf piece call` have no parent globals, so each carries
  * them as its own.
+ *
+ * A command that acts on no existing space passes `space: false`, and carries
+ * neither the space nor the combined URL that can name one, so that neither
+ * is accepted and then ignored.
  */
 export function targetOptions(
   // deno-lint-ignore no-explicit-any
   cmd: Command<any>,
-  opts: { global: boolean },
+  opts: { global: boolean; space?: boolean },
   // deno-lint-ignore no-explicit-any
 ): Command<any> {
+  const space = opts.space ?? true;
   const option = (flags: string, description: string) =>
     opts.global
       ? cmd.globalOption(flags, description)
@@ -1540,13 +1551,20 @@ export function targetOptions(
       ? cmd.globalEnv(name, description, { prefix: "CF_" })
       : cmd.env(name, description, { prefix: "CF_" });
   option("-q,--quiet", "Suppress hints and next-step suggestions");
-  option("-u,--url <url:string>", "URL representing a host, space, and piece.");
+  if (space) {
+    option(
+      "-u,--url <url:string>",
+      "URL representing a host, space, and piece.",
+    );
+  }
   env("CF_API_URL=<url:string>", "URL of the fabric server instance.");
   option("-a,--api-url <url:string>", "URL of the fabric server instance.");
   env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.");
   option("-i,--identity <path:string>", "Path to an identity keyfile.");
-  env("CF_SPACE=<space:string>", "The space name or DID.");
-  option("-s,--space <space:string>", "The space name or DID");
+  if (space) {
+    env("CF_SPACE=<space:string>", "The space name or DID.");
+    option("-s,--space <space:string>", "The space name or DID");
+  }
   return cmd;
 }
 
@@ -2047,6 +2065,7 @@ function refuseJsonOutput(spelling: string, options: { json?: boolean }): void {
 interface SpaceCommandCLIOptions extends PieceCLIOptions {
   quiet?: boolean;
   reset?: boolean;
+  label?: string;
 }
 
 /**
@@ -2208,6 +2227,42 @@ export function buildSetHomeCommand(
   return notice.helpPage(
     targetOptions(command.action(notice.action(act)), { global: false }),
   );
+}
+
+/**
+ * `space create`, which creates a space owned by the identity and records it
+ * in the identity's Home space list.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildCreateSpaceCommand(spelling: string): Command<any> {
+  const act = async (options: SpaceCommandCLIOptions) => {
+    refuseJsonOutput(spelling, options);
+    setQuietMode(!!options.quiet);
+    const baseConfig = parseSetHomeOptions(options);
+    const space = await createSpace(baseConfig, options.label);
+    render(space);
+    hint(cliText(`NEXT STEPS:
+  → Open space in browser: ${baseConfig.apiUrl}/${space}
+  → Create a piece in it:  cf piece new --space ${space} ...`));
+  };
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      "Create a new space owned by the identity, with a new random DID, and " +
+        "add it to the identity's Home space list. Opening a name or a DID " +
+        "never creates a space; this is how one comes into being.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} --label "Team lunch"`,
+      ),
+      'Create a space listed as "Team lunch" and print its DID.',
+    )
+    .option(
+      "--label <label:string>",
+      "What the space is called in the Home space list.",
+    );
+  return targetOptions(command.action(act), { global: false, space: false });
 }
 
 /**
@@ -2399,7 +2454,11 @@ export const piece = targetOptions(
   .arguments("<main:string>")
   .option(
     "--request-key <key:string>",
-    "Reuse a serving deployment's creation request after an uncertain result.",
+    "Reuse a creation request after an uncertain result without creating another piece.",
+  )
+  .option(
+    "--input-file <path:string>",
+    "Initialize the piece with a JSON object from this file before starting or registering it.",
   )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
@@ -4893,6 +4952,15 @@ export async function newPieceFromCommand(
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const spaceConfig = parseSpaceOptions(options);
+  const input = options.inputFile === undefined
+    ? undefined
+    : JSON.parse(await Deno.readTextFile(options.inputFile));
+  if (
+    options.inputFile !== undefined &&
+    (input === null || typeof input !== "object" || Array.isArray(input))
+  ) {
+    throw new Error("`--input-file` must contain a JSON object.");
+  }
   const pieceId = await (deps.newPiece ?? newPiece)(
     spaceConfig,
     localPatternEntry(main, options),
@@ -4900,6 +4968,7 @@ export async function newPieceFromCommand(
       start: options.start,
       slug: options.slug,
       force: !!options.force,
+      ...(input === undefined ? {} : { input }),
       ...(options.requestKey === undefined
         ? {}
         : { requestKey: options.requestKey }),

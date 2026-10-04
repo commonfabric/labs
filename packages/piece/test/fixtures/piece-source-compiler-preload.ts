@@ -1,6 +1,7 @@
 import { createSession, Identity } from "@commonfabric/identity";
 import { getPieceSourceRevisions, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import { pattern } from "../../../runner/src/builder/pattern.ts";
 import { setArtifactEntryRef } from "../../../runner/src/builder/pattern-metadata.ts";
 import { sourceDocKey } from "../../../runner/src/compilation-cache/cell-cache.ts";
@@ -24,9 +25,9 @@ const runtime = new Runtime({
 let outcome: { history?: string[]; error?: string };
 try {
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: storageManager.as as Identity,
-      spaceName: `piece-source-compiler-preload-${crypto.randomUUID()}`,
+      spaceDid: await runtime.createSpace(),
     }),
     runtime,
   );
@@ -73,5 +74,8 @@ try {
 }
 await runtime.dispose();
 await storageManager.close();
-worker.postMessage(outcome);
+worker.postMessage({
+  ...outcome,
+  lifetimeLock: await holdWorkerLifetimeLock(),
+});
 worker.close();

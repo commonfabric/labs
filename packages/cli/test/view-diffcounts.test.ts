@@ -8,11 +8,22 @@ import {
   diffCounts,
 } from "../lib/view/diffcounts.ts";
 import { parseDiff } from "../lib/view/diff.ts";
-import { buildDiffDocument } from "../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  type DiffFileLanguages,
+} from "../lib/view/diffdoc.ts";
 import { languageForFile } from "../lib/view/languages/language.ts";
 
 function contextLines(path: string, lines: readonly string[]) {
   return languageForFile(path).highlightLines(lines.join("\n"), path);
+}
+
+/** Both sides of a file read in the language its path selects. */
+function sideLanguages(path: string): DiffFileLanguages {
+  return {
+    oldLanguage: languageForFile(path),
+    newLanguage: languageForFile(path),
+  };
 }
 
 /** Computes every count policy over one highlighted diff. */
@@ -220,6 +231,7 @@ describe("diffcounts", () => {
       "",
     ].join("\n");
     const counts = countsFor(diff, [{
+      languages: sideLanguages("main.rs"),
       oldLines: contextLines("main.rs", [
         "/*",
         " * hidden note",
@@ -252,6 +264,7 @@ describe("diffcounts", () => {
       "",
     ].join("\n");
     const counts = countsFor(diff, [{
+      languages: sideLanguages("main.rs"),
       oldLines: contextLines("main.rs", [
         "/*",
         " * old note",
@@ -285,6 +298,7 @@ describe("diffcounts", () => {
       "",
     ].join("\n");
     const counts = countsFor(diff, [{
+      languages: sideLanguages("main.rs"),
       oldLines: contextLines("main.rs", [
         "/*",
         " * old note",
@@ -315,6 +329,7 @@ describe("diffcounts", () => {
       "",
     ].join("\n");
     const counts = countsFor(diff, [{
+      languages: sideLanguages("readme.md"),
       oldLines: contextLines("readme.md", [
         "```html",
         "<!-- literal example",
@@ -343,6 +358,7 @@ describe("diffcounts", () => {
       "",
     ].join("\n");
     const counts = countsFor(diff, [{
+      languages: sideLanguages("readme.md"),
       oldLines: contextLines("readme.md", [
         "    <!-- literal example",
         "old prose",
@@ -744,6 +760,58 @@ describe("diffcounts", () => {
       "-// old comment",
       "+// new comment",
       ' let marker = "not a raw close: \\"#";',
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
+  it("does not start shell heredocs from arithmetic shifts", () => {
+    const diff = [
+      "diff --git a/run.sh b/run.sh",
+      "--- a/run.sh",
+      "+++ b/run.sh",
+      "@@ -1,2 +1,2 @@",
+      " x=$((1 << count))",
+      "-# old comment",
+      "+# new comment",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("does not start shell heredocs from here-strings", () => {
+    const diff = [
+      "diff --git a/run.sh b/run.sh",
+      "--- a/run.sh",
+      "+++ b/run.sh",
+      "@@ -1,2 +1,2 @@",
+      " tr a b <<< word",
+      "-# old comment",
+      "+# new comment",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("starts shell heredocs from escaped delimiters", () => {
+    const diff = [
+      "diff --git a/run.sh b/run.sh",
+      "--- a/run.sh",
+      "+++ b/run.sh",
+      "@@ -1,3 +1,3 @@",
+      " cat <<\\EOF",
+      "-# old data",
+      "+# new data",
+      " EOF",
       "",
     ].join("\n");
 

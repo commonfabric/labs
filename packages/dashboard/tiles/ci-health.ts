@@ -34,6 +34,15 @@
  * the two builds the team watches are visible even when there is nothing wrong.
  * A red tile shows only what is failing. Every job the collection read, and
  * what its deciding run concluded and took, is on the page behind the tile.
+ *
+ * The two main builds are judged from the snapshots of their runs that the ci
+ * trust tiles read, each time a snapshot arrives, and are published with those
+ * tiles. Every other job is judged from a sweep of the organization that runs
+ * in the background at most once every SWEEP_TTL_MS. A collection shows the
+ * last sweep that finished and never waits for one, so a slow sweep holds up
+ * neither this tile's main builds nor the tiles published with them. When a
+ * sweep ends, the tile asks to be collected again from the snapshots already
+ * held, so the sweep's findings are shown at once.
  */
 
 import {
@@ -46,10 +55,11 @@ import {
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import { detailList } from "../detail-list.ts";
+import { livePageResponse } from "../live-page.ts";
 import {
   type CiJobs,
   CI_JOBS_PATH,
-  ciJobsResponse,
+  ciJobsPage,
   type Job,
 } from "../ci-jobs-page.ts";
 import {
@@ -62,14 +72,31 @@ import {
   STATUS_RANK,
   worstStatus,
 } from "../lib.ts";
-import type { Run, Status, Tile, TileView } from "../types.ts";
+import {
+  type Ctx,
+  type Run,
+  runSource,
+  type Status,
+  type Tile,
+  type TileView,
+} from "../types.ts";
 
 const ORG = REPO.split("/")[0];
 
 // The set of repositories and the workflows in them changes far more slowly
 // than a job's result, so the inventory is read once an hour while the results
-// behind it are read on the tile's own interval.
+// behind it are read every SWEEP_TTL_MS.
 const INVENTORY_TTL_MS = 3_600_000;
+
+// How often the runs of every job other than the two main builds are read.
+export const SWEEP_TTL_MS = 300_000;
+
+// The two main builds the dashboard used to carry a tile each for, whose runs
+// the ci trust tiles read as well.
+const PINNED = [
+  runSource(REPO, CI_WORKFLOW, "main"),
+  runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+];
 
 // Requests in flight at once. The inventory is tens of repositories wide and
 // GitHub asks for a client's requests to be spread out rather than fired
@@ -162,11 +189,10 @@ function workflowUrl(repo: string, path: string): string {
   return `https://github.com/${repo}/actions/workflows/${workflowFile(path)}`;
 }
 
-// The two main builds the dashboard used to carry a tile each for.
 function isPinned(repo: string, path: string): boolean {
-  const file = workflowFile(path);
-  return (repo === REPO && file === CI_WORKFLOW) ||
-    (repo === LOOM_REPO && file === LOOM_CI_WORKFLOW);
+  return PINNED.some((source) =>
+    source.repo === repo && source.workflow === workflowFile(path)
+  );
 }
 
 /** Runs tasks with a bounded number in flight, answering in the given order. */
@@ -423,21 +449,26 @@ interface Judged {
 
 /**
  * The job one workflow's runs describe, and what they settle for the next
- * collection. A job that cannot be read settles nothing, so the next
- * collection reads its runs afresh.
+ * sweep. A job that cannot be read settles nothing, so the next sweep reads
+ * its runs afresh. `redefined` says whether a failing run's
+ * workflow has changed since the run, answering `false` when that cannot be
+ * read.
  */
 async function jobOf(
   listing: Listing,
   attempts: CompletedAttempts,
-  token: string,
+  redefined: (listing: Listing, run: Run) => Promise<boolean>,
   now: number,
 ): Promise<Judged> {
   const { inventory, workflow } = listing;
   const job = {
     repo: shortName(inventory.repo),
     workflow: workflow.name,
+    path: workflow.path,
     pinned: isPinned(inventory.repo, workflow.path),
     href: workflowUrl(inventory.repo, workflow.path),
+    runningHref: listing.runs.find((run) => run.status === "in_progress")
+      ?.html_url,
   };
   const unreadable = (result: string): Judged => ({
     job: { ...job, status: "warn", failing: false, result },
@@ -475,24 +506,10 @@ async function jobOf(
     : undefined;
   let failing = status === "bad";
   let result = run.conclusion ?? "";
-  if (failing) {
-    let redefined: boolean;
-    try {
-      redefined = await redefinedSince(inventory, workflow, run, token);
-    } catch (error) {
-      // The failure stands, and the reason it could not be checked is
-      // logged with the collection's other unreadable reads.
-      console.error(
-        `ci: could not read ${job.repo} · ${job.workflow}'s history:`,
-        messageOf(error),
-      );
-      redefined = false;
-    }
-    if (redefined) {
-      status = "unknown";
-      failing = false;
-      result = "changed since it failed";
-    }
+  if (failing && await redefined(listing, run)) {
+    status = "unknown";
+    failing = false;
+    result = "changed since it failed";
   }
   return {
     job: {
@@ -538,6 +555,7 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
     ...unreadableRepos.map((repo): Job => ({
       repo: shortName(repo),
       workflow: "workflows",
+      path: "",
       pinned: false,
       status: "warn",
       failing: false,
@@ -612,116 +630,230 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
   };
 }
 
-export function createCiHealth(): Tile {
+// What a sweep of the organization found: every repository and its
+// workflows, every job other than the two main builds, and whether each
+// failing run's workflow has changed since the run, by run id.
+interface Sweep {
+  repos: RepoInventory[];
+  jobs: Job[];
+  redefined: Map<number, Promise<boolean>>;
+  at: number;
+}
+
+/** The ci tile, and a way to wait for the sweep it has under way. */
+export interface CiHealthTile extends Tile {
+  sweeping(): Promise<void>;
+}
+
+export function createCiHealth(): CiHealthTile {
   // The inventory is read on first use and shared until it goes stale. A read
-  // that fails is not kept, so the next collection tries again.
+  // that fails is not kept, so the next sweep tries again.
   let inventory: (() => Promise<RepoInventory[]>) | undefined;
-  // What the last finished collection saw, which is what the page renders.
+  // The last sweep that finished, why the last one failed if it did, and the
+  // one under way. A sweep starts at most once every SWEEP_TTL_MS, and a
+  // collection never waits for one.
+  let swept: Sweep | undefined;
+  let sweepFailure: string | undefined;
+  let sweepStartedAt = -Infinity;
+  let sweep: Promise<void> | undefined;
+  // What the latest collection to finish saw, which is what the page renders.
+  // The tile is collected once for each of its snapshots, and the scheduler
+  // shows the view of the collection that started last, so the page keeps
+  // what that one saw even when an earlier one finishes after it.
   let collected: CiJobs | undefined;
-  // One job-count cache per repository, held across collections. It reads
-  // with the token the tile was given, like every other request the tile makes.
-  const attempts = new Map<string, CompletedAttempts>();
-  const attemptsFor = (repo: string, token: string): CompletedAttempts => {
-    let held = attempts.get(repo);
-    if (!held) {
-      held = new CompletedAttempts(repo, token);
-      attempts.set(repo, held);
-    }
-    return held;
-  };
-  // What each workflow's runs settled, by workflow, held across collections so
-  // a verdict any number of runs back is read once rather than every time.
+  let collectionsStarted = 0;
+  let collectedFrom = 0;
+  // One job-count cache per workflow, by workflow id, held across collections.
+  // It reads with the token the tile was given, like every other request the
+  // tile makes.
+  const attempts = new Map<number, CompletedAttempts>();
+  // What each workflow's runs settled, by workflow, held across sweeps so a
+  // verdict any number of runs back is read once rather than every time.
   const settled = new Map<number, Settled>();
+
+  const judge = (
+    listing: Listing,
+    redefined: Map<number, Promise<boolean>>,
+    token: string,
+  ): Promise<Judged> => {
+    let held = attempts.get(listing.workflow.id);
+    if (!held) {
+      held = new CompletedAttempts(listing.inventory.repo, token);
+      attempts.set(listing.workflow.id, held);
+    }
+    held.observe(listing.runs);
+    const changedSince = (failing: Listing, run: Run): Promise<boolean> => {
+      let answer = redefined.get(run.id);
+      if (!answer) {
+        answer = redefinedSince(failing.inventory, failing.workflow, run, token)
+          .catch((error) => {
+            // The failure stands, and the reason it could not be checked is
+            // logged with the other unreadable reads.
+            console.error(
+              `ci: could not read ${shortName(failing.inventory.repo)} · ${failing.workflow.name}'s history:`,
+              messageOf(error),
+            );
+            return false;
+          });
+        redefined.set(run.id, answer);
+      }
+      return answer;
+    };
+    return jobOf(listing, held, changedSince, Date.now());
+  };
+
+  const readSweep = async (token: string): Promise<Sweep> => {
+    inventory ??= memo(INVENTORY_TTL_MS, () => readInventory(token));
+    const repos = await inventory();
+    const readable = repos.filter((repo) => repo.error === undefined);
+    for (const id of attempts.keys()) {
+      if (!readable.some((repo) => repo.workflows.some((w) => w.id === id))) {
+        attempts.delete(id);
+      }
+    }
+    const listings = await inParallel(
+      REQUEST_CONCURRENCY,
+      readable.flatMap((repo) =>
+        repo.workflows
+          .filter((workflow) => !isPinned(repo.repo, workflow.path))
+          .map((workflow) => () =>
+            readRuns(repo, workflow, settled.get(workflow.id), token)
+          )
+      ),
+    );
+    const redefined = new Map<number, Promise<boolean>>();
+    const judged = await inParallel(
+      REQUEST_CONCURRENCY,
+      listings.map((listing) => () => judge(listing, redefined, token)),
+    );
+    settled.clear();
+    listings.forEach((listing, index) => {
+      const held = judged[index].settled;
+      if (held !== undefined) settled.set(listing.workflow.id, held);
+    });
+    const jobs = judged.map(({ job }) => job);
+    logUnreadable([
+      ...repos.filter((repo) => repo.error !== undefined).map((repo) =>
+        repo.repo
+      ),
+      ...jobs.filter(isUnreadable).map(jobName),
+    ]);
+    return { repos, jobs, redefined, at: Date.now() };
+  };
+
+  // Starts a sweep when one is due. Once it ends, the tile asks to be
+  // collected again, so what the sweep found is shown without waiting for
+  // the next snapshot.
+  const startSweep = (ctx: Ctx, token: string): void => {
+    if (sweep || Date.now() - sweepStartedAt < SWEEP_TTL_MS) return;
+    sweepStartedAt = Date.now();
+    sweep = readSweep(token).then(
+      (result) => {
+        swept = result;
+        sweepFailure = undefined;
+      },
+      (error) => {
+        sweepFailure = messageOf(error);
+        console.error(
+          "ci: could not read the repository inventory:",
+          sweepFailure,
+        );
+      },
+    ).finally(() => {
+      sweep = undefined;
+      ctx.collectAgain?.();
+    });
+  };
+
+  // The two main builds, judged from the snapshots of their runs the tile is
+  // collected from. A snapshot that is missing or out of date makes its build
+  // unreadable rather than graying the tile.
+  const judgePinned = (ctx: Ctx, from: Sweep, token: string): Promise<Job[]> =>
+    Promise.all(from.repos.flatMap((repo) =>
+      repo.workflows
+        .filter((workflow) => isPinned(repo.repo, workflow.path))
+        .map(async (workflow) => {
+          const source = runSource(repo.repo, workflowFile(workflow.path), "main");
+          const problem = ctx.runSourceProblem?.(source);
+          const listing: Listing = problem !== undefined
+            ? { inventory: repo, workflow, runs: [], error: problem }
+            : {
+              inventory: repo,
+              workflow,
+              runs: (await ctx.runsFor(source)).filter((run) =>
+                !PULL_REQUEST_EVENTS.has(run.event)
+              ),
+            };
+          const { job } = await judge(listing, from.redefined, token);
+          // A snapshot's own problem is logged where the snapshot is read.
+          if (problem === undefined && isUnreadable(job)) {
+            logUnreadable([jobName(job)]);
+          }
+          return job;
+        })
+    ));
 
   return {
     label: "ci",
-    intervalMs: 300_000,
+    // The same interval as the ci trust tiles, so the scheduler collects this
+    // tile with them from each snapshot of the main builds' runs.
+    intervalMs: 30_000,
+    runSources: PINNED,
+    reportsSourceProblems: true,
     routes: [{
       path: CI_JOBS_PATH,
-      handler: () => ciJobsResponse(collected),
+      handler: () => livePageResponse(ciJobsPage(collected)),
+      live: true,
     }],
+    sweeping: () => sweep ?? Promise.resolve(),
     async collect(ctx): Promise<TileView> {
       const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
       if (!token) {
         return { status: "unknown", value: "—", sub: "set GH_TOKEN" };
       }
 
-      inventory ??= memo(INVENTORY_TTL_MS, () => readInventory(token));
-      let repos: RepoInventory[];
-      try {
-        repos = await inventory();
-      } catch (error) {
-        const message = messageOf(error);
-        console.error("ci: could not read the repository inventory:", message);
+      const collection = ++collectionsStarted;
+      startSweep(ctx, token);
+      if (sweepFailure !== undefined) {
         return {
           status: "unknown",
           value: "—",
-          sub: friendlyError(message),
+          sub: friendlyError(sweepFailure),
         };
       }
-
-      const readable = repos.filter((repo) => repo.error === undefined);
-      const listings = await inParallel(
-        REQUEST_CONCURRENCY,
-        readable.flatMap((repo) =>
-          repo.workflows.map((workflow) => () =>
-            readRuns(repo, workflow, settled.get(workflow.id), token)
-          )
-        ),
-      );
-      // Each repository's job-count cache keeps what the runs just read need
-      // and forgets the rest, so it is handed every run of that repository at
-      // once, before any of its jobs are decided.
-      for (const repo of readable) {
-        attemptsFor(repo.repo, token).observe(
-          listings.filter((listing) => listing.inventory.repo === repo.repo)
-            .flatMap((listing) => listing.runs),
-        );
-      }
-      for (const repo of attempts.keys()) {
-        if (!readable.some((entry) => entry.repo === repo)) {
-          attempts.delete(repo);
-        }
+      if (swept === undefined) {
+        return { status: "unknown", value: "—", sub: "reading every repository" };
       }
 
-      const judged = await inParallel(
-        REQUEST_CONCURRENCY,
-        listings.map((listing) => () =>
-          jobOf(
-            listing,
-            attemptsFor(listing.inventory.repo, token),
-            token,
-            Date.now(),
-          )
-        ),
-      );
-      settled.clear();
-      listings.forEach((listing, index) => {
-        const held = judged[index].settled;
-        if (held !== undefined) settled.set(listing.workflow.id, held);
-      });
-      const jobs = judged.map(({ job }) => job);
-      const unreadableRepos = repos.filter((repo) => repo.error !== undefined)
-        .map((repo) => repo.repo);
-      const unreadable = [
-        ...unreadableRepos,
-        // An old failure is orange too, and is read perfectly well.
-        ...jobs.filter((job) => job.status === "warn" && !job.failing).map((job) =>
-          `${job.repo} · ${job.workflow}`
-        ),
-      ];
-      if (unreadable.length > 0) {
-        console.error("ci: could not read:", unreadable.join(", "));
-      }
-      collected = {
-        jobs,
-        repoCount: repos.length,
-        unreadableRepos,
-        collectedAt: Date.now(),
+      const jobs: CiJobs = {
+        jobs: [...await judgePinned(ctx, swept, token), ...swept.jobs],
+        repoCount: swept.repos.length,
+        unreadableRepos: swept.repos
+          .filter((repo) => repo.error !== undefined)
+          .map((repo) => repo.repo),
+        collectedAt: swept.at,
       };
-      return ciHealthView(collected);
+      if (collection > collectedFrom) {
+        collected = jobs;
+        collectedFrom = collection;
+      }
+      return ciHealthView(jobs);
     },
   };
+}
+
+// A job whose runs could not be read, as distinct from an old failure, which
+// is orange too and is read perfectly well.
+function isUnreadable(job: Job): boolean {
+  return job.status === "warn" && !job.failing;
+}
+
+function jobName(job: Job): string {
+  return `${job.repo} · ${job.workflow}`;
+}
+
+function logUnreadable(names: string[]): void {
+  if (names.length > 0) console.error("ci: could not read:", names.join(", "));
 }
 
 export const ciHealth = createCiHealth();

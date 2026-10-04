@@ -2,7 +2,6 @@ import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
-import { TRIPWIRES } from "../check-tripwires.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
 import { matchesPatternFilter } from "../pattern-files.ts";
 import {
@@ -129,12 +128,10 @@ describe("the repository's gate suites", () => {
     expect(reached("tasks/test-identity-aliases.jsonl")).toEqual([
       "check-test-aliases",
     ]);
-    // Two gates read the workflow: one holds every action it uses to a
-    // pinned commit, and one probes the shape of the job matrix on behalf
-    // of a tripwire.
+    // One gate reads the workflow: it holds every action the workflow uses
+    // to a pinned commit.
     expect(reached(".github/workflows/deno.yml")).toEqual([
       "check-action-pins",
-      "check-tripwires",
     ]);
     // The baselines and the patterns beside them reach one gate each,
     // rather than both reaching both.
@@ -154,8 +151,6 @@ describe("the repository's gate suites", () => {
       "check-commonfabric-types",
       "check-withheld-globals",
     ]);
-    expect(reached("packages/toolshed/routes/ingest-channels/route.ts"))
-      .toEqual(["check-tripwires"]);
     // The historical tree is taken back out of the two gates reading
     // `docs/`, since neither compiles nor reads a document in it.
     expect(reached("docs/history/INDEX.md")).toEqual([
@@ -295,10 +290,6 @@ describe("the repository's gate suites", () => {
         declared.push(`check-verb-session-sync runs for ${at}`);
       }
     }
-    for (const tripwire of TRIPWIRES) {
-      found.push(reachedBy("check-tripwires", tripwire.testFile));
-      declared.push(`check-tripwires runs for ${tripwire.testFile}`);
-    }
     for (const file of namedBenchmarkFiles()) {
       found.push(reachedBy("check-bench-workflow", file));
       declared.push(`check-bench-workflow runs for ${file}`);
@@ -397,10 +388,22 @@ describe("the repository's gate suites", () => {
     expect(invocation!.command).not.toContain("--scope=cli");
   });
 
-  it("maps a changed path to the group that checks it", () => {
+  it("maps a changed path to the groups whose check opens it", () => {
     const typecheck = byId("typecheck");
-    expect(typecheck.unitsForChange!(new Set(["packages/memory/mod.ts"])))
-      .toEqual(["memory"]);
+    // Nothing imports a test, so its own group is the only one it reaches.
+    expect(
+      typecheck.unitsForChange!(
+        new Set(["packages/memory/test/commit-telemetry.test.ts"]),
+      ),
+    ).toEqual(["memory"]);
+    // A module other packages import reaches their groups too, and no
+    // group it imports from.
+    const shared = typecheck.unitsForChange!(
+      new Set(["packages/runner/src/cell.ts"]),
+    );
+    expect(shared).toContain("runner");
+    expect(shared).toContain("shell");
+    expect(shared).not.toContain("utils");
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);

@@ -11,7 +11,6 @@ describe("the binary build suites", () => {
   it("makes one unit of each shipped binary", () => {
     expect(byId("binaries").units).toEqual([
       "toolshed",
-      "bg-piece-service",
       "cf",
     ]);
   });

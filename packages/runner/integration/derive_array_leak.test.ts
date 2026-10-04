@@ -10,12 +10,12 @@
  * Actual behavior: Memory grows by gigabytes (1GB+ per 100 increments)
  */
 
-import { Identity, Session } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import {
   experimentalOptionsFromEnv,
   withServerExecutionDefault,
 } from "@commonfabric/runner";
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
 
 import { compileAndSavePattern, Runtime } from "../src/index.ts";
@@ -24,7 +24,6 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 (Error as any).stackTraceLimit = 100;
 
 const { API_URL } = env;
-const SPACE_NAME_PREFIX = "runner_integration";
 
 // Test parameters
 const INCREMENTS_PER_CLICK = 50; // How many times each click increments (must match .tsx file)
@@ -86,20 +85,9 @@ async function getServerMemoryMB(): Promise<number> {
 
 // Main test function
 async function runTest() {
-  // The space-name derivation, which supports the legacy space names used
-  // during development and nothing else. It is removed once those
-  // development-only spaces have been migrated
-  // (docs/plans/random-space-identities.md).
-  const account = await Identity.fromPassphrase("common user");
-  const spaceName = `${SPACE_NAME_PREFIX}-${crypto.randomUUID()}`;
-  const space_thingy = await account.derive(spaceName);
-  const space_thingy_space = space_thingy.did();
-  const session = {
-    isPrivate: false,
-    spaceName,
-    space: space_thingy_space,
-    as: space_thingy,
-  } as Session;
+  const account = await Identity.generate();
+  const space = await createTestSpace(account);
+  const session = createSession({ identity: account, spaceDid: space });
 
   // Create storage manager
   const storageManager = StorageManager.open({
@@ -136,7 +124,7 @@ async function runTest() {
   const pattern = await compileAndSavePattern(
     runtime,
     patternContent,
-    { space: space_thingy_space },
+    { space },
   );
   console.log("Pattern compiled successfully");
 

@@ -373,9 +373,9 @@ describe("prompt-loop cross-agent address handles", () => {
         storageManager,
         cfcReadMaxConfidentiality: policy.ceiling,
       });
-      const session = await createSession({
+      const session = createSession({
         identity: signer,
-        spaceName: runId,
+        spaceDid: (await Identity.generate()).did(),
       });
       const pieces = new PiecesController(session, bounded);
       await pieces.synced();
@@ -1738,9 +1738,9 @@ describe("prompt-loop cross-agent address handles", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `subagent-run-pattern-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -1855,9 +1855,9 @@ describe("prompt-loop cross-agent address handles", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `pattern-author-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );

@@ -21,6 +21,7 @@ import {
 } from "../src/cfc/label-introspection.ts";
 import {
   deriveLabelMetadataTemplateEntries,
+  isLabelMetadataTemplateEntry,
   resolveLabelMetadataTemplateConfidentiality,
 } from "../src/cfc/label-metadata-population.ts";
 import { containsCfcFieldCommitment } from "../src/cfc/label-representation.ts";
@@ -71,12 +72,17 @@ const residentClause = (
   ...alternatives: readonly CfcConfClause[]
 ): CfcConfClause => ({ anyOf: [cfcAtom.space(space), ...alternatives] });
 
+/** Metadata decoded from `entries`, as a reader decodes a stored map. */
 const metadataWith = (
   entries: CfcMetadata["labelMap"]["entries"],
 ): CfcMetadata => ({
   version: 1,
   schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-  labelMap: { version: 1, entries },
+  labelMap: {
+    version: 1,
+    entries: entries.filter((entry) => !isLabelMetadataTemplateEntry(entry)),
+    documentEntries: entries.filter(isLabelMetadataTemplateEntry),
+  },
 });
 
 /** A persisted label-metadata population template, as the mint produces it. */
@@ -179,7 +185,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         space,
         scope: "space",
         id: id as `${string}:${string}`,
-        path: ["value"],
+        path: [],
       },
       schema: { type: "object" },
     });
@@ -652,8 +658,8 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       derivedConfidentiality(outShape.getAsNormalizedFullLink().id),
     ).not.toContainEqual("tmpl-only-atom");
 
-    // Raw ["cfc"] envelope read: flow-excluded (flowReadExcluded), so not
-    // even the payload label taints through it.
+    // Raw ["cfc"] envelope read: a member of the document, not payload, so
+    // not even the payload label taints through it.
     const txRaw = rt.edit();
     txRaw.readOrThrow({
       space,

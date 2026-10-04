@@ -12,8 +12,9 @@ import { join, resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { toCompactDebugString } from "@commonfabric/data-model";
-import type { Identity } from "@commonfabric/identity";
+import type { DID, Identity } from "@commonfabric/identity";
 import {
+  createTestSpace,
   env,
   type ProbeApi,
   waitForCondition,
@@ -26,7 +27,7 @@ import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isol
 
 import "../src/globals.ts";
 
-const { API_URL, SPACE_NAME, FRONTEND_URL } = env;
+const { API_URL, FRONTEND_URL } = env;
 const REPO_ROOT = resolve(import.meta.dirname!, "../../..");
 const BOARD_SOURCE = join(
   REPO_ROOT,
@@ -38,13 +39,14 @@ const BOARD_SOURCE = join(
 const decoder = new TextDecoder();
 
 /**
- * Run one `cf` command against the space these tests share. The identity and
- * server flags land between `args` and `tail`, because a callable name opens
- * the section its own arguments sit in: `cf piece call` reads everything past
- * the name as the handler's input.
+ * Run one `cf` command against the space `space`. The identity and server
+ * flags land between `args` and `tail`, because a callable name opens the
+ * section its own arguments sit in: `cf piece call` reads everything past the
+ * name as the handler's input.
  */
 async function cf(
   identityPath: string,
+  space: DID,
   args: string[],
   tail: string[] = [],
 ): Promise<string> {
@@ -65,7 +67,7 @@ async function cf(
       "--api-url",
       API_URL,
       "--space",
-      SPACE_NAME,
+      space,
       ...tail,
     ],
     env: { CF_LOG_LEVEL: "error" },
@@ -84,9 +86,10 @@ async function cf(
 /** File an exemplar pattern, and return its piece id. */
 async function filePiece(
   identityPath: string,
+  space: DID,
   source: string,
 ): Promise<string> {
-  const created = await cf(identityPath, ["piece", "new", source]);
+  const created = await cf(identityPath, space, ["piece", "new", source]);
   const pieceId = created.match(/fid1:[^\s]+/)?.[0];
   if (!pieceId) {
     throw new Error(`cf piece new did not print a fid1 id:\n${created}`);
@@ -103,13 +106,14 @@ async function filePiece(
 async function fileBoardWithMembers(
   identity: Identity,
   identityPath: string,
+  space: DID,
   slug: string,
   titles: readonly string[],
 ): Promise<string> {
   if (titles.length === 0) {
     throw new Error("A collection fixture needs at least one member.");
   }
-  const boardId = await filePiece(identityPath, BOARD_SOURCE);
+  const boardId = await filePiece(identityPath, space, BOARD_SOURCE);
   // Through the board's own verb, which is the only way a client files a
   // member: `addItem` allocates the next name, creates the member holding
   // it, and appends the member, all in the write its own run mints. Seeding
@@ -122,6 +126,7 @@ async function fileBoardWithMembers(
     // call that allocated it and says what it allocated.
     const called = await cf(
       identityPath,
+      space,
       ["piece", "call", "--cell", `/of:${boardId}`, "--quiet"],
       [
         "addItem",
@@ -141,7 +146,7 @@ async function fileBoardWithMembers(
     const pieces = await PiecesController.initialize({
       apiUrl: new URL(API_URL),
       identity,
-      space: SPACE_NAME,
+      space,
     });
     try {
       const board = await pieces.get(boardId, true);
@@ -199,7 +204,7 @@ async function fileBoardWithMembers(
     }
   }
 
-  await cf(identityPath, [
+  await cf(identityPath, space, [
     "piece",
     "set-slug",
     slug,
@@ -232,15 +237,16 @@ describe("shell collection members", () => {
         implementation: "noble",
       });
       const { identity, path: identityPath } = tempIdentity;
+      const spaceDid = await createTestSpace(identity);
       const slug = `members-${crypto.randomUUID()}`;
-      await fileBoardWithMembers(identity, identityPath, slug, [
+      await fileBoardWithMembers(identity, identityPath, spaceDid, slug, [
         "Glaze recipes",
         "Oven schedule",
       ]);
 
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceName: SPACE_NAME, pieceSlug: slug, pieceMember: "2" },
+        view: { spaceDid, pieceSlug: slug, pieceMember: "2" },
         identity,
       });
 
@@ -252,7 +258,7 @@ describe("shell collection members", () => {
       const pathname = await shell.page().evaluate(() =>
         globalThis.location.pathname
       );
-      expect(pathname).toBe(`/${SPACE_NAME}/${slug}/2`);
+      expect(pathname).toBe(`/${spaceDid}/${slug}/2`);
       // The tab names the piece the shell opened. Member 2 is the second item
       // filed, and the board would name itself for its item count instead.
       await waitForCondition(
@@ -266,8 +272,9 @@ describe("shell collection members", () => {
         implementation: "noble",
       });
       const { identity, path: identityPath } = tempIdentity;
+      const spaceDid = await createTestSpace(identity);
       const slug = `portable-${crypto.randomUUID()}`;
-      await fileBoardWithMembers(identity, identityPath, slug, [
+      await fileBoardWithMembers(identity, identityPath, spaceDid, slug, [
         "Glaze recipes",
         "Oven schedule",
       ]);
@@ -276,7 +283,7 @@ describe("shell collection members", () => {
       // the one it holds on the member's page is what "Copy reference" copies.
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceName: SPACE_NAME, pieceSlug: slug, pieceMember: "2" },
+        view: { spaceDid, pieceSlug: slug, pieceMember: "2" },
         identity,
       });
       const reference = await waitForCondition(shell.page(), (probe) => {
@@ -286,10 +293,10 @@ describe("shell collection members", () => {
           : undefined;
         return typeof held === "string" && held !== "" ? held : false;
       });
-      expect(reference).toBe(`//${SPACE_NAME}/${slug}/2`);
+      expect(reference).toBe(`//${spaceDid}/${slug}/2`);
 
       // `cf` reads it and reaches the same member: the second one filed.
-      const title = await cf(identityPath, [
+      const title = await cf(identityPath, spaceDid, [
         "cell",
         "get",
         String(reference),
@@ -302,7 +309,7 @@ describe("shell collection members", () => {
       // it, and the shell that reads it back.
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceName: SPACE_NAME, pieceSlug: slug, pieceMember: "2" },
+        view: { spaceDid, pieceSlug: slug, pieceMember: "2" },
         urlPath: reference as `/${string}`,
         identity,
       });
@@ -315,7 +322,7 @@ describe("shell collection members", () => {
       const pathname = await shell.page().evaluate(() =>
         globalThis.location.pathname
       );
-      expect(pathname).toBe(`/${SPACE_NAME}/${slug}/2`);
+      expect(pathname).toBe(`/${spaceDid}/${slug}/2`);
     });
 
     it("opens an address that marks its space with a leading `@`", async () => {
@@ -323,8 +330,9 @@ describe("shell collection members", () => {
         implementation: "noble",
       });
       const { identity, path: identityPath } = tempIdentity;
+      const spaceDid = await createTestSpace(identity);
       const slug = `marked-${crypto.randomUUID()}`;
-      await fileBoardWithMembers(identity, identityPath, slug, [
+      await fileBoardWithMembers(identity, identityPath, spaceDid, slug, [
         "Glaze recipes",
       ]);
 
@@ -332,8 +340,8 @@ describe("shell collection members", () => {
       // page served at one opens the member it names.
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceName: SPACE_NAME, pieceSlug: slug, pieceMember: "1" },
-        urlPath: `/@${SPACE_NAME}/${slug}/1`,
+        view: { spaceDid, pieceSlug: slug, pieceMember: "1" },
+        urlPath: `/@${spaceDid}/${slug}/1`,
         identity,
       });
 
@@ -345,7 +353,7 @@ describe("shell collection members", () => {
       const pathname = await shell.page().evaluate(() =>
         globalThis.location.pathname
       );
-      expect(pathname).toBe(`/${SPACE_NAME}/${slug}/1`);
+      expect(pathname).toBe(`/${spaceDid}/${slug}/1`);
     });
   });
 
@@ -360,14 +368,15 @@ describe("shell collection members", () => {
         implementation: "noble",
       });
       const { identity, path: identityPath } = tempIdentity;
+      const spaceDid = await createTestSpace(identity);
       const slug = `missing-${crypto.randomUUID()}`;
-      await fileBoardWithMembers(identity, identityPath, slug, [
+      await fileBoardWithMembers(identity, identityPath, spaceDid, slug, [
         "Glaze recipes",
       ]);
 
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceName: SPACE_NAME, pieceSlug: slug, pieceMember: "999" },
+        view: { spaceDid, pieceSlug: slug, pieceMember: "999" },
         identity,
       });
 
@@ -388,8 +397,9 @@ describe("shell collection members", () => {
         implementation: "noble",
       });
       const { identity, path: identityPath } = tempIdentity;
+      const spaceDid = await createTestSpace(identity);
       const slug = `nested-${crypto.randomUUID()}`;
-      await fileBoardWithMembers(identity, identityPath, slug, [
+      await fileBoardWithMembers(identity, identityPath, spaceDid, slug, [
         "Glaze recipes",
       ]);
 
@@ -399,7 +409,7 @@ describe("shell collection members", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceSlug: slug,
           pieceMember: "1",
           pieceExtraPath: "comments/7",
@@ -424,16 +434,22 @@ describe("shell collection members", () => {
         implementation: "noble",
       });
       const { identity, path: identityPath } = tempIdentity;
+      const spaceDid = await createTestSpace(identity);
       const slug = `root-${crypto.randomUUID()}`;
       // Bound to the board's root rather than to the map inside it, the slug
       // names a piece, and a segment after it has no collection to select
       // from. Only the real resolver says so.
-      const boardId = await filePiece(identityPath, BOARD_SOURCE);
-      await cf(identityPath, ["piece", "set-slug", slug, `/of:${boardId}`]);
+      const boardId = await filePiece(identityPath, spaceDid, BOARD_SOURCE);
+      await cf(identityPath, spaceDid, [
+        "piece",
+        "set-slug",
+        slug,
+        `/of:${boardId}`,
+      ]);
 
       await shell.goto({
         frontendUrl: FRONTEND_URL,
-        view: { spaceName: SPACE_NAME, pieceSlug: slug, pieceMember: "1" },
+        view: { spaceDid, pieceSlug: slug, pieceMember: "1" },
         identity,
       });
 

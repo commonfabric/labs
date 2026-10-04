@@ -2,8 +2,8 @@
  * The prepared digest binds the SET of dereferences a transaction performed,
  * never the number of times it read each link. Both halves of that rule are
  * pinned here: a repeat collapses, and dereferences differing in any field
- * stay apart — including the pair that a payload field named `value` produces,
- * whose canonical path still opens with the element canonicalization strips.
+ * stay apart — including a pair whose paths differ only by a leading `value`,
+ * which names a payload field of that name.
  *
  * Policy inputs retain their structural hash tiebreak order and bind mutable
  * values independently on each call. Other digest fields are covered beside
@@ -150,31 +150,13 @@ describe("canonical", () => {
       expect(digestOf([hop, equal])).toBe(digestOf([hop]));
     });
 
-    it("collapses a repeat that differs only by a leading `value` element", () => {
-      // Dedupe runs after canonicalization, which strips the leading `value`
-      // element. Before it, these two are unequal records.
-      const raw = trace(
-        address("board", "value", "items"),
-        address("row", "value", "cells"),
-      );
-      const canonical = trace(
-        address("board", "items"),
-        address("row", "cells"),
-      );
-      expect(digestOf([raw, canonical])).toBe(digestOf([canonical]));
-    });
-
     it("distinguishes a payload field named `value` from the field it sits over", () => {
-      // Envelope `["value","value","x"]` is the payload path `value.x`; a
-      // payload field may legitimately be named `value`. It canonicalizes to
-      // `["value","x"]`, which a comparator that strips again would flatten
-      // onto payload `x` — two distinct dereferences merging into one, and
-      // the digest binding only the survivor.
-      const overValue = trace(
-        address("board", "value", "value", "x"),
-        address("row"),
-      );
-      const overRoot = trace(address("board", "value", "x"), address("row"));
+      // A trace names its paths logically, so `["value","x"]` is the payload
+      // path `value.x`; a payload field may legitimately be named `value`.
+      // Reading it as `x` would merge two distinct dereferences into one, and
+      // the digest would bind only the survivor.
+      const overValue = trace(address("board", "value", "x"), address("row"));
+      const overRoot = trace(address("board", "x"), address("row"));
       expect(digestOf([overValue, overRoot])).not.toBe(digestOf([overRoot]));
       expect(
         canonicalizePreparedDigestInput(
@@ -184,11 +166,8 @@ describe("canonical", () => {
     });
 
     it("distinguishes a payload field named `value` on the target side", () => {
-      const overValue = trace(
-        address("board"),
-        address("row", "value", "value", "x"),
-      );
-      const overRoot = trace(address("board"), address("row", "value", "x"));
+      const overValue = trace(address("board"), address("row", "value", "x"));
+      const overRoot = trace(address("board"), address("row", "x"));
       // Asserted on the canonical length, not on the digest: a merge leaves
       // whichever trace sorted first, whose content differs from `overRoot`
       // anyway, so comparing digests would pass without the two surviving.
@@ -202,10 +181,7 @@ describe("canonical", () => {
     it("collapses a repeat under a payload field named `value`", () => {
       // The other side of the same distinction: re-reading `value.x` is one
       // dereference, exactly as re-reading any other path is.
-      const overValue = trace(
-        address("board", "value", "value", "x"),
-        address("row"),
-      );
+      const overValue = trace(address("board", "value", "x"), address("row"));
       expect(digestOf([overValue, overValue])).toBe(digestOf([overValue]));
     });
 

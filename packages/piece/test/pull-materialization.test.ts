@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   entityRefToString,
+  linkRefFrom,
   linkRefPayload,
 } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -35,6 +36,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   assertSuppliedLinkSchemasCompatible,
   assertWritablePiecePath,
@@ -459,7 +461,7 @@ async function withInputRootPullSpy<T>(
   piece: Cell<unknown>,
   action: (rootPulls: () => number) => Promise<T>,
 ): Promise<T> {
-  const inputRoot = pieces.getArgument(piece);
+  const inputRoot = patchableCell(pieces.getArgument(piece));
   const originalGetArgument = pieces.getArgument.bind(pieces);
   const originalPull = inputRoot.pull.bind(inputRoot);
   let pullCount = 0;
@@ -926,9 +928,9 @@ describe("piece pull materialization", () => {
       storageManager,
     });
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "pull-materialization-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -1777,11 +1779,13 @@ describe("piece pull materialization", () => {
       compiledMultiplierProgram("bounded-pattern-load", 2),
       { space: pieces.getSpace() },
     );
-    const piece = await pieces.runPersistent(
-      pattern,
-      { input: 5 },
-      undefined,
-      { start: false },
+    const piece = patchableCell(
+      await pieces.runPersistent(
+        pattern,
+        { input: 5 },
+        undefined,
+        { start: false },
+      ),
     );
     const schemas: unknown[] = [];
     const originalAsSchema = piece.asSchema.bind(piece);
@@ -4928,14 +4932,14 @@ describe("piece pull materialization", () => {
     );
     const scalarController = new PieceController(pieces, scalarTarget);
     const scalarInput = await scalarController.input.getCell();
-    const forged = sourcePiece.key("value").getAsLink({
+    const genuine = sourcePiece.key("value").getAsLink({
       base: scalarInput.key("slot"),
       includeSchema: true,
     });
-    (linkRefPayload(forged) as { schema?: JSONSchema }).schema = {
-      type: "number",
-      asCell: ["cell"],
-    };
+    const forged = linkRefFrom({
+      ...linkRefPayload(genuine),
+      schema: { type: "number", asCell: ["cell"] } as JSONSchema,
+    });
     await expect(
       scalarController.input.set(forged, ["slot"]),
     ).rejects.toThrow(/link carries a non-durable Cell wrapper/);
@@ -6066,9 +6070,9 @@ describe("piece pull materialization", () => {
       output: 50,
     });
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: pieces.getSpaceName()!,
+      spaceDid: pieces.getSpace(),
     });
     const freshRuntime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),
@@ -7488,9 +7492,9 @@ describe("piece pull materialization", () => {
       { start: false },
     );
     const id = entityRefToString(piece.entityId);
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: pieces.getSpaceName()!,
+      spaceDid: pieces.getSpace(),
     });
     const remoteRuntime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),
@@ -7688,8 +7692,6 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
   let writerStorage: EmulatedStorageManager;
   let writerRuntime: Runtime;
   let writerPieces: PiecesController;
-  let spaceName: string;
-
   beforeEach(async () => {
     server = newSharedServer();
     writerStorage = EmulatedStorageManager.connectTo(server, {
@@ -7699,8 +7701,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: writerStorage,
     });
-    spaceName = "cold-slot-" + crypto.randomUUID();
-    const session = await createSession({ identity: signer, spaceName });
+    const session = createSession({
+      identity: signer,
+      spaceDid: await writerRuntime.createSpace(),
+    });
     writerPieces = new PiecesController(session, writerRuntime);
     await writerPieces.synced();
   });
@@ -7742,7 +7746,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();
@@ -7802,7 +7809,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();
@@ -7889,7 +7899,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();
@@ -8028,7 +8041,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();

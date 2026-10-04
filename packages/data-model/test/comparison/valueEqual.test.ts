@@ -26,6 +26,8 @@ import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricRegExp,
   FabricUnavailable,
@@ -175,6 +177,10 @@ describe("valueEqual()", () => {
         new FabricRegExp(/a/i),
         new FabricEpochDay(1n),
         new FabricEpochDay(2n),
+        new FabricDurationNsec(1n),
+        new FabricDurationNsec(2n),
+        new FabricDurationDay(1n),
+        new FabricDurationDay(2n),
         new FabricUnavailable("pending"),
         new FabricUnavailable("syncing"),
         new FabricUnavailable("error", "general", "boom"),
@@ -409,6 +415,26 @@ describe("valueEqual()", () => {
       expect(valueEqual(a, b)).toBe(false);
       expect(valueEqual(a, new FabricBytes(new Uint8Array([1, 2, 3, 4]))))
         .toBe(true);
+    });
+
+    it("distinguishes `FabricDurationNsec` by content, and from `FabricEpochDay`", () => {
+      expect(valueEqual(new FabricDurationNsec(1n), new FabricDurationNsec(2n)))
+        .toBe(false);
+      expect(valueEqual(new FabricDurationNsec(7n), new FabricDurationNsec(7n)))
+        .toBe(true);
+      expect(valueEqual(new FabricDurationNsec(7n), new FabricEpochDay(7n)))
+        .toBe(false);
+    });
+
+    it("distinguishes `FabricDurationDay` by content, and from `FabricEpochDay` and `FabricDurationNsec`", () => {
+      expect(valueEqual(new FabricDurationDay(1n), new FabricDurationDay(2n)))
+        .toBe(false);
+      expect(valueEqual(new FabricDurationDay(7n), new FabricDurationDay(7n)))
+        .toBe(true);
+      expect(valueEqual(new FabricDurationDay(7n), new FabricEpochDay(7n)))
+        .toBe(false);
+      expect(valueEqual(new FabricDurationDay(7n), new FabricDurationNsec(7n)))
+        .toBe(false);
     });
 
     it("distinguishes FabricRegExp and FabricEpochDay by content", () => {

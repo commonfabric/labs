@@ -76,6 +76,8 @@
 import { dirname, fromFileUrl } from "@std/path";
 import { parseCellReference } from "@commonfabric/runner/shared";
 
+import { repositoryFiles } from "./repository-files.ts";
+
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** One string a named file writes on purpose, and why it is written. */
@@ -458,20 +460,6 @@ export function collectFindings(
   return findings;
 }
 
-/** Runs `git ls-files` with `args` under `root` and splits its output. */
-async function gitLsFiles(root: string, args: string[]): Promise<string[]> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args: ["-C", root, "ls-files", "-z", ...args],
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    const message = new TextDecoder().decode(stderr).trim();
-    throw new Error(`git ls-files failed in ${root}: ${message}`);
-  }
-  return new TextDecoder().decode(stdout).split("\0").filter((p) => p !== "");
-}
-
 /**
  * Every governed file under `root`, with its text.
  *
@@ -481,14 +469,8 @@ async function gitLsFiles(root: string, args: string[]): Promise<string[]> {
  * working tree has lost is dropped rather than failing the read.
  */
 export async function readDocuments(root: string): Promise<Document[]> {
-  const [present, deleted] = await Promise.all([
-    gitLsFiles(root, ["--cached", "--others", "--exclude-standard"]),
-    gitLsFiles(root, ["--deleted"]),
-  ]);
-  const gone = new Set(deleted);
   const documents: Document[] = [];
-  await Promise.all(present.map(async (path) => {
-    if (gone.has(path)) return;
+  await Promise.all((await repositoryFiles(root)).map(async (path) => {
     const kind = governedKind(path);
     if (kind === null) return;
     documents.push({

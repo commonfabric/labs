@@ -61,14 +61,9 @@ interface Runner {
  */
 const RUNNERS: readonly Runner[] = [
   {
-    command: "run-sharded-test-files.ts",
+    command: "run-test-batches.ts",
     kind: "forwards",
-    implementation: "tasks/run-sharded-test-files.ts",
-  },
-  {
-    command: "test/runner.ts",
-    kind: "shuffles",
-    implementation: "packages/dashboard/test/runner.ts",
+    implementation: "tasks/run-test-batches.ts",
   },
   {
     command: "deno-web-test/cli.ts",
@@ -361,7 +356,9 @@ function taskCommands(
   const follow = (command: string) => {
     const named = /^deno task (?:-q |--quiet )?([\w:.-]+)/.exec(command);
     if (named !== null && named[1]! in tasks) {
-      commands.push(...taskCommands(tasks, named[1]!, seen));
+      for (const found of taskCommands(tasks, named[1]!, seen)) {
+        commands.push(found);
+      }
       return;
     }
     // A member's `test` task hands its task names to the script that runs
@@ -371,7 +368,10 @@ function taskCommands(
     if (script !== -1) {
       const { tasks: names } = readInvocation(words.slice(script + 1));
       for (const next of names) {
-        if (next in tasks) commands.push(...taskCommands(tasks, next, seen));
+        if (!(next in tasks)) continue;
+        for (const found of taskCommands(tasks, next, seen)) {
+          commands.push(found);
+        }
       }
       return;
     }
@@ -382,7 +382,9 @@ function taskCommands(
   } else if (task !== null && typeof task === "object") {
     const shape = task as { command?: string; dependencies?: string[] };
     for (const dependency of shape.dependencies ?? []) {
-      commands.push(...taskCommands(tasks, dependency, seen));
+      for (const command of taskCommands(tasks, dependency, seen)) {
+        commands.push(command);
+      }
     }
     if (typeof shape.command === "string") {
       for (const command of commandsOf(shape.command)) follow(command);
@@ -401,34 +403,31 @@ function announcesNoTests(command: string): boolean {
   return /^echo (['"])No tests defined\.\1$/.test(command);
 }
 
-/** Runs the check over `root`, reporting what it found. */
-export async function scan(root: string): Promise<Violation[]> {
-  const violations: Violation[] = [];
+/**
+ * Every command written in a manifest's tasks, in a workflow, or in a shell
+ * script under `root`, with where it was written.
+ */
+export async function commandsWrittenIn(
+  root: string,
+): Promise<{ where: string; command: string }[]> {
+  const found: { where: string; command: string }[] = [];
   const files = await trackedFiles(root);
-  const manifests = files.filter(isManifest);
-  const scripts = files.filter(isScript);
 
   // A manifest's commands are read from its tasks rather than from its
   // lines: a task is a JSON string, so the command inside it starts
   // after a quote and a line scan would take the quote for part of the
   // first word.
-  for (const file of manifests) {
+  for (const file of files.filter(isManifest)) {
     const tasks = await manifestTasks(join(root, file));
     if (tasks === undefined) continue;
     for (const name of Object.keys(tasks)) {
       for (const command of ownCommands(tasks, name)) {
-        const problem = problemWith(command);
-        if (problem === undefined) continue;
-        violations.push({
-          where: `${file} (task \`${name}\`)`,
-          command: command.trim(),
-          problem,
-        });
+        found.push({ where: `${file} (task \`${name}\`)`, command });
       }
     }
   }
 
-  for (const file of scripts) {
+  for (const file of files.filter(isScript)) {
     let contents: string;
     try {
       contents = await Deno.readTextFile(join(root, file));
@@ -437,14 +436,19 @@ export async function scan(root: string): Promise<Violation[]> {
       throw error;
     }
     for (const { line, command } of writtenCommands(contents)) {
-      const problem = problemWith(command);
-      if (problem === undefined) continue;
-      violations.push({
-        where: `${file}:${line}`,
-        command: command.trim(),
-        problem,
-      });
+      found.push({ where: `${file}:${line}`, command });
     }
+  }
+  return found;
+}
+
+/** Runs the check over `root`, reporting what it found. */
+export async function scan(root: string): Promise<Violation[]> {
+  const violations: Violation[] = [];
+  for (const { where, command } of await commandsWrittenIn(root)) {
+    const problem = problemWith(command);
+    if (problem === undefined) continue;
+    violations.push({ where, command: command.trim(), problem });
   }
 
   // Every member is held to reaching a runner this knows shuffles, which
