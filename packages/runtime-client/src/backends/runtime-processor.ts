@@ -81,7 +81,6 @@ import {
   parseLink,
   PatternCoverageCollector,
   popFrame,
-  pullForInitialization,
   pushFrame,
   resolveExternalRootRefForStructure,
   resolveSlugReference,
@@ -1548,9 +1547,8 @@ export class RuntimeProcessor {
     }
     const initial = mapCellRefsToSigilLinks(request.value);
     // A pending commit can install the producer of an apparently absent
-    // value. Retain demand through relevant writes and producer lifecycle work
-    // before choosing a default; disjoint ordinary commits can stay pending.
-    await pullForInitialization(getCell(this.#runtime, request.cell));
+    // value. Keep it demanded through settlement before choosing a default.
+    await getCell(this.#runtime, request.cell).pull({ awaitDurability: true });
     let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);

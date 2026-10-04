@@ -147,8 +147,6 @@ import {
   IStorageTransaction,
   IStorageTransactionInconsistent,
   NativeStorageCommit,
-  PendingCommitDocument,
-  PendingCommitImpact,
   PullError,
   PushError,
   ReplicaLoadFailureError,
@@ -1223,7 +1221,6 @@ export class StorageManager implements IStorageManager {
     id: number;
     startedAt: number;
     context?: () => PendingCommitContext;
-    impact?: () => PendingCommitImpact;
   }>();
 
   #nextPendingCommitId = 1;
@@ -2153,7 +2150,6 @@ export class StorageManager implements IStorageManager {
   trackPendingCommit(
     promise: Promise<unknown>,
     context?: () => PendingCommitContext,
-    impact?: () => PendingCommitImpact,
   ): void {
     // Normalize so a rejected commit settles the barrier instead of leaking an
     // unhandled rejection; the caller keeps the original promise for results.
@@ -2162,7 +2158,6 @@ export class StorageManager implements IStorageManager {
       id: this.#nextPendingCommitId++,
       startedAt: performance.now(),
       context,
-      impact,
     });
     if (this.#pendingCommits.size === 1) {
       this.#notifyPendingCommits(true);
@@ -2198,33 +2193,12 @@ export class StorageManager implements IStorageManager {
     };
   }
 
-  hasPendingCommits(documents?: readonly PendingCommitDocument[]): boolean {
-    return documents === undefined
-      ? this.#pendingCommits.size > 0
-      : this.#pendingCommitsFor(documents).length > 0;
+  hasPendingCommits(): boolean {
+    return this.#pendingCommits.size > 0;
   }
 
-  async pendingCommitsSettled(
-    documents?: readonly PendingCommitDocument[],
-  ): Promise<void> {
-    await Promise.allSettled(this.#pendingCommitsFor(documents));
-  }
-
-  #pendingCommitsFor(
-    documents?: readonly PendingCommitDocument[],
-  ): Promise<unknown>[] {
-    if (documents === undefined) return [...this.#pendingCommits.keys()];
-    return [...this.#pendingCommits].filter(([, entry]) => {
-      const impact = entry.impact?.();
-      return impact === undefined || impact.kind === "global" ||
-        impact.documents.some((affected) =>
-          documents.some((target) =>
-            affected.space === target.space && affected.id === target.id &&
-            (affected.scope === undefined || target.scope === undefined ||
-              affected.scope === target.scope)
-          )
-        );
-    }).map(([promise]) => promise);
+  async pendingCommitsSettled(): Promise<void> {
+    await Promise.allSettled(this.#pendingCommits.keys());
   }
 
   /**

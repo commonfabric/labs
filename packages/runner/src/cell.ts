@@ -188,7 +188,6 @@ import type {
   IMemorySpaceAddress,
   IReadOptions,
   Metadata,
-  PendingCommitDocument,
 } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
@@ -1788,43 +1787,6 @@ export class CellImpl<T extends FabricValue>
    * @returns The cell's reactive value after the selected readiness barrier.
    */
   pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
-    return this.#pullWithBarrier(() =>
-      options.awaitDurability === true
-        ? this.#runtime.scheduler.idleWithPendingCommits()
-        : this.#runtime.scheduler.idle()
-    );
-  }
-
-  /** Demands the value through work that can change its backing-value choice. */
-  pullForInitialization(): Promise<Readonly<T>> {
-    return this.#pullWithBarrier(async () => {
-      await this.#runtime.scheduler.idle();
-      await this.#runtime.scheduler.idleWithPendingCommits(
-        () => this.#initializationDocuments(),
-      );
-    });
-  }
-
-  #initializationDocuments(): readonly PendingCommitDocument[] | undefined {
-    const tx = this.#runtime.edit();
-    try {
-      this.withTx(tx).getRaw({ lastNode: "writeRedirect" });
-      const log = tx.getReactivityLog?.();
-      if (log === undefined) return undefined;
-      const documents = [
-        this.getAsNormalizedFullLink(),
-        ...log.reads,
-        ...log.shallowReads,
-      ];
-      return this.#runtime.scheduler.getPendingCommitReadinessDocuments(
-        documents,
-      );
-    } finally {
-      tx.abort("Initialization readiness probe complete");
-    }
-  }
-
-  #pullWithBarrier(idle: () => Promise<void>): Promise<Readonly<T>> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -1850,6 +1812,11 @@ export class CellImpl<T extends FabricValue>
     const schema = this.#_link.schema;
     const needsTraversal = schema === undefined ||
       ContextualFlowControl.isTrueSchema(schema);
+
+    const idle = () =>
+      options.awaitDurability === true
+        ? this.#runtime.scheduler.idleWithPendingCommits()
+        : this.#runtime.scheduler.idle();
 
     return new Promise((resolve, reject) => {
       const action: Action = (tx) => {
@@ -4658,11 +4625,6 @@ function frozenLink(link: NormalizedLink): NormalizedLink {
       ? link
       : { ...link, path: Object.freeze([...link.path]) },
   );
-}
-
-/** Pulls a cell through pending work that can affect an initialization decision. */
-export function pullForInitialization(cell: Cell<unknown>): Promise<unknown> {
-  return requireCellImpl(cell).pullForInitialization();
 }
 
 /** Returns what `cellImplOf()` does, and throws for anything but a cell. */
