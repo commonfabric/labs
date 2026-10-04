@@ -8,6 +8,7 @@ import type { NormalizedFullLink } from "../link-types.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
 import { scopeRank } from "../scope.ts";
+import { isSpaceRefused } from "../space-access-watch.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
 
@@ -163,18 +164,10 @@ function accessLevel(
     tx,
   ).get();
 
-  if (sessionIsPrincipal && isRefused(runtime, space)) return "none";
+  if (sessionIsPrincipal && isSpaceRefused(runtime.storageManager, space)) {
+    return "none";
+  }
   if (acl === undefined) return undefined;
   const role = spaceReaderRole(acl as ACL, principal);
   return role === null ? "none" : LEVEL_OF_ROLE[role];
-}
-
-/**
- * Helper for {@link accessLevel}, which returns whether the memory server has
- * refused this runtime's session `space` for good.
- */
-function isRefused(runtime: Runtime, space: MemorySpace): boolean {
-  const storage = runtime.storageManager;
-  return (storage.spaceAccessError?.(space) ??
-    storage.authorizationError?.(space)) !== undefined;
 }

@@ -5,6 +5,85 @@ import type { Action, Scheduler } from "./scheduler.ts";
 import type { IStorageManager } from "./storage/interface.ts";
 
 /**
+ * Returns whether the memory server has refused `storage`'s session `space`
+ * for good. A space `storage` has not opened, or whose open is still under
+ * way, returns `false`.
+ */
+export function isSpaceRefused(
+  storage: Pick<IStorageManager, "spaceAccessError" | "authorizationError">,
+  space: MemorySpace,
+): boolean {
+  return (storage.spaceAccessError?.(space) ??
+    storage.authorizationError?.(space)) !== undefined;
+}
+
+/**
+ * The reason a reactive computation's transaction is aborted when it read
+ * from a space the memory server refuses its principal. What it read there
+ * is absent for that principal alone, so its writes are a value no principal
+ * with access computes, and none of them is sent.
+ */
+export class RefusedInputSpaceError extends Error {
+  #space: MemorySpace;
+
+  /** Constructs an instance naming the refused `space`. */
+  constructor(space: MemorySpace) {
+    super(`Input space is refused: ${space}`);
+    this.name = "RefusedInputSpaceError";
+    this.#space = space;
+  }
+
+  /** The refused space the computation read from. */
+  get space(): MemorySpace {
+    return this.#space;
+  }
+}
+
+/**
+ * Returns whether `error` is the commit result of a transaction aborted with
+ * a {@link RefusedInputSpaceError}.
+ */
+export function isRefusedInputSpaceAbort(error: unknown): boolean {
+  return (error as { reason?: unknown } | undefined | null)?.reason instanceof
+    RefusedInputSpaceError;
+}
+
+/**
+ * The reason a reactive computation's transaction is aborted when it read a
+ * document as absent, in a space it does not write, whose load is still in
+ * flight. Its writes are held back until the load says what the read was.
+ */
+export class UnsettledInputLoadError extends Error {
+  #settled: Promise<number>;
+
+  /** Constructs an instance whose loads have settled once `settled` has. */
+  constructor(settled: Promise<number>) {
+    super("Input load is in flight");
+    this.name = "UnsettledInputLoadError";
+    this.#settled = settled;
+  }
+
+  /**
+   * Resolves, once every load the computation's reads started has settled,
+   * with how many of the documents it read as absent exist after all.
+   */
+  get settled(): Promise<number> {
+    return this.#settled;
+  }
+}
+
+/**
+ * Returns the {@link UnsettledInputLoadError} `error` is the commit result
+ * of, or `undefined` when its transaction was not aborted with one.
+ */
+export function unsettledInputLoadOf(
+  error: unknown,
+): UnsettledInputLoadError | undefined {
+  const reason = (error as { reason?: unknown } | undefined | null)?.reason;
+  return reason instanceof UnsettledInputLoadError ? reason : undefined;
+}
+
+/**
  * Runs actions again when the memory server starts or stops refusing a
  * runtime a space. Neither change touches a document an action has read, so
  * an action whose value depends on the verdict, as the value of

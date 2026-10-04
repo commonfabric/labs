@@ -75,6 +75,22 @@ export function isTerminalRejection(
 }
 
 /**
+ * Whether `error` refused a derived write for lack of a grant: an
+ * `AuthorizationError` the server did not mark retriable, of a transaction
+ * `source` whose writes are derived from its reads. Running the computation
+ * again reproduces the write and the refusal, so the scheduler neither
+ * retries it nor counts the revert of that write as a change to the
+ * computation's inputs. A handler's refused write returns `false`.
+ */
+export function isRefusedDerivedWrite(
+  error: { name?: string; retriable?: boolean } | undefined | null,
+  source: { derivedWrites?: boolean } | undefined,
+): boolean {
+  return source?.derivedWrites === true &&
+    error?.name === "AuthorizationError" && error.retriable !== true;
+}
+
+/**
  * A conflict rejection is a stale-read / pending-dependency commit failure
  * (normalized to `ConflictError`, see storage/v2.ts): the authoritative version
  * is ahead of this replica. A reactive compute or effect recovers from one by

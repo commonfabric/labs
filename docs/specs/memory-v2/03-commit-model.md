@@ -723,29 +723,26 @@ The client provider fires three notification types:
 A principal may read a space it cannot write, and a reactive computation it
 runs there still writes its outputs. Those writes are derived: running the
 computation again reproduces them. When the server refuses such a commit with
-an `AuthorizationError` it has not marked retriable, the client keeps each
-written document's new value instead of reverting it, as a _local fold_: the
-confirmed value at the same `seq`, with the refused write applied, held by
-that replica alone.
+an `AuthorizationError` it has not marked retriable, the client reverts the
+write as it reverts any rejected commit, so each written document reads as
+the value the server holds.
 
-- A document is folded only where the refused write sits directly on the
-  confirmed version it was made over. Where a newer confirmed version arrived
-  underneath it, or an earlier pending write lies beneath it, the write is
-  reverted as any other rejection's is.
-- A frame at the same `seq` leaves a fold in place, since it carries the value
-  the fold was made over. A frame at a later `seq` replaces it.
-- A later write over a folded document goes to the server as a whole-document
-  `set`, never as a patch, because the server holds a different value than the
-  one the patch was computed against. That matters once the principal is
-  granted WRITE. The commit also reads the whole document at the fold's `seq`,
-  so that a change the server took to any part of it since conflicts, rather
-  than being overwritten by the whole-document `set`.
-- The re-run the scheduler makes after the refusal reads the folded value and
-  so has nothing to write. Its computation settles instead of re-running
-  against the same refusal.
+- The scheduler does not retry the commit. Another attempt issues the same
+  write and takes the same refusal.
+- The `revert` notification does not run the computation that made the write.
+  Its inputs are what they were when it ran, and the document it wrote is back
+  at the value it read. Every other reader of that document runs as it does
+  for any revert.
+- The computation runs again when one of its inputs changes, and that run's
+  write is sent. So a principal that is granted WRITE stores the value at the
+  next input change, and one that is not takes one refusal per input change.
 
-Event handlers are not folded. Their writes are acts rather than derivations,
-and a refusal of one is reverted and reported.
+A value the server never held is never the confirmed value of a document on
+any replica, so a computation that reads the document computes from the value
+every other principal reads.
+
+Event handlers take none of this. Their writes are acts rather than
+derivations, and a refusal of one is reverted and reported.
 
 ## 3.9 Commit Ordering
 

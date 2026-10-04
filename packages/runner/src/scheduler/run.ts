@@ -1,3 +1,4 @@
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
@@ -8,6 +9,13 @@ import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
 import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
+import {
+  isRefusedInputSpaceAbort,
+  isSpaceRefused,
+  RefusedInputSpaceError,
+  UnsettledInputLoadError,
+  unsettledInputLoadOf,
+} from "../space-access-watch.ts";
 import { waveSettlementOf } from "../executor/wave.ts";
 import { createDuplicateWorkTransaction } from "../storage/extended-storage-transaction.ts";
 import type {
@@ -26,9 +34,11 @@ import {
 import {
   isConflictRejection,
   isPermanentRejection,
+  isRefusedDerivedWrite,
   isStorageTransactionInconsistent,
   isTerminalRejection,
 } from "../storage/rejection.ts";
+import { getDirectTransactionReadActivities } from "../storage/transaction-inspection.ts";
 import type {
   ActionReadStats,
   NonIdempotentReport,
@@ -161,6 +171,42 @@ export function invokeReactiveAction(state: {
     state.clearExecutingAction();
     return Promise.resolve({ ok: false as const, error });
   }
+}
+
+/**
+ * Actions whose last run was held for input loads that brought no document,
+ * so that their next run is sent without being held again.
+ */
+const inputHoldSpent = new WeakSet<Action>();
+
+/**
+ * Helper for the reactive commit, which returns whether `runtime` sends a
+ * reactive computation's writes to the store as the acting principal's own.
+ * A serving runtime does not: its session is the space owner's. Nor does a
+ * client under `serverExecution`, whose derivations are sealed into the
+ * speculation overlay and never sent.
+ */
+function sendsDerivedWrites(runtime: Runtime): boolean {
+  return !runtime.servingPosture &&
+    runtime.experimental.serverExecution !== true;
+}
+
+/**
+ * Helper for the reactive commit, which returns a space `tx` read from that
+ * the memory server refuses this runtime's principal, or `undefined` when it
+ * read from none.
+ */
+function refusedInputSpace(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+): MemorySpace | undefined {
+  const seen = new Set<MemorySpace>();
+  for (const { space } of getDirectTransactionReadActivities(tx.tx) ?? []) {
+    if (seen.has(space)) continue;
+    seen.add(space);
+    if (isSpaceRefused(runtime.storageManager, space)) return space;
+  }
+  return undefined;
 }
 
 export function startReactiveActionCommit(state: {
@@ -367,6 +413,42 @@ export function watchReactiveActionCommit(state: {
       });
       state.pending.add(state.action);
       state.queueExecution();
+      return;
+    }
+
+    // A derived write the space refused for lack of a grant is refused again
+    // on every attempt, so it ends the retry sequence. The run's subscription
+    // stays, and a change to an input runs the action again.
+    // A run aborted over an input load still in flight left nothing durable,
+    // and what it read is not yet known. It runs again once the loads have
+    // settled, off the retry budget, as a conflict's catch-up wait does.
+    const unsettledInputLoad = unsettledInputLoadOf(error);
+    if (unsettledInputLoad !== undefined) {
+      state.restoreInvalidCauses();
+      state.resubscribe(state.action, state.log);
+      const arrived = await unsettledInputLoad.settled;
+      if (arrived === 0) inputHoldSpent.add(state.action);
+      if (state.handleUnavailable?.()) return;
+      if (!state.canRetry()) {
+        abandonAction(state, error);
+        return;
+      }
+      state.markInvalid(state.action, { retry: true });
+      state.pending.add(state.action);
+      state.queueExecution();
+      return;
+    }
+
+    // A run that read from a space the principal is refused was aborted
+    // before it reached storage, and takes the same disposition: the space's
+    // access watch runs it again, not a retry.
+    if (
+      isRefusedDerivedWrite(error as { name?: string }, state.tx.tx) ||
+      isRefusedInputSpaceAbort(error)
+    ) {
+      state.retries.delete(state.action);
+      state.offBudgetRetries.delete(state.action);
+      abandonAction(state, error);
       return;
     }
 
@@ -1179,6 +1261,31 @@ function finalizeReactiveActionCommit(
     beforeCommit: () => {
       log = txToReactivityLog(args.tx);
       if (validateLocalReadBasis(args.tx) !== undefined) return;
+      const refused = sendsDerivedWrites(state.runtime)
+        ? refusedInputSpace(state.runtime, args.tx)
+        : undefined;
+      if (refused !== undefined) {
+        // The abort is what `commit()` below returns. The verdict on the
+        // space is not a document the run read, so the watch is what runs
+        // the action again once the principal is admitted.
+        state.runtime.spaceAccessWatch.rerunOnChange(refused, args.action);
+        args.tx.abort(new RefusedInputSpaceError(refused));
+        return;
+      }
+      // A run whose hold brought no document is not held a second time: a
+      // load that fails leaves its document unexamined, and the next read
+      // of it starts another.
+      const unsettled =
+        sendsDerivedWrites(state.runtime) && !inputHoldSpent.delete(args.action)
+          ? state.runtime.unsettledInputLoads(
+            args.tx,
+            new Set(log.writes.map(({ space }) => space)),
+          )
+          : undefined;
+      if (unsettled !== undefined) {
+        args.tx.abort(new UnsettledInputLoadError(unsettled));
+        return;
+      }
       warnOnWriteSurfaceViolations(state, args, log);
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
       if (args.fanOutRun !== undefined) {

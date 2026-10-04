@@ -435,6 +435,14 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   authorizationError?(space: MemorySpace): Error | undefined;
 
+  /**
+   * Whether the memory server has yet to admit or refuse this manager `space`:
+   * the space is open here, its session is not mounted, and no refusal is
+   * recorded. A space this manager has not opened returns `false`. Optional:
+   * a manager with no admission step omits it.
+   */
+  spaceAdmissionPending?(space: MemorySpace): boolean;
+
   /** The latest authoritative access loss for a space, cleared on reopening. */
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
@@ -1230,10 +1238,9 @@ export interface IStorageTransaction {
   /**
    * Whether this transaction's writes are derived from its reads, as a
    * reactive computation's are, so that running it again reproduces them.
-   * When the space refuses such a write for lack of a grant, a replica may
-   * keep it as a local fold rather than revert it: it does so for each
-   * document the write sits directly on the confirmed version it was made
-   * over, and reverts the write to any other.
+   * When the space refuses such a write for lack of a grant, the replica
+   * reverts it as it reverts any refused write, and the scheduler runs the
+   * computation again only once one of its inputs changes.
    */
   derivedWrites?: boolean;
 
