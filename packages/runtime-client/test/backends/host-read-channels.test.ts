@@ -960,10 +960,24 @@ describe("HostReadGate, for what crosses beside a value", () => {
             },
           },
         } as FabricValue);
+        // A piece whose argument is that document, and which stores no label
+        // of its own.
+        const piece = writer.getCell(space, "members-piece", undefined, tx);
+        seedStoredEnvelope(tx, {
+          space,
+          id: piece.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: {},
+          argument: labeled.getAsLink(),
+        } as FabricValue);
         expect((await tx.commit()).ok).toBeDefined();
         await writer.storageManager.synced();
         const cell = reader.getCell(space, "for-members");
         await cell.sync();
+        const pieceCell = reader.getCell(space, "members-piece");
+        await pieceCell.sync();
         // The visitor's worker works in a space of its own, so membership of
         // the owner's space comes from that space's access list alone.
         const processor = buildProcessor({
@@ -975,6 +989,15 @@ describe("HostReadGate, for what crosses beside a value", () => {
           ),
         });
         try {
+          // First, the piece's argument: the access list the linked document
+          // consults is settled, not only the piece's own.
+          expect(
+            await processor.handleRequest({
+              type: RequestType.CellGet,
+              cell: createCellRef(pieceCell),
+              meta: "argument",
+            }),
+          ).toEqual({ value: { note: "for members of the space" } });
           const answer = await processor.handleRequest({
             type: RequestType.CellGet,
             cell: createCellRef(cell),

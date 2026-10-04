@@ -1638,12 +1638,9 @@ export class RuntimeProcessor {
       // admits the read.
       const refusal = gate.metadataRefusal(rootCell);
       if (refusal !== undefined) return refusal;
-      const link = getMetaLink(rootCell, request.meta);
-      if (link === undefined) return gate.nothing();
-      cell = this.#runtime.getCellFromLink({
-        ...link,
-        path: [...link.path, ...request.cell.path],
-      });
+      const linked = this.#metaLinkTarget(rootCell, request);
+      if (linked === undefined) return gate.nothing();
+      cell = linked;
     }
     // The sigil links inside the answer carry each cell's `cfcLabelView` in
     // its display form, the same redaction the top-level `cfcLabel` gets.
@@ -1688,14 +1685,37 @@ export class RuntimeProcessor {
   async #settledGet(request: CellGetRequest): Promise<CellGetResponse> {
     const answer = this.handleCellGet(request);
     if (answer.refused === undefined) return answer;
-    // A metadata field is decided on its document's root.
+    // A metadata field is decided on its document's root, and a metadata
+    // link field on the cell it links to besides.
+    const root = getCell(this.#runtime, { ...request.cell, path: [] });
+    const linked = request.meta === undefined
+      ? undefined
+      : this.#metaLinkTarget(root, request);
     const settled = await this.#hostReadGate.settle(
       getCell(this.#runtime, request.cell),
-      ...(request.meta === undefined
-        ? []
-        : [getCell(this.#runtime, { ...request.cell, path: [] })]),
+      ...(request.meta === undefined ? [] : [root]),
+      ...(linked === undefined ? [] : [linked]),
     );
     return settled ? this.handleCellGet(request) : answer;
+  }
+
+  /**
+   * The cell the metadata link field `request.meta` of `root`'s document
+   * leads to, at `request.cell`'s path, or `undefined` where the field is no
+   * link field or holds no link.
+   */
+  #metaLinkTarget(
+    root: Cell<unknown>,
+    request: CellGetRequest,
+  ): Cell<unknown> | undefined {
+    if (request.meta !== "argument" && request.meta !== "result") {
+      return undefined;
+    }
+    const link = getMetaLink(root, request.meta);
+    return link === undefined ? undefined : this.#runtime.getCellFromLink({
+      ...link,
+      path: [...link.path, ...request.cell.path],
+    });
   }
 
   /** Atomically stores a default only while the target has no backing value. */
