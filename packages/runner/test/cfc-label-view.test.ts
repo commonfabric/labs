@@ -34,6 +34,7 @@ import {
   type IFCLabel,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
+  redactCaveatSourcesForDisplay,
   redactEntryPathsForDisplay,
   withCfcLabelViewOrigins,
 } from "../src/cfc/label-view-core.ts";
@@ -115,6 +116,12 @@ describe("CFC label view helpers", () => {
     ]);
     expect(cfcLabelViewOriginSpaces(rebaseCfcLabelView(merged, ["a"])))
       .toEqual(["did:key:s", "did:key:e"]);
+    // And through the display forms, which the worker decides on before
+    // handing them on.
+    expect(cfcLabelViewOriginSpaces(redactEntryPathsForDisplay(fromE)))
+      .toEqual(["did:key:e"]);
+    expect(cfcLabelViewOriginSpaces(redactCaveatSourcesForDisplay(fromS)))
+      .toEqual(["did:key:s"]);
     // Origins are not label data: they neither serialize nor distinguish
     // two views carrying the same labels.
     const bare = {

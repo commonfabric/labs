@@ -52,7 +52,7 @@ import {
 import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import {
   type CfcLabelView,
-  cfcLabelViewForCell,
+  cfcLabelViewForCellWithStatus,
   cfcLabelViewForResolvedTarget,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
@@ -1658,12 +1658,17 @@ export class WorkerReconciler {
     const link = cell.getAsNormalizedFullLink();
     let labelView: CfcLabelView | undefined;
     try {
-      const held = cfcLabelViewForCell(cell);
-      const viewed = held === undefined ? cell.resolveAsCell() : cell;
-      const view = held ?? cfcLabelViewForCell(viewed);
-      labelView = view === undefined
-        ? undefined
-        : displayLabelView(viewed, view, policy, this.#fitSources);
+      const held = cfcLabelViewForCellWithStatus(cell);
+      const viewed = held.view === undefined ? cell.resolveAsCell() : cell;
+      const { view, readFailed } = held.view === undefined
+        ? cfcLabelViewForCellWithStatus(viewed)
+        : held;
+      labelView = view === undefined ? undefined : displayLabelView(
+        viewed,
+        { view, readFailed: readFailed || held.readFailed },
+        policy,
+        this.#fitSources,
+      );
     } catch {
       labelView = undefined;
     }

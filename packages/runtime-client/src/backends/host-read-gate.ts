@@ -63,8 +63,9 @@ import {
   type CfcConfClause,
   cfcHolderLabelViewSourceForCell,
   type CfcLabelView,
-  cfcLabelViewForCell,
+  cfcLabelViewForCellWithStatus,
   cfcLabelViewForResolvedCell,
+  cfcLabelViewForResolvedCellWithStatus,
   type CfcLabelViewSource,
   isChannelStateDocument,
   membershipSpacesInConfidentiality,
@@ -390,15 +391,15 @@ export class HostReadGate {
     if (!options.includeCfcLabel) return decided({ value, ...refField });
     // The value read above resolved the same links and kicked any
     // cross-space targets already, so the label read kicks none of its own.
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
+    const label = cfcLabelViewForResolvedCellWithStatus(cell, {
       kickCrossSpaceTargets: false,
     });
     return decided({
       value,
       ...refField,
-      cfcLabel: cfcLabel === undefined
+      cfcLabel: label.view === undefined
         ? undefined
-        : this.#displayView(cell, cfcLabel),
+        : this.#displayView(cell, label.view, label.readFailed),
     });
   }
 
@@ -642,10 +643,10 @@ export class HostReadGate {
    */
   ref(cell: Cell<unknown>, schema?: JSONSchema): CellRef {
     const ref = createCellRef(cell, schema);
-    const view = cfcLabelViewForCell(cell);
+    const { view, readFailed } = cfcLabelViewForCellWithStatus(cell);
     return view === undefined ? ref : {
       ...ref,
-      cfcLabelView: this.#displayView(cell, view),
+      cfcLabelView: this.#displayView(cell, view, readFailed),
     };
   }
 
@@ -720,11 +721,13 @@ export class HostReadGate {
   label(cell: Cell<unknown>): CfcLabelViewResponse {
     // The value read elsewhere resolved the same links and kicked any
     // cross-space targets already, so the label read kicks none of its own.
-    const view = cfcLabelViewForResolvedCell(cell, {
+    const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell, {
       kickCrossSpaceTargets: false,
     });
     return decided({
-      cfcLabel: view === undefined ? undefined : this.#displayView(cell, view),
+      cfcLabel: view === undefined
+        ? undefined
+        : this.#displayView(cell, view, readFailed),
     });
   }
 
@@ -1361,8 +1364,12 @@ export class HostReadGate {
    * `displayLabelView()` makes every view that reaches one: `view` in display
    * form, joined at its root where the policy refuses the cell.
    */
-  #displayView = (cell: Cell<unknown>, view: CfcLabelView): CfcLabelView =>
-    displayLabelView(cell, view, this.#policy, this.#sources);
+  #displayView = (
+    cell: Cell<unknown>,
+    view: CfcLabelView,
+    readFailed = false,
+  ): CfcLabelView =>
+    displayLabelView(cell, { view, readFailed }, this.#policy, this.#sources);
 
   /** A value in the form a host is handed it, each link's view decided. */
   #hostValue = (value: unknown): FabricValue =>

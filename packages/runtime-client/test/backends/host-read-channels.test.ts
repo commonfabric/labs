@@ -407,6 +407,22 @@ describe("HostReadGate, for what crosses beside a value", () => {
         .toEqual({ refused: { refusedBy: "display-ceiling" } });
     });
 
+    it("joins at its root a label view whose read failed, rather than show where its labels sit", async () => {
+      await using docs = await shelf();
+      // A label the visitor's ceiling admits, on a field of a document whose
+      // value links back through its own position, so the read of where it
+      // leads, and of its label, fails.
+      const loop = await docs.write(
+        "label-loop",
+        docs.runtime.getCell(space, "label-loop").key("x").getAsLink(),
+        [[["x"], [cfcAtom.user(visitor.did())]]],
+      );
+      const gate = gateFor(docs.runtime, visitor);
+
+      expect(gate.label(loop).cfcLabel?.entries.map((entry) => entry.path))
+        .toEqual([[]]);
+    });
+
     it("joins the view a ref to a refused document carries", async () => {
       await using docs = await shelf();
 
