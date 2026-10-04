@@ -824,6 +824,27 @@ export class HostReadGate {
   }
 
   /**
+   * The refusal of an answer built from a read the gate did not make, which
+   * consumed `consumed`, such as a snapshot preview, decided as a read of
+   * `cell` is ({@link read}) once the access lists its labels name have
+   * loaded, or `undefined` where the policy admits it.
+   */
+  async consumedRefusal(
+    cell: Cell<unknown>,
+    consumed: SinkConsumedLabel,
+  ): Promise<(HostReadDecided & CellRefusedAnswer) | undefined> {
+    const policy = this.#policy;
+    if (policy === undefined) return undefined;
+    const loaded = await this.#loadAccessListsNamedBy(
+      consumed.confidentiality,
+    );
+    const refusal = loaded === "failed"
+      ? UNHELD
+      : readRefusal(cell, [consumed], policy, this.#sources);
+    return refusal === undefined ? undefined : this.#refuse(refusal, policy);
+  }
+
+  /**
    * An update of the collaborative field `cell`, for subscription
    * `subscriptionId`: the field as it now stands, or the refusal that stands
    * in its place, decided again at each update, as {@link fromCell} decides,

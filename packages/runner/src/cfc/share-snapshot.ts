@@ -13,7 +13,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import { type Cell, cellRuntime } from "../cell.ts";
+import { type Cell, cellRuntime, type SinkConsumedLabel } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
@@ -25,7 +25,7 @@ import { type CfcConfClause, clauseAlternatives } from "./clause.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
-import { collectConsumedLabel } from "./prepare.ts";
+import { collectConsumedLabel, collectReaderConsumedLabel } from "./prepare.ts";
 import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { isRendererTrustedEvent } from "./ui-contract.ts";
@@ -55,6 +55,14 @@ export interface PreparedSnapshotShare {
 
   /** One-use authority bound to this preview and authenticated actor. */
   readonly consent: SnapshotShareConsent;
+
+  /**
+   * What the read that made the preview consumed, as a reader answers to it:
+   * every document the value and the audience were read from, a document a
+   * link in the value leads to included. A host is shown the preview only
+   * where the display ceiling admits these.
+   */
+  readonly consumed: SinkConsumedLabel;
 }
 
 /** Runtime-owned state behind an opaque review token. */
@@ -217,6 +225,9 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
       evidence,
       ...resolved,
       audience,
+      // Read after the evidence is taken, so that the broader instances'
+      // envelopes this reads are no part of it.
+      consumed: collectReaderConsumedLabel(tx),
     };
   } finally {
     tx.abort();
@@ -232,7 +243,7 @@ export function prepareSnapshotShare(
     received: Cell<unknown>;
   },
 ): PreparedSnapshotShare {
-  const inspected = inspect(source, audience);
+  const { consumed, ...inspected } = inspect(source, audience);
   let boundAppendTargets: ConsentState["appendBooksTo"];
   if (appendBooksTo) {
     if (
@@ -277,6 +288,7 @@ export function prepareSnapshotShare(
     value: inspected.value,
     audience: inspected.audience,
     consent,
+    consumed,
   });
 }
 

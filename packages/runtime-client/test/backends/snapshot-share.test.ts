@@ -246,6 +246,47 @@ describe("snapshot-share", () => {
     );
   });
 
+  it("decides a preview on everything it shows, a document it links to included", async () => {
+    await withFixture(
+      async ({ processor, destinationRef, runtime }) => {
+        // A source without labels of its own, holding a link to a document
+        // only its owner may see, whose value the preview shows.
+        const tx = runtime.edit();
+        const nested = runtime.getCell<{ note: string }>(
+          identity.did(),
+          "nested-private",
+          {
+            type: "object",
+            properties: { note: { type: "string" } },
+            ifc: { confidentiality: [cfcAtom.user(identity.did())] },
+          },
+          tx,
+        );
+        nested.set({ note: "nested-behind-the-seal" });
+        const open = runtime.getCell(identity.did(), "open-source", {
+          type: "object",
+        }, tx);
+        open.setRawUntyped({ title: "open", nested: nested.getAsLink() });
+        expect((await tx.commit()).error).toBeUndefined();
+        await open.sync();
+        await nested.sync();
+        const visitor = await Identity.fromPassphrase("snapshot visitor");
+        processor.accessForTestingOnly.renderConfidentialityCeiling =
+          defaultRenderConfidentialityCeiling(visitor.did());
+
+        const answer = await processor.handleSnapshotSharePrepare({
+          type: RequestType.SnapshotSharePrepare,
+          source: createCellRef(open),
+          audience: { space: destinationRef },
+        }, first);
+
+        expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
+        expect(JSON.stringify(answer)).not.toContain("behind-the-seal");
+      },
+      { bounded: false },
+    );
+  });
+
   it("keeps consent in the backend and admits one confirmation from its client", async () => {
     await withFixture(
       async ({ processor, sourceRef, destinationRef, runtime }) => {

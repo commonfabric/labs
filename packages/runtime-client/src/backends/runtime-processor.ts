@@ -2318,24 +2318,27 @@ export class RuntimeProcessor {
       appendBooksTo?.received.sync(),
     ]);
     // The preview shows the host the source's value, so it is decided as an
-    // answer built from the source is, and no consent is kept for one the
-    // display ceiling refuses.
-    return await this.#hostReadGate.fromCell(source, (decided) => {
-      if (this.#isDisposed || this.#detachedClients.has(client)) {
-        throw new Error("Snapshot sharing is unavailable");
-      }
+    // answer built from the source is, and again on everything the read
+    // that made it consumed, a document a link in it leads to included. No
+    // consent is kept for one the display ceiling refuses.
+    return await this.#hostReadGate.fromCell(source, async (decided) => {
+      const unavailable = () =>
+        this.#isDisposed || this.#detachedClients.has(client);
+      if (unavailable()) throw new Error("Snapshot sharing is unavailable");
       const prepared = prepareSnapshotShare(
         decided,
         "user" in audience ? { user: audienceCell } : { space: audienceCell },
         appendBooksTo,
       );
+      const refused = await this.#hostReadGate.consumedRefusal(
+        decided,
+        prepared.consumed,
+      );
+      if (refused !== undefined) return refused;
+      if (unavailable()) throw new Error("Snapshot sharing is unavailable");
       const id = crypto.randomUUID();
       this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
-      return Promise.resolve({
-        id,
-        value: prepared.value,
-        audience: prepared.audience,
-      });
+      return { id, value: prepared.value, audience: prepared.audience };
     });
   }
 
