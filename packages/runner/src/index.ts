@@ -106,7 +106,10 @@ export {
   hasOperationStorageCapability,
   hasPresenceStorageCapability,
 } from "./storage/interface.ts";
-export { isCfcEnforcementRejection } from "./storage/rejection.ts";
+export {
+  isCfcEnforcementRejection,
+  isEntityValueHashConflict,
+} from "./storage/rejection.ts";
 export type {
   EntityIdListOptions,
   EntityIdListResult,

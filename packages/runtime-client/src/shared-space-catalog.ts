@@ -2,10 +2,16 @@
 
 import type { DID } from "@commonfabric/identity";
 import { commitPreconditionValueHash } from "@commonfabric/memory/v2";
-import type { Cell, Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  isEntityValueHashConflict,
+  type Runtime,
+} from "@commonfabric/runner";
 
 import {
   isSharedSpaceCatalog,
+  isSharedSpaceMembership,
+  isSharedSpaceMembershipAction,
   normalizeSharedSpaceRegistration,
   type SharedSpaceCatalog,
   sharedSpaceCatalogCause,
@@ -90,6 +96,7 @@ export async function registerSharedSpace(
 ): Promise<SharedSpaceRegistrationResult> {
   const registration = normalizeSharedSpaceRegistration(input);
   const revision = crypto.randomUUID();
+  const since = registration.since ?? Date.now();
   return await editCatalog(runtime, home, admit, (catalog, changed) => {
     const { space, host, kind, title, offer } = registration;
     const current = catalog.entries[space];
@@ -110,6 +117,8 @@ export async function registerSharedSpace(
       host,
       kind,
       ...(title === undefined ? {} : { title }),
+      ...(offer === undefined ? {} : { from: offer.from }),
+      since,
       state: registration.initialState ?? "saved",
       revision,
     };
@@ -139,7 +148,16 @@ export async function changeSharedSpaceMembership(
   return await editCatalog(runtime, home, admit, (catalog, changed) => {
     const current = catalog.entries[change.space];
     if (!current) return { status: "conflict", reason: "missing" };
+    if (!isSharedSpaceMembership(current.state)) {
+      return { status: "conflict", reason: "unsupported-state" };
+    }
     const last = current.lastAction;
+    if (
+      last !== undefined &&
+      (!isSharedSpaceMembershipAction(last) || last.state !== current.state)
+    ) {
+      return { status: "conflict", reason: "action" };
+    }
     if (last?.id === change.id) {
       return last.expectedRevision === change.expectedRevision &&
           last.state === change.state
@@ -188,7 +206,7 @@ async function editCatalog<T extends { status: string }>(
       throw new Error("The shared-space catalog is malformed or unsupported.");
     }
     const catalog: SharedSpaceCatalog = stored === undefined
-      ? { version: 1, entries: {}, offers: {} }
+      ? { entries: {}, offers: {} }
       : {
         ...stored,
         entries: { ...stored.entries },
@@ -216,10 +234,7 @@ async function editCatalog<T extends { status: string }>(
     return outcome;
   });
   if (result.error) {
-    if (
-      result.error.name === "ConflictError" && result.error.message ===
-        `entity-value-hash precondition target changed: ${address.id}`
-    ) {
+    if (isEntityValueHashConflict(result.error, address.id)) {
       return { status: "conflict", reason: "catalog-changed" };
     }
     throw new Error(result.error.message, { cause: result.error });
@@ -233,6 +248,9 @@ async function loadCatalog(
   home: SharedSpaceCatalogHome,
 ): Promise<Cell<unknown>> {
   const cell = sharedSpaceCatalogCell(runtime, home);
+  // Read after this runtime's earlier optimistic writes have settled, so an
+  // unconfirmed local insert or membership choice cannot become our baseline.
+  // This barrier covers the whole runtime; native lists use a local projection.
   await runtime.scheduler.idleWithPendingCommits();
   await cell.sync();
   const address = cell.getAsNormalizedFullLink();

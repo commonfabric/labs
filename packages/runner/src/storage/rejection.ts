@@ -115,6 +115,19 @@ export function isConflictRejection(
 }
 
 /**
+ * Whether the memory server refused the named entity's value-hash pin. The
+ * message survives the wire; its exact form is owned by memory/v2/engine.ts.
+ * A stale read or another entity's failed pin does not confirm this refusal.
+ */
+export function isEntityValueHashConflict(
+  error: { name?: string; message?: string } | undefined | null,
+  id: string,
+): boolean {
+  return isConflictRejection(error) &&
+    error?.message === `entity-value-hash precondition target changed: ${id}`;
+}
+
+/**
  * The STALE-READ sub-family of {@link isConflictRejection}: the server
  * refused the commit because a document its read basis named had already
  * advanced past the basis, so a catch-up and a fresh read are what

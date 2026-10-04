@@ -2,15 +2,23 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
+import { rootRenderPolicyFor } from "@commonfabric/html/worker";
 import { Identity } from "@commonfabric/identity";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { ACLManager, Runtime } from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import { RuntimeClients } from "../src/backends/client-registry.ts";
+import { HostReadGate } from "../src/backends/host-read-gate.ts";
 import { MessagePortRuntimeTransport } from "../src/client/transports/message-port/transport-message-port.ts";
 import { RequestType } from "../src/protocol/mod.ts";
 import { RuntimeClient } from "../src/runtime-client.ts";
@@ -59,7 +67,7 @@ type Fixture = {
   second: Runtime;
 
   /** Creates a fresh device with empty local state. */
-  fresh: () => Runtime;
+  fresh: (servingPosture?: boolean) => Runtime;
 };
 
 /** Runs a case against independent replicas and closes every session. */
@@ -73,11 +81,12 @@ async function withFixture(
     subscriptionRefreshDelayMs: 0,
   });
   const clients: { runtime: Runtime; storage: EmulatedStorageManager }[] = [];
-  const fresh = () => {
+  const fresh = (servingPosture = false) => {
     const storage = EmulatedStorageManager.connectTo(server, { as: identity });
     const runtime = new Runtime({
       apiUrl: new URL(home.host),
       storageManager: storage,
+      servingPosture,
     });
     clients.push({ runtime, storage });
     return runtime;
@@ -424,6 +433,52 @@ describe("shared-space-catalog", () => {
     });
   });
 
+  it("retains first-admission provenance across offers and membership changes", async () => {
+    await withFixture(async ({ first, second, fresh }) => {
+      await registerSharedSpace(first, home, {
+        ...loom,
+        since: 123,
+        offer: { from: other.did(), id: "first-offer" },
+      });
+      const initial = (await read(first)).entries[loom.space];
+      expect(initial).toMatchObject({
+        from: other.did(),
+        since: 123,
+        title: loom.title,
+      });
+      await changeSharedSpaceMembership(first, home, {
+        space: loom.space,
+        id: "archive-with-provenance",
+        expectedRevision: initial.revision,
+        state: "archived",
+      });
+      await registerSharedSpace(second, home, {
+        ...loom,
+        since: 456,
+        title: "Another display hint",
+        offer: { from: identity.did(), id: "later-offer" },
+      });
+      expect((await read(fresh())).entries[loom.space]).toMatchObject({
+        from: other.did(),
+        since: 123,
+        title: loom.title,
+        state: "archived",
+      });
+
+      const started = Date.now();
+      await registerSharedSpace(second, home, room);
+      const direct = (await read(fresh())).entries[room.space];
+      expect(direct.from).toBeUndefined();
+      expect(direct.since).toBeGreaterThanOrEqual(started);
+      expect(direct.since).toBeLessThanOrEqual(Date.now());
+      await registerSharedSpace(first, home, {
+        ...room,
+        offer: { from: other.did(), id: "offered-after-save" },
+      });
+      expect((await read(fresh())).entries[room.space]).toEqual(direct);
+    });
+  });
+
   it("refuses host and kind conflicts without redirecting or duplicating the entry", async () => {
     await withFixture(async ({ first, second, fresh }) => {
       await registerSharedSpace(first, home, loom);
@@ -452,6 +507,130 @@ describe("shared-space-catalog", () => {
     });
   });
 
+  it("refuses sticky Home access failures despite a successful cached load", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const before = await read(first);
+      const change: SharedSpaceMembershipChange = {
+        space: loom.space,
+        id: "denied-archive",
+        expectedRevision: before.entries[loom.space].revision,
+        state: "archived",
+      };
+      for (const source of ["spaceAccessError", "authorizationError"]) {
+        const denied = new Error(`Sticky ${source} refusal`);
+        const access = stub(
+          first.storageManager,
+          "spaceAccessError",
+          () => source === "spaceAccessError" ? denied : undefined,
+        );
+        const authorization = stub(
+          first.storageManager,
+          "authorizationError",
+          () => source === "authorizationError" ? denied : undefined,
+        );
+        try {
+          await expect(getSharedSpaceCatalog(first, home)).rejects.toBe(denied);
+          await expect(registerSharedSpace(first, home, room)).rejects.toBe(
+            denied,
+          );
+          await expect(changeSharedSpaceMembership(first, home, change))
+            .rejects.toBe(denied);
+        } finally {
+          authorization.restore();
+          access.restore();
+        }
+        expect(await read(fresh())).toEqual(before);
+      }
+    });
+  });
+
+  it("refuses unscoped serving access even when the runtime identity matches Home", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const before = await read(first);
+      const serving = fresh(true);
+      expect(serving.userIdentityDID).toBe(home.principal);
+      await expect(getSharedSpaceCatalog(serving, home)).rejects.toThrow(
+        "principal",
+      );
+      await expect(registerSharedSpace(serving, home, room)).rejects.toThrow(
+        "principal",
+      );
+      await expect(changeSharedSpaceMembership(serving, home, {
+        space: loom.space,
+        id: "serving-archive",
+        expectedRevision: before.entries[loom.space].revision,
+        state: "archived",
+      })).rejects.toThrow("principal");
+      expect(await read(fresh())).toEqual(before);
+    });
+  });
+
+  it("refuses SDK reads and mutations when the catalog exceeds the host display ceiling", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const before = await read(first);
+      const address = sharedSpaceCatalogCell(first, home)
+        .getAsNormalizedFullLink();
+      const tx = first.edit();
+      writeSeedEnvelopeDoc(tx, identity.did());
+      seedStoredEnvelope(tx, {
+        space: identity.did(),
+        id: address.id,
+        type: "application/json",
+        path: [],
+      }, {
+        value: before,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [cfcAtom.resource("CredentialSecret")],
+              },
+            }],
+          },
+        },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+      const gate = new HostReadGate(
+        rootRenderPolicyFor({ atoms: [], caveatKinds: [] }),
+        {},
+      );
+      const { client, processor } = await connect(first);
+      // The worker has no configurable host ceiling yet. Supply a real gate
+      // policy at its boundary so these requests exercise actual label refusal.
+      const enforce = stub(
+        HostReadGate.prototype,
+        "read",
+        gate.read.bind(gate),
+      );
+      try {
+        await expect(client.getSharedSpaceCatalog(home)).rejects.toThrow(
+          "The host cannot read this shared-space catalog.",
+        );
+        await expect(client.registerSharedSpace(home, room)).rejects.toThrow(
+          "The host cannot read this shared-space catalog.",
+        );
+        await expect(client.changeSharedSpaceMembership(home, {
+          space: loom.space,
+          id: "hidden-archive",
+          expectedRevision: before.entries[loom.space].revision,
+          state: "archived",
+        })).rejects.toThrow("The host cannot read this shared-space catalog.");
+      } finally {
+        enforce.restore();
+        await client.dispose();
+        await processor.dispose();
+      }
+      expect(await read(fresh())).toEqual(before);
+    });
+  });
+
   it("refuses malformed stored data and leaves it intact", async () => {
     await withFixture(async ({ first, second }) => {
       const tx = first.edit();
@@ -471,11 +650,11 @@ describe("shared-space-catalog", () => {
     });
   });
 
-  it("refuses unknown registration kinds and invalid routes without storing data", async () => {
+  it("refuses invalid registration kinds and routes without storing data", async () => {
     await withFixture(async ({ first }) => {
       for (
         const input of [
-          { ...loom, kind: "future-kind" },
+          { ...loom, kind: "" },
           { ...loom, host: "https://spaces.example/other" },
           { ...loom, host: "https://user:secret@spaces.example" },
           { ...loom, space: "did:not valid" },
@@ -555,6 +734,147 @@ describe("shared-space-catalog", () => {
     });
   });
 
+  it("registers an application-validated kind without an SDK kind-list change", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      const registration = { ...loom, kind: "future-kind" };
+      expect((await registerSharedSpace(first, home, registration)).status)
+        .toBe("registered");
+      expect((await read(fresh())).entries[loom.space].kind).toBe(
+        "future-kind",
+      );
+    });
+  });
+
+  it("retains unfamiliar states and action evidence without making them active or writable", async () => {
+    await withFixture(async ({ first, second, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const initial = await read(first);
+      for (const state of ["left", "future-state"]) {
+        const opaque = {
+          ...initial.entries[loom.space],
+          state,
+          lastAction: {
+            id: "future-action",
+            expectedRevision: "older",
+            state: "saved",
+            futureEvidence: ["opaque"],
+          },
+        };
+        const tx = first.edit();
+        sharedSpaceCatalogCell(first, home).withTx(tx).set({
+          ...initial,
+          entries: { [loom.space]: opaque },
+        });
+        expect((await tx.commit()).error).toBeUndefined();
+        const registration = await registerSharedSpace(second, home, {
+          ...loom,
+          offer: { from: other.did(), id: state },
+        });
+        expect(registration.status).toBe("existing");
+        await registerSharedSpace(second, home, room);
+        const catalog = await read(fresh());
+        expect(catalog.entries[loom.space]).toEqual(opaque);
+        expect(
+          Object.values(catalog.entries).filter((entry) =>
+            entry.state === "saved"
+          ).map((entry) => entry.space),
+        ).toEqual([room.space]);
+        for (const requested of ["saved", "archived"] as const) {
+          expect(
+            await changeSharedSpaceMembership(second, home, {
+              space: loom.space,
+              id: "future-action",
+              expectedRevision: "older",
+              state: requested,
+            }),
+          ).toEqual({ status: "conflict", reason: "unsupported-state" });
+          expect(
+            await changeSharedSpaceMembership(second, home, {
+              space: loom.space,
+              id: "new-action",
+              expectedRevision: opaque.revision,
+              state: requested,
+            }),
+          ).toEqual({ status: "conflict", reason: "unsupported-state" });
+        }
+        expect((await read(fresh())).entries[loom.space]).toEqual(opaque);
+      }
+    });
+  });
+
+  it("isolates unfamiliar action evidence from other entries and refuses to overwrite it", async () => {
+    await withFixture(async ({ first, second, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const catalog = await read(first);
+      const opaque = {
+        ...catalog.entries[loom.space],
+        lastAction: { futureEvidence: true },
+      };
+      const tx = first.edit();
+      sharedSpaceCatalogCell(first, home).withTx(tx).set({
+        ...catalog,
+        entries: { [loom.space]: opaque },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+      await registerSharedSpace(second, home, room);
+      expect(
+        await changeSharedSpaceMembership(second, home, {
+          space: loom.space,
+          id: "archive",
+          expectedRevision: opaque.revision,
+          state: "archived",
+        }),
+      ).toEqual({ status: "conflict", reason: "action" });
+      expect((await read(fresh())).entries[loom.space]).toEqual(opaque);
+    });
+  });
+
+  it("refuses contradictory action evidence without blocking other entries", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const catalog = await read(first);
+      const entry = {
+        ...catalog.entries[loom.space],
+        lastAction: {
+          id: "contradictory-action",
+          expectedRevision: "older",
+          state: "archived",
+        },
+      };
+      const tx = first.edit();
+      sharedSpaceCatalogCell(first, home).withTx(tx).set({
+        ...catalog,
+        entries: { [loom.space]: entry },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+      await registerSharedSpace(first, home, room);
+      const actions: Omit<SharedSpaceMembershipChange, "space">[] = [
+        {
+          id: "new-archive",
+          expectedRevision: entry.revision,
+          state: "archived",
+        },
+        { id: "new-save", expectedRevision: entry.revision, state: "saved" },
+        {
+          id: "contradictory-action",
+          expectedRevision: "older",
+          state: "archived",
+        },
+      ];
+      for (const action of actions) {
+        expect(
+          await changeSharedSpaceMembership(first, home, {
+            space: loom.space,
+            ...action,
+          }),
+        ).toEqual({ status: "conflict", reason: "action" });
+      }
+      const after = await read(fresh());
+      expect(after.entries[loom.space]).toEqual(entry);
+      expect(after.entries[room.space].state).toBe("saved");
+    });
+  });
+
   it("preserves unknown kinds and extension fields while registering a known kind", async () => {
     await withFixture(async ({ first, second, fresh }) => {
       await registerSharedSpace(first, home, loom);
@@ -621,7 +941,9 @@ describe("shared-space-catalog", () => {
       if (!isSharedSpaceCatalog(stale)) {
         throw new Error("Expected the stale catalog.");
       }
-      expect(stale.entries[loom.space].lastAction?.id).toBe("old-archive");
+      expect(stale.entries[loom.space].lastAction).toMatchObject({
+        id: "old-archive",
+      });
       // Release fan-out only after the server decides the stale confirmation.
       const edit = first.edit.bind(first);
       const verdictOnly = stub(first, "edit", (...args) => {

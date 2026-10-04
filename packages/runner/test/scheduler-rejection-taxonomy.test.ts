@@ -6,12 +6,38 @@
 import { describe, expect, it } from "./scheduler-test-utils.ts";
 import {
   isDiscardedAttemptRejection,
+  isEntityValueHashConflict,
   isPermanentRejection,
   isRetryableCommitRejection,
   isTerminalRejection,
 } from "../src/storage/rejection.ts";
 
 describe("scheduler rejection taxonomy", () => {
+  it("identifies only the named entity's value-hash conflict", () => {
+    const refusal = {
+      name: "ConflictError",
+      message: "entity-value-hash precondition target changed: of:catalog",
+    };
+    expect(isEntityValueHashConflict(refusal, "of:catalog")).toBe(true);
+    expect(isEntityValueHashConflict(refusal, "of:other")).toBe(false);
+    for (
+      const error of [
+        undefined,
+        null,
+        { name: "ConflictError" },
+        { ...refusal, name: "Error" },
+        { ...refusal, message: `seal failed: ${refusal.message}` },
+        {
+          ...refusal,
+          message:
+            "stale confirmed read: of:catalog at seq 1 conflicted with seq 2",
+        },
+      ]
+    ) {
+      expect(isEntityValueHashConflict(error, "of:catalog")).toBe(false);
+    }
+  });
+
   it("classifies precondition failures as permanent", () => {
     expect(isPermanentRejection({
       name: "PreconditionFailedError",

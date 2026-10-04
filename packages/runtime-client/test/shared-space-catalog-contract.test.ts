@@ -66,6 +66,7 @@ describe("shared-space-catalog-contract", () => {
       ...entry,
       kind: "loom",
       title: "",
+      since: 123,
       offer,
     });
     offer.id = "changed";
@@ -74,6 +75,7 @@ describe("shared-space-catalog-contract", () => {
       host: entry.host,
       kind: "loom",
       title: "",
+      since: 123,
       offer: { from, id: "id" },
     });
   });
@@ -81,7 +83,7 @@ describe("shared-space-catalog-contract", () => {
   it("rejects malformed catalog records instead of interpreting them as empty", () => {
     expect(isSharedSpaceCatalog(catalog)).toBe(true);
     for (
-      const value of [null, [], {}, { ...catalog, version: 2 }, {
+      const value of [null, [], {}, {
         ...catalog,
         entries: [],
       }, { ...catalog, offers: null }]
@@ -94,16 +96,10 @@ describe("shared-space-catalog-contract", () => {
         { host: "https://spaces.example/" },
         { kind: "" },
         { title: "x".repeat(201) },
-        { state: "left" },
+        { state: "" },
         { revision: "" },
-        { lastAction: {} },
-        {
-          lastAction: {
-            id: "a",
-            expectedRevision: "initial",
-            state: "archived",
-          },
-        },
+        { from: "not-a-DID" },
+        { since: -1 },
       ]
     ) {
       expect(
@@ -113,6 +109,34 @@ describe("shared-space-catalog-contract", () => {
         }),
       ).toBe(false);
     }
+  });
+
+  it("retains additive fields and unfamiliar membership evidence", () => {
+    for (const state of ["left", "future-state", "saved"]) {
+      expect(isSharedSpaceCatalog({
+        ...catalog,
+        version: 2,
+        extension: "preserved",
+        entries: {
+          [space]: {
+            ...entry,
+            state,
+            lastAction: { futureEvidence: ["opaque"] },
+          },
+        },
+      })).toBe(true);
+    }
+    expect(isSharedSpaceCatalog({ entries: {}, offers: {} })).toBe(true);
+  });
+
+  it("rejects invalid admission timestamps before registration", () => {
+    for (const since of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => normalizeSharedSpaceRegistration({ ...entry, since }))
+        .toThrow("Invalid shared-space registration");
+    }
+    expect(normalizeSharedSpaceRegistration({ ...entry, since: 0 }).since).toBe(
+      0,
+    );
   });
 
   it("requires each retained receipt to match its key and registered target", () => {

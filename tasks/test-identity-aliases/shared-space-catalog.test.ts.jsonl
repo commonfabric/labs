@@ -1,0 +1,1 @@
+{"date":"2026-10-03","from":{"k":"unit","s":"runtime-client","n":"shared-space-catalog > refuses unknown registration kinds and invalid routes without storing data"},"to":{"k":"unit","s":"runtime-client","n":"shared-space-catalog > refuses invalid registration kinds and routes without storing data"}}

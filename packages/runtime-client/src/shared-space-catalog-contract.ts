@@ -33,9 +33,11 @@ export const sharedSpaceEntrySchema = {
     host: { type: "string" },
     kind: { type: "string" },
     title: { type: "string" },
-    state: sharedSpaceMembershipSchema,
+    from: { type: "string" },
+    since: { type: "number" },
+    state: { type: "string" },
     revision: { type: "string" },
-    lastAction: membershipActionSchema,
+    lastAction: true,
   },
   required: ["space", "host", "kind", "state", "revision"],
 } as const satisfies JSONSchema;
@@ -60,7 +62,6 @@ const sharedSpaceOfferReceiptSchema = {
 export const sharedSpaceCatalogSchema = {
   type: "object",
   properties: {
-    version: { const: 1 },
     entries: {
       type: "object",
       additionalProperties: sharedSpaceEntrySchema,
@@ -70,10 +71,10 @@ export const sharedSpaceCatalogSchema = {
       additionalProperties: sharedSpaceOfferReceiptSchema,
     },
   },
-  required: ["version", "entries", "offers"],
+  required: ["entries", "offers"],
 } as const satisfies JSONSchema;
 
-/** The durable catalog value. Unknown kinds remain readable and retained. */
+/** The durable catalog value. Unknown kinds, states, and action evidence remain readable and retained. */
 export type SharedSpaceCatalog = Schema<typeof sharedSpaceCatalogSchema>;
 
 /** A validated catalog snapshot or a successfully observed absent document. */
@@ -108,13 +109,16 @@ export type SharedSpaceRegistration = {
   host: string;
 
   /** Collection consumer that can interpret the space. */
-  kind: "loom" | "fabrichat-room";
+  kind: string;
 
   /** Legacy membership used only when inserting an absent entry. Defaults to saved. */
   initialState?: SharedSpaceMembership;
 
   /** Optional display hint, retained from the first registration. */
   title?: string;
+
+  /** Recipient admission time in epoch milliseconds, optionally preserved during migration. */
+  since?: number;
 
   /** Optional validated offer identity, recorded atomically with registration. */
   offer?: {
@@ -172,7 +176,12 @@ export type SharedSpaceMembershipResult =
     status: "conflict";
 
     /** Missing entry, stale revision, or reused operation identity. */
-    reason: "missing" | "revision" | "action" | "catalog-changed";
+    reason:
+      | "missing"
+      | "revision"
+      | "action"
+      | "unsupported-state"
+      | "catalog-changed";
   };
 
 /** Returns the stable cause of a person's dedicated catalog document. */
@@ -206,23 +215,17 @@ export function isSharedSpaceCatalog(
   value: unknown,
 ): value is SharedSpaceCatalog {
   if (
-    !isPlainObject(value) || value.version !== 1 ||
+    !isPlainObject(value) ||
     !isPlainObject(value.entries) || !isPlainObject(value.offers)
   ) return false;
   for (const [space, entry] of Object.entries(value.entries)) {
     if (
       !isPlainObject(entry) || !validTarget(entry) || entry.space !== space ||
-      !membership(entry.state) || !boundedString(entry.revision, 320) ||
-      (entry.title !== undefined && !boundedString(entry.title, 200, true))
+      !boundedString(entry.state, 32) || !boundedString(entry.revision, 320) ||
+      (entry.title !== undefined && !boundedString(entry.title, 200, true)) ||
+      (entry.from !== undefined && !isWellFormedDID(entry.from)) ||
+      (entry.since !== undefined && !admissionTime(entry.since))
     ) return false;
-    if (entry.lastAction !== undefined) {
-      const action = entry.lastAction;
-      if (
-        !isPlainObject(action) || !boundedString(action.id, 320) ||
-        !boundedString(action.expectedRevision, 320) ||
-        action.state !== entry.state
-      ) return false;
-    }
   }
   for (const [key, receipt] of Object.entries(value.offers)) {
     if (
@@ -245,11 +248,12 @@ export function normalizeSharedSpaceRegistration(
 ): SharedSpaceRegistration {
   if (
     !isPlainObject(registration) || !isWellFormedDID(registration.space) ||
-    !["loom", "fabrichat-room"].includes(registration.kind) ||
+    !boundedString(registration.kind, 32) ||
     (registration.initialState !== undefined &&
-      !membership(registration.initialState)) ||
+      !isSharedSpaceMembership(registration.initialState)) ||
     (registration.title !== undefined &&
-      !boundedString(registration.title, 200, true))
+      !boundedString(registration.title, 200, true)) ||
+    (registration.since !== undefined && !admissionTime(registration.since))
   ) throw new TypeError("Invalid shared-space registration.");
   if (registration.offer !== undefined) {
     if (!isPlainObject(registration.offer)) {
@@ -265,6 +269,7 @@ export function normalizeSharedSpaceRegistration(
       ? {}
       : { initialState: registration.initialState }),
     ...(registration.title === undefined ? {} : { title: registration.title }),
+    ...(registration.since === undefined ? {} : { since: registration.since }),
     ...(registration.offer === undefined ? {} : {
       offer: {
         from: registration.offer.from,
@@ -281,7 +286,8 @@ export function validateSharedSpaceMembershipChange(
   if (
     !isPlainObject(change) || !isWellFormedDID(change.space) ||
     !boundedString(change.id, 320) ||
-    !boundedString(change.expectedRevision, 320) || !membership(change.state)
+    !boundedString(change.expectedRevision, 320) ||
+    !isSharedSpaceMembership(change.state)
   ) throw new TypeError("Invalid shared-space membership action.");
 }
 
@@ -295,9 +301,25 @@ function boundedString(
     value.length <= max;
 }
 
-/** Helper for catalog validation, which recognizes collection choices. */
-function membership(value: unknown): value is SharedSpaceMembership {
+/** Whether an admission timestamp is a nonnegative, exact epoch millisecond. */
+function admissionTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Whether this implementation can apply an explicit membership choice. */
+export function isSharedSpaceMembership(
+  value: unknown,
+): value is SharedSpaceMembership {
   return value === "saved" || value === "archived";
+}
+
+/** Whether retained action evidence has the shape this writer understands. */
+export function isSharedSpaceMembershipAction(
+  value: unknown,
+): value is Schema<typeof membershipActionSchema> {
+  return isPlainObject(value) && boundedString(value.id, 320) &&
+    boundedString(value.expectedRevision, 320) &&
+    isSharedSpaceMembership(value.state);
 }
 
 /** Helper for catalog validation, which checks a stored normalized target. */
