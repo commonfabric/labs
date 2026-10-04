@@ -324,6 +324,11 @@ export default pattern<{}>(() => {
           "make()",
         ],
         [
+          "a function declaration that returns it from a branch",
+          `function make(flag: boolean) {\n  if (flag) {\n    return toSchema<${UNREAD}>();\n  }\n  return toSchema<{ value: string }>();\n}`,
+          "make(true)",
+        ],
+        [
           "a function that destructures its argument",
           "const unwrap = ({ schema }: { schema: any }) => schema;",
           `unwrap({ schema: toSchema<${UNREAD}>() })`,
@@ -412,6 +417,11 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
           "make(seed)",
         ],
         [
+          "a function whose parameter defaults to a value that cannot be read back",
+          `let seed = toSchema<${UNREAD}>();\nconst make = (schema = seed) => schema;`,
+          "make()",
+        ],
+        [
           "a method of an object",
           `const helpers = { make: () => toSchema<${UNREAD}>() };`,
           "helpers.make()",
@@ -476,6 +486,11 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
           "a property a spread holds",
           `const base = { input: toSchema<{ value: string }>(), other: toSchema<${UNREAD}>() };\nconst schemas = { ...base };`,
           "schemas.input",
+        ],
+        [
+          "a function beside one nested in it",
+          `function make() {\n  function other() {\n    return toSchema<${UNREAD}>();\n  }\n  return toSchema<{ value: string }>();\n}`,
+          "make()",
         ],
       ] as const
     ) {
