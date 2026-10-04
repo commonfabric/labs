@@ -655,7 +655,7 @@ describe("CFCellLink disposal handling", () => {
 
   /** Starts resolving on an unconnected element holding `fields`. */
   function resolveCellOn(fields: Record<string, unknown>): {
-    element: Record<string, unknown>;
+    element: Record<string, unknown> & { _resolveCell(): Promise<void> };
     resolving: Promise<void>;
   } {
     const element = Object.assign(new CFCellLink(), fields) as unknown as
@@ -713,6 +713,37 @@ describe("CFCellLink disposal handling", () => {
       spy.restore();
     }
     expect(spy.calls.length).toBe(1);
+  });
+
+  it("drops the withheld name once the refused link is gone", async () => {
+    const refusing = {
+      signal: { aborted: false },
+      getCellFromRef: () => ({
+        ref: () => ({
+          id: "of:refused-link",
+          space: "did:key:test-space",
+          scope: "space",
+          path: [],
+        }),
+        resolveAsCell: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+      }),
+    };
+    const { element, resolving } = resolveCellOn({
+      ...baseFields(),
+      link: "/of:fid1:refused-link",
+      runtime: refusing,
+    });
+    await resolving;
+    expect(element._name).toBe("Content hidden by policy");
+
+    // The element is reused with no link at all.
+    element.link = undefined;
+    await element._resolveCell();
+
+    expect(element._name).toBeUndefined();
   });
 
   it("names a serialized link whose resolution the worker refuses as withheld, and reports no error", async () => {

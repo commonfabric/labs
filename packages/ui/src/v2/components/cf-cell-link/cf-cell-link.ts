@@ -346,6 +346,12 @@ export class CFCellLink extends BaseElement {
 
   private _setResolvedCell(cell: CellHandle | undefined) {
     const nextCellKey = this._cellKey(cell);
+    // A name belongs to the cell it was read from: with none resolved, or
+    // another, the name shown goes until that cell's own arrives. A refusal
+    // sets its placeholder after this.
+    if (cell === undefined || nextCellKey !== this._resolvedCellKey) {
+      this._name = undefined;
+    }
     if (cell === this._resolvedCell && nextCellKey === this._resolvedCellKey) {
       // `_prepareSubscriptionTarget()` drops the `$NAME` subscription when the
       // cell being resolved differs from its target, and no update follows an
