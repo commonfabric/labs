@@ -715,6 +715,40 @@ describe("CFCellLink disposal handling", () => {
     expect(spy.calls.length).toBe(1);
   });
 
+  it("names a serialized link whose resolution the worker refuses as withheld, and reports no error", async () => {
+    const runtime = {
+      signal: { aborted: false },
+      getCellFromRef: () => ({
+        ref: () => ({
+          id: "of:refused-link",
+          space: "did:key:test-space",
+          scope: "space",
+          path: [],
+        }),
+        resolveAsCell: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+      }),
+    };
+    const spy = captureConsoleError();
+    let element: Record<string, unknown>;
+    try {
+      const started = resolveCellOn({
+        ...baseFields(),
+        link: "/of:fid1:refused-link",
+        runtime,
+      });
+      element = started.element;
+      await started.resolving;
+    } finally {
+      spy.restore();
+    }
+    expect(element._name).toBe("Content hidden by policy");
+    expect(element._resolvedCell).toBeUndefined();
+    expect(spy.calls).toEqual([]);
+  });
+
   it("suppresses the resolve-link log when the captured runtime is disposed", async () => {
     // The link branch reads `this.runtime` once, up front, to build the linked
     // cell. The guard checks that captured client (the one the resolve ran on),

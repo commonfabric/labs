@@ -257,10 +257,17 @@ export class CFCellLink extends BaseElement {
         // cancellation, not a failure to surface. Read the runtime the linked
         // cell was built from, not the ambient `this.runtime` (cleared on logout).
         if (runtime.signal.aborted) return;
-        console.error("Failed to resolve link:", e);
         this.#linkTarget.cancel();
         this._prepareSubscriptionTarget(undefined);
         this._setResolvedCell(undefined);
+        // As for a cell: a link the worker will not say where it leads is
+        // named as withheld.
+        if (e instanceof CellReadRefusedError) {
+          this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+          this.requestUpdate();
+          return;
+        }
+        console.error("Failed to resolve link:", e);
       }
     } else {
       this.#linkTarget.cancel();
