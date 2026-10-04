@@ -154,6 +154,86 @@ describe("cfc-cell-read-ceiling", () => {
     expect(() => cell.key("secret").get()).toThrow(/read ceiling/);
   });
 
+  it("withholds a scoped instance its broader instance's label puts outside the ceiling", async () => {
+    // The user instance stores its own value and no envelope, beside a space
+    // instance labeled at the same position: the shape a write narrowed into
+    // the user instance left before it stamped that instance's envelope.
+    const tx = writer.edit();
+    const link = writer.getCell(
+      signer.did(),
+      `scoped read ceiling ${crypto.randomUUID()}`,
+      undefined,
+      tx,
+    ).getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: { notes: "slot" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{ path: ["notes"], label: { confidentiality: [B] } }],
+        },
+      },
+    });
+    const scoped = toMemorySpaceAddress({ ...link, scope: "user" });
+    seedStoredEnvelope(tx, { ...scoped, path: [] }, {
+      value: { notes: "narrowed content" },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+
+    const readTx = readerFor([A]).edit();
+    try {
+      expect(() => readTx.read({ ...scoped, path: ["value", "notes"] }))
+        .toThrow(/read ceiling/);
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("reads a scoped instance whose broader instance labels only the pointer it holds", async () => {
+    // The label on the broader slot's pointer copies whichever user's
+    // instance the redirect was written for, so it does not gate a read of
+    // this instance's content.
+    const tx = writer.edit();
+    const link = writer.getCell(
+      signer.did(),
+      `scoped pointer ceiling ${crypto.randomUUID()}`,
+      undefined,
+      tx,
+    ).getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: { notes: "slot" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["notes"],
+            label: { confidentiality: [B] },
+            origin: "link",
+          }],
+        },
+      },
+    });
+    const scoped = toMemorySpaceAddress({ ...link, scope: "user" });
+    seedStoredEnvelope(tx, { ...scoped, path: [] }, {
+      value: { notes: "narrowed content" },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+
+    const readTx = readerFor([A]).edit();
+    try {
+      expect(readTx.read({ ...scoped, path: ["value", "notes"] }).ok?.value)
+        .toBe("narrowed content");
+    } finally {
+      readTx.abort();
+    }
+  });
+
   it("withholds direct transaction reads of protected content", async () => {
     const link = await seed([B]);
     const reader = readerFor([A]);

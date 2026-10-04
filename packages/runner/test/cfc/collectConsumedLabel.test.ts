@@ -199,6 +199,71 @@ describe("collectConsumedLabel()", () => {
     expect(result.modulePolicySpaces.size).toBe(0);
   });
 
+  it("consumes no payload label for a read of one of the document's own members", () => {
+    // The member `slug` and the payload field `slug` are different places
+    // (spec §4.6.5). The read of the payload field is the control.
+
+    const entries = [{
+      path: ["slug"],
+      label: { confidentiality: ["private"] },
+    }];
+    const read = (path: string[]): IReadActivity => ({
+      ...address,
+      path: toDocumentPath(path),
+      meta: {},
+    });
+
+    expect(
+      collectConsumedLabel(transaction([], [read(["slug"])], entries))
+        .confidentiality,
+    ).toEqual([]);
+    expect(
+      collectConsumedLabel(transaction([], [read(["value", "slug"])], entries))
+        .confidentiality,
+    ).toEqual(["private"]);
+  });
+
+  it("consumes no label-metadata template for a payload read, even of a field named `cfc`", () => {
+    // A label-metadata template is keyed under `cfc/labels/...` relative to
+    // the stored document, and a payload field named `cfc` is keyed under
+    // `cfc` relative to `value`, so their paths coincide. The payload entry
+    // under the field is the control: a read of the field consumes it.
+
+    const entries = [{
+      path: [
+        "cfc",
+        "labels",
+        "value",
+        "body",
+        "confidentiality",
+        "clauses",
+        "*",
+        "alternatives",
+        "*",
+      ],
+      label: { confidentiality: ["metadata-secret"] },
+      origin: "label-metadata",
+      observes: "labelMetadata",
+    }, {
+      path: ["cfc", "labels"],
+      label: { confidentiality: ["payload-secret"] },
+    }];
+    const read = (path: string[]): IReadActivity => ({
+      ...address,
+      path: toDocumentPath(path),
+      meta: {},
+    });
+
+    expect(
+      collectConsumedLabel(transaction([], [read(["value", "cfc"])], entries))
+        .confidentiality,
+    ).toEqual(["payload-secret"]);
+    expect(
+      collectConsumedLabel(transaction([], [read(["value"])], entries))
+        .confidentiality,
+    ).toEqual(["payload-secret"]);
+  });
+
   it("starts a fresh source set for each collection", () => {
     const tx = transaction([observation(address, ["private"])]);
     const first = collectConsumedLabel(tx);

@@ -131,8 +131,7 @@ export class LinkTargetWatch {
         ? synchronizedTarget
         : undefined;
       this.#observed = observedTarget;
-      const unsubscribe = linkCell.subscribe((nextTarget) => {
-        const validTarget = isCellHandle(nextTarget) ? nextTarget : undefined;
+      const retarget = (validTarget: CellHandle | undefined) => {
         if (
           validTarget === undefined
             ? observedTarget === undefined
@@ -145,7 +144,14 @@ export class LinkTargetWatch {
         observedTarget = validTarget;
         this.#observed = validTarget;
         this.#onRetarget(validTarget);
-      });
+      };
+      const unsubscribe = linkCell.subscribe(
+        (nextTarget) =>
+          retarget(isCellHandle(nextTarget) ? nextTarget : undefined),
+        // A link the worker will not show names no target the host may
+        // follow, so the watch reports none rather than keep the last.
+        { onRefused: () => retarget(undefined) },
+      );
       if (this.#token === token) {
         this.#unsubscribe = unsubscribe;
       } else {

@@ -79,6 +79,9 @@ const CELL_LIKE_CLASSES = spellingsWhere({
 });
 
 const CELL_FACTORY_NAMES = new Set(["of"]);
+// The plain cell constructor's `of`, which `commonfabric` also exports on its
+// own as `cell<T>(…)`.
+const CELL_FUNCTION_NAMES = new Set(["cell"]);
 const CELL_FOR_NAMES = new Set(["for"]);
 const CELL_SCOPED_CONSTRUCTOR_NAMES = new Set([
   "perSpace",
@@ -284,6 +287,51 @@ export function detectNewExpressionKind(
   );
   if (!factoryName) return undefined;
   return { kind: "cell-factory", factoryName };
+}
+
+/**
+ * The cell kind `call` constructs, where it calls a cell constructor's static
+ * factory (`Writable.of<T>(…)`) or the plain cell constructor's `of` that
+ * `commonfabric` exports as `cell<T>(…)`, named directly or through a
+ * namespace import, or `undefined` for any other call.
+ */
+export function detectCellFactoryCallKind(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): Extract<CallKind, { kind: "cell-factory" }> | undefined {
+  const callee = stripWrappers(call.expression);
+  const factoryName = isCellFunction(callee, checker)
+    ? "Cell"
+    : ts.isPropertyAccessExpression(callee) &&
+        CELL_FACTORY_NAMES.has(callee.name.text)
+    ? detectCellConstructorExpressionName(callee.expression, checker, new Set())
+    : undefined;
+  return factoryName ? { kind: "cell-factory", factoryName } : undefined;
+}
+
+/**
+ * Whether `callee` names the `cell` function `commonfabric` exports: imported
+ * by name, or read as a member of the module's namespace.
+ */
+function isCellFunction(
+  callee: ts.Expression,
+  checker: ts.TypeChecker,
+): boolean {
+  if (ts.isIdentifier(callee)) {
+    const symbol = checker.getSymbolAtLocation(callee);
+    return symbol !== undefined &&
+      getImportedCommonFabricNamedExport(symbol, CELL_FUNCTION_NAMES) !==
+        undefined;
+  }
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    !CELL_FUNCTION_NAMES.has(callee.name.text)
+  ) return false;
+  const symbol = checker.getSymbolAtLocation(callee.name);
+  const resolved = symbol && resolveAlias(symbol, checker, new Set());
+  return resolved !== undefined &&
+    CELL_FUNCTION_NAMES.has(resolved.getName()) &&
+    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved));
 }
 
 export function detectDirectBuilderCall(

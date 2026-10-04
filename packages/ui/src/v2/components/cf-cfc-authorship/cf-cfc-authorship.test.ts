@@ -448,6 +448,35 @@ describe("CFCFCAuthorship", () => {
     }
   });
 
+  it("stops watching the resolved cell once the worker refuses the value", async () => {
+    const resolved = unloadedCell();
+    const element = connectedElement();
+    let refuse: (() => void) | undefined;
+
+    try {
+      element.author = "alice";
+      element.value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(resolved),
+        subscribe: (
+          _callback: () => void,
+          options: { onRefused: (refusal: unknown) => void },
+        ) => {
+          refuse = () => options.onRefused({ refusedBy: "display-ceiling" });
+          return () => {};
+        },
+      };
+      await element.refreshLabel();
+      expect(resolved.subscriberCount()).toBe(1);
+
+      refuse?.();
+
+      expect(resolved.subscriberCount()).toBe(0);
+    } finally {
+      element.disconnectedCallback();
+    }
+  });
+
   it("stops watching an unloaded resolved cell when it disconnects", async () => {
     const resolved = unloadedCell();
     const element = connectedElement();
