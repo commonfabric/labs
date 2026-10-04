@@ -395,6 +395,16 @@ describe("HostReadGate, for what crosses beside a value", () => {
         [],
       ]);
       expect(holds(toOwner, SECRET_KEY)).toBe(true);
+      // A read that asks for the label beside the value is given the same
+      // view, and a refused read none.
+      const withLabel = { includeCfcLabel: true };
+      expect(gateFor(docs.runtime, owner).read(docs.contacts, withLabel))
+        .toEqual({
+          value: { [SECRET_KEY]: SECRET_VALUE },
+          cfcLabel: toOwner.cfcLabel,
+        });
+      expect(gateFor(docs.runtime, visitor).read(docs.contacts, withLabel))
+        .toEqual({ refused: { refusedBy: "display-ceiling" } });
     });
 
     it("joins the view a ref to a refused document carries", async () => {
@@ -760,6 +770,27 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("refuses, rather than fails, a decision on a path that cannot be resolved", async () => {
+      await using docs = await shelf();
+      // A link that leads back through its own position never resolves.
+      const loop = await docs.write("link-loop", {
+        a: docs.runtime.getCell(space, "link-loop").key("a").key("b")
+          .getAsLink(),
+      });
+      const looped = loop.key("a").key("b");
+      expect(() => looped.resolveAsCell()).toThrow("Link cycle detected");
+
+      for (const viewer of [visitor, owner]) {
+        const gate = gateFor(docs.runtime, viewer);
+        expect(gate.linkRefusal(looped)).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+        expect(gate.metadataRefusal(looped)).toEqual({
+          refused: { refusedBy: "display-ceiling" },
+        });
+      }
+    });
+
     it("does not tell a visitor where a link in a document only its owner may see leads", async () => {
       await using docs = await shelf();
       const target = await docs.write("link-target", { x: 1 });
@@ -1029,10 +1060,30 @@ describe("HostReadGate, for what crosses beside a value", () => {
         modulePolicies,
       });
 
+      const refused = { refused: { refusedBy: "display-ceiling" } };
+      const build = () => Promise.resolve({ rows: [] });
       expect(await gate.settle(member)).toBe(false);
-      expect(await gate.fromCell(member, () => Promise.resolve({ rows: [] })))
-        .toEqual({ refused: { refusedBy: "display-ceiling" } });
-      expect(await gate.slug(member)).toEqual({
+      expect(await gate.fromCell(member, build)).toEqual(refused);
+      expect(await gate.fromMetadata(member, build)).toEqual(refused);
+      expect(await gate.slug(member)).toEqual(refused);
+      expect(await gate.resolveAsCell(member)).toEqual(refused);
+    });
+
+    it("refuses a member's document at once where nothing can load its access list", async () => {
+      await using docs = await shelf();
+      const member = await docs.write("members-only", { note: "x" }, [[
+        [],
+        [cfcAtom.space(space)],
+      ]]);
+      // Decided by the configured ceiling alone, with no provider that admits
+      // a space's members or loads their list.
+      const gate = HostReadGate.forConfiguredCeiling(
+        defaultRenderConfidentialityCeiling(owner.did()),
+      );
+
+      expect(await gate.hold(member)).toBe(true);
+      expect(await gate.settle(member)).toBe(false);
+      expect(gate.read(member)).toEqual({
         refused: { refusedBy: "display-ceiling" },
       });
     });
@@ -1282,6 +1333,18 @@ describe("HostReadGate, for what crosses beside a value", () => {
         writes: [],
         timeStamp: 3,
       };
+      const pulled: RuntimeTelemetryMarkerResult = {
+        type: "storage.pull.error",
+        id: "pull",
+        error: `could not read ${SECRET_VALUE}`,
+        timeStamp: 3,
+      };
+      const attempted: RuntimeTelemetryMarkerResult = {
+        type: "scheduler.read-attempt",
+        kind: "reactive",
+        reads: { proxyAccesses: 1, linkResolutions: 0 },
+        timeStamp: 4,
+      };
       const settled: RuntimeTelemetryMarkerResult = {
         type: "scheduler.settle",
         durationMs: 1,
@@ -1310,9 +1373,16 @@ describe("HostReadGate, for what crosses beside a value", () => {
         ...pushed,
         message: PLACEHOLDER,
       });
-      expect(toVisitor.telemetry(settled, docs.documentAt).marker).toEqual(
-        settled,
-      );
+      expect(toOwner.telemetry(pulled, docs.documentAt).marker).toEqual({
+        ...pulled,
+        error: PLACEHOLDER,
+      });
+      // Counts and times carry nothing of a cell.
+      for (const counted of [attempted, settled]) {
+        expect(toVisitor.telemetry(counted, docs.documentAt).marker).toEqual(
+          counted,
+        );
+      }
       // With no ceiling, nothing is decided.
       expect(
         new HostReadGate(undefined, {}).telemetry(committed, docs.documentAt)
@@ -1551,6 +1621,65 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(toOwner.result).toEqual(result);
     });
 
+    it("withholds, under a ceiling, a diagnostic key that names no address it can decide", async () => {
+      await using docs = await shelf();
+      // Too few segments to name a document in each spelling: the scheduler
+      // graph's `space/id/scopeKey/path`, telemetry's `space/id/path`, and a
+      // diagnosis's `space/id/path`.
+      const unplaced = `${space}/${SECRET_KEY}`;
+      const bare = SECRET_KEY;
+      const snapshot = {
+        nodes: [{
+          id: "action",
+          type: "computation" as const,
+          isDirty: false,
+          isPending: false,
+          reads: [unplaced],
+          writes: [],
+        }],
+        edges: [],
+        timestamp: 1,
+      };
+      const dependencies: RuntimeTelemetryMarkerResult = {
+        type: "scheduler.dependencies.update",
+        actionId: "action",
+        reads: [bare],
+        writes: [],
+        timeStamp: 1,
+      };
+      const diagnosis = {
+        nonIdempotent: [{
+          actionId: "action:1",
+          runs: [{ timestamp: 1, reads: { [bare]: SECRET_VALUE }, writes: {} }],
+          differingWriteKeys: [bare],
+        }],
+        cycles: [],
+        duration: 1,
+        busyTime: 1,
+      };
+      const documentAt: GraphDocumentAt = (documentSpace, id) =>
+        docs.documentAt(documentSpace, id);
+
+      for (const viewer of [visitor, owner]) {
+        const gate = gateFor(docs.runtime, viewer);
+        const answers = [
+          gate.graphSnapshot(snapshot, documentAt),
+          gate.telemetry(dependencies, docs.documentAt),
+          gate.diagnosis(diagnosis, docs.documentAt),
+        ];
+        for (const answer of answers) {
+          expect(holds(answer, SECRET_KEY)).toBe(false);
+          expect(holds(answer, SECRET_VALUE)).toBe(false);
+          expect(holds(answer, PLACEHOLDER)).toBe(true);
+        }
+      }
+      // With no ceiling, nothing is decided.
+      expect(
+        new HostReadGate(undefined, {}).diagnosis(diagnosis, docs.documentAt)
+          .result,
+      ).toEqual(diagnosis);
+    });
+
     it("withholds what an action logged from a reader its reads refuse", async () => {
       await using docs = await shelf();
       // What an action that read the document had consumed.
@@ -1584,6 +1713,23 @@ describe("HostReadGate, for what crosses beside a value", () => {
         gateFor(docs.runtime, owner).console(message, ["logged"], () => {
           throw new Error("the transaction is gone");
         }).args,
+      ).toEqual([PLACEHOLDER]);
+      // A module policy's label is decided on its manifest, looked up in the
+      // spaces the labeled documents were read from; none is published here,
+      // so the policy cannot be shown to admit what the action read.
+      const governed = await docs.write("policy-governed", { note: "x" }, [[
+        [],
+        [cfcAtom.modulePolicyRef("module", "policy", "digest", owner.did())],
+      ]]);
+      const consumedGoverned = () =>
+        readProjected(governed.asSchema(true), hostValueOf).consumed;
+      expect(consumedGoverned().modulePolicySpaces.size).toBe(1);
+      expect(
+        gateFor(docs.runtime, owner).console(
+          message,
+          ["logged"],
+          consumedGoverned,
+        ).args,
       ).toEqual([PLACEHOLDER]);
     });
 

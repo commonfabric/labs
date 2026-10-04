@@ -139,6 +139,12 @@ type PlacedAddress = {
   root: Cell<unknown> | undefined;
 };
 
+/** Addresses as a host may see them, and an absent list as absent. */
+type ShownAddresses = {
+  (keys: readonly string[]): string[];
+  (keys: readonly string[] | undefined): string[] | undefined;
+};
+
 /** Splits and places an address, or `undefined` for a string that is none. */
 type AddressPlacement = (key: string) => PlacedAddress | undefined;
 
@@ -199,6 +205,13 @@ const UNHELD: RenderLabelSummary = Object.freeze({
   confidentiality: [],
   integrity: [],
 });
+
+/** How the policy stands with what an action consumed (`#consumedVerdict`). */
+type ConsumedVerdict =
+  | { readonly kind: "admitted" | "unreadable" | "absent" }
+  | { readonly kind: "refused"; readonly labels: SinkConsumedLabel };
+
+const ADMITTED: ConsumedVerdict = Object.freeze({ kind: "admitted" });
 
 /**
  * Whether the replica holds `cell`'s document and the one its path resolves
@@ -440,7 +453,6 @@ export class HostReadGate {
     cells: readonly Cell<unknown>[],
     holders: readonly Cell<unknown>[] = [],
   ): Promise<"none" | "loaded" | "failed"> {
-    if (this.#policy === undefined) return "none";
     return await this.#loadAccessListsNamedBy([
       ...cells.flatMap((cell) => [
         ...readProjected(cell, hostValueOf).consumed.confidentiality,
@@ -933,17 +945,17 @@ export class HostReadGate {
         return {
           ...marker,
           handlerInfo,
-          writes: addresses(marker.writes) ?? [],
+          writes: addresses(marker.writes),
           ...error(marker.error),
         };
       }
       case "scheduler.materializer.register":
-        return { ...marker, writes: addresses(marker.writes) ?? [] };
+        return { ...marker, writes: addresses(marker.writes) };
       case "scheduler.dependencies.update":
         return {
           ...marker,
-          reads: addresses(marker.reads) ?? [],
-          writes: addresses(marker.writes) ?? [],
+          reads: addresses(marker.reads),
+          writes: addresses(marker.writes),
         };
       case "storage.push.start":
       case "storage.push.complete":
@@ -987,10 +999,6 @@ export class HostReadGate {
       case "scheduler.subscribe":
       case "scheduler.non-settling":
         return marker;
-      default: {
-        const undecided: never = marker;
-        return undecided;
-      }
     }
   }
 
@@ -1004,9 +1012,8 @@ export class HostReadGate {
    * named alone, and a string that is no address is withheld. Each
    * document is decided once per call.
    */
-  #addressesShown(
-    place: AddressPlacement,
-  ): (keys: readonly string[] | undefined) => string[] | undefined {
+  #addressesShown(place: AddressPlacement): ShownAddresses {
+    const policy = this.#policy;
     const verdicts = new Map<string, boolean>();
     const shown = (key: string): string => {
       const placed = place(key);
@@ -1020,10 +1027,17 @@ export class HostReadGate {
       }
       return refused ? placed.document : key;
     };
-    return (keys) =>
-      keys === undefined || this.#policy === undefined
-        ? keys === undefined ? undefined : [...keys]
-        : [...new Set(keys.map(shown))];
+    function addresses(keys: readonly string[]): string[];
+    function addresses(
+      keys: readonly string[] | undefined,
+    ): string[] | undefined;
+    function addresses(
+      keys: readonly string[] | undefined,
+    ): string[] | undefined {
+      if (keys === undefined) return undefined;
+      return policy === undefined ? [...keys] : [...new Set(keys.map(shown))];
+    }
+    return addresses;
   }
 
   /**
@@ -1106,7 +1120,9 @@ export class HostReadGate {
    * instance (`parseAddressKey()`), and carries the values: those of a
    * document the policy refuses, decided on the instance the key names, are
    * joined under `space/id`, with the placeholder in place of their values,
-   * and the differing keys are named the same way.
+   * and the differing keys are named the same way. Under a policy, a key
+   * that names no document is withheld with its values, as an address is
+   * that cannot be placed.
    */
   diagnosis(
     result: SchedulerDiagnosisResult,
@@ -1115,7 +1131,9 @@ export class HostReadGate {
     const verdicts = new Map<string, boolean>();
     const shown = (key: string): string => {
       const address = parseAddressKey(key);
-      if (address === undefined) return key;
+      if (address === undefined) {
+        return this.#policy === undefined ? key : WITHHELD;
+      }
       const [space, scopedId] = key.split("/", 2);
       const document = `${space}/${scopedId}`;
       let refused = verdicts.get(document);
@@ -1205,31 +1223,25 @@ export class HostReadGate {
     consumed: (() => SinkConsumedLabel) | undefined,
   ): Promise<NavigateRequestNotification> {
     let verdict = this.#consumedVerdict(consumed);
-    if (verdict === "refused") {
-      const labels = this.#labelsOf(consumed);
-      if (
-        labels !== undefined &&
-        await this.#loadAccessListsNamedBy(labels.confidentiality) ===
-          "loaded"
-      ) {
-        verdict = this.#consumedVerdict(consumed);
-      }
+    if (
+      verdict.kind === "refused" &&
+      await this.#loadAccessListsNamedBy(verdict.labels.confidentiality) ===
+        "loaded"
+    ) {
+      verdict = this.#consumedVerdict(consumed);
     }
-    if (verdict !== "admitted") {
+    if (verdict.kind !== "admitted") {
       // This rests on the ceiling being fixed for a worker's life, and on
       // the resolver consulting no grant: a refusal of labels that name no
       // space or module policy would be refused again. Display-boundary
       // grant rules, such as a share grant, would be one more thing a later
       // decision can learn, and must be added here before they exist.
-      const labels = verdict === "refused"
-        ? this.#labelsOf(consumed)
-        : undefined;
       throw new NavigationWithheldError(
-        labels !== undefined &&
-          membershipSpacesInConfidentiality(labels.confidentiality)
+        verdict.kind === "refused" &&
+          membershipSpacesInConfidentiality(verdict.labels.confidentiality)
               .length === 0 &&
-          modulePolicyRefsInConfidentiality(labels.confidentiality).length ===
-            0,
+          modulePolicyRefsInConfidentiality(verdict.labels.confidentiality)
+              .length === 0,
       );
     }
     return decided({
@@ -1365,40 +1377,29 @@ export class HostReadGate {
    * everything an action says to a host.
    */
   #withheld(consumed: (() => SinkConsumedLabel) | undefined): boolean {
-    return this.#consumedVerdict(consumed) !== "admitted";
-  }
-
-  /** `consumed` read, or `undefined` where there are none or they fail. */
-  #labelsOf(
-    consumed: (() => SinkConsumedLabel) | undefined,
-  ): SinkConsumedLabel | undefined {
-    if (this.#policy === undefined || consumed === undefined) return undefined;
-    try {
-      return consumed();
-    } catch {
-      return undefined;
-    }
+    return this.#consumedVerdict(consumed).kind !== "admitted";
   }
 
   /**
    * How the policy stands with labels an action consumed: `admitted` with
    * no policy, or where it admits them (an action that consumed no labeled
-   * value included); `refused` where it refuses them; `unreadable` where
-   * they cannot be read; and `absent` where there are none to decide on.
+   * value included); `refused`, with the labels it refused, where it refuses
+   * them; `unreadable` where they cannot be read; and `absent` where there
+   * are none to decide on.
    */
   #consumedVerdict(
     consumed: (() => SinkConsumedLabel) | undefined,
-  ): "admitted" | "refused" | "unreadable" | "absent" {
+  ): ConsumedVerdict {
     const policy = this.#policy;
-    if (policy === undefined) return "admitted";
-    if (consumed === undefined) return "absent";
+    if (policy === undefined) return ADMITTED;
+    if (consumed === undefined) return { kind: "absent" };
     let read: SinkConsumedLabel;
     try {
       read = consumed();
     } catch {
-      return "unreadable";
+      return { kind: "unreadable" };
     }
-    if (read.confidentiality.length === 0) return "admitted";
+    if (read.confidentiality.length === 0) return ADMITTED;
     const spaces = [...read.modulePolicySpaces.values()].flatMap((set) => [
       ...set,
     ]);
@@ -1409,8 +1410,8 @@ export class HostReadGate {
         policy,
         this.#sources,
       )
-      ? "admitted"
-      : "refused";
+      ? ADMITTED
+      : { kind: "refused", labels: read };
   }
 
   /**

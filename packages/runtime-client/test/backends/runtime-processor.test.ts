@@ -7895,7 +7895,9 @@ describe("runtime-processor", () => {
         }, client);
         try {
           expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
-          processor.handleVDomUnmount({
+          // Through the dispatcher, which hands the handler the client the
+          // request came from: the mount is that client's, not the owner's.
+          await processor.handleRequest({
             type: RequestType.VDomUnmount,
             mountId: 37,
           }, client);
