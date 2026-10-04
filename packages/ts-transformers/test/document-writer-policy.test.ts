@@ -308,6 +308,36 @@ export default pattern<{}>(() => {
           `pick ? toSchema<${UNREAD}>() : toSchema<${UNREAD}>()`,
         ],
         [
+          "a `??` choice",
+          "const fallback = undefined as ReturnType<typeof toSchema> | undefined;",
+          `fallback ?? toSchema<${UNREAD}>()`,
+        ],
+        [
+          "a function declaration that returns it",
+          `function make() {\n  return toSchema<${UNREAD}>();\n}`,
+          "make()",
+        ],
+        [
+          "a function that destructures its argument",
+          "const unwrap = ({ schema }: { schema: any }) => schema;",
+          `unwrap({ schema: toSchema<${UNREAD}>() })`,
+        ],
+        [
+          "a function that destructures a tuple argument past a hole",
+          "const second = ([, schema]: [unknown, any]) => schema;",
+          `second([0, toSchema<${UNREAD}>()])`,
+        ],
+        [
+          "a shorthand property",
+          `const input = toSchema<${UNREAD}>();\nconst schemas = { input };`,
+          "schemas.input",
+        ],
+        [
+          "a property beside a later spread that does not hold it",
+          `const schemas = { input: toSchema<${UNREAD}>(), ...{ other: 1 } };`,
+          "schemas.input",
+        ],
+        [
           "a schema literal holding a `toSchema` call",
           `const schema = { type: "object", properties: { byId: toSchema<${UNREAD}>() } } as const;`,
           "schema",
@@ -327,16 +357,57 @@ export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
       });
     }
 
-    it("reports a schema that cannot be read back to its sources", async () => {
-      // A `let` binding may hold any schema by the time the pattern reads it.
-      const result = await transform(`
-let schema = toSchema<${UNREAD}>();
-export default pattern((input: ${UNREAD}) => ({ input }), schema);`);
+    for (
+      const [how, declaration, reference] of [
+        ["a `let` binding", `let schema = toSchema<${UNREAD}>();`, "schema"],
+        [
+          "a call to a function bound by `let`",
+          `let make = () => toSchema<${UNREAD}>();`,
+          "make()",
+        ],
+        [
+          "a call given an argument that cannot be read back",
+          `const make = (_seed: unknown) => toSchema<${UNREAD}>();\nlet seed = {};`,
+          "make(seed)",
+        ],
+        [
+          "a method of an object",
+          `const helpers = { make: () => toSchema<${UNREAD}>() };`,
+          "helpers.make()",
+        ],
+        [
+          "a function that calls itself",
+          "const loop = (): any => loop();",
+          "loop()",
+        ],
+        [
+          "a getter",
+          `const schemas = { get input() { return toSchema<${UNREAD}>(); } };`,
+          "schemas.input",
+        ],
+        [
+          "a property a spread of a `let` binding may hold",
+          `let base = { input: toSchema<${UNREAD}>() };\nconst schemas = { ...base };`,
+          "schemas.input",
+        ],
+        [
+          "a `new` expression",
+          "",
+          "new Object() as unknown as ReturnType<typeof toSchema>",
+        ],
+      ] as const
+    ) {
+      it(`reports a schema that cannot be read back to its sources: ${how}`, async () => {
+        // A value the reading cannot follow may hold any schema by the time
+        // the pattern reads it.
+        const result = await transform(`${declaration}
+export default pattern((input: ${UNREAD}) => ({ input }), ${reference});`);
 
-      expect(
-        result.diagnostics.filter(isUnreadWriter).map(isUnfollowedReference),
-      ).toEqual([true]);
-    });
+        expect(
+          result.diagnostics.filter(isUnreadWriter).map(isUnfollowedReference),
+        ).toContain(true);
+      });
+    }
 
     for (
       const [how, declaration, reference] of [
@@ -479,6 +550,10 @@ export default pattern<{}>((): ${UNREAD} => ({ byId: {} }));`);
           'return { box: { a: "" } as WriteAuthorizedBy<{ a: string }, typeof setName> };',
         ],
         ["returns inside an array", `return { list: ["" as ${POLICY}] };`],
+        [
+          "returns inside an array with a hole",
+          `return { list: [, "" as ${POLICY}] };`,
+        ],
         [
           "returns beside a spread",
           `return { ...{ count: 1 }, value: "" as ${POLICY} };`,

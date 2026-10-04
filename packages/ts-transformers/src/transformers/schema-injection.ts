@@ -1034,7 +1034,7 @@ function readSchemaSources(
         if (symbol) parameters.add(symbol);
       }
     }
-    return returnedExpressions(fn).every((returned) =>
+    return returnedExpressions(fn.body).every((returned) =>
       next(returned, parameters)
     );
   }
@@ -1054,13 +1054,20 @@ function isPrimitiveType(type: ts.Type): boolean {
 /**
  * The function `callee` calls, through imports: one written in the program,
  * as a function declaration or a `const` binding of a function or arrow
- * function, or `"declared"` for one only declared in a declaration file, as
- * the library's are. `undefined` where neither can be told.
+ * function, with its body, or `"declared"` for one only declared in a
+ * declaration file, as the library's are. `undefined` where neither can be
+ * told.
  */
 function calledFunction(
   callee: ts.Expression,
   checker: ts.TypeChecker,
-): ts.FunctionLikeDeclaration | "declared" | undefined {
+):
+  | {
+    readonly parameters: readonly ts.ParameterDeclaration[];
+    readonly body: ts.ConciseBody;
+  }
+  | "declared"
+  | undefined {
   const target = unwrapExpression(callee);
   const name = ts.isPropertyAccessExpression(target) ? target.name : target;
   let symbol = checker.getSymbolAtLocation(name);
@@ -1079,7 +1086,8 @@ function calledFunction(
   if (!ts.isIdentifier(target)) return undefined;
   const declaration = symbol?.valueDeclaration;
   if (declaration && ts.isFunctionDeclaration(declaration)) {
-    return declaration.body ? declaration : undefined;
+    return declaration.body &&
+      { parameters: declaration.parameters, body: declaration.body };
   }
   const initializer = declaration && ts.isVariableDeclaration(declaration) &&
       (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
@@ -1088,7 +1096,7 @@ function calledFunction(
   return initializer &&
       (ts.isArrowFunction(initializer) ||
         ts.isFunctionExpression(initializer))
-    ? initializer
+    ? { parameters: initializer.parameters, body: initializer.body }
     : undefined;
 }
 
@@ -1101,13 +1109,12 @@ function bindingNamesOf(name: ts.BindingName): ts.Identifier[] {
 }
 
 /**
- * The expressions `fn` returns: its body, for an arrow function written as
- * one, and otherwise the operand of each `return` in its body, not counting
- * those of functions nested in it.
+ * The expressions a function whose body is `body` returns: the body itself,
+ * for an arrow function written as one, and otherwise the operand of each
+ * `return` in it, not counting those of functions nested in it.
  */
-function returnedExpressions(fn: ts.FunctionLikeDeclaration): ts.Expression[] {
-  if (!fn.body) return [];
-  if (!ts.isBlock(fn.body)) return [fn.body];
+function returnedExpressions(body: ts.ConciseBody): ts.Expression[] {
+  if (!ts.isBlock(body)) return [body];
   const returned: ts.Expression[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isReturnStatement(node)) {
@@ -1117,7 +1124,7 @@ function returnedExpressions(fn: ts.FunctionLikeDeclaration): ts.Expression[] {
     if (ts.isFunctionLike(node)) return;
     ts.forEachChild(node, visit);
   };
-  ts.forEachChild(fn.body, visit);
+  ts.forEachChild(body, visit);
   return returned;
 }
 
@@ -1218,23 +1225,14 @@ function constInitializer(
  * The name `name` gives its member where no evaluation is needed to read it:
  * an identifier, a string or numeric literal, or a computed name holding one.
  */
-function staticPropertyName(
-  name: ts.PropertyName | undefined,
-): string | undefined {
-  if (!name) return undefined;
-  if (
-    ts.isIdentifier(name) || ts.isStringLiteral(name) ||
-    ts.isNumericLiteral(name)
-  ) {
-    return name.text;
-  }
-  if (ts.isComputedPropertyName(name)) {
-    const key = unwrapExpression(name.expression);
-    return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)
-      ? key.text
-      : undefined;
-  }
-  return undefined;
+function staticPropertyName(name: ts.PropertyName): string | undefined {
+  const key = ts.isComputedPropertyName(name)
+    ? unwrapExpression(name.expression)
+    : name;
+  return (ts.isIdentifier(key) && !ts.isComputedPropertyName(name)) ||
+      ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)
+    ? key.text
+    : undefined;
 }
 
 function createUnknownSchemaTypeNode(factory: ts.NodeFactory): ts.TypeNode {
