@@ -1692,9 +1692,17 @@ export class RuntimeProcessor {
     // A metadata field is decided on its document's root, and a metadata
     // link field on the cell it links to besides.
     const root = getCell(this.#runtime, { ...request.cell, path: [] });
-    const linked = request.meta === "argument" || request.meta === "result"
-      ? this.#metaLinkTarget(root, request.meta, request.cell.path)
-      : undefined;
+    let linked: Cell<unknown> | undefined;
+    try {
+      linked = request.meta === "argument" || request.meta === "result"
+        ? this.#metaLinkTarget(root, request.meta, request.cell.path)
+        : undefined;
+    } catch {
+      // The link of a document the read was refused, which another writer
+      // may have left malformed: no access list makes it readable, so the
+      // refusal stands, rather than turning into an error.
+      return answer;
+    }
     const settled = await this.#hostReadGate.settle(
       getCell(this.#runtime, request.cell),
       ...(request.meta === undefined ? [] : [root]),
