@@ -8,7 +8,10 @@
  */
 
 import { Browser, env, type Page } from "@commonfabric/integration";
-import { login } from "@commonfabric/integration/shell-utils";
+import {
+  login,
+  seedRenderCeilingProfile,
+} from "@commonfabric/integration/shell-utils";
 import type { Identity } from "@commonfabric/identity";
 import {
   settleView,
@@ -68,8 +71,18 @@ export class BoardSession {
     await waitForPieceView(this.#page, spaceDid, boardId);
   }
 
-  /** Sign in, and wait for the runtime the board's data arrives through. */
+  /**
+   * Sign in, and wait for the runtime the board's data arrives through.
+   *
+   * The worker runs without the shell's display ceiling. A measurement
+   * confirms each lift it attributes reads to by the preview of the function
+   * running at its site, which is program text, and under a ceiling the
+   * worker withholds program text, since nothing records what a program was
+   * made from. What is measured is the reads lifts make, which the ceiling
+   * does not decide. The switch is read when the worker is built, at login.
+   */
   async signIn(): Promise<void> {
+    await seedRenderCeilingProfile(this.#page, false);
     await login(this.#page, this.#target.identity);
     await waitForRuntimeIdle(this.#page);
   }

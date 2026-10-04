@@ -256,7 +256,7 @@ const RENDER_CEILING_KEY = "cfcRenderCeiling";
  * and before the login: the same contract {@link enablePatternCoverage} runs
  * under.
  */
-async function seedRenderCeilingProfile(
+export async function seedRenderCeilingProfile(
   page: Page,
   enabled: boolean | undefined,
 ): Promise<void> {
