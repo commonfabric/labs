@@ -174,7 +174,13 @@ export const createRuntimeSpaceMembershipProvider = (
       return cellDocumentHeld(aclCellFor(runtime, cells, space));
     },
     async whenHeld(space) {
-      await aclCellFor(runtime, cells, space).sync();
+      // A sync can finish without the document, as one cut off by the
+      // runtime's disposal does, which says nothing of the access list.
+      const cell = aclCellFor(runtime, cells, space);
+      await cell.sync();
+      if (!cellDocumentHeld(cell)) {
+        throw new Error(`The access list of ${space} did not load`);
+      }
     },
     subscribe(space, onChange) {
       // `Cell.sink` runs its action once synchronously at subscribe time (the

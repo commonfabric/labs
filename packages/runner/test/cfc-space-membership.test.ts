@@ -5,8 +5,13 @@ import {
   createRuntimeSpaceMembershipProvider,
   spaceReaderRole,
 } from "../src/cfc/space-membership.ts";
+import { Identity } from "@commonfabric/identity";
 import type { Cancel } from "../src/cancel.ts";
-import type { Runtime } from "../src/runtime.ts";
+import { Runtime } from "../src/runtime.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "../src/storage/cache.deno.ts";
 
 // §4.9.3 render membership lookup — the client-side capability resolver
 // (design: docs/history/specs/cfc-render-membership-lookup.md §3.1). `spaceReaderRole`
@@ -125,6 +130,32 @@ const fakeRuntime = (aclBySpace: Record<string, unknown>) => {
 };
 
 describe("createRuntimeSpaceMembershipProvider (§4.9.3 provider)", () => {
+  it("does not report an access list held when its sync finished without it", async () => {
+    const reader = await Identity.fromPassphrase("membership reader");
+    const space = (await Identity.fromPassphrase("membership space")).did();
+    const server = newLoopbackServer();
+    const runtime = new Runtime({
+      apiUrl: new URL("http://localhost"),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: reader }),
+    });
+    const provider = createRuntimeSpaceMembershipProvider(
+      runtime,
+      reader.did(),
+    );
+    try {
+      const loaded = provider.whenHeld?.(space).then(
+        () => "loaded",
+        (error: unknown) => `${error}`,
+      );
+      // Disposed while the access list loads, the sync finishes without it.
+      await runtime.dispose();
+      expect(await loaded).toContain("did not load");
+      expect(provider.held?.(space)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("reads a granted ACL synchronously and returns the reader role", () => {
     const { runtime, getCalls } = fakeRuntime({
       [`of:${SPACE_TEAM}`]: { [MALLORY]: "OWNER", [ALICE]: "READ" },
