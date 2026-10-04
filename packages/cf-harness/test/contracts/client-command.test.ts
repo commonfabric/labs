@@ -181,6 +181,33 @@ describe("client command contract", () => {
       ).toBeUndefined();
     });
 
+    it("omits unreported target, version and origin from result provenance", () => {
+      for (
+        const version of [undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "12"]
+      ) {
+        expect(harnessCommandResultProvenance(
+          { command: "loom.inspect", args: {}, approval: "person" },
+          {
+            approval: "person",
+            actor: "user",
+            loomActor: "user",
+            service: "s",
+          },
+          {
+            executor: "weaver",
+            ok: true,
+            bodyBytes: 0,
+            bodyOmitted: true,
+            ...(version !== undefined ? { outputs: { version } } : {}),
+          },
+        )).toEqual({
+          command: "loom.inspect",
+          actor: "user",
+          loomActor: "user",
+        });
+      }
+    });
+
     it("refuses a result's malformed or disagreeing `loomActor`", () => {
       for (
         const [actor, loomActor] of [

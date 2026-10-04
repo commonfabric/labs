@@ -2289,6 +2289,21 @@ describe("console/server", () => {
   });
 
   describe("POST /api/client-actions", () => {
+    it("returns 400 for malformed JSON before starting or settling a turn", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/client-actions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
     const loomId = "loom-0123456789abcdef";
 
     /**
@@ -2448,6 +2463,21 @@ describe("console/server", () => {
   });
 
   describe("POST /api/task", () => {
+    it("returns 400 for malformed JSON before starting or settling a turn", async () => {
+      const response = await server.handle(
+        new Request("http://127.0.0.1:8100/api/task", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "request body is not JSON",
+      });
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
     it("refuses a host whose protocol requires an unserved feature, before any session starts", async () => {
       const response = await server.handle(jsonRequest("/api/task", {
         text: "what is on this loom?",
