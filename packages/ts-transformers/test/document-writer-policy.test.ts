@@ -359,6 +359,16 @@ export default pattern<{}>(() => {
           "schemas.input",
         ],
         [
+          "a primitive property a spread with a computed key may replace",
+          `const key = "input" as string;\nconst schemas = { input: "", ...{ [key]: toSchema<${UNREAD}>() as unknown as string } };`,
+          "schemas.input as unknown as Schema",
+        ],
+        [
+          "a primitive element of an array literal",
+          `const schemas = [toSchema<${UNREAD}>() as unknown as string];`,
+          "schemas[0] as unknown as Schema",
+        ],
+        [
           "a shorthand property",
           `const input = toSchema<${UNREAD}>();\nconst schemas = { input };`,
           "schemas.input",

@@ -1012,7 +1012,7 @@ function readSchemaSources(
     ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)
   ) {
     const member = staticMemberOf(value, checker, depth);
-    return member ? next(member) : isPrimitive() || next(value.expression);
+    return member ? next(member) : next(value.expression) || isPrimitive();
   }
   if (ts.isConditionalExpression(value)) {
     return next(value.whenTrue) && next(value.whenFalse);
