@@ -2401,6 +2401,85 @@ describe("HostReadGate, for what crosses beside a value", () => {
       ).toEqual([]);
     });
 
+    it("decides a server's intent on its own once an optimistic enactment of it is withheld", async () => {
+      const nonce = "nav:optimistic-withheld";
+      const storageManager = StorageManager.emulate({ as: owner });
+      let gate: HostReadGate | undefined;
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager,
+        experimental: { serverExecution: true },
+        navigateCallback: async (target, consumed) => {
+          if (gate !== undefined) {
+            await gate.navigate(createCellRef(target), consumed);
+          }
+        },
+      });
+      const acked = () =>
+        runtime.getCellFromLink({
+          space,
+          id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+          scope: "session",
+          path: ["acks", nonce],
+        }).get();
+      try {
+        gate = gateFor(runtime, visitor);
+        const channel = runtime.effectsChannel;
+        if (channel === undefined) throw new Error("no effects channel");
+        // The client's own speculative run of the same handler, still in
+        // flight when the server's intent arrives.
+        const optimistic = Promise.withResolvers<void>();
+        const flushed = channel.enactOnce(nonce, () => optimistic.promise);
+        const tx = runtime.edit();
+        const destination = runtime.getCell(
+          space,
+          "optimistic-destination",
+          undefined,
+          tx,
+        );
+        destination.set({ title: "anyone may see this" });
+        runtime.getCellFromLink({
+          space,
+          id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+          scope: "session",
+          path: [],
+        }).withTx(tx).setRawUntyped({
+          entries: [{
+            nonce,
+            kind: "navigate",
+            args: {
+              target: {
+                id: destination.getAsNormalizedFullLink().id,
+                path: [],
+              },
+              chosenFrom: {
+                confidentiality: [ownerOnly],
+                integrity: [],
+                modulePolicySpaces: {},
+              },
+            },
+            issuedIn: null,
+          }],
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        await runtime.settled();
+        expect(acked()).toBeUndefined();
+
+        // The flush is withheld, as the visitor's ceiling refuses what chose
+        // its target, and nothing else is delivered.
+        optimistic.reject(new NavigationWithheldError(true));
+        expect(await flushed).toBe(false);
+        await runtime.settled();
+
+        // The server's intent was decided on what it carries, a definitive
+        // withhold, and retired.
+        expect(acked()).toBe(true);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
     it("answers a host's read of the session effects document as unreadable", async () => {
       await using docs = await shelf();
       const effects = docs.runtime.getCellFromLink({

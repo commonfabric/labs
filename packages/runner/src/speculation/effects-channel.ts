@@ -520,10 +520,17 @@ export class EffectsChannel {
         // An enactment (optimistic or authoritative) is MID-FLIGHT:
         // chain the ack on its SUCCESS (protocol.md §5's enact-then-ack
         // ordering; owner review P1-1) — a failure retracts the record
-        // and a later delivery retries instead of acking a navigation
-        // that never happened.
+        // and the entry is reconciled again, as this delivery would have
+        // decided it had nothing been in flight, instead of acking a
+        // navigation that never happened. An optimistic flush the display
+        // ceiling withheld is such a failure: the server's intent, which
+        // carries what chose its target, is then decided on its own, and
+        // retired if that withhold is definitive, without waiting for
+        // another delivery.
         void inFlight.then((ok) => {
-          if (ok && !this.#closed) this.#ack(space, nonce);
+          if (this.#closed) return;
+          if (ok) this.#ack(space, nonce);
+          else this.#reconcileFromReplica(space);
         });
         continue;
       }
