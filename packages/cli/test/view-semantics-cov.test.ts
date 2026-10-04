@@ -16,6 +16,7 @@ import {
   createSemantics,
 } from "../lib/view/languages/typescript/semantics.ts";
 import { buildDiffDocument } from "../lib/view/diffdoc.ts";
+import { diffSemanticsFor } from "../lib/view/languages/language.ts";
 import type { DiffMaps, DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import type { Document } from "../lib/view/model.ts";
@@ -238,19 +239,6 @@ const x = 1;
   // An offset two characters before the end sits in trailing whitespace, inside
   // the section but inside no node.
   assertEquals(sem.typeAt(blob.length - 2), null);
-});
-
-Deno.test("semantics: a section header path TS cannot load types to null", () => {
-  // A bare (slashless, extension-less) header path is not a virtual source file
-  // the program can serve: build() succeeds, but getSourceFile(section.name)
-  // returns undefined, so typeStringAt returns null via its `!sf` guard.
-
-  const blob = `// transformed: m
-const x = 1;
-const y = x;`;
-  const doc = parseDocument(blob);
-  const sem = createSemantics(blob, { cwd: CWD })!;
-  assertEquals(sem.typeAt(nameOffsetOf(doc, "y")), null);
 });
 
 Deno.test("semantics: definitionOf preview on a last line with no trailing newline", () => {
@@ -584,6 +572,44 @@ Deno.test("diff semantics: typeAt and definitionOf answer against the workspace"
   }
 });
 
+Deno.test("diff semantics: a diff file read in another language types to null", () => {
+  // Both files hold the same code. The diff maps offsets into each, but only
+  // the TypeScript file is in the program, so the Markdown file's offsets reach
+  // no source file.
+  const root = Deno.makeTempDirSync();
+  try {
+    Deno.writeTextFileSync(join(root, "deno.json"), "{}");
+    const paths = ["code.ts", "notes.md"];
+    for (const path of paths) {
+      Deno.writeTextFileSync(join(root, path), "const answer = 42;\n");
+    }
+    const diff = paths.map((path) =>
+      [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        "@@ -1 +1 @@",
+        "-const answer = 41;",
+        "+const answer = 42;",
+      ].join("\n")
+    ).join("\n") + "\n";
+    const { maps } = buildDiffDocument(
+      diff,
+      parseDiff(diff)!,
+      diffWorkspace(root),
+    );
+    const sem = diffSemanticsFor(diff, maps, { cwd: root })!;
+    const [code, notes] = paths.map((path) =>
+      diff.indexOf("+const answer", diff.indexOf(`+++ b/${path}`)) + 7
+    );
+    assertEquals(maps.toFile(notes)?.path, join(root, "notes.md"));
+    assertEquals(sem.typeAt(code), "42");
+    assertEquals(sem.typeAt(notes), null);
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
+});
+
 Deno.test("diff semantics: prewarm warms the diff program off the query path", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
@@ -612,7 +638,10 @@ Deno.test("diff semantics: an offset with no file mapping types to null", () => 
   }
 });
 
-Deno.test("diff semantics: a definition outside the diff opens as a file", () => {
+// Named apart from the test of the same case in view-diff.test.ts: two
+// tests of one package with one name are one identity, and a lane running
+// both files cannot say which of them a record belongs to.
+Deno.test("diff semantics: fileLines colors a definition outside the diff, and nothing outside the root", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     Deno.writeTextFileSync(
@@ -703,7 +732,7 @@ Deno.test("diff semantics: returns null when no root file is in the workspace", 
   const noWs: DiffWorkspace = { resolve: () => null, read: () => null };
   const model = parseDiff(DIFF)!;
   const { maps } = buildDiffDocument(DIFF, model, noWs);
-  assertEquals(maps.rootFiles.length, 0);
+  assertEquals(maps.rootFiles.size, 0);
   const sem = createDiffSemantics(DIFF, maps, { cwd: CWD });
   assertEquals(
     sem,

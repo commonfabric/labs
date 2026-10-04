@@ -1,9 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join } from "@std/path";
 
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../../src/config.ts";
 
 import {
+  consoleLaunchHelpText,
   type ConsoleLaunchIo,
   type ConsoleLaunchRecords,
   consoleLaunchReport,
@@ -208,9 +210,9 @@ describe("launch", () => {
         value: "granted: gmail-other (email)",
       });
       expect(plan.health.connectors[3]).toMatchObject({
-        reason: "its declared table contract carries no CFC class",
+        reason: "its declared table contract declares no confidentiality",
         remedy:
-          "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
+          "Declare per-column ifc.confidentiality (or a rowLabel confidentiality) in this connector's sqlite_sources, then restart the console.",
       });
       expect(JSON.stringify(plan.health.connectors)).not.toContain(MAIL_REF);
       expect(plan.health.connectors[4]).toMatchObject({
@@ -691,7 +693,7 @@ describe("launch", () => {
       );
 
       expect(plan.environment.CF_HARNESS_CONNECTOR_GRANTS).toBeUndefined();
-      expect(reported?.value).toContain("no CFC class");
+      expect(reported?.value).toContain("declares no confidentiality");
     });
 
     it("refuses to start when the receipt does not parse", () => {
@@ -888,6 +890,221 @@ describe("launch", () => {
           }),
         ),
       ).rejects.toThrow("daemon is not running");
+    });
+
+    /** The selection Loom hands a console on the native runtime. */
+    const RUNSC_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+    };
+
+    it("reads no Docker runtime table for a console on the runsc runtime", async () => {
+      let reads = 0;
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        RUNSC_ENV,
+        io({
+          readDockerRuntimes: () => {
+            reads += 1;
+            return Promise.resolve({ unreadable: "Docker is not running" });
+          },
+        }),
+      );
+
+      expect(reads).toBe(0);
+      expect(Object.keys(plan.environment)).not.toContain(
+        "CF_HARNESS_RUNSC_CFC_RESULT_DIR",
+      );
+      expect(Object.keys(plan.environment)).not.toContain(
+        "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR",
+      );
+      const names = plan.resolved.map(({ name }) => name);
+      expect(names).not.toContain("cfc results");
+      expect(names).not.toContain("cfc contexts");
+      expect(plan.resolved).toEqual(expect.arrayContaining([
+        {
+          name: "sandbox",
+          value: "runsc",
+          source: "`CF_HARNESS_SANDBOX_RUNTIME`, inherited",
+        },
+        {
+          name: "runsc",
+          value: "/store/bin/runsc",
+          source: "`CF_HARNESS_RUNSC_BINARY`, inherited",
+        },
+        {
+          name: "rootfs",
+          value: "/store/images/kitchensink",
+          source: "`CF_HARNESS_SANDBOX_ROOTFS`, inherited",
+        },
+        {
+          name: "cfc policy",
+          value: "/store/policy.json",
+          source: "`CF_HARNESS_RUNSC_CFC_POLICY`, inherited",
+        },
+      ]));
+    });
+
+    it("prints the harness's own defaults for a runsc console that names no binary, rootfs or policy", async () => {
+      const home = await Deno.makeTempDir({ prefix: "console-launch-home-" });
+      try {
+        const { plan } = await prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: home },
+          io(),
+        );
+
+        expect(
+          plan.resolved.filter(({ name }) =>
+            ["runsc", "rootfs", "cfc policy"].includes(name)
+          ),
+        ).toEqual([
+          {
+            name: "runsc",
+            value: "`runsc`, looked for on `PATH`",
+            source: "harness default",
+          },
+          {
+            name: "rootfs",
+            value: "(the driver's default)",
+            source: "harness default",
+          },
+          {
+            name: "cfc policy",
+            value: "(none: every turn is refused at `enforce-strict`)",
+            source: "harness default",
+          },
+        ]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("attributes a CFC policy found under `HOME` to the harness default, not to the environment", async () => {
+      const home = await Deno.makeTempDir({ prefix: "console-launch-home-" });
+      try {
+        const policy = `${home}/.local/share/runsc-cfc/cfc-policy.json`;
+        await Deno.mkdir(`${home}/.local/share/runsc-cfc`, {
+          recursive: true,
+        });
+        await Deno.writeTextFile(policy, "{}");
+
+        const { plan } = await prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: home },
+          io(),
+        );
+
+        expect(plan.resolved).toContainEqual({
+          name: "cfc policy",
+          value: policy,
+          source: "harness default",
+        });
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("reads the Docker runtime table for a console the environment puts on Docker", async () => {
+      let reads = 0;
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+        io({
+          readDockerRuntimes: () => {
+            reads += 1;
+            return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+          },
+        }),
+      );
+
+      expect(reads).toBe(1);
+      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
+        "/store/runsc-cfc/sidecars/results",
+      );
+      expect(plan.resolved.map(({ name }) => name)).not.toContain("sandbox");
+    });
+
+    for (const flag of ["--cfc-result-dir", "--cfc-invocation-context-dir"]) {
+      it(`throws naming \`${flag}\`, a sidecar flag a console on the runsc runtime has no use for`, async () => {
+        await expect(
+          prepareConsoleLaunch(
+            [...NAMED_ARGS, flag, "/elsewhere/sidecar"],
+            RUNSC_ENV,
+            io(),
+          ),
+        ).rejects.toThrow(`\`${flag}\``);
+      });
+    }
+
+    for (
+      const [flag, variable] of [
+        ["--sandbox-runtime", "CF_HARNESS_SANDBOX_RUNTIME"],
+        ["--sandbox-rootfs", "CF_HARNESS_SANDBOX_ROOTFS"],
+        ["--sandbox-cfc-policy", "CF_HARNESS_RUNSC_CFC_POLICY"],
+      ] as const
+    ) {
+      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\`, in every spelling, before reading anything`, async () => {
+        for (
+          const spelling of [
+            [flag, "runsc"],
+            [`${flag}=runsc`],
+            [`${flag}=`],
+            [flag],
+            [flag, "runsc", flag, "docker"],
+          ]
+        ) {
+          let reads = 0;
+          await expect(
+            prepareConsoleLaunch(
+              [...NAMED_ARGS, ...spelling],
+              {},
+              io({
+                readDockerRuntimes: () => {
+                  reads += 1;
+                  return Promise.resolve({
+                    unreadable: "Docker is not running",
+                  });
+                },
+              }),
+            ),
+          ).rejects.toThrow(variable);
+          expect(reads).toBe(0);
+        }
+      });
+    }
+
+    it("resolves relative sandbox paths against the working directory it runs in", async () => {
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        {
+          CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+          CF_HARNESS_SANDBOX_ROOTFS: "images/kitchensink",
+          CF_HARNESS_RUNSC_CFC_POLICY: "policy/cfc.json",
+        },
+        io(),
+      );
+
+      expect(
+        plan.resolved.filter(({ name }) =>
+          ["rootfs", "cfc policy"].includes(name)
+        ).map(({ value }) => value),
+      ).toEqual([
+        join(Deno.cwd(), "images/kitchensink"),
+        join(Deno.cwd(), "policy/cfc.json"),
+      ]);
+    });
+
+    it("throws the shared derivation's refusal for a runtime it does not know", async () => {
+      await expect(
+        prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "podman" },
+          io(),
+        ),
+      ).rejects.toThrow("sandbox runtime must be one of docker, runsc");
     });
 
     it("ranks an instance's record above what the shell exported", async () => {
@@ -1087,6 +1304,92 @@ describe("launch", () => {
       );
 
       expect(consoleArgs).toEqual(["--host-mount", "name=c"]);
+    });
+
+    it("throws naming a misspelled launcher flag and the flag it meant, before reading anything", async () => {
+      let reads = 0;
+      const counted = io({
+        readTextFile: () => {
+          reads += 1;
+          return Promise.resolve(PIECES_JSON);
+        },
+        readDockerRuntimes: () => {
+          reads += 1;
+          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+        },
+      });
+
+      await expect(
+        prepareConsoleLaunch(
+          [...NAMED_ARGS, "--instance", "loom", "--no-skills-registy"],
+          {},
+          counted,
+        ),
+      ).rejects.toThrow(
+        "`--no-skills-registy` is not a flag of `console:launch`. Did you " +
+          "mean `--no-skills-registry`?",
+      );
+      expect(reads).toBe(0);
+    });
+
+    it("throws naming a flag after `--` the console does not take, before reading anything", async () => {
+      let reads = 0;
+      const counted = io({
+        readTextFile: () => {
+          reads += 1;
+          return Promise.resolve(PIECES_JSON);
+        },
+        readDockerRuntimes: () => {
+          reads += 1;
+          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+        },
+      });
+
+      await expect(
+        prepareConsoleLaunch(
+          [
+            ...NAMED_ARGS,
+            "--instance",
+            "loom",
+            "--",
+            "--host-mounts",
+            "name=c",
+          ],
+          {},
+          counted,
+        ),
+      ).rejects.toThrow(
+        "`--host-mounts` is not a flag of the console. Did you mean " +
+          "`--host-mount`?",
+      );
+      expect(reads).toBe(0);
+    });
+
+    it("throws saying a console flag given to the launcher goes after `--`", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--space-db", "/x.db"], {}, io()),
+      ).rejects.toThrow(
+        "`--space-db` is a flag of the console rather than of " +
+          "`console:launch`; pass it after `--`.",
+      );
+    });
+
+    it("throws the no-value refusal, not an undeclared flag, for a value that reads as a flag", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--port", "-x"], {}, io()),
+      ).rejects.toThrow(
+        "`--port` was given no value; a value starting with `-` needs the " +
+          "`--port=<value>` spelling",
+      );
+    });
+
+    it("throws for a positional argument after `--`, which the console does not take", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--", "hunter2"], {}, io()),
+      ).rejects.toThrow(
+        "The console takes no positional arguments, and reads no flag after " +
+          "`--`.",
+      );
     });
 
     it("leaves the registries out when both are waived", async () => {
@@ -1317,6 +1620,99 @@ describe("launch", () => {
       }
     };
 
+    it("prints usage for `--help`, before `--` or after it, and reads and serves nothing", async () => {
+      for (const args of [["--help"], ["-h"], [...ARGS, "--", "--help"]]) {
+        let reads = 0;
+        let served = false;
+        await launchConsole(
+          args,
+          {},
+          () => {
+            served = true;
+            return Promise.resolve();
+          },
+          {
+            readTextFile: () => {
+              reads += 1;
+              return Promise.resolve(PIECES_JSON);
+            },
+            readToolshedStoreDir: () => {
+              reads += 1;
+              return Promise.resolve("file:///store/68239506e79d/memory/");
+            },
+            readDockerRuntimes: () => {
+              reads += 1;
+              return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+            },
+          },
+        );
+
+        expect(served).toBe(false);
+        expect(reads).toBe(0);
+      }
+    });
+
+    it("refuses a dotted flag, before `--` or after it, without the value of the flag before the dot", async () => {
+      for (
+        const [args, refusal] of [
+          [
+            ["--store", "/secret/store", "--store.x", "y"],
+            "`--store.x` is not a flag of `console:launch`.",
+          ],
+          [
+            [...ARGS, "--", "--workspace", "SECRETWS", "--workspace.a", "b"],
+            "`--workspace.a` is not a flag of the console. Did you mean " +
+            "`--workspace`?",
+          ],
+        ] as const
+      ) {
+        const message = await launchConsole(
+          args,
+          {},
+          () => Promise.resolve(),
+          io,
+        ).then(() => undefined, (error: Error) => error.message);
+
+        expect(message).toBe(refusal);
+      }
+    });
+
+    it("refuses a flag whose value reads as help, before `--` or after it, rather than printing usage", async () => {
+      for (
+        const [args, flag] of [
+          [["--instance", "-h"], "--instance"],
+          [["--instance", "--help"], "--instance"],
+          [[...ARGS, "--", "--port", "-h"], "--port"],
+        ] as const
+      ) {
+        let served = false;
+        await expect(
+          launchConsole(args, {}, () => {
+            served = true;
+            return Promise.resolve();
+          }, io),
+        ).rejects.toThrow(
+          `\`${flag}\` was given no value; a value starting with \`-\` ` +
+            `needs the \`${flag}=<value>\` spelling`,
+        );
+        expect(served).toBe(false);
+      }
+    });
+
+    it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {
+      let served = false;
+      await expect(
+        launchConsole(["--store", "-hidden"], {}, () => {
+          served = true;
+          return Promise.resolve();
+        }, io),
+      ).rejects.toThrow(
+        "`--store` was given no value; a value starting with `-` needs the " +
+          "`--store=<value>` spelling",
+      );
+      expect(served).toBe(false);
+    });
+
     it("serves under the environment it resolved", async () => {
       await withEnvironmentRestored(async () => {
         let served: string[] | undefined;
@@ -1410,6 +1806,24 @@ describe("launch", () => {
       expect(said).toContain("`--fabric-identity`");
       // The message is the whole of what they need; the stack is noise.
       expect(said).not.toContain("launch.ts:");
+    });
+  });
+
+  describe("consoleLaunchHelpText()", () => {
+    it("returns the launcher's usage for `--help` before `--`, and the console's after it", () => {
+      expect(consoleLaunchHelpText(["--help"])).toContain("--instance");
+      expect(consoleLaunchHelpText(["--instance", "loom", "-h"])).toContain(
+        "--instance",
+      );
+      const consoleUsage = consoleLaunchHelpText(["--", "--help"]);
+
+      expect(consoleUsage).toContain("--space-db");
+      expect(consoleUsage).not.toContain("--instance");
+    });
+
+    it("returns `undefined` for arguments that ask for no help", () => {
+      expect(consoleLaunchHelpText(["--instance", "loom", "--", "--port", "1"]))
+        .toBeUndefined();
     });
   });
 

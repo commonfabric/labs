@@ -292,6 +292,24 @@ describe("invites", () => {
       await f.close();
     }
   });
+  it("gives the space's own DID only the access its ACL grants on redemption and administration", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ access: "READ" });
+      const pending = f.create();
+      expect(f.run({ operation: "redeem", body: invite }, space))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "READ" });
+      expect(() => f.run({ operation: "list", body: {} }, space)).toThrow(
+        "not-owner",
+      );
+      f.acl({ [f.owner]: "OWNER", [space]: "OWNER" });
+      expect(f.run({ operation: "list", body: {} }, space)).toMatchObject([
+        { inviteId: pending.inviteId },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
   it("lets an explicit owner issue an OWNER invitation that grants OWNER", async () => {
     const f = await fixture();
     try {

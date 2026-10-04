@@ -70,6 +70,7 @@ interface CatalogInput {
           { id: "hstack"; label: "HStack" },
           { id: "vgroup"; label: "VGroup" },
           { id: "hgroup"; label: "HGroup" },
+          { id: "hover-reveal"; label: "Hover Reveal" },
           { id: "vscroll"; label: "VScroll" },
           { id: "hscroll"; label: "HScroll" },
           { id: "grid"; label: "Grid" },
@@ -107,6 +108,7 @@ interface CatalogInput {
           { id: "skeleton"; label: "Skeleton" },
           { id: "alert"; label: "Alert" },
           { id: "toast"; label: "Toast" },
+          { id: "hover-card"; label: "Hover Card" },
         ];
       },
       {

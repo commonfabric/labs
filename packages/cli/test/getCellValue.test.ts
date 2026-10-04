@@ -43,9 +43,9 @@ describe("getCellValue()", () => {
     const releaseQuery = defer<void>();
     try {
       const pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity,
-          spaceName: "cli-first-session-read",
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );

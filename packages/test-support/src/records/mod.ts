@@ -2,6 +2,7 @@ export {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  isMainPush,
   isSeed,
   localObjectName,
   objectNameSlug,
@@ -20,10 +21,16 @@ export type {
   TestRecord,
 } from "./schema.ts";
 export {
+  COVERAGE_ARTIFACT,
+  COVERAGE_OBJECT_GLOB,
+  coverageArtifactAttempt,
+  coverageFiguresOf,
+  coverageRecords,
   isLaneMeasurement,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
 } from "./lane-measurement.ts";
+export type { CoverageFigures } from "./lane-measurement.ts";
 export {
   AGENT_VARIABLE,
   agentLabel,
@@ -78,19 +85,24 @@ export {
   NAME_SEPARATOR,
   parseSkipList,
   readNameMaps,
-  registerFrameworkModule,
-  registeringModule,
-  relativeToRoot,
+  repositoryPathOf,
   repositoryRootOf,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
 } from "./registration.ts";
 export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
 export {
+  BEGAN_PREFIX,
+  BEGAN_SUFFIX,
+  markUnitsBegan,
+  unitsBegan,
+} from "./began.ts";
+export {
   preloadArgument,
   preloadModulePath,
-  spoolWriteArgument,
+  recordingArguments,
 } from "./preload-path.ts";
+export type { RecordingPaths } from "./preload-path.ts";
 export {
   dropContainerCases,
   ingestJUnit,
@@ -146,12 +158,17 @@ export {
 } from "./selection-testing.ts";
 export type {
   Calibration,
+  CalibrationHealth,
   CoverageBaseline,
   FlakeEvidence,
   LanePlan,
   Manifest,
   ManifestEntry,
+  PreviousSuiteHealth,
+  ProcessFit,
   ScoreInputs,
+  SuiteFit,
+  SuiteHealth,
   UnavailableEntry,
   UnschedulableEntry,
   WithheldEntry,

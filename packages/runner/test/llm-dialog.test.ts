@@ -509,6 +509,68 @@ describe("llmDialog", () => {
     });
   });
 
+  it("offers a pattern tool whose argument schema is `false` as taking `{}`, and runs it for `{}`", async () => {
+    // A pattern that takes no argument declares the argument schema `false`,
+    // which the runner reads as no input. Its tool takes an empty object.
+
+    const ping = pattern(() => "pong", false, { type: "string" });
+    const resultSchema = {
+      type: "object",
+      properties: { tools: true },
+      required: ["tools"],
+    } as const satisfies JSONSchema;
+    const testPattern = pattern(
+      () => ({
+        tools: { ping: patternTool(ping) as unknown as BuiltInLLMTool },
+      }),
+      false,
+      resultSchema,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      {},
+      runtime.getCell(
+        space,
+        "llmDialog-no-argument-pattern-tool",
+        resultSchema,
+        tx,
+      ),
+    );
+    tx.prepareCfc();
+    await tx.commit();
+    await runtime.idle();
+
+    const catalog = llmToolExecutionHelpers.buildToolCatalog(
+      result.key("tools") as any,
+      false,
+    );
+    expect(catalog.llmTools.ping?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+
+    const [call] = await llmToolExecutionHelpers.executeToolCalls(
+      runtime,
+      space,
+      catalog,
+      [{
+        type: "tool-call",
+        toolCallId: "call-ping",
+        toolName: "ping",
+        input: {},
+      }],
+    );
+    await runtime.idle();
+
+    expect(call?.error).toBeUndefined();
+    expect(call?.result).toMatchObject({
+      type: "json",
+      value: { result: "pong" },
+    });
+  });
+
   it("should pass opaque text links through handler tool string inputs", async () => {
     type SentEmail = {
       recipient: string;

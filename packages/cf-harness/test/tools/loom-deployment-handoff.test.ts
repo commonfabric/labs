@@ -49,7 +49,7 @@ const fixture = async () => {
     storageManager: storage,
   });
   const pieces = new PiecesController(
-    await createSession({ identity, spaceName: "handoff" }),
+    createSession({ identity, spaceDid: (await Identity.generate()).did() }),
     runtime,
   );
   const created = await pieces.create(

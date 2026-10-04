@@ -79,6 +79,7 @@ decision is reversed or superseded).
 - [Label-metadata confidentiality](cfc-label-metadata-confidentiality.md)
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
+- [Sealed custody](cfc-custody-seal.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)
@@ -95,3 +96,10 @@ decision is reversed or superseded).
 
 - [Shared profile space](shared-profile-space.md)
 - [Shared-profile participant rosters](shared-profile-rosters.md)
+
+### Chat
+
+- [FabriChat](fabrichat/README.md) (implemented, with the departures its
+  README lists): a room per conversation, a
+  per-user manager, and placements and adapters that show rooms in other
+  spaces

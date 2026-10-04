@@ -7,25 +7,22 @@ The board gives each Topic a name of its own: a decimal number, dense from `1`,
 allocated when the Topic is filed and never reused. It is not a display name — a
 Topic's display name stays its title.
 
-The board shows no Topic's number for now. `SHOW_TOPIC_NUMBERS` in
-`packages/patterns/topics/topic.tsx` is off while only some Topics have one, and
-a Topic then publishes no `shortName` at all — which is what leaves every
-surface reading it blank: no header or board card badge, no number on a mention
-pill, and nothing offered for `#42` in a Topic's body editor. The numbers
-themselves are unaffected: allocated, recorded, stored by the Topic, and
-resolvable as below. Wherever numbers are shown, one renders as a badge beside
-its Topic's title, out of the number the Topic stores and publishes as
-`shortName`, which the board's `index` rows carry.
+A Topic publishes the number it stores, as `shortName`, and every surface that
+shows one reads that one property: the header and board card badges, the number
+on a mention pill, and what `#42` offers in a Topic's body editor. It renders as
+a badge beside the Topic's title, and the board's `index` rows carry it. A Topic
+nobody has numbered publishes none, and each of those surfaces reads nothing for
+it.
 
 `addTopic` allocates the number, passes it into the Topic it creates, and
 returns it as `name` beside the created `topic`. For the Topics already on the
 board, the namespace is what to read: the board's `namesTable` holds one row per
 Topic the NAMESPACE has numbered, carrying `name` and the Topic itself as
 `member`, and `names` holds the same pairing as a map from number to Topic.
-Neither says whether that Topic stores its number; that is a separate question
-and a separate read. One Topic's own stored number is read from its durable
-input, `cf cell get --cell "$TOPIC" shortName --input`, which the display switch
-does not gate.
+Neither says whether that Topic stores its number; that is the Topic's own
+record, and a separate read: `cf cell get --cell "$TOPIC" shortName` reads what
+the Topic publishes, and the same command with `--input` reads the durable value
+it publishes from.
 
 ```bash
 deno task cf cell get --cell "$TOPICS_BOARD" namesTable --step
@@ -49,11 +46,19 @@ thing to pass in a reference position; the member name is for a person to read
 and type.
 
 **What the Estuary deployment carries.** The verbs in `references/verbs.md` and
-the naming above are what the pattern in this checkout declares. The deployed
-board runs whatever commit `/api/meta` reports, and until a pattern update lands
-there it has no `names` map, no `top` slug, and no numbered Topic — a Topic
-publishes no `shortName` and `/top/42` resolves to nothing. Ask the deployment
-before citing a number, and treat `top/42` as unavailable there until the plan's
-remaining step is done (`docs/plans/collection-naming-topics.md`). Deploying it
-and numbering the Topics already on the board are the team's steps, not an
-agent's; `references/namespace-backfill.md` is that procedure.
+the naming above are what the pattern in this checkout declares; the deployed
+board runs whatever commit `/api/meta` reports. Ask the deployment before citing
+a number.
+
+It carries the namespace. The `names` map is complete and dense with no
+duplicates and no gaps, the `top` slug is bound, and every Topic on the board
+stores the number the namespace holds for it, so `top/<n>` resolves there and
+`namesTable` names every Topic.
+
+It does not yet carry the publication. A deployed Topic stores its number and
+publishes no `shortName`, so no header or board card badge, no number on a
+mention pill, and nothing offered for `#42` in a Topic's body editor. Read a
+number from `namesTable`, or one Topic's from its own input with
+`cf cell get --cell "$TOPIC" shortName --input`. The pattern update that makes
+those Topics publish what they store is the team's step, not an agent's, and
+`references/pattern-updates.md` governs it.

@@ -133,7 +133,8 @@ export function buildPeekCard(
         expand: t.expand,
       });
     }
-    info.push(...section.lines, BLANK);
+    for (const line of section.lines) info.push(line);
+    info.push(BLANK);
   };
 
   info.push(metaLine(node));
@@ -154,7 +155,10 @@ export function buildPeekCard(
   info.push(BLANK);
 
   const detail = detailSection(doc, node);
-  if (detail.length > 0) info.push(...detail, BLANK);
+  if (detail.length > 0) {
+    for (const line of detail) info.push(line);
+    info.push(BLANK);
+  }
 
   append(outlineSection(node, expanded));
   append(usesSection(doc, node, expanded));
@@ -315,10 +319,12 @@ function contractDetail(doc: Document, meta: ContractMeta): Line[] {
     );
   }
   if (contract.input) {
-    out.push(BLANK, ...schemaSection("input", contract.input));
+    out.push(BLANK);
+    for (const line of schemaSection("input", contract.input)) out.push(line);
   }
   if (contract.output) {
-    out.push(BLANK, ...schemaSection("output", contract.output));
+    out.push(BLANK);
+    for (const line of schemaSection("output", contract.output)) out.push(line);
   }
   return out;
 }
@@ -852,8 +858,8 @@ function objectInlineParts(fields: readonly SchemaField[]): Part[] {
       [f.name, "schemaKey"],
       [f.required ? "" : "?", "comment"],
       [": ", "punctuation"],
-      ...fieldTypeInlineParts(f),
     );
+    for (const part of fieldTypeInlineParts(f)) parts.push(part);
   });
   parts.push([" }", "bracket"]);
   return parts;
@@ -883,7 +889,9 @@ function objectMultiline(
   indent: number,
 ): Line[] {
   const lines: Line[] = [row([pad(indent), "plain"], ["{", "bracket"])];
-  for (const f of fields) lines.push(...fieldMultiline(f, indent + 1));
+  for (const f of fields) {
+    for (const line of fieldMultiline(f, indent + 1)) lines.push(line);
+  }
   lines.push(row([pad(indent), "plain"], ["}", "bracket"]));
   return lines;
 }

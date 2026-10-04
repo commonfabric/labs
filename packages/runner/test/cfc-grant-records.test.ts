@@ -34,7 +34,10 @@ import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { PreparedDigestInput } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  TransactionWrapper,
+} from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { isStorageTransactionInconsistent } from "../src/storage/rejection.ts";
 import { prepareAndCommit } from "./refused-commit.ts";
@@ -220,7 +223,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
     // The trusted policy-writer authors under a builtin identity — the same
     // way the llm/compile-cache builtins author their runtime-evidence
     // writes (codex P1 on #4627).
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "cfc-grant-writer",
     });
@@ -599,7 +602,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
         expect(() => bare.writeCfcGrant(grant)).toThrow(/builtin/);
         bare.abort();
         const verified = runtime.edit();
-        verified.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(verified, {
           kind: "verified",
           moduleIdentity: "mod:example",
         });
@@ -614,7 +617,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       // intent-evidence chain arrives with intents.
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -633,7 +636,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
     it("refuses audience entries that are not principal-like (§3.1.8)", async () => {
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -664,7 +667,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
     it("refuses a revocation not attributed to the acting principal", async () => {
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -1493,7 +1496,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
         );
         wrapper.recordCfcConsultedGrant(entry("d1"));
         expect(tx.getCfcState().consultedGrants.length).toBe(1);
-        wrapper.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(wrapper, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });

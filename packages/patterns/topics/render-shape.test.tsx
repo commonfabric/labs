@@ -1,10 +1,10 @@
 /**
  * What the board and a topic actually RENDER through whatever projection the
  * board declares for its topics: that a card carries its topic's text, that
- * the body editor's completion source reaches it populated, and that no entry
- * of that source carries a topic's number while Topics shows none — through
- * the board's derived universe, and through the raw topics list a topic not
- * yet rewired to that universe reads.
+ * the body editor's completion source reaches it populated, and that an entry
+ * of that source carries the number its topic publishes — through the board's
+ * derived universe, and through the raw topics list a topic not yet rewired to
+ * that universe reads.
  *
  * The four assertions over the board's card and the two editors were validated
  * by mutation — remove the step that files a topic and each goes red — so none
@@ -167,9 +167,9 @@ export default pattern(() => {
   });
 
   // The board's table names the filed topic `1`, and the entry standing for it
-  // in the editor's completion source carries the empty name, so a `#1` query
-  // offers nothing and a mention of it shows no number.
-  const assert_editor_entries_carry_no_number = assert(() => {
+  // in the editor's completion source carries that number, so a `#1` query
+  // offers that topic and a mention of it shows the number.
+  const assert_editor_entries_carry_the_number = assert(() => {
     const editors = findAllByTag(detail[UI], "cf-code-editor");
     if (editors.length !== 1) return false;
     const entries = propValue(editors[0].props["$mentionable"]);
@@ -177,12 +177,13 @@ export default pattern(() => {
     const entry = entries[0] as Record<string, unknown>;
     return board.namesTable?.[0]?.name === "1" &&
       propValue(entry?.[NAME]) === "Rendered topic" &&
-      propValue(entry?.shortName) === "";
+      propValue(entry?.shortName) === "1";
   });
 
   // The same of the raw list, where an entry IS a topic rather than a copy of
-  // one: the topic named `1` publishes no name, so the entry carries none.
-  const assert_raw_entries_carry_no_number = assert(() => {
+  // one: the topic the table names `1` publishes that number, so the entry
+  // carries it with none of the board's derivation in between.
+  const assert_raw_entries_carry_the_number = assert(() => {
     const editors = findAllByTag(rawUniverseDetail[UI], "cf-code-editor");
     if (editors.length !== 1) return false;
     const entries = propValue(editors[0].props["$mentionable"]);
@@ -190,7 +191,7 @@ export default pattern(() => {
     const entry = entries[0] as Record<string, unknown>;
     return board.namesTable?.[0]?.name === "1" &&
       propValue(entry?.[NAME]) === "Rendered topic" &&
-      propValue(entry?.shortName) === undefined;
+      propValue(entry?.shortName) === "1";
   });
 
   // An edit is only honest if a reader can see one happened, and `editedAt`
@@ -216,10 +217,10 @@ export default pattern(() => {
       { action: action_open_the_editor },
       { render: detail[UI] },
       { assertion: assert_editor_receives_mentionables },
-      { assertion: assert_editor_entries_carry_no_number },
+      { assertion: assert_editor_entries_carry_the_number },
       { action: action_open_the_raw_editor },
       { render: rawUniverseDetail[UI] },
-      { assertion: assert_raw_entries_carry_no_number },
+      { assertion: assert_raw_entries_carry_the_number },
       { action: action_comment_on_detail },
       { render: detail[UI] },
       { assertion: assert_no_edited_marker_before },

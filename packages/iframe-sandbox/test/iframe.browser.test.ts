@@ -565,6 +565,33 @@ ${GUEST_EPILOG}`;
   }
 });
 
+Deno.test("a guest that starts listening after its handoff went by still gets a port", async () => {
+  cleanupFixtures();
+  try {
+    // The host hands a port over once the guest's document has loaded, and
+    // module scripts can still be running then. This guest makes that
+    // certain: a classic script, which runs while the document is parsed,
+    // waits for the handoff to go by, and only then does the guest connect.
+    const context = new ContextShim({ a: 1 });
+    const body = `<script>
+globalThis.handedOff = new Promise((resolve) =>
+  addEventListener("message", (event) => {
+    if (event.data === "common-iframe-sandbox:port") resolve();
+  }));
+</script>
+<script type="module">
+import { connectFabric } from "/guest.js";
+await globalThis.handedOff;
+const cell = connectFabric().cell("a");
+cell.set((await cell.pull()) + 1);
+</script>`;
+    const iframe = await render(body, context);
+    await waitForContextValue(context, iframe, "a", (value) => value === 2);
+  } finally {
+    cleanupFixtures();
+  }
+});
+
 Deno.test("an element that gets a frame and has no source says nothing is loaded", async () => {
   cleanupFixtures();
   try {

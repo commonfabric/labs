@@ -18,12 +18,16 @@
 export const LANES = 5;
 
 /**
- * The hard bound on a lane's work step. A lane job's own timeouts have to
- * be set against this, and no lane job exists yet to carry them.
+ * What a pull-request lane is packed to finish inside, setup included. The
+ * workflow's step and job timeouts sit above it and only stop a lane that
+ * hangs. They are not this bound.
  */
 export const LANE_BOUND_SECONDS = 300;
 
-/** Checkout, Deno, cache restore, ship, and job overhead. */
+/**
+ * Checkout, Deno, cache restore, ship, and job overhead. A chosen figure:
+ * nothing measures it.
+ */
 export const LANE_PROLOGUE_SECONDS = 40;
 
 /** Headroom for a slower-than-usual runner. */
@@ -38,12 +42,12 @@ export const LANE_BUDGET_SECONDS = LANE_BOUND_SECONDS -
   LANE_PROLOGUE_SECONDS - LANE_SAFETY_SECONDS;
 
 /**
- * The hard bound on a lane of the full run on `main`. Ten minutes: `main`
- * makes no promise about a first answer the way a pull request does, so
- * this is chosen for how many jobs the run should take rather than for
- * how long anybody waits.
+ * What a lane of the full run on `main` is packed to finish inside.
+ * Thirty minutes: `main` makes no promise about a first answer the way a
+ * pull request does, so this is chosen for how many jobs the run should
+ * take rather than for how long anybody waits.
  */
-export const FULL_LANE_BOUND_SECONDS = 600;
+export const FULL_LANE_BOUND_SECONDS = 1800;
 
 /**
  * What the packer may fill in a lane of the full run, derived from that
@@ -175,8 +179,72 @@ export const MIN_CORRECTION_SPAN_SECONDS = LANE_BUDGET_SECONDS / 10;
  * slope fitted too high only over-charges, where one fitted too low lets
  * a lane pack work it has no time for: two batches of one suite have
  * fitted a slope of zero, which says a second of its tests costs nothing.
+ *
+ * It is also how many of the batches a suite's fit is still reading must
+ * carry a figure before the fit narrows to those alone. The fit narrows by
+ * one figure at a time, so each count is taken among the batches left by
+ * the figures before it, which `fitSuite()` describes.
  */
 export const MIN_CORRECTION_SAMPLES = 3;
+
+/**
+ * How many times the count of identities too long for any lane has to
+ * grow from one manifest to the next before the cost model is reported
+ * broken, with `HEALTH_TOO_LONG_JUMP`. Both have to be passed.
+ *
+ * A suite whose fixed charge passes the lane's bound moves the count by
+ * the size of the suite, which is hundreds of tests or thousands, where
+ * tests growing slow one at a time move it by a dozen at the most.
+ * [Knowing when the cost model is
+ * wrong](../../docs/plans/pull-request-test-selection.md#knowing-when-the-cost-model-is-wrong)
+ * has the manifests this was read from.
+ */
+export const HEALTH_TOO_LONG_FACTOR = 2;
+
+/**
+ * How many identities the count too long for any lane has to grow by,
+ * beside `HEALTH_TOO_LONG_FACTOR`, so that a count going from one to
+ * three is not reported as the model breaking.
+ */
+export const HEALTH_TOO_LONG_JUMP = 20;
+
+/**
+ * The share of the lanes projected to finish inside their bound that may
+ * run past it before the cost model is reported broken. A lane projected
+ * past its bound running past it is a plan the packer knew it could not
+ * fit, which is capacity rather than calibration, so those lanes are not
+ * counted.
+ *
+ * The fit charges a suite what nine batches in ten spent, so some lanes
+ * run long by design: a day's pull-request lanes run past their bound
+ * something under one time in ten while the model holds.
+ */
+export const HEALTH_OVERRUN_SHARE = 0.15;
+
+/**
+ * Lanes projected inside their bound that the cost window has to hold
+ * before `HEALTH_OVERRUN_SHARE` is judged, so that one slow lane in a
+ * quiet week is not a share.
+ */
+export const HEALTH_MIN_LANES = 20;
+
+/**
+ * How far from one the ninetieth percentile of a suite's batches' spending
+ * over what they were charged may drift, either way, before the cost
+ * model is reported broken for that suite.
+ *
+ * The fit charges a suite what nine batches in ten spent, so that
+ * percentile sits near one while the model holds, and within about a
+ * third of one for every suite that ten batches have measured.
+ */
+export const HEALTH_DRIFT_FACTOR = 2;
+
+/**
+ * Batches recording what they were charged that a suite has to have in
+ * the cost window before its drift is judged. Over nine or fewer the
+ * ninetieth percentile is the largest of them.
+ */
+export const HEALTH_MIN_BATCHES = 10;
 
 /** The flake rate above which an item leaves the selectable set. */
 export const FLAKE_EXCLUSION_RATE = 0.005;
@@ -302,58 +370,94 @@ export const RENAME_SUGGESTIONS = 5;
 export const ALIAS_GATE_MIN_CATCHES: number | undefined = undefined;
 
 /**
- * Workspace members that carry no measured set, each with the reason it
- * is here. A list rather than a rule that measures each member and
- * decides, because such a rule can take a member's gate away for a change
- * nobody meant as a change to coverage, and a gate that silently stops
- * gating is worse than no gate.
+ * Why a member carries no measured set. `size` is a member whose set is
+ * past what the whole run holds, which comes off once its tests fit.
+ * `source` is a member whose own Deno-only tests are not what should
+ * measure it, or that has none, which no measurement changes.
  */
+export type ExclusionKind = "size" | "source";
+
+/** One member the coverage gate leaves out, and why. */
+interface Exclusion {
+  member: string;
+  kind: ExclusionKind;
+
+  /** The reason, in words a person reads. */
+  reason: string;
+}
+
+/**
+ * Workspace members that carry no measured set. A list rather than a rule
+ * that measures each member and decides, because such a rule can take a
+ * member's gate away for a change nobody meant as a change to coverage,
+ * and a gate that silently stops gating is worse than no gate.
+ */
+const exclusions: readonly Exclusion[] = [
+  {
+    member: "packages/generated-patterns",
+    kind: "source",
+    reason: "Its test task defines no tests. Its test files run in the " +
+      "`generated-patterns` suite.",
+  },
+  {
+    member: "packages/home-schemas",
+    kind: "source",
+    reason: "It has no tests.",
+  },
+  {
+    member: "packages/patterns",
+    kind: "source",
+    reason: "Authored pattern code is measured by transformer " +
+      "instrumentation in the pattern unit and integration suites. The " +
+      "package's own `deno test` ignores the pattern files deliberately.",
+  },
+  {
+    member: "packages/runner",
+    kind: "size",
+    reason: "Its whole set is past what all five lanes hold together.",
+  },
+  {
+    member: "packages/cli",
+    kind: "source",
+    reason: "The command line's real coverage comes from the integration " +
+      "script rather than from these tests, so a gate on them would fail " +
+      "a change whose lines only the integration script runs.",
+  },
+  {
+    member: "packages/identity",
+    kind: "source",
+    reason: "Every one of its tests runs in a browser through " +
+      "deno-web-test. It has no Deno-only half to measure.",
+  },
+  {
+    member: "packages/deno-web-test",
+    kind: "source",
+    reason: "Its tests drive the browser harness end to end.",
+  },
+  {
+    member: "packages/toolshed",
+    kind: "source",
+    reason: "Its tests want the service's own environment and its " +
+      "initialized database.",
+  },
+  {
+    member: "packages/integration",
+    kind: "source",
+    reason: "The coverage metric counts none of its lines, since it " +
+      "leaves out every path with an `integration` directory in it, so a " +
+      "set over it would measure nothing.",
+  },
+];
+
+/** The exclusion list, each member against the reason it is there. */
 export const EXCLUDED_FROM_COVERAGE_GATE: ReadonlyMap<string, string> = new Map(
-  [
-    [
-      "packages/generated-patterns",
-      "Its test task defines no tests. Its test files run in the " +
-      "generated-patterns integration job.",
-    ],
-    ["packages/home-schemas", "It has no tests."],
-    [
-      "packages/patterns",
-      "Authored pattern code is measured by transformer instrumentation " +
-      "in the pattern unit and integration jobs. The package's own " +
-      "`deno test` ignores the pattern files deliberately.",
-    ],
-    [
-      "packages/runner",
-      "Its whole set is past what all five lanes hold together.",
-    ],
-    [
-      "packages/cli",
-      "The command line's real coverage comes from the integration " +
-      "script rather than from these tests, so gating on them would " +
-      "ratchet the wrong number.",
-    ],
-    [
-      "packages/identity",
-      "Every one of its tests runs in a browser through deno-web-test. " +
-      "It has no Deno-only half to measure.",
-    ],
-    [
-      "packages/deno-web-test",
-      "Its tests drive the browser harness end to end.",
-    ],
-    [
-      "packages/toolshed",
-      "Its tests want the service's own environment and its initialized " +
-      "database.",
-    ],
-    [
-      "packages/integration",
-      "The coverage metric counts none of its lines, since it leaves out " +
-      "every path with an `integration` directory in it, so a set over it " +
-      "would measure nothing.",
-    ],
-  ],
+  exclusions.map(({ member, reason }) => [member, reason]),
 );
+
+/** Why `member` is on `EXCLUDED_FROM_COVERAGE_GATE`, where it is. */
+export function exclusionKind(member: string): ExclusionKind | undefined {
+  return exclusions.find((exclusion) => exclusion.member === member)?.kind;
+}
 
 /** Whether a dial is a decision, a measurement, or computed. */
 export type DialSource = "chosen" | "measured" | "derived";
@@ -402,19 +506,18 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why:
       "Up when more should fit in a lane; down when five minutes is longer " +
-      "than anybody will wait for a first answer. The lane jobs that this " +
-      "bounds do not exist yet; when they do, their work-step and job " +
-      "timeouts in `deno.yml` have to move with it, and nothing checks " +
-      "that until they are written.",
+      "than anybody will wait for a first answer. It sets what a lane " +
+      "packs against, not the workflow's step timeout, which only stops " +
+      "a lane that hangs.",
   },
   {
     name: "LANE_PROLOGUE_SECONDS",
     value: LANE_PROLOGUE_SECONDS,
     unit: "seconds",
-    setBy: "measured",
-    why: "Never. The publisher overwrites it from the lanes' own timing " +
-      "records, and the checked-in figure is only what the first lane uses " +
-      "before any lane has reported one.",
+    setBy: "chosen",
+    why: "Up when checkout, setup, and cache restore take longer than this " +
+      "and eat into the safety margin; down when they take less. Nothing " +
+      "measures it.",
   },
   {
     name: "LANE_SAFETY_SECONDS",
@@ -670,9 +773,8 @@ export const DIALS: readonly Dial[] = [
     unit: "seconds",
     setBy: "derived",
     why: "A tenth of a lane's budget, measured as the widest gap between " +
-      "the time two batches' own tests took. Down when a suite's real slope " +
-      "is going unbelieved for too long; up when a slope fitted inside a " +
-      "narrow range is being read far outside it.",
+      "the time two batches' own tests took. Nothing edits it: it moves " +
+      "only when the lane's budget does.",
   },
   {
     name: "MIN_CORRECTION_SAMPLES",
@@ -681,7 +783,63 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why:
       "Up when a slope is being fitted from too little and swinging about; " +
-      "down when a suite's real slope takes too long to be believed.",
+      "down when a suite's real slope takes too long to be believed. It " +
+      "is also how many of the batches a suite's fit is still reading " +
+      "must carry a figure before the batches lacking it are left out.",
+  },
+  {
+    name: "HEALTH_TOO_LONG_FACTOR",
+    value: HEALTH_TOO_LONG_FACTOR,
+    unit: "multiplier",
+    setBy: "chosen",
+    why: "Up when the test selection tile goes red for ordinary growth in " +
+      "the tests too long for any lane; down when a jump that took tests " +
+      "out of every pull request went unreported.",
+  },
+  {
+    name: "HEALTH_TOO_LONG_JUMP",
+    value: HEALTH_TOO_LONG_JUMP,
+    unit: "identities",
+    setBy: "chosen",
+    why: "Up when a handful of newly slow tests turns the test selection " +
+      "tile red; down when a suite's worth of tests left pull requests " +
+      "without it going red.",
+  },
+  {
+    name: "HEALTH_OVERRUN_SHARE",
+    value: HEALTH_OVERRUN_SHARE,
+    unit: "share of lanes",
+    setBy: "chosen",
+    why: "Up when the test selection tile goes red over lanes a slow " +
+      "runner held up; down when lanes ran past their bound for days " +
+      "without it going red.",
+  },
+  {
+    name: "HEALTH_MIN_LANES",
+    value: HEALTH_MIN_LANES,
+    unit: "lanes",
+    setBy: "chosen",
+    why: "Up when a quiet week's few lanes turn the test selection tile " +
+      "red; down when lanes running long go unjudged for want of enough " +
+      "of them.",
+  },
+  {
+    name: "HEALTH_DRIFT_FACTOR",
+    value: HEALTH_DRIFT_FACTOR,
+    unit: "multiplier",
+    setBy: "chosen",
+    why: "Up when the test selection tile goes red for a suite whose " +
+      "charges are off in a way nobody will fix; down when a suite " +
+      "charged twice or half what it spends went unreported.",
+  },
+  {
+    name: "HEALTH_MIN_BATCHES",
+    value: HEALTH_MIN_BATCHES,
+    unit: "batches",
+    setBy: "chosen",
+    why: "Up when a suite few lanes run turns the test selection tile red " +
+      "on a handful of batches; down when a suite's drift goes unjudged " +
+      "for want of enough of them.",
   },
   {
     name: "FLAKE_EXCLUSION_RATE",

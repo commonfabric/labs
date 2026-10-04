@@ -38,7 +38,10 @@ describe("newPiece() naming", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: "cli-piece-new" }),
+      createSession({
+        identity: signer,
+        spaceDid: (await Identity.generate()).did(),
+      }),
       runtime,
     );
     await pieces.synced();

@@ -13,7 +13,7 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
 import {
   type CfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -101,7 +101,9 @@ export function cellCarryingLabelView(
   id: string,
   view: CfcLabelView,
 ): Cell<unknown> {
-  const link = runtime.getCell(space, id).getAsLink();
-  setLinkCfcLabelView(link, view);
+  const link = withLinkCfcLabelView(
+    runtime.getCell(space, id).getAsLink(),
+    view,
+  );
   return runtime.getCellFromLink(link);
 }

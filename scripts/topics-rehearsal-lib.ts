@@ -153,7 +153,9 @@ export function retiredKeys(
   if (Array.isArray(expected) && Array.isArray(actual)) {
     const out: string[] = [];
     for (let i = 0; i < Math.min(expected.length, actual.length); i++) {
-      out.push(...retiredKeys(expected[i], actual[i], `${path}[]`));
+      for (const retired of retiredKeys(expected[i], actual[i], `${path}[]`)) {
+        out.push(retired);
+      }
     }
     return [...new Set(out)];
   }
@@ -161,8 +163,13 @@ export function retiredKeys(
   const out: string[] = [];
   for (const [key, value] of Object.entries(expected)) {
     const where = path === "" ? key : `${path}.${key}`;
-    if (!(key in actual)) out.push(where);
-    else out.push(...retiredKeys(value, actual[key], where));
+    if (!(key in actual)) {
+      out.push(where);
+    } else {
+      for (const retired of retiredKeys(value, actual[key], where)) {
+        out.push(retired);
+      }
+    }
   }
   return [...new Set(out)];
 }

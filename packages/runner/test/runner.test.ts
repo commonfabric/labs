@@ -1031,7 +1031,10 @@ describe("runPattern", () => {
                     ? values.reduce((a, b) => a + b, 0) / values.length
                     : 0;
                 case "max":
-                  return Math.max(...values);
+                  return values.reduce(
+                    (most, value) => Math.max(most, value),
+                    -Infinity,
+                  );
                 default:
                   return 0;
               }
@@ -2291,22 +2294,32 @@ describe("setup/start", () => {
     // Installed from the synchronization the call performs before it opens
     // its transaction, which is the window the entry check cannot see.
     const sealed: IExtendedStorageTransaction[] = [];
-    const mutableCell = resultCell as unknown as {
-      sync: typeof resultCell.sync;
-    };
-    const originalSync = resultCell.sync.bind(resultCell);
-    mutableCell.sync = (async (...args: Parameters<typeof resultCell.sync>) => {
-      const synced = await originalSync(...args);
-      if (!serving.sealDestinationInstalled) {
-        serving.installSealDestination({
-          seal: (tx: IExtendedStorageTransaction) => {
-            sealed.push(tx);
-            return tx.commit();
-          },
-        });
-      }
-      return synced;
-    }) as typeof resultCell.sync;
+    const resultId = resultCell.getAsNormalizedFullLink().id;
+    const storageManager = serving.storageManager;
+    const originalSyncCell = storageManager.syncCell;
+    using _sync = stub(
+      storageManager,
+      "syncCell",
+      async function <T>(cell: Cell<T>, ...rest: unknown[]) {
+        const synced: Cell<T> = await Reflect.apply(
+          originalSyncCell,
+          storageManager,
+          [cell, ...rest],
+        );
+        if (
+          cell.getAsNormalizedFullLink().id === resultId &&
+          !serving.sealDestinationInstalled
+        ) {
+          serving.installSealDestination({
+            seal: (tx: IExtendedStorageTransaction) => {
+              sealed.push(tx);
+              return tx.commit();
+            },
+          });
+        }
+        return synced;
+      },
+    );
 
     try {
       await expect(serving.runSyncedWithCommit(
@@ -2320,7 +2333,6 @@ describe("setup/start", () => {
       )).rejects.toThrow(SEALING_RECEIPT_REFUSAL);
       expect(sealed).toEqual([]);
     } finally {
-      mutableCell.sync = originalSync;
       serving.clearSealDestination();
       await serving.dispose();
       await servingStorage.close();

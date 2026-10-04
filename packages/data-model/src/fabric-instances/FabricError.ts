@@ -35,7 +35,6 @@ import {
   type LiveEnvironment,
   type NonterminalCodec,
 } from "@/codec-interface/interface.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
 import { FrozenSet } from "@/frozen-builtins.ts";
 import type {
   FabricPlainObject,
@@ -393,9 +392,8 @@ export class FabricError extends FabricNativeWrapper<Error>
   /**
    * @inheritDoc
    *
-   * Round-trips through the codec, matching the codec's `shouldDeepFreeze` to
-   * this clone's `frozen` intent (the `deepClone()` template owns the final
-   * top-level freeze).
+   * Round-trips through the codec, decoding mutable unless `frozen` (the
+   * `deepClone()` template owns the final deep freeze).
    *
    * Known gap: `encode()` passes `cause` and the extras through by reference,
    * so an unfrozen clone still _shares_ those nested values with the original,
@@ -405,13 +403,13 @@ export class FabricError extends FabricNativeWrapper<Error>
   protected override [DEEP_CLONE_CORE](frozen: boolean): FabricError {
     const codec = FabricError[CODEC];
     const liveEnvironment = new NullLiveEnvironment(
-      frozen,
       "no live environment (FabricError deep-clone path).",
     );
     return codec.decode(
       CODEC_TYPE_TAGS.Error,
       codec.encode(this, liveEnvironment),
       liveEnvironment,
+      !frozen,
     ) as FabricError;
   }
 
@@ -447,6 +445,11 @@ export class FabricError extends FabricNativeWrapper<Error>
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   static #codec = Object.freeze(
     new (class FabricErrorCodec
       extends BaseNonterminalCodec<never, FabricPlainObject> {
@@ -471,7 +474,10 @@ export class FabricError extends FabricNativeWrapper<Error>
         for (const [key, val] of value.extraEntries()) {
           state[key] = val;
         }
-        return state;
+
+        // A snapshot of this instance's state, so frozen whether or not the
+        // instance is. The values in it are held as they are.
+        return Object.freeze(state);
       }
 
       /**
@@ -511,7 +517,8 @@ export class FabricError extends FabricNativeWrapper<Error>
       decode(
         _typeTag: string,
         state: FabricPlainObject,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const type = (state.type as string) ?? (state.name as string) ??
           "Error";
@@ -537,9 +544,7 @@ export class FabricError extends FabricNativeWrapper<Error>
           cause,
           extras,
         });
-        // Honor `shouldDeepFreeze`: produce the type's correct deep-frozen
-        // form via its `[DEEP_FREEZE]` member (recursing through `deepFreeze`).
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );

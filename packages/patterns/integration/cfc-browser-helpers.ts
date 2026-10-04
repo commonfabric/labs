@@ -1055,14 +1055,13 @@ export async function clickCfButtonsConcurrently(
   }));
   const markResults = await Promise.allSettled(
     markedByPage.map(async ({ page, tokens }) => {
-      tokens.push(
-        ...await settleWithClickTargets(
-          page,
-          targets.filter((target) => target.page === page).map(
-            ({ selector }) => selector,
-          ),
+      const settled = await settleWithClickTargets(
+        page,
+        targets.filter((target) => target.page === page).map(
+          ({ selector }) => selector,
         ),
       );
+      for (const token of settled) tokens.push(token);
     }),
   );
   const clearMarks = () =>
@@ -2519,7 +2518,7 @@ export async function installSenderEchoProbe(page: Page): Promise<void> {
     const collect = (selector: string): Element[] => {
       const out: Element[] = [];
       const walk = (root: Document | ShadowRoot) => {
-        out.push(...root.querySelectorAll(selector));
+        for (const el of root.querySelectorAll(selector)) out.push(el);
         for (const el of root.querySelectorAll("*")) {
           const sr = (el as HTMLElement).shadowRoot;
           if (sr) walk(sr);
@@ -2657,7 +2656,7 @@ export async function armSenderEcho(
       const collect = (selector: string): Element[] => {
         const out: Element[] = [];
         const walk = (root: Document | ShadowRoot) => {
-          out.push(...root.querySelectorAll(selector));
+          for (const el of root.querySelectorAll(selector)) out.push(el);
           for (const el of root.querySelectorAll("*")) {
             const sr = (el as HTMLElement).shadowRoot;
             if (sr) walk(sr);

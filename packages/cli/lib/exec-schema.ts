@@ -1440,7 +1440,7 @@ export function renderExecHelp(
       lines.push("Invoke alone will call the handler without any inputs.");
     }
   }
-  lines.push(...outputSectionLines(spec));
+  for (const line of outputSectionLines(spec)) lines.push(line);
 
   return lines.join("\n");
 }
@@ -1538,7 +1538,7 @@ export function renderPieceCallHelp(
   if (specificFlags.length > 0) {
     lines.push("");
     lines.push("Flags:");
-    lines.push(...specificFlags);
+    for (const flag of specificFlags) lines.push(flag);
   }
 
   // No write-through note here, unlike the mounted-file page above: this
@@ -1551,7 +1551,7 @@ export function renderPieceCallHelp(
     lines.push("");
     lines.push("Invoke alone will call the handler without any inputs.");
   }
-  lines.push(...outputSectionLines(spec));
+  for (const line of outputSectionLines(spec)) lines.push(line);
 
   return lines.join("\n");
 }

@@ -116,6 +116,10 @@ session-scoped catch-up sync.
 The invariant catalog is backed by a model-checked TLA+ specification of the
 pending-stack commit protocol in [tla/](./tla/README.md).
 
+[connection-multiplexing.md](./connection-multiplexing.md) is a proposed design
+for carrying every space's sessions over one connection per host, acting as a
+second identity on that connection, and routers in front of several toolsheds.
+
 ## Implementation Materials
 
 For the current shipped implementation status and explicitly deferred items, use

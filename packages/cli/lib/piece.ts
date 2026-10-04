@@ -12,7 +12,12 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import { createSession, type Identity, Session } from "@commonfabric/identity";
+import {
+  createSession,
+  type Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -33,6 +38,7 @@ import {
 } from "@commonfabric/piece";
 import {
   assertPieceInputPath,
+  completeServedRegistration,
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
   PieceController,
@@ -40,9 +46,13 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  servedInstantiatePiece,
+  ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
 import {
   Cell,
+  cellRuntime,
+  cellTx,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -69,6 +79,7 @@ import {
   Runtime,
   runtimePresets,
   RuntimeProgram,
+  SpaceNotFoundError,
   UI,
   VNode,
 } from "@commonfabric/runner";
@@ -561,11 +572,12 @@ export async function withRuntimeCleanupOnFailure<T>(
 
 async function makeSession(config: SpaceConfig): Promise<Session> {
   const identity = await loadIdentity(config.identity);
-  if (isDID(config.space)) {
-    return createSession({ identity, spaceDid: config.space });
-  } else {
-    return createSession({ identity, spaceName: config.space });
-  }
+  return createSession({
+    identity,
+    spaceDid: isDID(config.space)
+      ? config.space
+      : await legacySpaceDid(config.space),
+  });
 }
 
 /**
@@ -665,7 +677,6 @@ export async function loadPieces(
           storageManager: StorageManager.open({
             as: session.as,
             memoryHost: new URL(config.apiUrl),
-            spaceIdentity: session.spaceIdentity,
           }),
           experimental,
           errorHandlers: [
@@ -726,6 +737,7 @@ export async function loadPieces(
       () =>
         new PiecesController(session, runtime, {
           deferSpaceCellSync,
+          ...(isDID(config.space) ? {} : { spaceName: config.space }),
         }),
     );
     if (deferSpaceCellSync) {
@@ -1008,10 +1020,10 @@ async function resolveRegisteredDocumentOwner(
     const resultLink = getMetaLink(current, "result");
     if (resultLink === undefined) return finish(undefined);
 
-    current = current.runtime.getCellFromLink(
+    current = cellRuntime(current).getCellFromLink(
       { ...resultLink, path: [], schema: undefined },
       undefined,
-      current.tx,
+      cellTx(current),
       getCarriedCfcLabelView(current),
     );
   }
@@ -1672,22 +1684,19 @@ async function lifecycleClient(
 }
 
 /**
- * The served half of `newPiece`: the serving runtime compiles the program
- * and materializes the piece with its name and creation receipt in one
- * transaction, then awaits the default pattern's registration action.
- * This connection then starts
- * it the way it starts any piece it opens, running the graph as
- * speculation while the server derives on demand. The request is awaited
- * without a wall-clock bound: a creation the server is still committing
- * is not one to walk away from, since it lands whether or not this
- * process waits. `boundStart` is the bound the local start runs under.
+ * Creates or resumes a piece with an atomic creation receipt. A serving
+ * deployment executes the transaction remotely; an ordinary client executes
+ * the same operation locally. Registration retains its delivery identity, so
+ * an uncertain response can be retried without reinitializing the document.
+ * `boundStart` bounds only the local start, after creation and registration.
  */
-async function createOnServer(
+async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
   program: RuntimeProgram,
   entry: EntryConfig,
   options: {
+    input?: object;
     start?: boolean;
     slug?: string;
     force?: boolean;
@@ -1699,23 +1708,41 @@ async function createOnServer(
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const receipt = await (async () => {
     try {
-      return await (deps.instantiatePieceOnServer ??
-        instantiatePieceOnServer)(await lifecycleClient(config, deps), {
-          space: pieces.getSpace(),
-          requestKey,
-          program,
-          ...(entry.repository === undefined
-            ? {}
-            : { repository: entry.repository }),
-          ...(options?.slug === undefined ? {} : { slug: options.slug }),
-          ...(options?.force === undefined ? {} : { force: options.force }),
-          register: true,
-          ...(options?.start === false ? { start: false } : {}),
-        });
+      const client = await lifecycleClient(config, deps);
+      const request = {
+        requestKey,
+        ...(options?.input === undefined ? {} : { argument: options.input }),
+        ...(entry.repository === undefined
+          ? {}
+          : { repository: entry.repository }),
+        ...(options?.slug === undefined ? {} : { slug: options.slug }),
+        ...(options?.force === undefined ? {} : { force: options.force }),
+        register: true,
+      };
+      if (servesLifecycleVerbs(pieces)) {
+        return await (deps.instantiatePieceOnServer ??
+          instantiatePieceOnServer)(client, {
+            ...request,
+            space: pieces.getSpace(),
+            program,
+            ...(options?.start === false ? { start: false } : {}),
+          });
+      }
+      const created = await servedInstantiatePiece(pieces, {
+        ...request,
+        source: { program },
+        actingUser: client.identity.did(),
+      });
+      return await completeServedRegistration(
+        pieces,
+        created,
+        client.identity.did(),
+      );
     } catch (error) {
       if (
-        error instanceof ServedLifecycleError && error.status >= 400 &&
-        error.status < 500 && error.status !== 408
+        error instanceof ServedLifecycleRefusal ||
+        (error instanceof ServedLifecycleError && error.status >= 400 &&
+          error.status < 500 && error.status !== 408)
       ) {
         throw error;
       }
@@ -1744,16 +1771,19 @@ async function createOnServer(
  * Creates a new piece from source code and optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
- * refuses one, and `force` takes it. Against a serving deployment the name
- * rides the creation transaction, so the refusal leaves nothing behind.
- * Otherwise the refusal arrives after the piece exists, so it names the
- * piece as well as the flag: an operator who meant to repoint has an id to
- * name, and one who did not has a piece to find.
+ * refuses one, and `force` takes it. With a request key or a serving
+ * deployment, the name rides the creation transaction, so the refusal
+ * leaves nothing behind. Otherwise the refusal arrives after the piece exists,
+ * so it names the piece as well as the flag: an operator who meant to repoint
+ * has an id to name, and one who did not has a piece to find.
  */
 export async function newPiece(
   config: SpaceConfig,
   entry: EntryConfig,
   options?: {
+    /** Initial argument committed during setup, before registration or start. */
+    input?: object;
+
     start?: boolean;
     slug?: string;
     force?: boolean;
@@ -1783,6 +1813,13 @@ export async function newPiece(
       );
     }
   } catch (error) {
+    if (error instanceof SpaceNotFoundError) {
+      throw new Error(
+        `${error.message}. Opening a space never creates one; create one ` +
+          `with: ${cliCommand(["space", "create"])}`,
+        { cause: error },
+      );
+    }
     throw new Error(
       `Could not initialize the space's default pattern: ${
         error instanceof Error ? error.message : String(error)
@@ -1832,11 +1869,12 @@ export async function newPiece(
     });
     return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
   };
+  const receipted = served || options?.requestKey !== undefined;
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
-      served
-        ? createOnServer(
+      receipted
+        ? createWithReceipt(
           config,
           pieces,
           program,
@@ -1848,14 +1886,15 @@ export async function newPiece(
         : boundStart(pieces.create(program, {
           repository: entry.repository,
           start: options?.start,
+          ...(options?.input === undefined ? {} : { input: options.input }),
         })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // Served creation returns after both setup and registration commit.
-  if (served) return piece.id;
+  // Receipt-backed creation returns after both setup and registration commit.
+  if (receipted) return piece.id;
 
   if (options?.slug) {
     try {
@@ -2615,10 +2654,10 @@ async function isDocumentOf(
   const sameDocument = (link: NormalizedFullLink) =>
     sameCellAddress({ ...link, path: [] }, { ...owner, path: [] });
   const link = cell.getAsNormalizedFullLink();
-  const document = cell.runtime.getCellFromLink(
+  const document = cellRuntime(cell).getCellFromLink(
     { ...link, path: [], schema: undefined },
     undefined,
-    cell.tx,
+    cellTx(cell),
   );
   await document.sync();
   const backLink = getMetaLink(document, "result");
@@ -4883,7 +4922,7 @@ export function cachedResultFields(
   result: Readonly<unknown>,
 ): CachedResultField[] {
   if (!isObjectNotArray(result)) return [];
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const tx = runtime.readTx();
   const cached: CachedResultField[] = [];
   for (const name of Object.keys(result)) {
@@ -4989,7 +5028,7 @@ export async function inspectPiece(
   }));
   const resultCell = await piece.result.getCell();
   const inputCell = await piece.input.getCell();
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const sourceLink = resolveLink(
     runtime,
     runtime.readTx(),
@@ -5635,8 +5674,9 @@ export async function setCellValue(
 
 /**
  * What a {@link callPieceHandler} call supplies: the connection its
- * resolution runs over, and the three execution deps a handling can observe
- * through a call that returns nothing.
+ * resolution runs over, the three execution deps a handling can observe
+ * through a call that returns nothing, and the `sendEvent` a test stands in
+ * for the dispatch.
  *
  * Narrower than {@link PieceCallableDependencies} by the fields this path
  * cannot keep. The input readers and the help prefix have no bearing on it —
@@ -5649,7 +5689,10 @@ export async function setCellValue(
  * {@link executePieceCallable}, which returns one.
  */
 export type PieceHandlerCallDeps =
-  & Pick<CallableExecutionDeps, "invocation" | "onPhase" | "skipReadback">
+  & Pick<
+    CallableExecutionDeps,
+    "invocation" | "onPhase" | "skipReadback" | "sendEvent"
+  >
   & Pick<PieceCallableDependencies, "loadPieces" | "loadPiece">;
 
 /**
@@ -6021,6 +6064,23 @@ export async function setHomePattern(
     repository: entry.repository,
   });
   noteWroteTo(homeConfig.space);
+}
+
+/**
+ * Creates a space owned by the configured identity and returns its DID. The
+ * space gets a random DID and is born granting its creator alone; it is
+ * recorded in the identity's Home space list under `label`.
+ */
+export async function createSpace(
+  config: Omit<SpaceConfig, "space">,
+  label?: string,
+): Promise<string> {
+  const identity = await loadIdentity(config.identity);
+  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
+  const pieces = await loadPieces(homeConfig);
+  const space = await pieces.createSpace(label);
+  noteWroteTo(homeConfig.space);
+  return space;
 }
 
 /**

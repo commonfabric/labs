@@ -6,6 +6,7 @@ import {
   DID_PREFIX,
   isDID,
   isDIDKey,
+  isWellFormedDID,
   parseDID,
 } from "../src/did.ts";
 
@@ -104,4 +105,32 @@ Deno.test("assertNotDID returns for a value that is not a DID", () => {
 Deno.test("the prefixes are the literal strings the rule is written against", () => {
   assertEquals(DID_PREFIX, "did:");
   assertEquals(DID_KEY_PREFIX, "did:key:");
+});
+
+Deno.test("isWellFormedDID accepts a DID in DID Core syntax as written", () => {
+  assertEquals(isWellFormedDID("did:key:z6MkExample"), true);
+  assertEquals(isWellFormedDID("did:web:example.com:user%20a"), true);
+});
+
+Deno.test("isWellFormedDID refuses every other spelling isDID admits", () => {
+  // Each passes isDID, and each could be shown or compared as a principal it
+  // is not.
+  for (
+    const spelling of [
+      "did:key:z6MkExample ",
+      "did:key:z6MkExample\n",
+      "did:key:z6Mk\u200bExample",
+      "did:key:z6Mk Example",
+      "did:KEY:z6MkExample",
+      "did:key:",
+      "did:key",
+      "did:key:z6MkExample:",
+      `did:key:${"z".repeat(256)}`,
+    ]
+  ) {
+    assertEquals(isDID(spelling), true, spelling);
+    assertEquals(isWellFormedDID(spelling), false, spelling);
+  }
+  assertEquals(isWellFormedDID(" did:key:z6MkExample"), false);
+  assertEquals(isWellFormedDID(undefined), false);
 });

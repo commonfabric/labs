@@ -17,15 +17,21 @@ import { valueEqual } from "./valueEqual.ts";
  * private fields and has no enumerable own properties, so `deepEqual()` on its
  * own reads two distinct same-class ones as equal. `valueEqual()` is defined
  * over `FabricValue`s and throws on any other class instance, which these
- * operands still carry -- a `Cell`, a query-result proxy.
+ * operands can still carry -- a `Cell`, for one.
  *
- * Operands arrive unwrapped. A special object is recognized by `instanceof`,
- * which a proxy decides rather than the value behind it, so a proxy that does
- * not forward the test hides the special object from this comparison and two
- * distinct ones read as equal -- the answer this function exists to prevent.
- * One that does forward it reaches `valueEqual()`, which reads a private field
- * through the proxy and throws. `data-model` sits below whatever built the
- * proxy and cannot unwrap one, so this is the caller's to do.
+ * Operands are values, never views: a proxy that reads through to stored data
+ * as it is walked, as a query-result proxy does, is not an operand, at the top
+ * or anywhere inside one. Either of two reasons settles it. A special object is
+ * recognized by `instanceof`, which a proxy decides rather than the value
+ * behind it, so a proxy that does not forward the test hides the special
+ * object from this comparison and two distinct ones read as equal -- the
+ * answer this function exists to prevent -- and one that does forward it
+ * reaches `valueEqual()`, which reads a private field through the proxy and
+ * throws. And a view resolves links as it is read, so a walk over one reads
+ * into every document the stored value links to, and walks a document those
+ * links share once for each path to it. `data-model` sits below whatever built
+ * the view and cannot recognize or unwrap one, so the caller hands over the
+ * stored values a view reads instead.
  *
  * So the walk is the frame, and the model decides the values only it can
  * decide. A special object is one of those, whatever it sits inside: two of
@@ -53,12 +59,11 @@ import { valueEqual } from "./valueEqual.ts";
  * naming itself is the answer that names the work.
  *
  * Where both this and `valueEqual()` return, they return the same result
- * except in two cases, where this walk keeps a distinction that `valueEqual()`
- * does not. A null-prototype object holding the same contents as a plain
- * record: `valueEqual()` calls the two equal, a record being a record in the
- * value model, and this walk separates them on their constructors. And an
- * array with non-index properties, which `valueEqual()` ignores, as content
- * hashing does, and this walk compares.
+ * except for an array with non-index properties, which `valueEqual()` ignores,
+ * as content hashing does, and this walk compares. A null-prototype object is
+ * one `valueEqual()` refuses, not being a `FabricValue`; this walk compares it
+ * by its contents, and separates it from a plain record on their
+ * constructors.
  *
  * This is the compare-side half of admitting special objects; the walk-side
  * half is `isKeyableObjectOrArray()`, with `isWalkableObjectOrArray()` the

@@ -4,7 +4,7 @@ import type { NormalizedFullLink } from "../link-utils.ts";
 import { toMemorySpaceAddress } from "../link-utils.ts";
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
 import { entityNameKey } from "./keys.ts";
-import { readsOverlapWrites } from "./scheduling-writes.ts";
+import { forEachOverlappingWriter } from "./scheduling-writes.ts";
 import type { Action, ReactivityLog, SpaceScopeAndURI } from "./types.ts";
 
 export interface MaterializerIndexState {
@@ -106,27 +106,49 @@ export class SchedulerMaterializers implements MaterializerIndexState {
   }
 }
 
+/**
+ * The materializers, other than effects and `options.exclude`, whose write
+ * envelopes overlap one of `log`'s reads, deep reads and shallow reads each
+ * under their own overlap rule (see `readsOverlapWrites`). The set iterates in
+ * the order the log's reads, deep then shallow, first reach each materializer
+ * through the entity index. The work is at most one test of a single read
+ * against one materializer's envelopes per (read, indexed materializer) pair.
+ */
 export function collectMaterializerWritersForLog(
   state: MaterializerIndexState,
   log: ReactivityLog,
   options: { exclude?: Action } = {},
 ): Set<Action> {
-  const writers = new Set<Action>();
-  const reads = [...log.reads, ...log.shallowReads];
-  for (const read of reads) {
-    const candidates = state.materializersByEntity.get(
-      entityNameKey(read),
-    );
-    if (!candidates) continue;
+  // A read can only overlap an envelope on its own entity, so testing each
+  // read alone against the materializers indexed there finds every overlap.
+  // A materializer already found to overlap is filtered out before its test.
+  const reached = new Set<Action>();
+  const overlapping = new Set<Action>();
+  forEachOverlappingWriter(
+    {
+      writersByEntity: state.materializersByEntity,
+      getSchedulingWrites: (action) =>
+        state.getMaterializerWriteEnvelopes(action),
+    },
+    log.reads,
+    log.shallowReads,
+    (writer) => {
+      overlapping.add(writer);
+    },
+    {
+      filter: (writer) =>
+        writer !== options.exclude && !state.effects.has(writer) &&
+        !overlapping.has(writer),
+      onCandidate: (writer) => {
+        reached.add(writer);
+      },
+    },
+  );
 
-    for (const candidate of candidates) {
-      if (candidate === options.exclude) continue;
-      if (state.effects.has(candidate)) continue;
-      const envelopes = state.getMaterializerWriteEnvelopes(candidate) ?? [];
-      if (readsOverlapWrites(log.reads, log.shallowReads, envelopes)) {
-        writers.add(candidate);
-      }
-    }
+  // `overlapping` holds each writer in the order its overlap was found;
+  // filtering `reached` instead keeps first-reach order.
+  for (const writer of reached) {
+    if (!overlapping.has(writer)) reached.delete(writer);
   }
-  return writers;
+  return reached;
 }

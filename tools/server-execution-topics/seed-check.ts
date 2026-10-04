@@ -23,7 +23,6 @@ import {
 
 const apiUrl = new URL(Deno.env.get("API_URL")!);
 const runDir = Deno.env.get("CF_CAMPAIGN_RUN_DIR")!;
-const spaceName = Deno.env.get("SPACE_NAME")!;
 const rawPosture = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
 const environmentPosture = rawPosture === "true"
   ? true
@@ -45,7 +44,7 @@ const shape = {
   citingTopics: 3,
   bodyWords: 120,
 };
-const fixture = await seedTopicBoard({ apiUrl, spaceName, identity, ...shape });
+const fixture = await seedTopicBoard({ apiUrl, identity, ...shape });
 await Deno.writeTextFile(join(runDir, "fixture.json"), JSON.stringify(fixture));
 const response = await fetch(new URL("/api/health/stats", apiUrl));
 if (!response.ok) {
@@ -60,7 +59,7 @@ await Deno.writeTextFile(
 
 const reader = await initializePiecesController({
   apiUrl,
-  space: spaceName,
+  space: fixture.spaceDid,
   identity,
 });
 try {

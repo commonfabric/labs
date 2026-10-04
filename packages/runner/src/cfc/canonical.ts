@@ -1,4 +1,9 @@
 import { hashStringOf } from "@commonfabric/data-model";
+import type {
+  DocumentPath,
+  NonDocumentPath,
+  ValuePath,
+} from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 import { normalizeCellScope } from "../scope.ts";
 import type { CfcConfClause } from "./clause.ts";
@@ -10,9 +15,11 @@ import type {
   CfcExternalContentObservation,
   CfcLabelMetadataObservation,
   CfcMetadata,
+  CfcRecordAddress,
   ConsultedGrant,
   ConsultedPolicyManifest,
   ConsumedRead,
+  LabelMapEntry,
   OrderedWriteAttempt,
   PreparedDigestInput,
   WritePolicyInput,
@@ -21,26 +28,60 @@ import { cloneCfcLabelView, type IFCLabel } from "./label-view-core.ts";
 import { isOrClause, normalizeClause } from "./clause.ts";
 
 /**
- * Returns a canonical-form logical path: any leading `"value"` element
- * stripped, deep-frozen so the array is safe to use as a cache key or
- * to retain in long-lived data structures. Callers may rely on
- * "canonical paths are immutable" as a system invariant.
+ * Returns the canonical form of a logical path — a path inside a document's
+ * `value`, the way a cell link, a label-map entry, and a write-policy target
+ * name a field. The path is not rewritten: a first segment of `"value"` names a
+ * payload field of that name. The result is deep-frozen so it is safe to use as
+ * a cache key or to retain in long-lived data structures; callers may rely on
+ * "canonical paths are immutable" as a system invariant. An input that is
+ * already frozen is returned unchanged, so canonicalizing twice is harmless.
  *
- * The result is normally a fresh array. As a fast path, if the input
- * is already frozen and already in canonical form (no leading
- * `"value"`), the input is returned unchanged — useful when
- * canonicalize* re-runs on already-canonical input (e.g. during a CFC
- * commit-recheck pass).
+ * A path rooted at the stored document, as a transaction address is, goes
+ * through {@link canonicalizeDocumentPath} instead.
  */
-export const canonicalizeLogicalPath = (
-  path: readonly string[],
-): readonly string[] => {
-  if (path[0] !== "value" && Object.isFrozen(path)) {
-    return path;
+export const canonicalizeLogicalPath = (path: NonDocumentPath): ValuePath => {
+  if (Object.isFrozen(path)) {
+    return path as ValuePath;
   }
-  const next = path[0] === "value" ? path.slice(1) : path.slice();
-  Object.freeze(next);
-  return next;
+  return Object.freeze(path.slice()) as ValuePath;
+};
+
+/**
+ * Returns the payload path that a path rooted at the stored document names,
+ * as a transaction's read and write addresses are, or `undefined` when the
+ * path names one of the document's own members instead. The document keeps
+ * its payload under `value`, so `["value", "x"]` becomes `["x"]` and
+ * `["value"]` becomes `[]`, the whole payload. The document root `[]` holds
+ * the payload too, and also becomes `[]`.
+ *
+ * Any other path, such as `["source"]` or `["cfc", "labelMap"]`, is envelope
+ * metadata, which is never matched as a payload path (spec §4.6.5): a member
+ * named `source` and a payload field named `source` are different places. A
+ * record that has to keep a member's address uses {@link cfcRecordPath}.
+ */
+export const canonicalizeDocumentPath = (
+  path: DocumentPath,
+): ValuePath | undefined =>
+  path[0] === "value"
+    ? Object.freeze(path.slice(1)) as ValuePath
+    : path.length === 0
+    ? canonicalizeLogicalPath(path as readonly string[])
+    : undefined;
+
+/**
+ * The path a transaction record binds for `path`, which is rooted at the
+ * stored document: `{ path }` with the payload path
+ * {@link canonicalizeDocumentPath} returns, or, for one of the document's own
+ * members, `{ metaPath }` with `path` itself, frozen as
+ * {@link canonicalizeLogicalPath} freezes a path. See {@link CfcRecordAddress}.
+ */
+export const cfcRecordPath = (
+  path: DocumentPath,
+): { path: ValuePath } | { metaPath: readonly string[] } => {
+  const payload = canonicalizeDocumentPath(path);
+  return payload !== undefined
+    ? { path: payload }
+    : { metaPath: canonicalizeLogicalPath(path as readonly string[]) };
 };
 
 /**
@@ -59,10 +100,10 @@ export const canonicalizeLogicalPath = (
  */
 const pathPointerCache = new WeakMap<readonly string[], string>();
 
-export const logicalPathToPointer = (path: readonly string[]): string => {
+export const logicalPathToPointer = (path: NonDocumentPath): string => {
   const cached = pathPointerCache.get(path);
   if (cached !== undefined) return cached;
-  const pointer = encodePointer(canonicalizeLogicalPath(path));
+  const pointer = encodePointer(path);
   if (Object.isFrozen(path)) pathPointerCache.set(path, pointer);
   return pointer;
 };
@@ -79,45 +120,26 @@ const compareAddress = (left: CfcAddress, right: CfcAddress): number => {
 };
 
 /**
- * Pointer cache for paths that are ALREADY canonical, kept separate from
- * `pathPointerCache` because the two disagree on exactly the paths this
- * distinction exists for: they key on the same array identity but encode it
- * with and without a `"value"` strip.
+ * {@link compareAddress} over prepared-digest records: a payload record sorts
+ * before a member record of the same document, since the two name different
+ * places even where their paths are equal.
  */
-const canonicalPathPointerCache = new WeakMap<readonly string[], string>();
-
-const canonicalPathToPointer = (path: readonly string[]): string => {
-  const cached = canonicalPathPointerCache.get(path);
-  if (cached !== undefined) return cached;
-  const pointer = encodePointer(path);
-  if (Object.isFrozen(path)) canonicalPathPointerCache.set(path, pointer);
-  return pointer;
-};
-
-/**
- * Orders addresses whose paths are already in canonical form, encoding them
- * as they stand.
- *
- * `compareAddress` cannot serve here. It reaches paths through
- * `logicalPathToPointer`, which canonicalizes on the way — harmless for a
- * raw path, but a second strip for one already canonicalized. A payload field
- * named `value` is what that loses: envelope `["value","value","x"]` is the
- * payload path `value.x`, canonicalizes to `["value","x"]`, and a second
- * strip flattens it onto payload `x`. Two distinct addresses then compare
- * equal, which merely ties their order in a plain sort but silently merges
- * them under a comparator that also decides identity.
- */
-const compareCanonicalAddress = (
-  left: CfcAddress,
-  right: CfcAddress,
+const compareRecordAddress = (
+  left: CfcRecordAddress,
+  right: CfcRecordAddress,
 ): number => {
+  if (left.metaPath === undefined && right.metaPath === undefined) {
+    return compareAddress(left, right);
+  }
   if (left.space !== right.space) {
     return left.space < right.space ? -1 : 1;
   }
   if (left.id !== right.id) return left.id < right.id ? -1 : 1;
   if (left.scope !== right.scope) return left.scope < right.scope ? -1 : 1;
-  const leftPointer = canonicalPathToPointer(left.path);
-  const rightPointer = canonicalPathToPointer(right.path);
+  if (left.metaPath === undefined) return -1;
+  if (right.metaPath === undefined) return 1;
+  const leftPointer = encodePointer(left.metaPath);
+  const rightPointer = encodePointer(right.metaPath);
   return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
 };
 
@@ -144,26 +166,21 @@ const compareDereferenceTrace = (
   left: CfcDereferenceTrace,
   right: CfcDereferenceTrace,
 ): number => {
-  const sourceCompare = compareCanonicalAddress(left.source, right.source);
+  const sourceCompare = compareAddress(left.source, right.source);
   if (sourceCompare !== 0) return sourceCompare;
-  const targetCompare = compareCanonicalAddress(left.target, right.target);
+  const targetCompare = compareAddress(left.target, right.target);
   if (targetCompare !== 0) return targetCompare;
   return left.kind < right.kind ? -1 : left.kind > right.kind ? 1 : 0;
 };
 
 /**
- * Whether two dereference traces name the same dereference. Canonicalizes
- * both sides, so a caller may pass raw traces — a hop recorded off a raw link
- * path and the same hop already canonicalized are one dereference, not two.
+ * Whether two dereference traces name the same dereference: the same source,
+ * the same target, and the same kind.
  */
 export const cfcDereferenceTracesEqual = (
   left: CfcDereferenceTrace,
   right: CfcDereferenceTrace,
-): boolean =>
-  compareDereferenceTrace(
-    canonicalizeDereferenceTrace(left),
-    canonicalizeDereferenceTrace(right),
-  ) === 0;
+): boolean => compareDereferenceTrace(left, right) === 0;
 
 const compareConsultedGrant = (
   left: ConsultedGrant,
@@ -202,7 +219,7 @@ const compareExternalContentObservation = (
   left: CfcExternalContentObservation,
   right: CfcExternalContentObservation,
 ): number => {
-  const bySource = compareCanonicalAddress(left.source, right.source);
+  const bySource = compareAddress(left.source, right.source);
   if (bySource !== 0) return bySource;
   const leftHash = hashStringOf(left);
   const rightHash = hashStringOf(right);
@@ -223,9 +240,11 @@ const compareWritePolicyInput = (
   let primary = 0;
   switch (left.kind) {
     case "preserved-output":
+    case "policy-application":
+    case "release-program":
     case "owner-adoption":
     case "initialization": {
-      primary = compareCanonicalAddress(
+      primary = compareAddress(
         left.target,
         (right as typeof left).target,
       );
@@ -271,10 +290,17 @@ const compareWritePolicyInput = (
 // itself.
 export const canonicalizeConsumedRead = (
   read: ConsumedRead,
-): ConsumedRead => ({
-  ...read,
-  path: canonicalizeLogicalPath(read.path),
-});
+): ConsumedRead =>
+  read.metaPath === undefined
+    ? { ...read, path: canonicalizeLogicalPath(read.path) }
+    : { ...read, metaPath: canonicalizeLogicalPath(read.metaPath) };
+
+export const canonicalizeRecordAddress = (
+  record: CfcRecordAddress,
+): CfcRecordAddress =>
+  record.metaPath === undefined
+    ? { ...record, path: canonicalizeLogicalPath(record.path) }
+    : { ...record, metaPath: canonicalizeLogicalPath(record.metaPath) };
 
 export const canonicalizeAttemptedWrite = (
   write: AttemptedWrite,
@@ -296,16 +322,15 @@ export const canonicalizeWritePolicyInput = (
 ): WritePolicyInput => {
   switch (input.kind) {
     case "preserved-output":
+    case "policy-application":
+    case "release-program":
     case "owner-adoption":
     case "initialization":
-      // Runtime evidence addresses are already value-relative. A literal leading
-      // `value` is a field name, not the storage envelope segment.
       return {
         ...input,
         target: {
-          ...input.target,
+          ...canonicalizeAttemptedWrite(input.target),
           scope: normalizeCellScope(input.target.scope),
-          path: Object.freeze([...input.target.path]),
         },
       };
     case "schema":
@@ -405,44 +430,57 @@ const withoutUndefinedLabelMembers = (label: IFCLabel): IFCLabel => {
  * canonical, `undefined` label members dropped, and `version` fixed at 1 —
  * the stored spelling is not part of what two envelopes are compared on,
  * so a version-1 and a version-2 envelope holding the same labels are
- * equal here.
+ * equal here. The document-rooted entries take the same form, and an empty
+ * set of them is the same as none.
  */
 export const canonicalizeCfcMetadata = (
   metadata: CfcMetadata,
-): CfcMetadata => ({
-  version: 1,
-  schemaHash: metadata.schemaHash,
-  labelMap: {
+): CfcMetadata => {
+  const documentEntries = metadata.labelMap.documentEntries ?? [];
+  return {
     version: 1,
-    entries: [...metadata.labelMap.entries].map((entry) => ({
-      path: canonicalizeLogicalPath(entry.path),
-      label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
-      ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
-      ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-    })).sort((left, right) => {
-      const leftKey = logicalPathToPointer(left.path);
-      const rightKey = logicalPathToPointer(right.path);
-      if (leftKey !== rightKey) {
-        return leftKey < rightKey ? -1 : 1;
-      }
-      const leftOrigin = left.origin ?? "";
-      const rightOrigin = right.origin ?? "";
-      if (leftOrigin !== rightOrigin) {
-        return leftOrigin < rightOrigin ? -1 : 1;
-      }
-      // Same (path, origin) can legitimately hold per-class entries (the C2
-      // persist split writes `value` and `shape` siblings) — order by class
-      // so canonicalization stays deterministic.
-      const leftObserves = left.observes ?? "";
-      const rightObserves = right.observes ?? "";
-      return leftObserves < rightObserves
-        ? -1
-        : leftObserves > rightObserves
-        ? 1
-        : 0;
-    }),
-  },
-});
+    schemaHash: metadata.schemaHash,
+    labelMap: {
+      version: 1,
+      entries: canonicalLabelEntries(metadata.labelMap.entries),
+      ...(documentEntries.length > 0
+        ? { documentEntries: canonicalLabelEntries(documentEntries) }
+        : {}),
+    },
+  };
+};
+
+/** Label-map entries in comparison form, sorted by path, origin and class. */
+const canonicalLabelEntries = (
+  entries: readonly LabelMapEntry[],
+): LabelMapEntry[] =>
+  entries.map((entry) => ({
+    path: canonicalizeLogicalPath(entry.path),
+    label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
+    ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+    ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+  })).sort((left, right) => {
+    const leftKey = logicalPathToPointer(left.path);
+    const rightKey = logicalPathToPointer(right.path);
+    if (leftKey !== rightKey) {
+      return leftKey < rightKey ? -1 : 1;
+    }
+    const leftOrigin = left.origin ?? "";
+    const rightOrigin = right.origin ?? "";
+    if (leftOrigin !== rightOrigin) {
+      return leftOrigin < rightOrigin ? -1 : 1;
+    }
+    // Same (path, origin) can legitimately hold per-class entries (the C2
+    // persist split writes `value` and `shape` siblings) — order by class
+    // so canonicalization stays deterministic.
+    const leftObserves = left.observes ?? "";
+    const rightObserves = right.observes ?? "";
+    return leftObserves < rightObserves
+      ? -1
+      : leftObserves > rightObserves
+      ? 1
+      : 0;
+  });
 
 /** Canonicalizes policy records and hashes each tied sort key at most once. */
 const canonicalizeWritePolicyInputs = (
@@ -466,12 +504,12 @@ export const canonicalizePreparedDigestInput = (
   input: PreparedDigestInput,
 ): PreparedDigestInput => ({
   consumedReads: [...input.consumedReads].map(canonicalizeConsumedRead).sort(
-    compareAddress,
+    compareRecordAddress,
   ),
-  attemptedWrites: [...input.attemptedWrites].map(canonicalizeAttemptedWrite)
-    .sort(compareAddress),
-  writes: [...input.writes].map(canonicalizeAttemptedWrite).sort(
-    compareAddress,
+  attemptedWrites: [...input.attemptedWrites].map(canonicalizeRecordAddress)
+    .sort(compareRecordAddress),
+  writes: [...input.writes].map(canonicalizeRecordAddress).sort(
+    compareRecordAddress,
   ),
   // ORDER-PRESERVING on purpose (sorted by journalIndex, which is unique
   // per record, so this is a total order): the log exists to bind the
@@ -504,9 +542,9 @@ export const canonicalizePreparedDigestInput = (
   // reaches, is silently dropped from the second read onward.
   //
   // Duplicates land adjacent because `compareDereferenceTrace` orders on
-  // every field, so comparing equal means equal. Dedupe follows the sort, and
-  // the sort follows canonicalization: two traces differing only in a leading
-  // `"value"` path element are the same record, but only once canonicalized.
+  // every field, so comparing equal means equal, and dedupe follows the sort.
+  // A trace's paths are logical: a leading `"value"` names a payload field, so
+  // two traces that differ in one are different dereferences.
   dereferenceTraces: dedupeSorted(
     [...input.dereferenceTraces].map(canonicalizeDereferenceTrace).sort(
       compareDereferenceTrace,
@@ -583,6 +621,56 @@ export const canonicalizePreparedDigestInput = (
     ? {
       externalContentObservations: [...input.externalContentObservations].sort(
         compareExternalContentObservation,
+      ),
+    }
+    : {}),
+  // Whole-value roots decide where the flow stamp lands, and a root's
+  // reference decides which pointer its value may hold: an order-insensitive
+  // set of (address, recording identity, reference). Empty collapses to
+  // absent, so a transaction that recorded none keeps its digest, and a root
+  // with no reference keeps the spelling it had before references existed.
+  ...(input.assertedValueRoots !== undefined &&
+      input.assertedValueRoots.length > 0
+    ? {
+      assertedValueRoots: [...input.assertedValueRoots]
+        .map((root) => {
+          const canonical = {
+            address: canonicalizeAttemptedWrite(root.address),
+            identity: root.identity,
+            ...(root.reference !== undefined
+              ? { reference: canonicalizeAttemptedWrite(root.reference) }
+              : {}),
+          };
+          // The whole canonical record's hash, so two roots compare equal only
+          // when they are the same root.
+          return { ...canonical, recordHash: hashStringOf(canonical) };
+        })
+        .sort((left, right) =>
+          compareAddress(left.address, right.address) ||
+          (left.recordHash < right.recordHash
+            ? -1
+            : left.recordHash > right.recordHash
+            ? 1
+            : 0)
+        )
+        // A root recorded twice stamps once (`assertedValueRootPaths` keeps
+        // the first of each path), so a repeat is not digest content.
+        .filter((root, index, sorted) =>
+          index === 0 || root.recordHash !== sorted[index - 1].recordHash
+        )
+        .map(({ recordHash: _, ...root }) => root),
+    }
+    : {}),
+  // List-coordinator containers: a deduplicated address set, absent when
+  // empty so a transaction that declared none keeps its digest.
+  ...(input.structureContainers !== undefined &&
+      input.structureContainers.length > 0
+    ? {
+      structureContainers: dedupeSorted(
+        [...input.structureContainers].map(canonicalizeAttemptedWrite).sort(
+          compareAddress,
+        ),
+        compareAddress,
       ),
     }
     : {}),

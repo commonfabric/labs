@@ -2,10 +2,16 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
 
 import type { FabricValue } from "@/interface.ts";
-import { BaseDecodeAct, ProblematicStateError } from "@/codec-common";
+import {
+  BaseDecodeAct,
+  type CodecEngineConfig,
+  ProblematicStateError,
+} from "@/codec-common";
+import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { debugStr } from "@/value-debug";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
+import { excerptOf } from "./text-scan.ts";
 import {
   isEncodedInstance,
   parseWireText,
@@ -22,17 +28,32 @@ import {
  * array holes.
  */
 export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
+  readonly #slotLimit: number | undefined;
+
+  /**
+   * Constructs an instance. `slotLimit`, when given, bounds the slots the text
+   * this act decodes may stand for, as `parseWireText()` counts them.
+   */
+  constructor(
+    config: CodecEngineConfig<JsonCodecValue>,
+    env: LiveEnvironment,
+    slotLimit?: number,
+  ) {
+    super(config, env);
+    this.#slotLimit = slotLimit;
+  }
+
   /**
    * @inheritDoc
    *
    * Checks the format tag and parses what follows it. A string without the tag
    * is not this format's serialized form at all, which is refused here rather
    * than walked -- and settles against `lenient` like any other malformation
-   * off a channel.
+   * off a channel, as does text past this act's slot limit.
    */
   override encodedFromSerializedForm(data: string): JsonCodecValue {
     if (!seemsLikeEncoded(data)) {
-      const excerpt = (data.length <= 50) ? data : `${data.slice(0, 50)}...`;
+      const excerpt = excerptOf(data);
       throw new ProblematicStateError(
         "",
         excerpt,
@@ -42,6 +63,8 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
 
     return parseWireText(
       data.slice(ENCODING_PREFIX_TAG.length),
+      this.config.mutable,
+      this.#slotLimit,
     );
   }
 
@@ -49,10 +72,10 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
    * Decodes a codec-value tree back into `FabricValue`s. See Section 4.5 of
    * the formal spec.
    *
-   * Frozen-ness contract: values returned via the codec dispatch arm are
-   * guaranteed deep-frozen at this boundary, so callers do not each have to
-   * freeze. The unknown-tag fallback (`UnknownValue`) is a separate arm and is
-   * intentionally NOT covered by this contract.
+   * Frozen-ness contract: every value this returns is deep-frozen, or built
+   * mutable when this act is mutable, whichever arm produced it, the
+   * unknown-tag arm's `UnknownValue` included, so callers do not each have to
+   * freeze.
    */
   override decodeValue(
     data: JsonCodecValue,
@@ -100,7 +123,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
           }
           result[key] = this.decodeValue(val);
         }
-        return Object.freeze(result);
+        return this.freezeUnlessMutable(result);
       }
 
       // `/quote` and `/object` returned above, so no codec ever sees their
@@ -109,6 +132,13 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     }
 
     // Primitives pass through.
+    //
+    // TODO(danfuzz): Refuse the JSON number `-0`, negative zero being written
+    // only as `SpecialNumber@1`, and refuse a number a double cannot
+    // represent, which `JSON.parse()` has already turned into an infinity by
+    // the time it arrives here. The cases `number literal negative zero` and
+    // `number literal past the largest double` in
+    // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
     if (
       data === null || typeof data === "boolean" ||
       typeof data === "number" || typeof data === "string"
@@ -188,11 +218,12 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     }
 
     result.length = targetIndex;
-    return Object.freeze(result);
+    return this.freezeUnlessMutable(result);
   }
 
   /**
-   * Plain objects: recursively decode values and freeze. Any `/`-prefixed key
+   * Plain objects: recursively decode values, and freeze unless mutable. Any
+   * `/`-prefixed key
    * is reserved per spec — return `ProblematicValue` on first occurrence rather
    * than silently round-tripping the object.
    */
@@ -213,19 +244,32 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       // becoming a property. Such a record cannot have been written by this
       // implementation, whose write path refuses it, so report it rather than
       // decoding something the bytes do not say.
+      //
+      // TODO(danfuzz): Decode such a record, the format letting a record
+      // carry any key, once every boundary preserves both names: the copy
+      // loops rebuild records by assignment, which loses `__proto__`, and
+      // other boundaries refuse or drop `constructor`, which assignment
+      // copies faithfully. The cases `record with key __proto__` and
+      // `record with key constructor` in
+      // `packages/data-model/test/fixtures/fvj1-conformance.json` record both.
       if (isUnsafeObjectKey(key)) {
         return this.reportReservedKey(key, data);
       }
       result[key] = this.decodeValue(val);
     }
-    return Object.freeze(result);
+    return this.freezeUnlessMutable(result);
+  }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
   }
 
   /**
    * Unwraps a wire representation. Detects single-key objects with `/`-prefixed
    * keys. Returns `{ tag, state }` or `null` if not a tagged value. The
-   * returned `state` is extracted directly from `data`, so if `data` is
-   * deep-frozen (as it should be) then `state` will be too.
+   * returned `state` is extracted directly from `data`, so it has the
+   * frozenness `parseWireText()` gave the whole tree.
    *
    * See `3-json-encoding.md` Section 4.
    */

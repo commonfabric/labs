@@ -25,6 +25,7 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   type Options,
   type SessionFactory,
@@ -290,19 +291,13 @@ const TEST_AUDIENCE = "did:key:z6Mk-runner-retry-classification-audience";
 class CountingLoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
 
-  /** Commits sent for the ACL document, across all sessions. */
+  /** Commits sent for a space's ACL document, across all sessions. */
   aclCommits = 0;
-
-  #aclDocId: string;
 
   readonly #server: MemoryV2Server.Server;
 
-  constructor(
-    server: MemoryV2Server.Server,
-    space: MemorySpace,
-  ) {
+  constructor(server: MemoryV2Server.Server) {
     this.#server = server;
-    this.#aclDocId = `of:${space}`;
   }
 
   async create(
@@ -329,7 +324,7 @@ class CountingLoopbackSessionFactory implements SessionFactory {
       commit: { operations?: readonly unknown[] },
     ) => {
       for (const operation of commit.operations ?? []) {
-        if ((operation as { id?: string }).id === this.#aclDocId) {
+        if ((operation as { id?: string }).id === `of:${space}`) {
           this.aclCommits++;
           break;
         }
@@ -354,28 +349,18 @@ class TestStorageManager extends V2StorageManager {
 
 Deno.test("a server ProtocolError reaches editWithRetry by name, once", async () => {
   const user = await Identity.fromPassphrase("retry-classification user");
-  const spaceIdentity = await Identity.fromPassphrase(
-    "retry-classification space",
-  );
-  const space = spaceIdentity.did();
   const bob = await Identity.fromPassphrase("retry-classification bob");
 
   const server = new MemoryV2Server.Server({
     store: new URL("memory://retry-classification"),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,
   });
-  const factory = new CountingLoopbackSessionFactory(server, space);
-  const storageManager = TestStorageManager.overServer(
-    { as: user, spaceIdentity },
-    factory,
-  );
+  const factory = new CountingLoopbackSessionFactory(server);
+  const storageManager = TestStorageManager.overServer({ as: user }, factory);
+  const space = await storageManager.createSpace({ [user.did()]: "OWNER" });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
@@ -511,25 +496,17 @@ class SessionErrorSessionFactory implements SessionFactory {
 
 Deno.test("a SessionError commits once and does not remount the session", async () => {
   const user = await Identity.fromPassphrase("session-error user");
-  const spaceIdentity = await Identity.fromPassphrase("session-error space");
-  const space = spaceIdentity.did();
 
   const server = new MemoryV2Server.Server({
     store: new URL("memory://session-error-retry"),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,
   });
   const factory = new SessionErrorSessionFactory(server);
-  const storageManager = TestStorageManager.overServer(
-    { as: user, spaceIdentity },
-    factory,
-  );
+  const storageManager = TestStorageManager.overServer({ as: user }, factory);
+  const space = await storageManager.createSpace({ [user.did()]: "OWNER" });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,

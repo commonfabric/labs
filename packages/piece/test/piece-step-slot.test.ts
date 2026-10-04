@@ -46,9 +46,9 @@ describe("piece run/step through a value-link slot", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "piece-step-slot-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();

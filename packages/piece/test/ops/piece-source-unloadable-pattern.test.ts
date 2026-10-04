@@ -78,9 +78,9 @@ describe("piece-controller", () => {
         },
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `piece-source-unloadable-pattern-${crypto.randomUUID()}`,
+          spaceDid: await runtime.createSpace(),
         }),
         runtime,
       );

@@ -120,20 +120,20 @@ export const seedProfileName = handler<
 // builder/pattern.ts `optIntoInSpaceMultiSpaceCommit` → runner
 // `enableCrossSpaceChildCommit`).
 //
-// CT-1650: the profile space is created via ANONYMOUS `inSpace()` — never
-// `inSpace(name)`. A named target derives its DID from
-// `fromPassphrase("common user").derive(name)` (createSession spaceName path),
-// i.e. the display NAME alone, so two different users picking the same profile
-// name — or one user creating two same-named profiles — collide into a single
-// shared space. That named path supports the legacy space names used during
-// development and nothing else, and is removed once those development-only
-// spaces have been migrated (docs/plans/random-space-identities.md).
-// The anonymous case instead derives the DID from this handler's
-// frame cause, which carries the creating user's per-home-space input links plus
-// the durable per-event id (runner.ts `createPatternFrame` cause): unique per
-// user AND per creation event, stable across the cross-space-commit retry. The
-// display name flows ONLY to `initialName` (editable later, independent of the
-// space identity). Existing profiles keep their already-baked concrete DID link.
+// Each profile lives in a space of its own, created by the ANONYMOUS
+// `inSpace()` call below: the calling (home) space records one allocation per
+// call, keyed by this handler's frame cause, which carries the creating user's
+// per-home-space input links plus the durable per-event id (runner.ts
+// `createPatternFrame` cause). The space is created with a random DID and owned
+// by the creating user, so a profile is unique per user AND per creation event,
+// and stable across the cross-space-commit retry. The display name flows ONLY to
+// `initialName` (editable later, independent of the space identity). Other
+// users read a profile — a lunch poll or a chat room shows its name — and a
+// runtime showing one writes into the profile's space, its per-session state
+// at the least, so the space grants anyone WRITE. What keeps a visitor from
+// changing the profile's data is the owner protection on its fields
+// (profile-home.tsx), not the space's access list; its view state is per
+// session. Existing profiles keep their already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
   {
@@ -169,7 +169,7 @@ export const submitProfileCreation = handler<
     const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
       []).length as number;
     profiles.push(
-      ProfileHome.inSpace()({
+      ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
         initialName: name,
         // The freshly created profile is current-vintage by construction — it
         // carries every stream and field, so the strict producer type is the
@@ -183,13 +183,22 @@ export const submitProfileCreation = handler<
   }
 });
 
+/**
+ * Home's default profile: a link to the chosen profile, under `profile`, or
+ * no `profile` while none is chosen. The link sits under a key because a
+ * handle to a cell whose root holds a link denotes the cell that link names,
+ * so a link stored at the root would make every later write land in the
+ * profile chosen first rather than re-point the default.
+ */
+export type DefaultProfileSlot = { profile?: BackwardsCompatibleProfile };
+
 // Sets the user's default profile — the one `#profile` resolves to in headless
 // mode and orders first in the picker. The chosen profile is bound per-row via
 // handler state (mirrors how home's removeSpaceHandler binds its item).
 export const setDefaultProfile = handler<
   unknown,
   {
-    defaultProfile: Writable<BackwardsCompatibleProfile | undefined>;
+    defaultProfile: Writable<DefaultProfileSlot>;
     // Take the profile as a LINK cell, not a resolved value: the handler only
     // needs the link to write into defaultProfile, and a link argument doesn't
     // require the profile's cross-space values to be loaded at event time —
@@ -200,7 +209,7 @@ export const setDefaultProfile = handler<
   }
 >((_, { defaultProfile, profile }) => {
   if (profile) {
-    defaultProfile.set(profile as any);
+    defaultProfile.key("profile").set(profile as any);
   }
 });
 
@@ -276,13 +285,14 @@ type PickerProfileLink<Binding, Action extends string> = Cfc<
   }
 >;
 
-// The home `defaultProfile` link: write authorized by `setDefaultProfile`.
-export type TrustedDefaultProfile =
-  | PickerProfileLink<
+// The home `defaultProfile` slot (`DefaultProfileSlot`): its `profile` link is
+// write authorized by `setDefaultProfile`.
+export type TrustedDefaultProfile = {
+  profile?: PickerProfileLink<
     typeof setDefaultProfile,
     typeof TRUSTED_PROFILE_SET_DEFAULT_ACTION
-  >
-  | undefined;
+  >;
+};
 
 // The home `mru` list: elements carry the picker `uiContract`; the array
 // container carries `writeAuthorizedBy: setMruProfile` to gate structural

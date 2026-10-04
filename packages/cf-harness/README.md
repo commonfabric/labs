@@ -85,6 +85,16 @@ happens to know. Handles cross that boundary — a child resolves tokens its
 parent minted — but the brief around them does not. Closing that is live work,
 not a settled part of the design.
 
+What crosses back is handles too. A string a child's structured return would
+otherwise seal as an `opaque:` link reaches the parent as a `cfh:v:` return
+referent: the parent can name it in another child's goal, and that child can
+spend it as the `browser` tool's `urlHandle` or `valueHandle`, while neither
+parent nor `describe_handle` ever reads it. A field that takes an address, such
+as `skillHandle`, refuses one. That is how one browser child's finding — a URL,
+a value on a page — becomes the input of the next without passing through the
+model that planned them. The owner, whose run it is, sees the string in place of
+the token where the final answer names one.
+
 ## Why This Exists
 
 Common Fabric needs an agent harness that can become CFC-aware without
@@ -102,14 +112,21 @@ The current design direction is:
 
 What works today:
 
-- shell-centric execution against the local `runsc-cfc` sandbox path
-- sandbox containers default to Docker `--network bridge` so local Loom/Fabric
-  helper services can be reached through Docker Desktop's `host.docker.internal`
-  host alias during early integration work; set
-  `CF_HARNESS_DOCKER_NETWORK_MODE=host` when a runtime should explicitly use
-  host networking
-- default sandbox image aligned with the public CFC kitchen-sink image published
-  from the sibling `gvisor` repo:
+- shell-centric execution in a gVisor sandbox through one of two drivers: Docker
+  with the Docker-registered `runsc-cfc` runtime, which is the default, or a
+  `runsc` binary the harness invokes directly, selected with
+  `--sandbox-runtime runsc`; see [Sandbox runtimes](#sandbox-runtimes)
+- named `bash` sessions on the direct driver: a long-lived container that later
+  calls execute in, offered to the model only where the run's sandbox has
+  sessions and its CFC enforcement mode allows them
+- under the Docker driver, sandbox containers default to Docker
+  `--network bridge` so local Loom/Fabric helper services can be reached through
+  Docker Desktop's `host.docker.internal` host alias during early integration
+  work; set `CF_HARNESS_DOCKER_NETWORK_MODE=host` when a runtime should
+  explicitly use host networking. The direct driver reads the same variable and
+  defaults to `sandbox`, its counterpart of `bridge`
+- under the Docker driver, a default sandbox image aligned with the public CFC
+  kitchen-sink image published from the sibling `gvisor` repo:
   - `us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest`
   - override per run with `--sandbox-image` or `CF_HARNESS_SANDBOX_IMAGE`
 - durable Loom collections through an explicitly configured host transport; see
@@ -119,8 +136,9 @@ What works today:
   [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
 - built-in tools:
   - `bash`
-  - `browser` (structured host browser control for the browser subagent profile
-    only)
+  - `browser` (structured browser control for the browser subagent profile only,
+    executed by a browser host attached to the run or else through the Browser
+    Access lease; see [A browser host](#a-browser-host))
   - `read_file`
   - `view_image`
   - `web_fetch` (explicit parent allowlist or `web_fetch` subagent profile only)
@@ -131,8 +149,13 @@ What works today:
   - `edit_file`
   - `write_file`
   - `delegate_task`
-  - `finish_task` (parent-only question or reason the task cannot proceed; ends
-    the turn through ordinary policy and artifacts)
+  - `finish_task` (parent-only answer with optional client actions, question, or
+    reason the task cannot proceed; ends the turn through ordinary policy and
+    artifacts)
+  - `weaver_action` (parent-only, present only when the host opts the session
+    in: asks the person's client to run up to eight client actions mid-turn and
+    waits for the person to settle each; never a default tool, never offered to
+    a subagent)
   - `submit_result` (present only when the root run configures a structured
     result; validates the submitted value against that schema and writes the
     host-owned result file)
@@ -223,11 +246,11 @@ What works today:
 - provider-reported per-turn token usage in run reports, with aggregate input,
   cached-input, cache-write, output, reasoning, and total tokens surfaced in
   operator and batch results
-- GPT-5.6 gateway cost estimates when the provider returns complete cache usage
-  detail; estimates use the public OpenAI token schedule and are kept distinct
-  from provider-reported cost
+- GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
+  cache usage detail; estimates use the public OpenAI token schedule and are
+  kept distinct from provider-reported cost
 - stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6 gateway implicit/explicit cache-mode controls
+  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
@@ -243,10 +266,13 @@ What works today:
 
 The sandbox `bash` tool has a provisional direct-`curl` guard while sandbox
 networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
-hosts such as `localhost`, `127.0.0.1`, and Docker Desktop's
+hosts such as `localhost`, `127.0.0.1`, `[::1]`, and Docker Desktop's
 `host.docker.internal` host alias, but obvious external `curl` targets are
-denied before sandbox execution. This is an integration unblock, not a complete
-network confinement model.
+denied before sandbox execution. The refusal states that rule and names no host
+to try instead, since what answers on those names is the driver's: under Docker
+`host.docker.internal` reaches any port of the host, and under the direct driver
+on macOS only the ports the launch forwards into the VM. This is an integration
+unblock, not a complete network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -327,6 +353,10 @@ What is not done yet:
   - one batch/interactive executable boundary for Loom-owned runs
 - [src/sqlite-session-store.ts](src/sqlite-session-store.ts)
   - SQLite-backed interactive chat session, turn, and event persistence
+- [src/sandbox/](src/sandbox/)
+  - the Docker and direct `runsc` sandbox drivers, the selection between them,
+    the CFC result parser they share, and the process runner that holds a
+    session's long-lived child
 - [src/artifacts.ts](src/artifacts.ts)
   - persisted run state, run manifest, transcript and its omission record, run
     report, capability snapshot, and tool output storage
@@ -345,8 +375,8 @@ What is not done yet:
     Timeline places the model-facing result beside the full fields withheld from
     it, labeled by omission rule. See [console/README.md](console/README.md)
 - [integration/](integration/)
-  - the deployed-topology posture gate, which a continuous-integration job runs
-    against a toolshed it starts
+  - the deployed-topology posture gate, which the `deployed-topology` suite of
+    the test topology runs against a toolshed it starts
 - [docs/SKILLS_SUPPORT_SPEC.md](docs/SKILLS_SUPPORT_SPEC.md)
   - staged Agent Skills support design
 - [../../docs/plans/cf-harness-codex-subscription-auth.md](../../docs/plans/cf-harness-codex-subscription-auth.md)
@@ -405,6 +435,41 @@ section pass `--model-provider` for one run; `CF_HARNESS_MODEL_PROVIDER` selects
 one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
 
+New runs default to `gpt-6.1-sol`. `--model` or `CF_HARNESS_MODEL` selects a
+different model for a new run. Gateway resumes keep their recorded model unless
+`--model` explicitly changes it; Codex resumes require the recorded model and
+reject model changes. The console uses the same new-run default. GPT-6.1 Sol
+supports reasoning efforts `low`, `medium` (provider default), `high`, `xhigh`,
+and `max`; it does not support `none` or `minimal`. Both the gateway and Codex
+adapters reject unsupported known-model efforts before dispatch; Codex validates
+them before resolving credentials.
+
+A flag the CLI does not declare is refused, never ignored, because an ignored
+restriction is a run without it: `--allowed-tools read_file` stops before any
+model call with
+`` `--allowed-tools` is not a flag of the batch CLI. Did you mean
+`--allow-tool`? ``
+rather than running with every tool. The refusal names the flag and, where one
+is close, the declared flag it most likely meant, and never the value typed with
+it, nor a word that could not be a flag's name. The control commands (`config`,
+`auth`, `models`, `whoami`), the interactive stdio entrypoint, the local Loom
+host's `batch` and `interactive` modes over those two, the console,
+`console:launch` and the measurement scripts refuse the same way. Through the
+local Loom host a `batch` refusal is an `invalid-request` host failure carrying
+that message; an `interactive` one stays on the chat protocol, as the error the
+host returns, with that message, for each request it is sent. `--help` or `-h`,
+written as a word of its own, answers whatever else is on the line, and text
+after `--` is prompt text, flags included.
+
+The batch CLI, the interactive stdio entrypoint, the console and
+`console:launch` also refuse a flag that takes a value when nothing follows it
+or the word after it starts with `-`, since the word after it would otherwise be
+taken apart as flags or taken as the value of the wrong flag: the batch CLI
+would read `--prompt "- buy milk"` as an empty prompt followed by a run of
+flags. Such a value is written as one shell word, `--prompt='- buy milk'`. That
+refusal comes before help, so `--prompt -h` is a prompt given no value rather
+than a question.
+
 Standard bearer-auth mode:
 
 ```bash
@@ -428,14 +493,14 @@ deno task run -- \
   --print-transcript
 ```
 
-GPT-5.6 cache experiment:
+GPT-6.1 Sol cache experiment:
 
 ```bash
 cd packages/cf-harness
 CF_HARNESS_API_KEY=... deno task run -- \
   --workspace ../.. \
   --model-provider openai-compatible-gateway \
-  --model gpt-5.6-terra \
+  --model gpt-6.1-sol \
   --reasoning-effort low \
   --prompt-cache-mode explicit \
   --prompt "Inspect the cf-harness package and summarize its model adapters."
@@ -447,8 +512,15 @@ including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
 that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the public OpenAI GPT-5.6 price
-schedule and is not an invoice or a subscription quota conversion.
+`estimatedCostUsd` is an estimate based on the
+[public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
+for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
+subscription quota conversion.
+
+GPT-6.1 Sol estimates use $2 input, $0.10 cached input, $2.50 cache writes, and
+$10 output per million tokens. Above 272,000 input tokens, the full request uses
+2x input/cache rates and 1.5x output rates. These are standard API rates, not
+fast-mode, batch, regional-processing, or subscription prices.
 
 Interactive streams emit `turn_usage` after each completed model call with the
 root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
@@ -457,32 +529,55 @@ time through its terminal event. Unreported usage fields stay absent, and a call
 without usage prevents a partial dollar cost from being shown as a total. There
 is no estimate of tokens still being generated within a provider call.
 
-For an ordinary task with a configured Fabric session, the parent completes only
-after `assign_slug` successfully names a UI piece in that run. A text answer
-becomes a small pattern that renders the answer, created through the ordinary
-authoring and tool policy path. Data-only probes stay unnamed. An existing piece
-can keep its address: after a revision, `assign_slug` confirms the same piece
-under its existing slug. Its pending-read and UI checks apply in either case.
+For an ordinary task with a configured Fabric session, the parent completes
+either after `assign_slug` successfully names a UI piece in that run or through
+`finish_task` with outcome `completed`. A task that builds or shows something
+leaves a piece, created through the ordinary authoring and tool policy path.
+Data-only probes stay unnamed. An existing piece can keep its address: after a
+revision, `assign_slug` confirms the same piece under its existing slug. Its
+pending-read and UI checks apply in either case. A task whose answer is words
+ends with `finish_task` completed and the answer as its message, without a
+pattern built to hold it.
 
 Outside a budget-finalizing turn, a plain-text final answer without that receipt
 gets a host correction within the existing model-turn bound. Exhausting a strict
 turn budget still records `max_model_turns`; with `finalizeOnTurnLimit`, the
 last turn instead records the existing budget-finalized give-up without a
 correction. The host does not create a replacement piece on the model's behalf.
-Same-run resume retains naming receipts and the requirement from its recorded
-Fabric session even when connection flags are omitted; conversation history
-alone does not satisfy a new turn. Generic library runs without a configured
-Fabric session keep their text return contract; factory-only library callers can
-enable `requirePieceOutput`. Host-configured structured-result requests keep
-their schema-based document return contract, including on resume. Child return
-contracts are unchanged. A budget-finalized give-up can still report partial
-findings without a piece.
+Same-run resume retains naming receipts even when connection flags are omitted;
+conversation history alone does not satisfy a new turn. A host that opens a
+Fabric session but grants a tool set without `assign_slug`, such as a lane with
+no piece-naming tool, keeps the run's text return contract, since it could never
+produce the receipt. The run records that decision as `pieceOutputRequired`. A
+resume that cannot back `assign_slug` (no connection flags) has no tool list to
+decide from, so it keeps the recorded decision, whatever tools it was granted. A
+record from a harness that did not keep the decision falls back to requiring a
+piece whenever the run had a Fabric session. Generic library runs without a
+configured Fabric session keep their text return contract; factory-only library
+callers can enable `requirePieceOutput`. Host-configured structured-result
+requests keep their schema-based document return contract, including on resume.
+Child return contracts are unchanged. A budget-finalized give-up can still
+report partial findings without a piece.
 
-When a missing input or choice blocks the goal, the parent calls `finish_task`
-with `{ "outcome": "question", "message": "…" }`; when it cannot proceed, it
-uses `"gave-up"` and a concrete reason. The call must stand alone in its model
-turn. An admitted call persists its ordinary policy decision, artifact, and
-paired transcript result, then ends the loop without another provider request.
+The parent ends a task in words with `finish_task`. When the task is done, it
+calls `{ "outcome": "completed", "message": "…" }` with the answer the person
+reads. A completed call may add `actions`, at most eight, for the person's
+client to perform in order:
+
+- `{ "kind": "open_loom", "loomId": "loom-…" }` opens a loom the run composed;
+  the id is `loom-` and sixteen lowercase hex digits.
+- `{ "kind": "command", "line": "/…" }` runs a client slash command of at most
+  500 characters.
+- `{ "kind": "open_url", "url": "https://…" }` opens an http or https address.
+
+The harness checks their shape and carries them; the client decides whether and
+how each runs. Actions with any other outcome, an unknown kind, an extra field,
+or a malformed value refuse the call. When a missing input or choice blocks the
+goal, the parent calls `finish_task` with
+`{ "outcome": "question", "message": "…" }`; when it cannot proceed, it uses
+`"gave-up"` and a concrete reason. The call must stand alone in its model turn.
+An admitted call persists its ordinary policy decision, artifact, and paired
+transcript result, then ends the loop without another provider request.
 Malformed or withheld calls remain recoverable tool errors. Children retain
 their failure-return contract and cannot call `finish_task`.
 
@@ -520,13 +615,15 @@ reference behind the attachment remains private.
 These dispositions keep the run lifecycle `completed` and the conversation
 reusable. `run-report.json` records `taskOutcome`, a union discriminated by
 `outcome: "completed" | "question" | "gave-up"`; only a question carries
-`question: { text }`, and only a give-up carries `reason`. The human sentence
-remains in `finalAssistantText`, read from the admitted tool result before
-model-bound handle substitution. The transcript's tool result still carries
-tokens for model context. Older reports without `taskOutcome` mean `completed`.
-The console projects that union into its HTTP 200 result and `turn_completed`
-event, with the session identity and current continuation availability described
-in [the console contract](console/README.md). Execution errors and cancellation
+`question: { text }`, only a give-up carries `reason`, and only a completion
+through `finish_task` carries `answer` and, when it named any, `actions`. A
+completion by final assistant text carries neither. The human sentence remains
+in `finalAssistantText`, read from the admitted tool result before model-bound
+handle substitution. The transcript's tool result still carries tokens for model
+context. Older reports without `taskOutcome` mean `completed`. The console
+projects that union into its HTTP 200 result and `turn_completed` event, with
+the session identity and current continuation availability described in
+[the console contract](console/README.md). Execution errors and cancellation
 keep their distinct lifecycle and HTTP results.
 
 Missing-input discovery uses the current grants and safe handle metadata.
@@ -794,8 +891,7 @@ inside a Claude Code session reports both.
 A service reaches this through `OTEL_SERVICE_NAME`, which it already sets to
 name itself for tracing. Every process it spawns inherits the variable, so a
 harness a service launches reports `invoker=service` and carries the service's
-own name in `service`. The local dev launcher sets the name for both toolshed
-and the background piece service.
+own name in `service`.
 
 No filesystem path and no git metadata contributes to any field. An absent field
 means the value was not there to read.
@@ -866,9 +962,79 @@ has one for each, and a home that is wiped starts a new one.
 No real principal appears in this document. A principal published next to the
 name of whoever committed it is tied to a person for good.
 
+### Sandbox runtimes
+
+Sandboxed tools run through one of two drivers, and a run selects one:
+
+```bash
+deno task run -- \
+  --workspace /path/to/workspace \
+  --sandbox-runtime runsc \
+  --sandbox-rootfs /path/to/rootfs \
+  --sandbox-cfc-policy /path/to/cfc-policy.json \
+  --prompt "Run uname -a and report the exact output."
+```
+
+`--sandbox-runtime` takes `docker` or `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME`
+as its default. A run that names neither uses Docker. The flags in this section
+are the batch CLI's; the interactive stdio entrypoint and the interactive lane
+of the Loom local host refuse them and read the environment variables alone. The
+console refuses the three selection flags, `--sandbox-runtime`,
+`--sandbox-rootfs`, and `--sandbox-cfc-policy`, and reads their variables alone.
+The two sidecar directory flags are the Docker driver's: the console's launcher,
+`console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on
+the Docker driver and refuses them under `runsc`. The console takes no Docker
+image or Docker runtime name. The two drivers coexist on one machine: the direct
+driver registers nothing with Docker and keeps its `runsc` state under the run's
+own scratch directory.
+
+- `docker` drives Docker with a Docker-registered runtime, normally `runsc-cfc`.
+  `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
+  `--cfc-invocation-context-dir` configure it, and the direct driver reads none
+  of them.
+- `runsc` writes an OCI bundle and invokes a `runsc` binary itself, with no
+  Docker: gVisor's `runsc` on Linux, and on macOS the darwin build from the
+  sibling `gvisor` repo, which is expected to forward the same command line into
+  one VM. Its settings are `--sandbox-rootfs` (`CF_HARNESS_SANDBOX_ROOTFS`),
+  `--sandbox-cfc-policy` (`CF_HARNESS_RUNSC_CFC_POLICY`),
+  `CF_HARNESS_RUNSC_BINARY`, and the shared `CF_HARNESS_DOCKER_NETWORK_MODE`.
+
+The direct driver passes `--cfc` to `runsc` exactly when a CFC policy is
+configured, and an enforcing run without one is refused before anything
+executes. With no policy named, it uses the one the Docker path's installer
+places at `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists,
+so both drivers label the same files the same way.
+
+Under the direct driver `bash` takes an optional `session`, in a run whose CFC
+enforcement mode allows one. A call that names a session executes in a container
+the harness keeps for the rest of the run, and a call that names none runs in a
+fresh container of its own. Sessions are refused in the enforcing CFC modes, so
+a run in one of them, `enforce-strict` by default, is offered `bash` with no
+`session`, as a run under Docker is in every mode.
+
+The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
+inside a writable mount of the run, and a scratch directory that lies inside any
+mount.
+
+Every run that the batch CLI, the interactive stdio entrypoint, the Loom local
+host, or the console starts on the direct driver runs its commands as root, on
+every host. None of them configures a container user: only a caller that builds
+the runtime itself can name one, numerically. The Docker driver's default on
+Linux is the host user. Those runs also use the direct driver's default scratch
+directory, which is made for the run with no access for group or others, under a
+parent the driver verifies is this user's alone. Only a caller that builds the
+runtime itself can name another scratch directory, and that one is not verified.
+
+[Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
+reference is the full contract: the defaults of each setting, the runtime
+description each driver records and how to tell the two apart in it, the
+network-mode mapping, the session contract and its refusals, the lifecycle of a
+session's process, and the trust checks.
+
 On hosts without the `runsc-cfc` Docker runtime (or where the installed CFC
 policy does not label the workspace mount, which makes in-sandbox file reads
-fail with SIGSYS), run with the plain `runc` runtime and observe-mode CFC:
+fail with SIGSYS), the Docker driver can run with the plain `runc` runtime and
+observe-mode CFC:
 
 ```bash
 export CF_HARNESS_SANDBOX_DOCKER_RUNTIME=runc
@@ -949,11 +1115,15 @@ being retyped. Loom retrieval uses the parallel `cfh:v:` grammar for admitted
 non-cell document referents, which can be delegated and consumed by the agent
 result writer. It does not expose a general value-handle dereference or release
 API. Token derivation is deterministic: the suffix is computed from the table's
-salt (the run id) and the normalized address, so the same referent yields the
-same token within a run and two spellings of one address (an LLM-friendly link
-and the bare entity URI, say) share one token. A suffix collision re-derives a
-fresh five-character suffix with a counter mixed into the hash, so no token is
-ever a prefix of another.
+salt (the id of the run that created the table) and the normalized address, so
+the same referent yields the same token within a table and two spellings of one
+address (an LLM-friendly link and the bare entity URI, say) share one token. An
+interactive session carries its table from turn to turn: each turn is a fresh
+run with its own run id that starts from the session's table, keeping its salt,
+so a token from an earlier turn resolves in a later one and an address held
+already keeps its token. A suffix collision re-derives a fresh five-character
+suffix with a counter mixed into the hash, so no token is ever a prefix of
+another.
 
 The table supports swapping in both directions:
 
@@ -969,9 +1139,13 @@ The table supports swapping in both directions:
   reference string; a well-formed token the table does not hold is left
   untouched.
 
-The table is per-run state: it is persisted in `run-state.json` alongside the
+The table is run state: it is persisted in `run-state.json` alongside the
 transcript and policy evidence, and a resumed run (`--resume-run`) carries its
-table, so tokens stay stable across resume.
+table, so tokens stay stable across resume. An interactive session also commits
+the table with each checkpoint, and the next turn's run starts from it, less its
+skill-context entries: an acquired skill's scripts are recorded on the run that
+acquired them, so a later turn holds no such handle and acquires the skill
+again.
 
 The prompt/tool loop applies the swaps at three seams. Successful tool output
 bound for model context carries tokens, while the persisted tool-output artifact
@@ -1343,12 +1517,15 @@ its own planner could have read.
 
 The child a `delegate_task` hands that handle to mounts the directory read-only
 at `/acquired-skill`, and mounts the one skill its handle names and no other.
-Such a child does not share its parent's container — a mount is a property of
-the container, so the child is given the parent's sandbox configuration plus
-that one mount and builds its own sandbox from it. That is possible only where
-this harness built the parent's sandbox from a configuration; a run whose
-sandbox runtime was handed in has none to extend, and its children go on sharing
-it, acquired skill or not. It receives `run_skill_script` and the operator's
+Such a child builds a sandbox of its own — a mount is a property of the
+container, so the child is given the parent's sandbox configuration plus that
+one mount and builds its own sandbox from it. Under the Docker driver that sets
+it apart from a child with no acquired skill, which shares its parent's sandbox
+runtime. Under the direct driver every child builds a runtime of its own, and
+this one's carries the mount. Building is possible only where this harness built
+the parent's sandbox from a configuration; a run whose sandbox runtime was
+handed in has none to extend, and its children share that runtime on either
+driver, acquired skill or not. It receives `run_skill_script` and the operator's
 allowlist entries for that pin, and for no other skill: the allowlist is the
 run's while a child's tool surface is its profile's, and neither reaches the
 other on its own. An acquisition is not an authorization — mounting the bytes
@@ -1541,7 +1718,7 @@ limits; the question determines how much research is useful:
 
 The tool is available to the parent and `pattern-author` whenever the run can
 supply a documentation corpus or pattern index. The gateway transport uses
-`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-5.6-luna`.
+`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-6-luna`.
 Research is a private tool loop, not web search or a delegable child profile.
 Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
 `cf:pattern:<id>`; index lookups and retained evidence use the bare id.
@@ -1762,17 +1939,23 @@ chronological order. Saved unscoped kits are interpreted in one read boundary:
 orientation. Stored transcripts are not rewritten. Saved unscoped kits retain
 their implementation admission contract; new calls use the two purposes above.
 
-Interactive sessions commit the original user goal, selected research, and the
-full model-context CFC record atomically with resumable history. A later root
-task retains that goal alongside its current request and inherits those findings
-as historical context, including after SQLite restart. It receives current
-grants independently; earlier bindings are not automatically transferred to a
-child. By default, failed and canceled turns retain the previous checkpoint. The
-Loom interactive host opts into `finalizeOnTurnLimit`: a failed provider call
-can retain the last resumable checkpoint: a validated complete tool batch or
+Interactive sessions commit the original user goal, selected research, the full
+model-context CFC record, and the handle table atomically with resumable
+history; the handle table follows whichever checkpoint is committed. A later
+root task retains that goal alongside its current request and inherits those
+findings as historical context, including after SQLite restart. It receives
+current grants independently; earlier bindings are not automatically transferred
+to a child. By default, a failed turn retains the previous checkpoint. The Loom
+interactive host opts into `finalizeOnTurnLimit`: a failed provider call can
+retain the last resumable checkpoint: a validated complete tool batch or
 opening-research handoff with matching research, CFC state, and omission
-provenance. Unpaired work, canceled turns, and process interruptions do not
-advance that checkpoint; their evidence remains in the audit trail.
+provenance. A turn the person cancels always advances the checkpoint to its own
+request plus that last complete batch, followed by a host notice that the turn
+was stopped before it finished, so a following turn reads the request as
+interrupted rather than answered. A session closed mid-turn saves nothing.
+Unpaired work, including a tool call still running when the cancel lands, and
+process interruptions do not advance the checkpoint; their evidence remains in
+the audit trail.
 
 `finalizeOnTurnLimit` reserves the last root model turn for a partial answer
 with harness and native tools disabled. It warns two turns beforehand and
@@ -1857,12 +2040,12 @@ and `pattern-author` profiles are offered the tool under the same gate and work
 through the parent's session; the `browser`, `web_fetch`, and `web_search`
 profiles never receive it.
 
-`run_pattern` executes on the trusted host side — it never enters the docker
-sandbox. The session (a `PiecesController` against the deployed API) is built
-lazily on the tool's first invocation; construction verifies the configured
-space's authorization, and only a healthy session is cached for the run. A
-session that fails to build surfaces as an ordinary tool-output error rather
-than a run failure, and the next tool call retries the construction.
+`run_pattern` executes on the trusted host side — it never enters the sandbox,
+whichever driver runs it. The session (a `PiecesController` against the deployed
+API) is built lazily on the tool's first invocation; construction verifies the
+configured space's authorization, and only a healthy session is cached for the
+run. A session that fails to build surfaces as an ordinary tool-output error
+rather than a run failure, and the next tool call retries the construction.
 
 `--fabric-foreign-spaces` (`CF_HARNESS_FABRIC_FOREIGN_SPACES`) admits foreign
 references with a JSON map from space DIDs to HTTP(S) origins, for example
@@ -2392,7 +2575,7 @@ deno task run -- \
   --prompt "Build this pattern."
 ```
 
-Sandbox image override:
+Sandbox image override, under the Docker driver:
 
 ```bash
 deno task run -- \
@@ -2405,7 +2588,9 @@ deno task run -- \
 
 Use this for Deno 2 / Common Fabric CLI validation while keeping the mounted
 workspace as the source of truth for Labs, Pattern Factory, and Loom code. Run
-reports include the selected sandbox image in the capability snapshot.
+reports include the selected sandbox image in the capability snapshot. The
+direct driver does not read `--sandbox-image`, and the `image` in its capability
+snapshot is the rootfs path.
 
 Loom-backed batch runs may also pass a retained manifest:
 
@@ -2560,6 +2745,95 @@ deno task run -- \
   --allow-subagent-profile browser \
   --prompt "Delegate browser inspection of the local app and summarize the result."
 ```
+
+### A browser host
+
+A run may instead have a browser host attached: a trusted component, such as the
+Weaver, that owns a web engine, shows its page to the owner, and executes the
+`browser` tool's operations in the one session it holds for the run. The
+protocol is `src/contracts/browser-host.ts` (`HarnessBrowserHost`), and the
+tool's host backend is `src/tools/browser-host-backend.ts`. The interactive chat
+service takes a host per turn (`startTurn`'s `attached.browserHost`), which is
+how the console's [browser host routes](console/README.md#browser-hosts) reach
+it.
+
+With a host, the tool offers more than a lease does, and the model is offered
+the host's descriptor rather than the lease's: `back`, `forward`, `reload`,
+`scroll`, `screenshot` (whose pixels reach the model's next turn as an image,
+one pixel per CSS pixel, with whatever the page shows in them), a `click` at a
+point of that screenshot, and `handoff`, which gives the page to the owner for a
+fixed reason — `sign-in`, `one-time-code`, `challenge`, or `choice` — and
+returns whether they finished or declined; the host shows the owner fixed words
+for the reason, never words an agent wrote. `press` takes only keys that move,
+submit, or dismiss, none of which puts a character into the page. A host waits
+for a ref, a load state, or a URL, never for a time, and takes no `timeoutMs` —
+an operation waits as long as the page or the owner takes. It ends when the host
+answers, when the host's stream or the turn ends (settling it as
+`session-ended`), or when the run's abort signal fires. A browser child in such
+a run holds the `browser` tool alone, with no skill scripts and no host
+execution. Every result carries the page: the address the host committed for it,
+and the title the page wrote.
+
+No operation names this device, its network, or an address written as an IP
+literal: `open`, a `urlHandle`'s value, and a `urlPattern` naming a host are
+refused here, and the host refuses such a load whatever starts it. Once the
+owner finishes a hand-off, the page may hold their sign-in, so from then on the
+session can only be read and opened on the origin they finished on: `click`,
+`check`, `press`, `fill`, `type`, and `select` change the page, `back` and
+`forward` leave it for an address nobody checked, and `reload` may send it
+again, so all of them are refused.
+
+A value reaches a page in one of two ways, and the host is told which:
+
+- text the agent wrote is entered as given;
+- a string a browser child found on the web, which its parent holds as a
+  `cfh:v:` return referent and passes on without reading, goes as a
+  `handle-value`, and the host enters it and leaves it out of later snapshots,
+  since no model that saw it chose it. An address one resolves to is opened the
+  same way, and the host reports that document by its origin alone. A referent
+  labeled above the run's read ceiling is refused.
+
+The host path takes no value from the owner's space: nothing yet holds such a
+value to the page it was meant for, so an address handle (`cfh:a:`) is refused
+there. Only a browser child of a run with a host returns referents, and only
+before the owner finishes a hand-off; after one, a page may hold their account,
+which no label describes, so its strings stay sealed.
+
+Nothing asks the owner whether a value may go to a page, or whether a click may
+commit them to something: a question at every step teaches a person to agree
+without reading. Until release rules over a value's CFC label decide it, the
+owner's task and the guidance below are the only limit on what an agent enters
+or clicks.
+
+What a host shows is labeled by where the session stands. Before any hand-off it
+is a fresh browser with no sign-in, so what it shows is the public web: text and
+pixels a page wrote, which may carry instructions. Each result enters the
+model's context under the unscreened prompt-injection caveat
+(`prompt-injection-risk-unscreened`), sourced to the page's origin, under any
+enforcement mode, and a run whose read ceiling does not admit it is told the
+action ran and given none of the page. A child's return brings the child's label
+into its parent's model context, as every child's does, so the caveat reaches
+the parent with whatever crosses — a scalar, a summary, a referent. Once the
+owner finishes a hand-off, a page may show their account, which no label
+describes, so a run under `enforce-explicit` or `enforce-strict` learns only how
+the hand-off ended and on which origin, refuses every action but another
+`handoff`, and observes nothing more of the page.
+
+A page can show what it was given back — in its text, its title, its address, or
+a screenshot. Wherever a host's later answer carries a value it was sent, the
+harness puts the value's handle in its place before a model reads the answer,
+and the host paints over every field a value went into before it takes a
+screenshot. What the page shows after changing a value is the page's.
+
+The host decides which fields only the owner may fill. Its refusals come back
+under their own codes — `stale_ref`, `owner_only_field`, `session_ended` —
+beside the lease's.
+
+A turn with a host is guided on both sides (`src/browser-host-guidance.ts`): the
+parent is told how to split web work between browser children and pass their
+findings on as handles, and a browser child what the owner sees and what it may
+do without asking anyone. A turn whose browser child finished may end with a
+Markdown answer rather than a named piece.
 
 The `web_fetch` profile is the preferred first-pass path for web page
 inspection. It gives the child only the `web_fetch` tool: no shell, no browser,
@@ -3182,10 +3456,13 @@ deno task cfc-audit /tmp/cfc-properties \
 Two properties the brief for this suite named are established elsewhere, and a
 second copy would be a second encoding rather than more coverage:
 
-- **P-refuse-start** — `assertDockerRunscCfcTransportForMode` refuses to start
-  an enforcing run whose CFC transports are unwired, and
-  `test/docker-runsc-sandbox.test.ts` covers both enforcing modes, each
-  transport missing on its own, and both present.
+- **P-refuse-start** — under the Docker driver
+  `assertDockerRunscCfcTransportForMode` refuses to start an enforcing run whose
+  CFC transports are unwired, and `test/docker-runsc-sandbox.test.ts` covers
+  both enforcing modes, each transport missing on its own, and both present.
+  Under the direct driver `assertRunscCfcPolicyForMode` refuses to start an
+  enforcing run that has no CFC policy, and `test/runsc-sandbox.test.ts` covers
+  both enforcing modes.
 - **P-dial-order** and **P-posture-parity** — `audit/test/seeded-violations.ts`
   turns AUD-13 to `fail` and to `warn` on non-conforming matrix points, and
   `audit/test/deployment.test.ts` covers AUD-18. These are the stronger form for
@@ -3357,15 +3634,24 @@ deno task test
 ```
 
 `integration/` holds one file, `fabric-session-posture-gate.test.ts`, and the
-"Deployed Topology Posture Gates" job in `.github/workflows/deno.yml` names it
-directly against a toolshed it starts. There is no package task for it: the gate
-needs a serving deployment, so `API_URL` is what admits it, and every case is
-skipped without one. That file's own header carries a local invocation.
+test topology's `deployed-topology` suite (`tasks/test-topology/`) runs it
+against a toolshed its `toolshed` capability starts. There is no package task
+for it: the gate needs a serving deployment, so `API_URL` is what admits it, and
+every case is skipped without one. That file's own header carries a local
+invocation.
 
-On Linux, Docker/runsc runs default to the host UID/GID. On macOS, the default
-omits `--user` because Docker Desktop bind mounts may expose host files as
-`root:root`, which prevents non-root container users from writing mounted Loom
-workspaces. An explicit `containerUser` still overrides the platform default.
+Under the Docker driver, runs on Linux default to the host UID/GID. On macOS,
+the default omits `--user` because Docker Desktop bind mounts may expose host
+files as `root:root`, which prevents non-root container users from writing
+mounted Loom workspaces. An explicit `containerUser` still overrides the
+platform default.
+
+The two sidecar directories described below are the Docker driver's CFC
+transport. The direct driver has neither. Where a CFC policy is configured, it
+hands `runsc` the invocation context and takes the result back on descriptors it
+opens for each call, from files private to that call under the run's scratch
+directory; with no policy it hands over no context and takes back no result. See
+[Sandbox runtimes](#sandbox-runtimes).
 
 CFC sandbox result mediation requires the installed `runsc-cfc` runtime to use
 the same host result directory that `cf-harness` reads. Configure runsc with

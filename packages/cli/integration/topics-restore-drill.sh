@@ -23,8 +23,9 @@
 #   API_URL=http://localhost:8000 \
 #     packages/cli/integration/topics-restore-drill.sh
 #
-# CI runs it through integration.sh's `piece-call` section; `topics-drill`
-# runs it alone.
+# CI runs it through integration.sh's `topics-drill` section, which the test
+# topology's `cli-core` suite makes a unit of. The `piece-call` section runs it
+# too, among the other steps a person running that group by hand gets.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,13 +58,6 @@ command -v jq > /dev/null || {
   echo "jq is required" >&2
   exit 1
 }
-# The space name is minted with python3 below. Without this check a missing
-# python3 leaves every run naming the same space, and the drill then fails
-# somewhere in the export talking about a board it did not create.
-command -v python3 > /dev/null || {
-  echo "python3 is required to mint the drill's space name" >&2
-  exit 1
-}
 # CF_DRILL_STORE_DIR named the store before `cf inspect` found it, and MEMORY_DIR
 # is the name it answers to now. A caller who still sets the old one means to
 # point the drill at a particular store, so say that it is not read rather than
@@ -75,7 +69,6 @@ command -v python3 > /dev/null || {
 }
 
 WORK="$(mktemp -d)"
-SPACE="topics-drill-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
 
 # Every cf command below reads CF_IDENTITY from the environment, and CI sets
 # none. Mint one for this run rather than failing on the first deploy with
@@ -88,6 +81,14 @@ if [ -z "${CF_IDENTITY:-}" ]; then
   }
 fi
 export CF_IDENTITY
+
+# Opening a space never creates it, so the drill makes a fresh one; `cf space
+# create` prints the new space's DID.
+SPACE=$($CF space create --quiet --api-url "$API_URL")
+case "$SPACE" in
+  did:key:*) ;;
+  *) echo "cf space create printed no DID: $SPACE" >&2; exit 1 ;;
+esac
 
 step "deploy the topics board into a fresh space ($SPACE)"
 # `--root` is the repository root because the board imports the member-naming

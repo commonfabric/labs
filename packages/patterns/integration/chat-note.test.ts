@@ -1,10 +1,14 @@
-import { env, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { sleep } from "@commonfabric/utils/sleep";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { TEST_LLM } from "./flags.ts";
 import {
   initializePiecesController,
@@ -12,14 +16,13 @@ import {
 } from "./pieces-controller.ts";
 
 const { API_URL, FRONTEND_URL } = env;
-// Use a unique space name to avoid conflicts
-const SPACE_NAME = "chat-note-test-" + Date.now().toString(36);
 const ignore = !TEST_LLM;
 
 describe("Chat Note pattern test", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
 
+  let spaceDid: DID;
   let pieceId: string;
   let identity: Identity;
   let cc: PiecesController;
@@ -27,16 +30,13 @@ describe("Chat Note pattern test", () => {
   if (!ignore) {
     beforeAll(async () => {
       identity = await Identity.generate({ implementation: "noble" });
+      spaceDid = await createTestSpace(identity);
       cc = await initializePiecesController({
-        space: SPACE_NAME,
+        space: spaceDid,
         apiUrl: new URL(API_URL),
         identity: identity,
       });
-
-      // First visit the space to create the Default App
-      const page = shell.page();
-      await page.goto(`${FRONTEND_URL}/${SPACE_NAME}`);
-      await sleep(3000); // Wait for space initialization
+      await cc.ensureDefaultPattern();
 
       // Create the chat-note piece
       const piece = await cc.create(
@@ -61,7 +61,7 @@ describe("Chat Note pattern test", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceId,
         },
         identity,
@@ -215,7 +215,7 @@ describe("Chat Note pattern test", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceId,
         },
         identity,

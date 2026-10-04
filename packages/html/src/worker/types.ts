@@ -9,6 +9,7 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { Cancel, Cell, JSONSchema } from "@commonfabric/runner";
 import type {
   CfcConfClause,
+  CfcModulePolicySource,
   RenderConfidentialityResolver,
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -116,6 +117,16 @@ export interface RenderPolicy {
   caveatKindAllow?: readonly string[];
 
   /**
+   * Set when this subtree, or a view it is part of, renders data that carries
+   * a caveat the remote-load policy refuses: a material-risk prompt caveat,
+   * which the display ceiling admits (SC-54) but a remote load does not
+   * (SC-56). No prop that would load a remote resource is set anywhere in the
+   * subtree, whatever that prop's own label, since the data chose it.
+   * Inherited, and only ever added on the way down.
+   */
+  remoteLoadsBlocked?: boolean;
+
+  /**
    * Confidentiality atoms this subtree may declassify before applying the max bound.
    * This is a temporary low-level capability hook for trusted UI experiments.
    */
@@ -128,6 +139,13 @@ export interface RenderPolicy {
   textIntegrity?: {
     requiredIntegrity: readonly CfcAtom[];
     allowLiteralText: boolean;
+
+    /**
+     * Whether cell text may render at all. A boundary that requires no atoms
+     * admits no cell text, and an enclosing boundary's requirement does not
+     * change that for the text inside it.
+     */
+    admitsCellText: boolean;
 
     /**
      * The enclosing text-integrity boundaries this policy applies to, innermost
@@ -316,10 +334,11 @@ export function normalizeRenderDeclassificationPolicy(
  * confidentiality a display surface admits when no authored boundary
  * narrows further. `atoms` are admitted by structural equality (the place
  * for acting-user identity atoms); `caveatKinds` admits Caveat-type atoms
- * by kind (the display-dischargeable classes). Everything else renders as
- * the blocked placeholder. Undefined = no default ceiling (today's
- * behavior); the profile may only be tightened, not loosened, without a
- * new release judgment.
+ * by kind (the prompt-caveat family, SC-54). Admitting a caveat is not
+ * discharging it: it stays on the value. Everything
+ * else renders as the blocked placeholder. Undefined = no default ceiling
+ * (today's behavior); the profile may only be tightened, not loosened,
+ * without a new release judgment (SC-54 is one).
  */
 export interface RenderConfidentialityCeiling {
   atoms?: readonly CfcConfClause[];
@@ -408,6 +427,16 @@ export interface WorkerReconcilerOptions {
    * upgrade (Stage-1 sync snapshot only; still sound, just less precise).
    */
   membershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source backing
+   * {@link resolveRenderConfidentiality}. When present, a rendered cell whose
+   * label selects a module policy (`PolicyOf<...>`) subscribes to that
+   * policy's manifest document within its cancel group, so a cell sealed
+   * because the manifest had not synced re-renders once it arrives. Absent →
+   * no reactive upgrade; the sync snapshot still gates soundly.
+   */
+  modulePolicySource?: Pick<CfcModulePolicySource, "subscribe">;
 }
 
 /**

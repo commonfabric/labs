@@ -56,6 +56,10 @@ export function createTestCommand(
       { conflicts: ["cfc-enforcement-mode", "cfc-flow-labels"] },
     )
     .option(
+      "--cfc-denials",
+      "Print each CFC denial, with the reasons and inputs behind it, as it happens.",
+    )
+    .option(
       "--verbose",
       "Show detailed execution logs.",
     )
@@ -141,7 +145,7 @@ export function createTestCommand(
           if (stat.isDirectory) {
             // Discover test files in directory
             const discovered = await discoverTestFiles(fullPath);
-            testFiles.push(...discovered);
+            for (const file of discovered) testFiles.push(file);
           } else if (stat.isFile) {
             // Single file - warn but allow non-.test.tsx for flexibility
             if (!path.endsWith(".test.tsx")) {
@@ -204,6 +208,7 @@ export function createTestCommand(
           : options.cfcFlowLabels === "derive"
           ? "observe"
           : options.cfcFlowLabels,
+        cfcDenials: options.cfcDenials,
         noIdempotencyCheck: options.idempotencyCheck === false,
         root,
         dataFilePaths: options.datafile?.map((path: string) =>

@@ -470,9 +470,8 @@ Server-primary pattern execution is complementary. It determines where
 deployed patterns run. Hosted pattern authoring determines where a coding
 agent works before deployment. One does not depend on the other.
 
-The background piece service and the runtime `wish()` builtin do not author
-pattern source. `wish()` discovers existing pieces. Neither is reused as the
-authoring scheduler.
+The runtime `wish()` builtin does not author pattern source. It discovers
+existing pieces. It is not reused as the authoring scheduler.
 
 ## Acceptance criteria
 

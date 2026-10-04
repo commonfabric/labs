@@ -26,6 +26,8 @@ import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricRegExp,
   FabricUnavailable,
@@ -175,6 +177,10 @@ describe("valueEqual()", () => {
         new FabricRegExp(/a/i),
         new FabricEpochDay(1n),
         new FabricEpochDay(2n),
+        new FabricDurationNsec(1n),
+        new FabricDurationNsec(2n),
+        new FabricDurationDay(1n),
+        new FabricDurationDay(2n),
         new FabricUnavailable("pending"),
         new FabricUnavailable("syncing"),
         new FabricUnavailable("error", "general", "boom"),
@@ -411,6 +417,26 @@ describe("valueEqual()", () => {
         .toBe(true);
     });
 
+    it("distinguishes `FabricDurationNsec` by content, and from `FabricEpochDay`", () => {
+      expect(valueEqual(new FabricDurationNsec(1n), new FabricDurationNsec(2n)))
+        .toBe(false);
+      expect(valueEqual(new FabricDurationNsec(7n), new FabricDurationNsec(7n)))
+        .toBe(true);
+      expect(valueEqual(new FabricDurationNsec(7n), new FabricEpochDay(7n)))
+        .toBe(false);
+    });
+
+    it("distinguishes `FabricDurationDay` by content, and from `FabricEpochDay` and `FabricDurationNsec`", () => {
+      expect(valueEqual(new FabricDurationDay(1n), new FabricDurationDay(2n)))
+        .toBe(false);
+      expect(valueEqual(new FabricDurationDay(7n), new FabricDurationDay(7n)))
+        .toBe(true);
+      expect(valueEqual(new FabricDurationDay(7n), new FabricEpochDay(7n)))
+        .toBe(false);
+      expect(valueEqual(new FabricDurationDay(7n), new FabricDurationNsec(7n)))
+        .toBe(false);
+    });
+
     it("distinguishes FabricRegExp and FabricEpochDay by content", () => {
       expect(valueEqual(new FabricRegExp(/a/g), new FabricRegExp(/b/g)))
         .toBe(false);
@@ -488,6 +514,27 @@ describe("valueEqual()", () => {
 
   describe("object-subtype-check branch", () => {
     // Different container kinds are unequal without reading their contents.
+
+    describe("given a null-prototype object", () => {
+      it("throws against any object other than itself", () => {
+        // Not a `FabricPlainObject`, which is `Object.prototype`-rooted, so
+        // there is no subtype for it to be compared as. Identity is settled
+        // before any value is classified, so only a second object reaches the
+        // refusal.
+
+        const make = () => Object.assign(Object.create(null), { a: 1 });
+        const nullProto = make();
+        expect(() => valueEqual(nullProto, { a: 1 })).toThrow(
+          "Cannot compare value",
+        );
+        expect(() => valueEqual({ a: 1 }, nullProto)).toThrow(
+          "Cannot compare value",
+        );
+        expect(() => valueEqual(nullProto, make())).toThrow(
+          "Cannot compare value",
+        );
+      });
+    });
 
     describe("given a plain object and an array", () => {
       it("returns `false`", () => {

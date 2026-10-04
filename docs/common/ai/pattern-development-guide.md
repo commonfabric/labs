@@ -194,7 +194,9 @@ are:
 
 - keep module scope declarative:
   - use `const`
-  - define `pattern()`, `handler()`, `lift()`, schemas, and plain data
+  - define `pattern()`, `handler()`, `lift()`, schemas, and plain data, which
+    may hold fabric primitives such as `FabricEpochNsec` and
+    `FabricDurationNsec` as it would a `bigint`
   - avoid top-level `let`, `var`, classes, or ad hoc mutable caches
 - keep pattern-owned callback bodies straight-line:
   - avoid `let`, `var`, reassignment, and loop statements

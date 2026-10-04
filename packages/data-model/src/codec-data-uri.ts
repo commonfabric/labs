@@ -79,7 +79,6 @@ const textDecoder = new TextDecoder();
  * cell reference produces a message that names the boundary.
  */
 const dataUriLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell decoding at the `data:` URI boundary",
 );
 

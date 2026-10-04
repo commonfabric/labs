@@ -14,7 +14,8 @@
  */
 
 import {
-  resolveEntryIdentity,
+  computeEntryIdentity,
+  ensureCompilerStack,
   type Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -79,23 +80,14 @@ export function resolveLocalSourceProgram(
  * The identity a resolved program's entry is stored under, computed from its
  * authored sources without compiling them. Source roots and data files fold
  * into the identity exactly as the compiler folds them, so a program carrying
- * either pins the same value the engine stores.
+ * either pins the same value the engine stores. The program's own lists decide
+ * which files are roots and which are data, as they do when it compiles.
  */
-export function programEntryIdentity(
+export async function programEntryIdentity(
   program: RuntimeProgram,
 ): Promise<string> {
-  const byName = new Map(
-    program.files.map((file) => [file.name, file.contents]),
-  );
-  return resolveEntryIdentity(program.main, (name) => {
-    const contents = byName.get(name);
-    if (contents === undefined) {
-      return Promise.reject(
-        new Error(`Resolved program does not contain ${name}.`),
-      );
-    }
-    return Promise.resolve(contents);
-  }, {
+  await ensureCompilerStack();
+  return computeEntryIdentity(program.main, program.files, {
     ...(program.sourceRoots === undefined
       ? {}
       : { sourceRoots: program.sourceRoots }),

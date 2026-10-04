@@ -21,6 +21,8 @@ import {
   setCellCfcLabelFromCommand,
   setQuietMode,
 } from "../commands/piece.ts";
+import { CellImpl } from "../../runner/src/cell.ts";
+import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import { cell } from "../commands/cell.ts";
 import { cf, stripAnsi } from "./utils.ts";
 
@@ -562,33 +564,31 @@ describe("cf piece CFC labels", () => {
   });
 
   it("rejects an ambiguous observation class instead of choosing one", async () => {
-    const labelSymbol = Object.getOwnPropertySymbols(
-      Object.getPrototypeOf(root),
-    ).find((symbol) => symbol.description === "cfcLabelView");
-    expect(labelSymbol).toBeDefined();
-    if (labelSymbol === undefined) throw new Error("Missing CFC label carrier");
-
-    const ambiguousCell = {
-      key: () => ambiguousCell,
-      pull: () => Promise.resolve(),
-      getRaw: () => "hello",
-      schema: {},
-      [labelSymbol]: () => ({
+    // The root, carrying a view whose `body` has entries of two observation
+    // classes.
+    const ambiguousCell = new CellImpl(
+      runtime,
+      undefined,
+      root.getAsNormalizedFullLink(),
+      false,
+      undefined,
+      "cell",
+      {
         version: 1,
         entries: [
           {
-            path: [],
+            path: ["body"],
             label: { confidentiality: ["team"] },
             observes: "value",
           },
           {
-            path: [],
+            path: ["body"],
             label: { integrity: ["reviewed"] },
             observes: "shape",
           },
         ],
-      }),
-    };
+      },
+    );
     const ambiguousDeps = {
       ...deps,
       loadPieces: () =>
@@ -650,20 +650,17 @@ describe("cf piece CFC labels", () => {
   });
 
   it("fails when label metadata cannot be read", async () => {
-    const failingCell = {
-      pull: () => Promise.resolve(),
-      key: () => failingCell,
-      getAsNormalizedFullLink: () => ({
-        space: signer.did(),
-        id: "unreadable-labels",
-        path: [],
-      }),
-      runtime: {
-        readTx: () => {
+    // The root, read through a transaction whose every read fails.
+    const failingCell = new CellImpl(
+      runtime,
+      interceptTransaction(runtime.edit(), (method, _args, proceed) => {
+        if (method === "readOrThrow" || method === "readValueOrThrow") {
           throw new Error("metadata unavailable");
-        },
-      },
-    };
+        }
+        return proceed();
+      }),
+      root.getAsNormalizedFullLink(),
+    );
     let editCalled = false;
     const failingPieces = {
       runtime: {

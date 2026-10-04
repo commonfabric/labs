@@ -42,7 +42,10 @@ export interface HarnessConnectorGrantSpec {
    */
   name: string;
 
-  /** All declared column classifications, in contract order. */
+  /**
+   * Every declared column classification, first declarer's order then any
+   * other declarer's additions; empty when the contract names none.
+   */
   cfcClasses?: string[];
 
   /** Singular classification on persisted grants without `cfcClasses`. */

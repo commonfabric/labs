@@ -601,8 +601,9 @@ Run it against any host:
 API_URL=http://localhost:8000 packages/cli/integration/verbs-over-the-cli.sh
 ```
 
-CI runs it in the `piece-call` shard. It takes under half a minute and around
-two dozen `cf` invocations against a warm local toolshed.
+CI runs it as the `integration.sh verbs-walkthrough` unit of the `cli-core`
+suite. It takes under half a minute and around two dozen `cf` invocations
+against a warm local toolshed.
 
 Each step demonstrates one use case:
 

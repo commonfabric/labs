@@ -52,9 +52,9 @@ describe("scoped input write", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `scoped-input-write-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );

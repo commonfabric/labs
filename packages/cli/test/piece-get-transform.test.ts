@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
+import type { JSONSchemaObj } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
@@ -23,6 +24,7 @@ import {
   schemaRootKind,
   selectSourceSchema,
 } from "../lib/cell-selection.ts";
+import { externalizeSchema } from "../../runner/src/link-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -2140,7 +2142,7 @@ describe("cf cell get transforms", () => {
     (runtime as any).edit = () => {
       const tx = originalEdit();
       (tx as any).commit = () =>
-        Promise.resolve({ error: "forced commit failure" });
+        Promise.resolve({ error: new Error("forced commit failure") });
       return tx;
     };
     try {
@@ -2412,7 +2414,7 @@ describe("cf cell get transforms", () => {
   });
 
   describe("the labels a selection carries", () => {
-    // The two assertions here read a derived label component back out of
+    // The cases here read a derived label component back out of
     // storage through `derivedConfidentiality`. Persisting flow labels
     // writes that component. It reaches a probe document that declares no
     // ceiling of its own at the enforcement rungs where the writer-fit rule
@@ -2547,6 +2549,70 @@ describe("cf cell get transforms", () => {
       expect(derivedConfidentiality(
         probe.getAsNormalizedFullLink().id,
       )).toContain("source-secret");
+    });
+
+    it("derives a projected field's label where the source also states who may write the field", async () => {
+      // The value is stored through a schema stating the label alone, so
+      // nothing here has to be the writer the claim names. The claim reaches
+      // the selection through the schema its source cell is read by.
+      const sourceSchema = (ifc: Record<string, unknown>): JSONSchema => ({
+        type: "object",
+        properties: {
+          id: { type: "number", ifc },
+          ignored: { type: "string" },
+        },
+      });
+      const setup = measuring.edit();
+      measuring.getCell(
+        space,
+        "write-claimed-label-projection-source",
+        sourceSchema({ confidentiality: ["source-secret"] }),
+        setup,
+      ).set({ id: 7, ignored: "not returned" });
+      setup.prepareCfc();
+      expect((await setup.commit()).ok).toBeDefined();
+      const source = measuring.getCell(
+        space,
+        "write-claimed-label-projection-source",
+        sourceSchema({
+          confidentiality: ["source-secret"],
+          integrity: ["source-endorsed"],
+          writeAuthorizedBy: ["a-builtin-the-selection-is-not"],
+        }),
+      );
+
+      let outputCell: Cell<unknown> | undefined;
+      const result = await deriveSelectedValue(measuring, space, source, {
+        projection: await parseSelectionProjection("id"),
+      }, {
+        onOutputCell: (cell) => outputCell = cell,
+      });
+      expect(result).toEqual({ id: 7 });
+
+      const probeTx = measuring.edit();
+      const projectedId = outputCell!.key("id").withTx(probeTx).get();
+      const probe = measuring.getCell(
+        space,
+        "write-claimed-projection-label-probe",
+        undefined,
+        probeTx,
+      );
+      probe.set({ projectedId });
+      probeTx.prepareCfc();
+      expect((await probeTx.commit()).ok).toBeDefined();
+
+      expect(derivedConfidentiality(
+        probe.getAsNormalizedFullLink().id,
+      )).toContain("source-secret");
+      // The copy states the label its reader is held to and none of the
+      // integrity the source's writer vouched for.
+      const copied = storedLabels(
+        outputCell!.resolveAsCell().getAsNormalizedFullLink(),
+      );
+      expect(copied.flatMap((label) => label.confidentiality ?? []))
+        .toContain("source-secret");
+      expect(copied.flatMap((label) => label.integrity ?? []))
+        .not.toContain("source-endorsed");
     });
   });
 
@@ -3801,6 +3867,84 @@ describe("cf cell get transforms", () => {
       }
     });
   });
+
+  describe("a source whose schema states a writer claim by reference", () => {
+    // A stored schema can hold any position as a reference to a
+    // content-addressed document, and the claim a selection must not state
+    // on its own cells is then inside that document.
+
+    const label = { confidentiality: ["source-secret"] };
+    const claimed: JSONSchema = {
+      type: "string",
+      ifc: { ...label, writeAuthorizedBy: ["a-builtin-the-selection-is-not"] },
+    };
+
+    /**
+     * Reads `field` from a stored `{ name, other }` through `schema`. The
+     * value is stored through a schema stating the label alone, so nothing
+     * here has to be the writer the claim names.
+     */
+    async function selectThrough(
+      cause: string,
+      schema: JSONSchema,
+      field: string,
+    ): Promise<unknown> {
+      const setup = runtime.edit();
+      runtime.getCell(space, cause, {
+        type: "object",
+        properties: {
+          name: { type: "string", ifc: label },
+          other: { type: "string" },
+        },
+      }, setup).set({ name: "Ada", other: "not returned" });
+      setup.prepareCfc();
+      expect((await setup.commit()).ok).toBeDefined();
+      return await deriveSelectedValue(
+        runtime,
+        space,
+        runtime.getCell(space, cause, schema),
+        { projection: parseSelectProjection(field) },
+      );
+    }
+
+    it("returns a field whose own schema is a reference", async () => {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          name: externalizeSchema(claimed as JSONSchemaObj),
+          other: { type: "string" },
+        },
+      };
+      expect(await selectThrough("claim-by-reference-field", schema, "name"))
+        .toEqual({ name: "Ada" });
+    });
+
+    it("returns a field of a source whose whole schema is a reference", async () => {
+      const schema = externalizeSchema({
+        type: "object",
+        properties: { name: claimed, other: { type: "string" } },
+      });
+      expect(await selectThrough("claim-by-reference-root", schema, "name"))
+        .toEqual({ name: "Ada" });
+    });
+  });
+
+  /** The label of every entry in the label map stored for `document`. */
+  function storedLabels(
+    document: { id: string; scope: string },
+  ): Array<{ confidentiality?: unknown[]; integrity?: unknown[] }> {
+    type StoredEntry = {
+      label: { confidentiality?: unknown[]; integrity?: unknown[] };
+    };
+    const replica = storageManager.open(space).replica as unknown as {
+      getDocument(
+        id: string,
+        scope: string,
+      ): { cfc?: { labelMap?: { entries: StoredEntry[] } } } | undefined;
+    };
+    return replica.getDocument(document.id, document.scope)?.cfc?.labelMap
+      ?.entries.map((entry) => entry.label) ?? [];
+  }
 
   function derivedConfidentiality(id: string): string[] {
     type StoredEntry = {

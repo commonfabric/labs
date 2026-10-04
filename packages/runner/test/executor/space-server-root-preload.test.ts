@@ -9,12 +9,14 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "../support/serving-waits.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("root preload owner");
 const service = await Identity.fromPassphrase("root preload service");
@@ -151,10 +153,12 @@ describe("SpaceServer", () => {
     };
     const facade = new Proxy(server, {
       get(target, key, receiver) {
-        if (key === "demandedInstancesForSpace") {
+        if (key === "demandForSpace") {
           return () => {
             onPass?.();
-            return rootIds.map((id) => ({ id, scope, scopeKey, root: true }));
+            return sessionDemandOf(
+              rootIds.map((id) => ({ id, scope, scopeKey, root: true })),
+            );
           };
         }
         const value = Reflect.get(target, key, receiver);
@@ -274,7 +278,7 @@ describe("SpaceServer", () => {
           // The pull's call carries no transaction; a traversal's carries its
           // own immediate one.
           if (
-            !wrote && cell.tx === undefined &&
+            !wrote && cellTx(cell) === undefined &&
             cell.getAsNormalizedFullLink().id === rootIds[0]
           ) {
             wrote = true;

@@ -20,9 +20,9 @@
 #   API_URL=https://<host> CF_IDENTITY=~/.config/commonfabric/identity.key \
 #     packages/cli/integration/verbs-over-the-cli.sh
 #
-# CI runs it through integration.sh's `piece-call` section (the
-# cli-integration matrix in .github/workflows/deno.yml); the `verbs` section
-# is the standalone selector for running just this script by hand.
+# CI runs it through integration.sh's `verbs` section, which the test
+# topology's `cli-core` suite makes a unit of. The `piece-call` section runs it
+# too, among the other steps a person running that group by hand gets.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,10 +46,18 @@ check() {
   if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (expected [$1], got [$2])"; fi
 }
 
-SPACE="${SPACE:-$(mktemp -u verbsXXXXXXXX)}"
 if [ -z "${CF_IDENTITY:-}" ]; then
   CF_IDENTITY=$(mktemp)
   $CF id new >"$CF_IDENTITY" 2>/dev/null
+fi
+if [ -z "${SPACE:-}" ]; then
+  # Opening a space never creates it, so the run makes its own; `cf space
+  # create` prints the new space's DID.
+  SPACE=$($CF space create --quiet --api-url="$API_URL" --identity="$CF_IDENTITY")
+  case "$SPACE" in
+    did:key:*) ;;
+    *) echo "cf space create printed no DID: $SPACE" >&2; exit 1 ;;
+  esac
 fi
 ARGS="--api-url=$API_URL --identity=$CF_IDENTITY --space=$SPACE"
 

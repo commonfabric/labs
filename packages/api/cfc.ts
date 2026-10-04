@@ -866,6 +866,7 @@ export const CFC_CANONICAL_ALIAS_NAMES = [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -918,6 +919,11 @@ export type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, {
 /** Runtime-resolved placeholder for the principal executing the pattern. */
 export type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
 
+/**
+ * `T`, labeled `represents-principal` the principal each write acts for, as a
+ * profile's fields are. The position must name its writer, as for
+ * `AuthoredByCurrentUser`.
+ */
 export type RepresentsCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{
     readonly kind: "represents-principal";
@@ -925,6 +931,17 @@ export type RepresentsCurrentUser<T> = Cfc<T, {
   }];
 }>;
 
+/**
+ * `T`, labeled `authored-by` the principal each write acts for: the runtime
+ * resolves the subject, and refuses one a pattern supplies. The position must
+ * name its writer, through `WriteAuthorizedBy`, `TrustedActionWrite` or
+ * `WritePolicyAnyOf`, and refuses a write by any other. A new value of the
+ * type that a handler run creates is labeled for that run's principal too. The
+ * label is authority, not intent: it shows that a run acting for the principal
+ * wrote or created the value, not that they asked for it. Where the position
+ * also requires a gesture, as `TrustedActionWrite` does, a write to it came
+ * under one.
+ */
 export type AuthoredByCurrentUser<T> = Cfc<T, {
   addIntegrity: readonly [{
     readonly kind: "authored-by";
@@ -1011,6 +1028,20 @@ export type TrustedActionWrite<
   Action extends string,
   Pattern extends string,
 > = TrustedActionWriteWithIntegrity<T, Binding, Action, Pattern, [Pattern]>;
+
+/**
+ * `T`, writable through any one of `Policies`, each a complete writer policy:
+ * a `WriteAuthorizedBy`, `TrustedActionWrite`, or
+ * `TrustedActionWriteWithIntegrity` over `unknown`. A write is admitted when
+ * one policy admits it whole — its writer, and the reviewed gesture that
+ * policy names if it names one — so one writer's gesture never admits
+ * another writer. The set is fixed once stored: a later schema can neither add
+ * nor drop a policy, nor change one.
+ */
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [unknown, ...unknown[]],
+> = Cfc<T, { readonly writePolicyAnyOf: Policies }>;
 
 export type TrustedActionUiContract<
   T,

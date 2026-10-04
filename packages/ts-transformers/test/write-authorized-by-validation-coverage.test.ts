@@ -533,3 +533,64 @@ Deno.test(
     );
   },
 );
+
+Deno.test(
+  "a WritePolicyAnyOf member's binding is validated like a lone one's",
+  async () => {
+    const source = `/// <cts-enable />
+      import {
+        handler,
+        toSchema,
+        TrustedActionWrite,
+        WriteAuthorizedBy,
+        WritePolicyAnyOf,
+      } from "commonfabric";
+
+      const send = handler<void, { note: string }>(() => {});
+      const arbitrary = 123;
+
+      const schema = toSchema<
+        WritePolicyAnyOf<string, [
+          TrustedActionWrite<unknown, typeof send, "Send", "NoteSurface">,
+          WriteAuthorizedBy<unknown, typeof arbitrary>,
+        ]>
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+    assert(
+      diagnostics[0]!.message.includes(
+        "handler(), module(), requireEventIntegrity()",
+      ),
+    );
+  },
+);
+
+Deno.test(
+  "a WritePolicyAnyOf whose members all name handlers reports nothing",
+  async () => {
+    const source = `/// <cts-enable />
+      import {
+        handler,
+        toSchema,
+        TrustedActionWrite,
+        WritePolicyAnyOf,
+      } from "commonfabric";
+
+      const send = handler<void, { note: string }>(() => {});
+      const edit = handler<void, { note: string }>(() => {});
+
+      const schema = toSchema<
+        WritePolicyAnyOf<string, [
+          TrustedActionWrite<unknown, typeof send, "Send", "NoteSurface">,
+          TrustedActionWrite<unknown, typeof edit, "Edit", "NoteSurface">,
+        ]>
+      >();
+
+      export { schema };
+    `;
+    assertEquals(await cfcDiagnostics(source), []);
+  },
+);

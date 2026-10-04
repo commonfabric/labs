@@ -604,8 +604,9 @@ Arm a transaction-level write watcher for exact or prefix-matched logical cell
 paths, then inspect the captured stacks after the interaction.
 
 For accumulation tests, keep the same space across runs instead of creating a
-fresh one each time. In the integration harness, set `SPACE_NAME=...` so note
-creation keeps adding to one existing space.
+fresh one each time. In the integration harness, set `SPACE_NAME` to the legacy
+name of a space that already exists, and `default-app.test.ts` keeps adding
+notes to it rather than creating a space of its own.
 
 ```javascript
 // Shown inside a pattern body.

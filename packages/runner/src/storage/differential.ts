@@ -3,6 +3,7 @@ import {
   isFabricObjectOrArray,
   isFabricSpecialObject,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import {
   resolveScopeKey,
@@ -110,7 +111,9 @@ const collectChangedPaths = (
   }
 
   if (isFabricObjectOrArray(before) && isFabricObjectOrArray(after)) {
-    if (valueEqual(before, after)) {
+    // By walk, so that the subtrees a revision shares with what it revised
+    // are settled by identity rather than hashed whole at every level.
+    if (valueEqualByWalk(before, after)) {
       return;
     }
 
@@ -253,7 +256,10 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
-  if (valueEqual(before, after)) {
+  // Identity alone: `collectChangedPaths()` compares each pair of containers
+  // before descending into it, the roots included, and records nothing for
+  // a pair that is equal.
+  if (Object.is(before, after)) {
     return;
   }
 

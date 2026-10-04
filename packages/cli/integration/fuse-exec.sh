@@ -8,7 +8,7 @@ export CF_FUSE_DEBUG=1
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 
-# The phases to run. A CI leg or a lane asks for one; a bare run does all of
+# The phases to run. A lane asks for one section; a bare run does all of
 # them. The variable is this suite's own: CF_CLI_INTEGRATION_SECTION names
 # integration.sh's sections, which are a different set, and neither script
 # accepts the other's.
@@ -19,9 +19,9 @@ SECTION="${CF_FUSE_INTEGRATION_SECTION:-${1:-all}}"
 # written from the existing cleanup trap, which owns EXIT; registering a
 # second trap would replace it. Neither name carries the dispatched section:
 # which section scheduled a phase is run context, and the same phase joins
-# across a CI section leg and a local `all` run. With recording off this
-# initializes nothing, so the suite carries no dependency on the timing
-# helper.
+# across a lane's run of one section and a local `all` run. With recording
+# off this initializes nothing, so the suite carries no dependency on the
+# timing helper.
 source "$SCRIPT_DIR/test-records.sh"
 CF_TEST_RECORD_NAME="fuse-exec.sh"
 CF_TEST_RECORD_START_MS=0
@@ -48,7 +48,7 @@ dump_mount_state() {
   if [ -z "${MOUNTPOINT:-}" ] || [ -z "${SPACE:-}" ]; then
     return 0
   fi
-  local pieces_dir="$MOUNTPOINT/$SPACE/pieces"
+  local pieces_dir="$MOUNTPOINT/$SPACE_DIR/pieces"
   >&2 echo "--- mount state dump ---"
   if path_exists "$pieces_dir" 2; then
     >&2 bounded 5 ls -la "$pieces_dir" 2>&1 || true
@@ -571,11 +571,11 @@ force_detach() {
 
 # Unmount, bounded by the shared outer deadline (WAIT_DEADLINE_EPOCH) rather than a
 # fixed duration, so a slow-but-succeeding unmount is never cut short — the bound is
-# whatever is left before the CI step's 'timeout' fires, minutes more than an
-# unmount ever needs. Only a genuinely hung teardown reaches it. bounded's
-# 'timeout' cannot exec a shell function, and local dev's 'cf' is one, so only an
-# external 'cf' (the compiled binary CI runs) is bounded; a 'cf' function runs
-# unbounded, the same as the no-'timeout' local path.
+# whatever is left of the run's overall bound, minutes more than an unmount ever
+# needs. Only a genuinely hung teardown reaches it. bounded's 'timeout' cannot
+# exec a shell function, and local dev's 'cf' is one, so only an external 'cf'
+# (the bin/cf a lane puts on PATH) is bounded; a 'cf' function runs unbounded,
+# the same as the no-'timeout' local path.
 unmount_until_deadline() {
   local remaining
   remaining=$((WAIT_DEADLINE_EPOCH - $(date +%s)))
@@ -689,8 +689,17 @@ fi
 # the mount rather than as the script.
 run_mount() {
   phase "A background FUSE daemon mounts a space holding one stepped piece"
-  SPACE=$(mktemp -u XXXXXXXXXX)
   IDENTITY=$(mktemp)
+  cf id new >"$IDENTITY"
+  # Opening a space never creates it, so the run makes its own; `cf space
+  # create` prints the new space's DID. The mount names the space's directory
+  # by that DID with each `:` escaped, as every path component is.
+  SPACE=$(cf space create --quiet --api-url="$API_URL" --identity="$IDENTITY")
+  case "$SPACE" in
+    did:key:*) ;;
+    *) error "cf space create printed no DID: $SPACE" ;;
+  esac
+  SPACE_DIR=${SPACE//:/%3A}
   MOUNTPOINT=$(mktemp -d)
   # Resolve the mountpoint's physical path now, while it is still an empty plain
   # directory. After 'cf fuse mount' it is the mount root, and resolving it then
@@ -705,11 +714,12 @@ run_mount() {
   ENTITY_DEEP_PROBE="${FUSE_DEEP_ENTITY_PROBE:-0}"
 
   # The deadline for every wait that fails the test (see wait_deadline_reached).
-  # The default overall bound matches the CI step's 'timeout' in
-  # .github/workflows/deno.yml, which sets FUSE_EXEC_OVERALL_TIMEOUT_SECONDS to keep
-  # the two in step; the waits give up a few minutes before it so error() can print
-  # the daemon's state before the step is cancelled. The floor guards a
-  # misconfigured tiny outer bound from making every wait fire at once.
+  # The overall bound is the time the whole run is allowed:
+  # FUSE_EXEC_OVERALL_TIMEOUT_SECONDS where the caller sets it, and 480 seconds
+  # otherwise. The waits give up a few minutes before it, so error() can print
+  # the daemon's state before anything outside the script stops the run. The
+  # floor guards a misconfigured tiny outer bound from making every wait fire
+  # at once.
   OVERALL_TIMEOUT_SECONDS="${FUSE_EXEC_OVERALL_TIMEOUT_SECONDS:-480}"
   WAIT_BUDGET_SECONDS=$((OVERALL_TIMEOUT_SECONDS - 300))
   [ "$WAIT_BUDGET_SECONDS" -ge 30 ] || WAIT_BUDGET_SECONDS=$((OVERALL_TIMEOUT_SECONDS / 2 + 1))
@@ -719,8 +729,6 @@ run_mount() {
   echo "SPACE=$SPACE"
   echo "IDENTITY=$IDENTITY"
   echo "MOUNTPOINT=$MOUNTPOINT"
-
-  cf id new >"$IDENTITY"
 
   PIECE_ID=$(cf piece new --main-export "$CUSTOM_EXPORT" $SPACE_ARGS "$PATTERN_SRC")
   echo "Created piece: $PIECE_ID"
@@ -792,10 +800,10 @@ run_mount() {
 
   # The layout of the mounted tree, named once so every phase addresses the
   # same paths whichever section reached it.
-  ENTITIES_DIR="$MOUNTPOINT/$SPACE/entities"
+  ENTITIES_DIR="$MOUNTPOINT/$SPACE_DIR/entities"
   STATUS_FILE="$MOUNTPOINT/.status"
   PIECE_NAME="Fuse-Exec-Fixture"
-  PIECE_DIR="$MOUNTPOINT/$SPACE/pieces/$PIECE_NAME"
+  PIECE_DIR="$MOUNTPOINT/$SPACE_DIR/pieces/$PIECE_NAME"
   INPUT_DIR="$PIECE_DIR/input"
   INPUT_LAST_MESSAGE="$INPUT_DIR/lastMessage"
   RESULT_DIR="$PIECE_DIR/result"
@@ -839,7 +847,7 @@ run_entity_listing() {
 # entity listing addresses. It records for the same reason the mount does.
 run_piece_paths() {
   phase "The mounted piece's directory and documents hydrate"
-  wait_for_path "$MOUNTPOINT/$SPACE/pieces"
+  wait_for_path "$MOUNTPOINT/$SPACE_DIR/pieces"
   wait_for_path "$PIECE_DIR"
   wait_for_path "$RESULT_DIR"
   wait_for_path "$RESULT_JSON"
@@ -1207,8 +1215,8 @@ PRELUDE=(mount entity-listing piece-paths entities-entry)
 # first, and `all` runs it once.
 #
 # This table is read as well as run. packages/cli/test/fuse-sections.test.ts
-# holds it to reaching every phase, from `all` and from what
-# .github/workflows/deno.yml dispatches, and to naming phases the script
+# holds it to reaching every phase, from `all` and from the sections the test
+# topology's `cli-fuse` suite makes units of, and to naming phases the script
 # defines. Choosing the arm here, before the mount, is what makes an unknown
 # section cost a second rather than a mount.
 case "$SECTION" in

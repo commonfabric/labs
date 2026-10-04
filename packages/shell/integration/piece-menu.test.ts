@@ -2,7 +2,12 @@ import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { env, waitForCondition } from "@commonfabric/integration";
+import type { DID } from "@commonfabric/identity";
+import {
+  createTestSpace,
+  env,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 
@@ -10,7 +15,7 @@ import "../src/globals.ts";
 
 import { clickPierce } from "./shadow-dom.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const REPO_ROOT = resolve(import.meta.dirname!, "../../..");
 const decoder = new TextDecoder();
 
@@ -18,6 +23,7 @@ type MeasuredRect = { x: number; y: number; width: number; height: number };
 
 async function createNestedPiece(
   identityPath: string,
+  space: DID,
   slug: string,
 ): Promise<void> {
   const command = new Deno.Command(Deno.execPath(), {
@@ -34,7 +40,7 @@ async function createNestedPiece(
       "--api-url",
       API_URL,
       "--space",
-      SPACE_NAME,
+      space,
       "--slug",
       slug,
     ],
@@ -539,7 +545,7 @@ describe("piece context menu", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME },
+      view: { spaceDid: await createTestSpace(identity) },
       identity,
     });
     await waitForRenderedPiece(page);
@@ -617,7 +623,18 @@ describe("piece context menu", () => {
       "you have OWNER access",
     );
     await waitForCurrentIdentityAccess(page, "OWNER");
-    await waitForPanelText(page, "piece-panel-access", "Anyone (*)");
+    // The space was created granting its creator alone, so the one row is
+    // this identity's, and there is no wildcard entry.
+    await waitForCondition(
+      page,
+      (probe, owner: string) =>
+        probe.collect('[test-id="piece-panel-access"]').some((panel) => {
+          const text = probe.deepText(panel);
+          return probe.isRendered(panel) && text.includes(`${owner} (you)`) &&
+            !text.includes("Anyone (*)");
+        }),
+      { args: [identity.did()] },
+    );
 
     await changeCurrentIdentityAccess(page, "READ");
     await waitForPanelText(
@@ -665,11 +682,12 @@ describe("piece context menu", () => {
       implementation: "noble",
     });
     const { identity, path: identityPath } = tempIdentity;
+    const spaceDid = await createTestSpace(identity);
 
-    await createNestedPiece(identityPath, slug);
+    await createNestedPiece(identityPath, spaceDid, slug);
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceSlug: slug },
+      view: { spaceDid, pieceSlug: slug },
       identity,
     });
     await waitForCondition(

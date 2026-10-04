@@ -5,7 +5,7 @@ import type {
 } from "@commonfabric/api";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
-import { getArrayElementInfo } from "../type-utils.ts";
+import { getArrayElementInfo, instantiatedElementType } from "../type-utils.ts";
 
 export class ArrayFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
@@ -71,6 +71,7 @@ export class ArrayFormatter implements TypeFormatter {
       info.elementType,
       context,
       info.elementNode,
+      instantiatedElementType(context.instantiatedAs, context.typeChecker),
     );
 
     return { type: "array", items };

@@ -68,9 +68,9 @@ describe("setsrc over a writer-authorized field's source-file spelling", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `setsrc-writer-file-spelling-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );

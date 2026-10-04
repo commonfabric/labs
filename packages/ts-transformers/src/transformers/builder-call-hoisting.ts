@@ -376,7 +376,8 @@ function hoistBuilderCalls(
     );
     pendingHoists = [];
     const visitedStatement = ts.visitNode(statement, visit) as ts.Statement;
-    resultStatements.push(...pendingHoists, visitedStatement);
+    for (const hoist of pendingHoists) resultStatements.push(hoist);
+    resultStatements.push(visitedStatement);
   }
 
   // Register every hoisted builder artifact with one trailing call. `__cfReg` is

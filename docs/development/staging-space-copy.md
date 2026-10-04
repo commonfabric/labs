@@ -57,10 +57,13 @@ source DID for that reason.
 
 Two consequences worth holding on to:
 
-- **A named space derives the same DID everywhere**, from its name alone
-  (`deriveSpaceDid` in `packages/state-inspector/discover.ts`). Open the same
-  name on rapids and you reach the copy. This is what makes the copy usable
-  without anyone typing a DID.
+- **A legacy space name resolves to the same DID everywhere**, from the name
+  alone (`legacySpaceDid` in `packages/identity/src/legacy-space.ts`, which
+  `resolveSpace` in `packages/state-inspector/discover.ts` uses for a name).
+  Open the same name on rapids and you reach the copy. This is what makes the
+  copy of a legacy space usable without anyone typing a DID. A space created
+  with a random DID has no name that resolves to it, so its copy is opened by
+  that DID.
 - **Two hosts now answer for one space id, with content that diverges from the
   moment anything writes.** The api-url is the only thing that tells them
   apart, so pin it explicitly in every command that touches either. A copy is
@@ -80,9 +83,6 @@ that matter here are:
   character of the request URI, so one space is normally served by one instance.
   That is a property of the URL rather than of the store: every instance can
   open every file, so treat the store as shared by all 21 and restart all 21.
-- **`bg-piece-service` reaches memory over the API**, never the file. It still
-  wants stopping during the swap, so that nothing runs pieces against the copy
-  before you have looked at it.
 - **The service env is `/opt/cf/releases/.env`**, deployed vaulted by ansible
   and read by every instance. `MEMORY_DIR` (or `DB_PATH`) is in it. Read the
   value on the host rather than assuming one; provisioning creates `/data` from
@@ -164,7 +164,6 @@ sha256sum /tmp/<did>.sqlite      # same digest as step 1, or stop here
 
 # 5. Stop everything that can hold the store open, or write through it.
 for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
-sudo systemctl stop bg-piece-service
 
 # 6. Move any existing file for that DID ASIDE — never delete it, and take its
 #    -wal and -shm companions with it. The engine runs in WAL mode, and a stale
@@ -186,17 +185,6 @@ for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done
 
 Steps 5 through 8 are one continuous window in which staging is down. Have the
 file on the host and its checksum checked before you begin it.
-
-Leave `bg-piece-service` stopped until the checks below have passed. The copy is
-live the moment the servers start, and that service is what runs the space's
-pieces — so starting it last is the difference between reading the copy as it
-arrived and reading it after something has already acted on it.
-
-```bash
-# 9. Once the copy reads correctly, put the piece service back.
-sudo systemctl start bg-piece-service
-systemctl is-active bg-piece-service
-```
 
 ## Confirming the copy is the one being served
 
@@ -243,11 +231,10 @@ It still does not show:
 
 A staging copy is real content on a shared host, so it comes down when the
 question that justified it has been answered. Removal is steps 5 to 8 in
-reverse: stop `bg-piece-service` and the instances, move the copy out of the
-store directory with its `-wal` and `-shm` companions, move back whatever step 6
-set aside, start everything. If nothing was set aside, leaving the space absent
-is the correct end state — the server will create an empty one if anyone asks
-for it again.
+reverse: stop the instances, move the copy out of the store directory with its
+`-wal` and `-shm` companions, move back whatever step 6 set aside, start
+everything. If nothing was set aside, leaving the space absent is the correct
+end state — the server will create an empty one if anyone asks for it again.
 
 Write the rollback down before step 5, not after: the path step 6 moved things
 to, and the commands that put them back.

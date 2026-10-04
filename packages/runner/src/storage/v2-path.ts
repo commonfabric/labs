@@ -9,9 +9,6 @@ export type ReadPathOptions = {
 export const isArrayIndexSegment = (segment: string): boolean =>
   isArrayIndexPropertyName(segment);
 
-export const createPathContainer = (nextSegment: string): FabricValue =>
-  isArrayIndexSegment(nextSegment) ? [] : {};
-
 const hasOwnPathSegment = (
   value: Record<string, unknown> | unknown[],
   segment: string | number,

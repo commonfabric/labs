@@ -104,6 +104,29 @@ async function readDurableNumber(
   }
 }
 
+// The same fresh-session read for a cell of any schema.
+async function readDurableValue(
+  server: MemoryV2Server.Server,
+  cause: string,
+  // deno-lint-ignore no-explicit-any
+  schema: any,
+): Promise<unknown> {
+  const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+  const rt = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager: storage,
+  });
+  try {
+    const cell = rt.getCell(space, cause, schema);
+    await cell.sync();
+    await cell.pull();
+    return cell.get();
+  } finally {
+    await rt.dispose();
+    await storage.close();
+  }
+}
+
 describe("mergeable array appends", () => {
   let server: MemoryV2Server.Server;
   let storage1: EmulatedStorageManager;
@@ -174,6 +197,55 @@ describe("mergeable array appends", () => {
       expect(durable).toContain("seed");
       expect(durable).toContain("A");
       expect(durable).toContain("B");
+    } finally {
+      await rt2.dispose();
+      await rt1.dispose();
+    }
+  });
+
+  it("two concurrent pushAll appends to the same list both survive in order", async () => {
+    const rt1 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage1,
+    });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx0 = rt1.edit();
+      rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["seed"]);
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt1.storageManager.synced();
+
+      const cell2 = rt2.getCell<string[]>(space, CAUSE, stringListSchema);
+      await cell2.sync();
+      await cell2.pull();
+
+      const txA = rt1.edit();
+      rt1.getCell<string[]>(space, CAUSE, stringListSchema, txA).pushAll([
+        "A1",
+        "A2",
+      ]);
+      await txA.commit({ resolveAt: "verdict" });
+      await rt1.storageManager.synced();
+
+      // Session 2 has not observed session 1's append.
+      const txB = rt2.edit();
+      rt2.getCell<string[]>(space, CAUSE, stringListSchema, txB).pushAll([
+        "B1",
+        "B2",
+      ]);
+      await txB.commit({ resolveAt: "verdict" });
+      await rt2.storageManager.synced();
+
+      expect(await readDurable(server)).toEqual([
+        "seed",
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+      ]);
     } finally {
       await rt2.dispose();
       await rt1.dispose();
@@ -569,6 +641,81 @@ describe("mergeable array appends", () => {
     }
   });
 
+  describe("a push onto a list set to `undefined`", () => {
+    // Setting a list to `undefined` leaves its slot holding `undefined`. A push
+    // onto that slot commits a list of what it pushed, as a push onto a
+    // missing list does.
+
+    it("commits a list of the pushed element", async () => {
+      const rt1 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage1,
+      });
+      try {
+        // The list has to exist first: setting a missing list to `undefined`
+        // writes nothing, and leaves no slot.
+        const tx0 = rt1.edit();
+        rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["a"]);
+        await tx0.commit({ resolveAt: "verdict" });
+        const tx1 = rt1.edit();
+        rt1.getCell<string[] | undefined>(space, CAUSE, stringListSchema, tx1)
+          .set(undefined);
+        await tx1.commit({ resolveAt: "verdict" });
+        await rt1.storageManager.synced();
+
+        const tx = rt1.edit();
+        rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx).push("b");
+        const result = await tx.commit({ resolveAt: "verdict" });
+        expect(result.error).toBeUndefined();
+        await rt1.storageManager.synced();
+
+        expect(await readDurable(server)).toEqual(["b"]);
+      } finally {
+        await rt1.dispose();
+      }
+    });
+
+    it("commits a list of the pushed element from a session that still sees the old list", async () => {
+      const rt1 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage1,
+      });
+      const rt2 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage2,
+      });
+      try {
+        const tx0 = rt1.edit();
+        rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["a"]);
+        await tx0.commit({ resolveAt: "verdict" });
+        await rt1.storageManager.synced();
+
+        // Session 2 loads `["a"]` and, with fan-out held, keeps seeing it.
+        const cell2 = rt2.getCell<string[]>(space, CAUSE, stringListSchema);
+        await cell2.sync();
+        await cell2.pull();
+        expect(cell2.get()).toEqual(["a"]);
+
+        const tx1 = rt1.edit();
+        rt1.getCell<string[] | undefined>(space, CAUSE, stringListSchema, tx1)
+          .set(undefined);
+        await tx1.commit({ resolveAt: "verdict" });
+        await rt1.storageManager.synced();
+
+        const tx2 = rt2.edit();
+        rt2.getCell<string[]>(space, CAUSE, stringListSchema, tx2).push("b");
+        const result = await tx2.commit({ resolveAt: "verdict" });
+        expect(result.error).toBeUndefined();
+        await rt2.storageManager.synced();
+
+        expect(await readDurable(server)).toEqual(["b"]);
+      } finally {
+        await rt2.dispose();
+        await rt1.dispose();
+      }
+    });
+  });
+
   it("an edit to an existing element survives alongside a push in the same tx", async () => {
     // A single transaction that both edits an existing element and appends must
     // keep the edit: the append op covers only the appended tail, not the
@@ -692,15 +839,10 @@ describe("mergeable array appends", () => {
   });
 
   it("a same-length whole-array set then a push commits the replaced list", async () => {
-    // A whole-array set that REPLACES every element without changing the length
-    // or the hole layout, then a push. This one is deliberately NOT abandoned,
-    // and pins that: a dense same-length replacement diffs into per-index
-    // candidates that all sit below the tail start, so they survive the op's
-    // suppression and commit alongside the append. (Characterization, not a
-    // regression guard — it holds on the unfixed code too. It is here so a
-    // future tightening of the guard to full prefix VALUE comparison has to
-    // justify losing this. Changing the hole layout is a different matter and
-    // is abandoned — see below.)
+    // A whole-array set that replaces every element without changing the
+    // length or the hole layout, then a push. The set says what the list
+    // holds, so the push after it is committed as part of that value and
+    // records no op.
 
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -720,6 +862,8 @@ describe("mergeable array appends", () => {
       const cell = rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx1);
       cell.set(["x", "y", "z"]);
       cell.push("d");
+      expect([...(getDirectTransactionMergeableOpAddresses(tx1) ?? [])])
+        .toEqual([]);
       expect(cell.get()).toEqual(["x", "y", "z", "d"]);
       await tx1.commit({ resolveAt: "verdict" });
       await rt1.storageManager.synced();
@@ -730,13 +874,58 @@ describe("mergeable array appends", () => {
     }
   });
 
+  it("a same-length whole-array set then a push is refused when another session appended meanwhile", async () => {
+    // Session 2 sets and pushes without reading the list, from a view that
+    // lacks session 1's append. Sent as replacements and an append, its
+    // writes would land around that element and leave five where its set
+    // said four.
+    const rt1 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage1,
+    });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx0 = rt1.edit();
+      rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set([
+        "a",
+        "b",
+        "c",
+      ]);
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt1.storageManager.synced();
+
+      // Session 2 loads the three elements and, with fan-out held, keeps
+      // seeing them.
+      const cell2 = rt2.getCell<string[]>(space, CAUSE, stringListSchema);
+      await cell2.sync();
+      await cell2.pull();
+
+      const tx1 = rt1.edit();
+      rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx1).push("d");
+      await tx1.commit({ resolveAt: "verdict" });
+      await rt1.storageManager.synced();
+
+      const tx2 = rt2.edit();
+      const stale = rt2.getCell<string[]>(space, CAUSE, stringListSchema, tx2);
+      stale.set(["x", "y", "z"]);
+      stale.push("w");
+      const result = await tx2.commit({ resolveAt: "verdict" });
+      expect(result.error?.name).toBe("ConflictError");
+
+      expect(await readDurable(server)).toEqual(["a", "b", "c", "d"]);
+    } finally {
+      await rt2.dispose();
+      await rt1.dispose();
+    }
+  });
+
   it("a set that punches a hole then a push commits the hole", async () => {
-    // A same-length set that changes the array's HOLE LAYOUT, then a push.
-    // Length equality is satisfied, but the diff cannot express a presence
-    // change per index — it falls back to a whole-array replacement, which is
-    // the one candidate the op's suppression drops outright. Sparse arrays are
-    // preserved elsewhere in the runner, so the hole must survive the round
-    // trip.
+    // A same-length set that changes the array's hole layout, then a push.
+    // Sparse arrays are preserved elsewhere in the runner, so the hole must
+    // survive the round trip.
 
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -777,10 +966,7 @@ describe("mergeable array appends", () => {
 
   it("an absent cell set to a sparse array then pushed commits the hole", async () => {
     // No base at all: a previously absent cell set to a sparse array, then
-    // pushed. With no base the whole working array is the op's payload, so the
-    // hole is in the payload rather than in a prefix the diff would carry — the
-    // density check has to run whether or not there was a base. Without it the
-    // write does not merely flatten the hole, it fails to land at all.
+    // pushed. The hole has to survive, and the write has to land.
 
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -835,9 +1021,8 @@ describe("mergeable array appends", () => {
   });
 
   it("a set that fills a hole then a push commits the filled value", async () => {
-    // The reverse: the base is sparse and the set FILLS the hole, same length.
-    // Without the layout check the fill is dropped and, because the whole-array
-    // candidate carried every element, so is the rest of the replacement.
+    // The reverse: the base is sparse and the set fills the hole, same length.
+    // The filled value is committed with the rest of the replacement.
 
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -989,9 +1174,8 @@ describe("mergeable array appends", () => {
   });
 
   it("a parent-object set that shrinks a nested list then a push commits the shrunk list", async () => {
-    // The same reshape reached from a PARENT path, landing BEFORE the op — so
-    // no intent exists yet for the ancestor write to poison, and the tail op's
-    // own prefix check is what has to catch it.
+    // The same reshape reached from a parent path, landing ahead of the op: a
+    // write to an enclosing object says what the list inside it holds too.
 
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -2253,6 +2437,72 @@ describe("mergeable op guards and single-session branches", () => {
     expect(() => cell.addUnique("x")).toThrow();
   });
 
+  it("pushAll without a transaction throws", () => {
+    const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema);
+    expect(() => cell.pushAll(["x"])).toThrow();
+  });
+
+  it("pushAll given something other than an array throws", () => {
+    const tx = rt.edit();
+    const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+    expect(() => cell.pushAll("abc" as unknown as string[])).toThrow(
+      /requires an array of values/,
+    );
+    expect(() => cell.pushAll(["abc"])).not.toThrow();
+  });
+
+  it("push and pushAll append to a cell typed as a readonly array", () => {
+    const tx = rt.edit();
+    const cell = rt.getCell<readonly string[]>(
+      space,
+      "readonly-list",
+      stringListSchema,
+      tx,
+    );
+    cell.push("a");
+    cell.pushAll(["b", "c"]);
+    expect(cell.get()).toEqual(["a", "b", "c"]);
+  });
+
+  it("pushAll commits its list as one append of every member", async () => {
+    const tx0 = rt.edit();
+    rt.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["a"]);
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const tx = rt.edit();
+    const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+    cell.pushAll(["b", "c", "d"]);
+    expect(cell.get()).toEqual(["a", "b", "c", "d"]);
+
+    const native = getDirectTransactionNativeCommit(tx, space);
+    expect(native?.operations).toEqual([
+      expect.objectContaining({
+        op: "patch",
+        patches: [{ op: "append", path: "/value", values: ["b", "c", "d"] }],
+      }),
+    ]);
+  });
+
+  it("pushAll commits a list too long to spread into push's arguments", async () => {
+    const members = Array.from({ length: 150_000 }, (_, index) => `${index}`);
+    const tx0 = rt.edit();
+    rt.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["seed"]);
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const tx = rt.edit();
+    rt.getCell<string[]>(space, CAUSE, stringListSchema, tx).pushAll(members);
+    const result = await tx.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    expect(result.error).toBeUndefined();
+    const durable = await readDurable(server);
+    expect(durable.length).toBe(150_001);
+    expect(durable[0]).toBe("seed");
+    expect(durable[150_000]).toBe("149999");
+  });
+
   it("increment without a transaction throws", () => {
     const cell = rt.getCell<number>(space, COUNTER_CAUSE, numberSchema);
     expect(() => cell.increment(1)).toThrow();
@@ -2414,6 +2664,39 @@ describe("mergeable op guards and single-session branches", () => {
     expect(await readDurableNumber(server)).toBe(5);
   });
 
+  describe("a `set()` then an `increment()` in one transaction", () => {
+    // The increment's op carries only its delta. The `set()` ahead of it says
+    // what the number is, so the increment is committed as part of that value
+    // and records no op.
+
+    it("commits the number the transaction computed, over an existing one", async () => {
+      const tx0 = rt.edit();
+      rt.getCell<number>(space, COUNTER_CAUSE, numberSchema, tx0).set(5);
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      const tx = rt.edit();
+      const cell = rt.getCell<number>(space, COUNTER_CAUSE, numberSchema, tx);
+      cell.set(10);
+      cell.increment(1);
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      expect(await readDurableNumber(server)).toBe(11);
+    });
+
+    it("commits the number the transaction computed, on a new document", async () => {
+      const tx = rt.edit();
+      const cell = rt.getCell<number>(space, COUNTER_CAUSE, numberSchema, tx);
+      cell.set(10);
+      cell.increment(1);
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      expect(await readDurableNumber(server)).toBe(11);
+    });
+  });
+
   it("mergeable ops on two fields of one entity both commit", async () => {
     const docSchema = {
       type: "object",
@@ -2458,6 +2741,302 @@ describe("mergeable op guards and single-session branches", () => {
     }
   });
 
+  describe("a push that creates its list", () => {
+    // A document the transaction is the first to write has no base to diff
+    // against. A push that is its only write travels as an op. Beside any
+    // other write to the document it goes with that write in one
+    // whole-document set, which the store refuses where it already holds the
+    // document.
+
+    const docSchema = {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+
+    it("emits an op when it is the document's only write", () => {
+      const tx = rt.edit();
+      const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+      cell.push("x");
+
+      const { id } = cell.getAsNormalizedFullLink();
+      const operation = getDirectTransactionNativeCommit(tx, space)?.operations
+        .find((op) => op.id === id);
+      expect(operation?.op).toBe("patch");
+      expect(
+        (operation as { patches: { op: string; path: string }[] }).patches
+          .map(({ op, path }) => ({ op, path })),
+      ).toEqual([{ op: "append", path: "/value" }]);
+    });
+
+    it("commits a sibling field written beside it, in a set that drops the push's intent", async () => {
+      const cause = "push-creates-list-beside-sibling";
+      const tx = rt.edit();
+      const doc = rt.getCell(space, cause, docSchema, tx);
+      doc.key("count").set(1);
+      doc.key("tags").push("x");
+      expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
+        .toBe(1);
+
+      const { id } = doc.getAsNormalizedFullLink();
+      const operation = getDirectTransactionNativeCommit(tx, space)?.operations
+        .find((op) => op.id === id);
+      expect(operation?.op).toBe("set");
+      expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])])
+        .toEqual([]);
+
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+      expect(await readDurableValue(server, cause, docSchema)).toEqual({
+        count: 1,
+        tags: ["x"],
+      });
+    });
+
+    it("commits the rest of a whole-object `set()` made before it", async () => {
+      const cause = "push-creates-list-after-object-set";
+      const tx = rt.edit();
+      const doc = rt.getCell(space, cause, docSchema, tx);
+      doc.set({ tags: [], count: 1 });
+      doc.key("tags").push("x");
+      await tx.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      expect(await readDurableValue(server, cause, docSchema)).toEqual({
+        count: 1,
+        tags: ["x"],
+      });
+    });
+
+    it("is refused beside another write when another session's push created the list first", async () => {
+      // Both sessions see no document. The first one's push lands as an op and
+      // creates the list. The second one's set would replace that list with
+      // its own single element, so it has to be refused.
+      const cause = "push-creates-list-store-holds-document";
+      const tx0 = rt.edit();
+      rt.getCell<string[]>(space, cause, stringListSchema, tx0).push("a");
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt.storageManager.synced();
+
+      const storage2 = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const rt2 = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage2,
+      });
+      try {
+        const tx = rt2.edit();
+        const list = rt2.getCell<string[]>(space, cause, stringListSchema, tx);
+        list.push("b");
+        const { id, scope } = list.getAsNormalizedFullLink();
+        tx.writeOrThrow({ space, id, scope, path: ["note"] }, "beside");
+        const result = await tx.commit({ resolveAt: "verdict" });
+        expect(result.error?.name).toBe("ConflictError");
+      } finally {
+        await rt2.dispose();
+        await storage2.close();
+      }
+
+      expect(await readDurableValue(server, cause, stringListSchema)).toEqual([
+        "a",
+      ]);
+    });
+  });
+
+  it("a push that creates its list beside another write is refused when another session created a different field first", async () => {
+    // The second session's writes touch `tags` and `count`, and the first
+    // session's `other` is neither, so no read of those paths can refuse the
+    // commit. Sent as a whole-document set it would delete `other`.
+    const docSchema = {
+      type: "object",
+      properties: {
+        other: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "push-creates-list-store-holds-other-field";
+    const tx0 = rt.edit();
+    (rt.getCell(space, cause, docSchema, tx0).key("other") as unknown as Cell<
+      string[]
+    >).push("keep");
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const storage2 = EmulatedStorageManager.connectTo(server, { as: signer });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx = rt2.edit();
+      const doc = rt2.getCell(space, cause, docSchema, tx);
+      (doc.key("tags") as unknown as Cell<string[]>).push("x");
+      (doc.key("count") as unknown as Cell<number>).set(1);
+      const result = await tx.commit({ resolveAt: "verdict" });
+      expect(result.error?.name).toBe("ConflictError");
+    } finally {
+      await rt2.dispose();
+      await storage2.close();
+    }
+
+    expect(await readDurableValue(server, cause, docSchema)).toEqual({
+      other: ["keep"],
+    });
+  });
+
+  it("a `set()` of one field of a document the session has not loaded is refused when another session created a different field first", async () => {
+    // No mergeable op on the second session's side: a plain field write from
+    // an absent base is a whole-document set as well, and would delete
+    // `other` the same way.
+    const docSchema = {
+      type: "object",
+      properties: {
+        other: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "set-field-store-holds-other-field";
+    const tx0 = rt.edit();
+    (rt.getCell(space, cause, docSchema, tx0).key("other") as unknown as Cell<
+      string[]
+    >).push("keep");
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const storage2 = EmulatedStorageManager.connectTo(server, { as: signer });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx = rt2.edit();
+      (rt2.getCell(space, cause, docSchema, tx).key("count") as unknown as Cell<
+        number
+      >).set(1);
+      const result = await tx.commit({ resolveAt: "verdict" });
+      expect(result.error?.name).toBe("ConflictError");
+    } finally {
+      await rt2.dispose();
+      await storage2.close();
+    }
+
+    expect(await readDurableValue(server, cause, docSchema)).toEqual({
+      other: ["keep"],
+    });
+  });
+
+  it("a push that creates its list beside another write keeps another session's field once it runs again", async () => {
+    // The same two sessions through a retrying edit: the refused attempt runs
+    // again with the document loaded, where it has a base, and its writes
+    // land beside the first session's field.
+    const docSchema = {
+      type: "object",
+      properties: {
+        other: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "push-creates-list-retry-keeps-other-field";
+    const retryServer = newSharedServer();
+    const firstStorage = EmulatedStorageManager.connectTo(retryServer, {
+      as: signer,
+    });
+    const secondStorage = EmulatedStorageManager.connectTo(retryServer, {
+      as: signer,
+    });
+    const first = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: firstStorage,
+    });
+    const second = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: secondStorage,
+    });
+    try {
+      const created = await first.editWithRetry((tx) => {
+        (first.getCell(space, cause, docSchema, tx).key(
+          "other",
+        ) as unknown as Cell<string[]>).push("keep");
+      });
+      expect(created.error).toBeUndefined();
+      await first.storageManager.synced();
+
+      const written = await second.editWithRetry((tx) => {
+        const doc = second.getCell(space, cause, docSchema, tx);
+        (doc.key("tags") as unknown as Cell<string[]>).push("x");
+        (doc.key("count") as unknown as Cell<number>).set(1);
+      });
+      expect(written.error).toBeUndefined();
+      await second.storageManager.synced();
+
+      expect(await readDurableValue(retryServer, cause, docSchema)).toEqual({
+        other: ["keep"],
+        tags: ["x"],
+        count: 1,
+      });
+    } finally {
+      await second.dispose();
+      await first.dispose();
+      await secondStorage.close();
+      await firstStorage.close();
+      await retryServer.close();
+    }
+  });
+
+  it("a push after a write to the document root emits a set and drops the push's intent", async () => {
+    // No patch expresses a write to the document root, so the whole-document
+    // set is what carries it. The append is not sent, and its intent must not
+    // survive to narrow the array read out of the commit's reads.
+    const docSchema = {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" } },
+        count: { type: "number" },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const cause = "push-after-root-write";
+    const tx0 = rt.edit();
+    rt.getCell(space, cause, docSchema, tx0).set({ tags: ["a"], count: 0 });
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const tx = rt.edit();
+    const doc = rt.getCell(space, cause, docSchema, tx);
+    const { id, scope } = doc.getAsNormalizedFullLink();
+    const rootWrite = tx.tx.write(
+      { space, id, scope, type: "application/json", path: [] },
+      { value: { tags: ["a"], count: 5 } },
+    );
+    expect(rootWrite.error).toBeUndefined();
+    doc.key("tags").push("b");
+    expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
+      .toBe(1);
+
+    const operation = getDirectTransactionNativeCommit(tx, space)?.operations
+      .find((op) => op.id === id);
+    expect(operation?.op).toBe("set");
+    expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])]).toEqual(
+      [],
+    );
+
+    await tx.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+    expect(await readDurableValue(server, cause, docSchema)).toEqual({
+      tags: ["a", "b"],
+      count: 5,
+    });
+  });
+
   it("mergeable ops route through a TransactionWrapper", () => {
     // A cell whose transaction is a TransactionWrapper (the wrapper
     // Cell.sample() and Cell.sink() install for child cells) routes its
@@ -2485,7 +3064,7 @@ describe("mergeable op guards and single-session branches", () => {
     expect(counter.get()).toBe(3);
   });
 
-  it("an ancestor write poisons the tail intent beneath it", () => {
+  it("an ancestor write poisons the tail intent beneath it", async () => {
     // A whole-value write reaches the intents BENEATH it, not just the one at
     // the exact path it wrote. Asserted on the recorded intents rather than on
     // a commit outcome, because the reshaping `set` also records reads of its
@@ -2505,9 +3084,12 @@ describe("mergeable op guards and single-session branches", () => {
     } as any;
     const cause = "ancestor-poison";
 
+    const tx0 = rt.edit();
+    rt.getCell(space, cause, docSchema, tx0).set({ rows: ["a", "b", "c"] });
+    await tx0.commit({ resolveAt: "verdict" });
+
     const tx = rt.edit();
     const doc = rt.getCell(space, cause, docSchema, tx);
-    doc.set({ rows: ["a", "b", "c"] });
     const rows = doc.key("rows") as unknown as Cell<string[]>;
 
     rows.push("p");
@@ -2529,9 +3111,8 @@ describe("mergeable op guards and single-session branches", () => {
     // Abandoning at build time must remove the intent from the transaction, not
     // just skip the wire op — a surviving intent keeps narrowing reads out of
     // the conflict set for an op that is no longer being sent. Asserted
-    // directly on the intents after `getNativeCommit`, because the reshaping
-    // write happens to leave an unmarked read at the path anyway, so no commit
-    // outcome distinguishes the two.
+    // directly on the intents after `getNativeCommit`, since no commit outcome
+    // of a single session distinguishes the two.
 
     // Asserting on the built commit rather than on the committed transaction
     // matters: finishing a commit clears the intents anyway, so a post-commit
@@ -2548,11 +3129,11 @@ describe("mergeable op guards and single-session branches", () => {
 
     const tx = rt.edit();
     const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
-    cell.set(["a"]);
+    tx.writeValueOrThrow(cell.getAsNormalizedFullLink(), ["a"]);
     cell.push("d");
 
-    // Recorded while the handler ran: the shrink came first, so nothing was
-    // poisoned at the write.
+    // Recorded while the handler ran: the shrink went straight to the
+    // transaction, which poisons nothing, where a `set()` would have.
     expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
       .toBe(1);
 
@@ -2677,13 +3258,12 @@ describe("mergeable op guards and single-session branches", () => {
     }
   });
 
-  it("a write beneath an array leaves the array's intent intact", () => {
+  it("a write beneath an array leaves the array's intent intact", async () => {
     // The other direction, and the one that pins the predicate: a write BENEATH
-    // an array (an element edit) must leave that array's intent alone. Asserted
-    // on the intents, and with the push FIRST — the durable value cannot
-    // discriminate here, because a concurrent append is add-wins and lands
-    // either way, and the reverse order records no intent for a wrongly-widened
-    // poison to destroy.
+    // an array (an element edit) must leave that array's intent alone, whether
+    // it lands after the push or ahead of it. Asserted on the intents — the
+    // durable value cannot discriminate here, because a concurrent append is
+    // add-wins and lands either way.
 
     const docSchema = {
       type: "object",
@@ -2692,9 +3272,12 @@ describe("mergeable op guards and single-session branches", () => {
     } as any;
     const cause = "beneath-no-poison";
 
+    const tx0 = rt.edit();
+    rt.getCell(space, cause, docSchema, tx0).set({ rows: ["a", "b"] });
+    await tx0.commit({ resolveAt: "verdict" });
+
     const tx = rt.edit();
     const doc = rt.getCell(space, cause, docSchema, tx);
-    doc.set({ rows: ["a", "b"] });
     const rows = doc.key("rows") as unknown as Cell<string[]>;
 
     rows.push("p");
@@ -2703,11 +3286,22 @@ describe("mergeable op guards and single-session branches", () => {
     expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
       .toBe(1);
     expect(doc.get()).toEqual({ rows: ["A", "b", "p"] });
+
+    const reversed = rt.edit();
+    const reversedRows = rt.getCell(space, cause, docSchema, reversed)
+      .key("rows") as unknown as Cell<string[]>;
+    reversedRows.key(0).set("A");
+    reversedRows.push("p");
+
+    expect(
+      [...(getDirectTransactionMergeableOpAddresses(reversed) ?? [])].length,
+    ).toBe(1);
   });
 
-  it("a sibling write leaves the tail intent intact", () => {
+  it("a sibling write leaves the tail intent intact", async () => {
     // A sibling write must NOT poison a tail intent: only paths at or beneath
-    // the write are covered, so an unrelated field keeps the push mergeable.
+    // the write are covered, so an unrelated field keeps the push mergeable,
+    // written after the push or ahead of it.
 
     const docSchema = {
       type: "object",
@@ -2719,9 +3313,15 @@ describe("mergeable op guards and single-session branches", () => {
     } as any;
     const cause = "sibling-no-poison";
 
+    const tx0 = rt.edit();
+    rt.getCell(space, cause, docSchema, tx0).set({
+      rows: ["a"],
+      title: "before",
+    });
+    await tx0.commit({ resolveAt: "verdict" });
+
     const tx = rt.edit();
     const doc = rt.getCell(space, cause, docSchema, tx);
-    doc.set({ rows: ["a"], title: "before" });
     const rows = doc.key("rows") as unknown as Cell<string[]>;
 
     rows.push("p");
@@ -2729,6 +3329,123 @@ describe("mergeable op guards and single-session branches", () => {
 
     expect([...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length)
       .toBe(1);
+
+    const reversed = rt.edit();
+    const reversedDoc = rt.getCell(space, cause, docSchema, reversed);
+    reversedDoc.key("title").set("after");
+    (reversedDoc.key("rows") as unknown as Cell<string[]>).push("p");
+
+    expect(
+      [...(getDirectTransactionMergeableOpAddresses(reversed) ?? [])].length,
+    ).toBe(1);
+  });
+
+  describe("an op after a whole-value `set()` in the same transaction", () => {
+    // A `set()` says what the value is. An op after it, at that path or
+    // beneath it, would land on whatever the store holds and add to a value
+    // the transaction replaced, so it records no intent and the commit carries
+    // the value the transaction computed.
+
+    const intentCount = (tx: ReturnType<Runtime["edit"]>) =>
+      [...(getDirectTransactionMergeableOpAddresses(tx) ?? [])].length;
+
+    it("records no intent for a push, an `addUnique()` or an `increment()` at the path", () => {
+      const tx = rt.edit();
+      const list = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+      list.set(["a"]);
+      list.push("b");
+      list.addUnique("c");
+      const counter = rt.getCell<number>(
+        space,
+        COUNTER_CAUSE,
+        numberSchema,
+        tx,
+      );
+      counter.set(10);
+      counter.increment(1);
+
+      expect(intentCount(tx)).toBe(0);
+      expect(list.get()).toEqual(["a", "b", "c"]);
+      expect(counter.get()).toBe(11);
+    });
+
+    it("records no intent for a push beneath the path", () => {
+      const docSchema = {
+        type: "object",
+        properties: { rows: { type: "array", items: { type: "string" } } },
+        // deno-lint-ignore no-explicit-any
+      } as any;
+      const tx = rt.edit();
+      const doc = rt.getCell(space, "set-then-push-beneath", docSchema, tx);
+      doc.set({ rows: [] });
+      (doc.key("rows") as unknown as Cell<string[]>).push("p");
+
+      expect(intentCount(tx)).toBe(0);
+    });
+
+    it("records no intent when the `set()` wrote the value already there", async () => {
+      const tx0 = rt.edit();
+      rt.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set([]);
+      await tx0.commit({ resolveAt: "verdict" });
+
+      const tx = rt.edit();
+      const list = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+      list.set([]);
+      list.push("x");
+
+      expect(intentCount(tx)).toBe(0);
+    });
+
+    it("commits one element over a list another session filled", async () => {
+      // The writing session never loads the list. Its first attempt claims the
+      // list is absent and is refused; the retry runs with the twenty elements
+      // loaded and replaces them.
+      const twenty = Array.from({ length: 20 }, (_, index) => `e${index}`);
+      const retryServer = newSharedServer();
+      const fillingStorage = EmulatedStorageManager.connectTo(retryServer, {
+        as: signer,
+      });
+      const writingStorage = EmulatedStorageManager.connectTo(retryServer, {
+        as: signer,
+      });
+      const filling = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: fillingStorage,
+      });
+      const writing = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: writingStorage,
+      });
+      try {
+        const filled = await filling.editWithRetry((tx) => {
+          filling.getCell<string[]>(space, CAUSE, stringListSchema, tx)
+            .set(twenty);
+        });
+        expect(filled.error).toBeUndefined();
+        await filling.storageManager.synced();
+
+        const written = await writing.editWithRetry((tx) => {
+          const list = writing.getCell<string[]>(
+            space,
+            CAUSE,
+            stringListSchema,
+            tx,
+          );
+          list.set([]);
+          list.push("x");
+        });
+        expect(written.error).toBeUndefined();
+        await writing.storageManager.synced();
+
+        expect(await readDurable(retryServer)).toEqual(["x"]);
+      } finally {
+        await writing.dispose();
+        await filling.dispose();
+        await writingStorage.close();
+        await fillingStorage.close();
+        await retryServer.close();
+      }
+    });
   });
 
   it("a net-zero increment alongside another change is dropped", async () => {

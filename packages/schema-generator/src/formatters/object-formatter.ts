@@ -12,24 +12,36 @@ import {
   getDeclDocs,
   symbolHasDeprecatedTag,
 } from "../doc-utils.ts";
-import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import type {
+  BoundTypeArgument,
+  BoundTypeParameters,
+  GenerationContext,
+  TypeFormatter,
+} from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import {
   cloneSchemaDefinition,
   getNativeTypeSchema,
   getPropertyNameText,
+  instantiatedPropertyType,
+  instantiatedValueType,
   isFunctionLike,
   safeGetPropertyType,
 } from "../type-utils.ts";
-import {
-  getCellWrapperInfo,
-  isCellInternalMarkerName,
-} from "../typescript/cell-brand.ts";
+import { getCellWrapperInfo } from "../typescript/cell-brand.ts";
+import { isInternalMemberName } from "../typescript/property-name.ts";
 import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
-import { unwrapTypeParentheses } from "../typescript/type-node.ts";
+import {
+  holdsTypeParameter,
+  typeParameterOfType,
+  unwrapTypeParentheses,
+} from "../typescript/type-node.ts";
+import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
+import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
+import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -38,36 +50,50 @@ const logger = getLogger("schema-generator.object", {
 });
 
 /**
- * Check if a callable type (like ModuleFactory or HandlerFactory) returns a wrapper type.
- * ModuleFactory<T, R> when called returns Reactive<R>.
- * If R is Stream<T>, we should generate { asCell: ["stream"] } instead of skipping.
- * If R is Cell<T>, we should generate { asCell: ["cell"] } instead of skipping.
- *
- * Returns the schema definition for the wrapper if detected, undefined otherwise.
+ * A callable property's emission: its wrapper schema, or omission for a
+ * callable that returns no supported wrapper.
  */
-function getWrapperSchemaFromCallable(
+type CallableProperty =
+  | { readonly kind: "wrapper"; readonly schema: MutableJSONSchemaObj }
+  | { readonly kind: "omit" };
+
+/**
+ * Returns how a callable property is emitted, or `undefined` for a data
+ * property. A declared type parameter reads its bound argument when no
+ * instantiated property type is available. Calls returning `Stream`, `Cell`
+ * or `SqliteDb` carry their wrapper marker; other callables are omitted.
+ */
+export function classifyCallableProperty(
   type: ts.Type,
   checker: ts.TypeChecker,
-): MutableJSONSchemaObj | undefined {
+  bound?: BoundTypeParameters,
+): CallableProperty | undefined {
+  const seen = new Set<BoundTypeArgument>();
+  while (bound) {
+    const parameter = typeParameterOfType(type);
+    const argument = parameter && bound.arguments.get(parameter);
+    if (!argument || seen.has(argument)) break;
+    seen.add(argument);
+    type = argument.type;
+    bound = argument.bound;
+  }
+  if (!isFunctionLike(type)) return undefined;
   const callSignatures = type.getCallSignatures();
-  if (callSignatures.length === 0) return undefined;
+  if (callSignatures.length === 0) return { kind: "omit" };
 
-  // Get the return type of the first call signature
   const callReturnType = callSignatures[0]!.getReturnType();
-
-  // Check if the return type is a wrapper (Stream<T>, Cell<T>, or Reactive<...>)
   const wrapperInfo = getCellWrapperInfo(callReturnType, checker);
   if (wrapperInfo?.kind === "Stream") {
-    return { asCell: ["stream"] };
+    return { kind: "wrapper", schema: { asCell: ["stream"] } };
   }
   if (wrapperInfo?.kind === "Cell") {
-    return { asCell: ["cell"] };
+    return { kind: "wrapper", schema: { asCell: ["cell"] } };
   }
   if (wrapperInfo?.kind === "SqliteDb") {
-    return { asCell: ["sqlite"] };
+    return { kind: "wrapper", schema: { asCell: ["sqlite"] } };
   }
 
-  return undefined;
+  return { kind: "omit" };
 }
 
 /**
@@ -181,11 +207,7 @@ function shouldSkipInternalProperty(
   propDecl: ts.Declaration | undefined,
   context: GenerationContext,
 ): boolean {
-  if (propName.startsWith("__@")) {
-    return true;
-  }
-
-  if (isCellInternalMarkerName(propName)) {
+  if (isInternalMemberName(propName)) {
     return true;
   }
 
@@ -201,29 +223,6 @@ function shouldSkipInternalProperty(
     context.typeNode,
     propName,
     context.typeChecker,
-  );
-}
-
-/**
- * `FabricExecPlainObject` is used as a compile-time constraint on internal
- * execution graph types. Its inherited index signature does not describe
- * authored data accepted by a pattern, so it must not become a JSON Schema
- * `additionalProperties` declaration. The name is a type alias, so a base
- * declared through it resolves to the aliased type and carries the alias as
- * its alias symbol; that is what identifies it.
- */
-function hasFabricExecPlainObjectBase(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): boolean {
-  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
-
-  const objectType = type as ts.ObjectType;
-  if ((objectType.objectFlags & ts.ObjectFlags.Interface) === 0) return false;
-
-  return (checker.getBaseTypes(type as ts.InterfaceType) ?? []).some((base) =>
-    (base.aliasSymbol ?? base.getSymbol())?.getName() ===
-      "FabricExecPlainObject"
   );
 }
 
@@ -272,8 +271,15 @@ export class ObjectFormatter implements TypeFormatter {
     );
 
     const props = checker.getPropertiesOfType(type);
+    // A CFC metadata carrier a mapped type folded into the object is a
+    // label, not a member: no value holds it.
+    let carrier: ts.Symbol | undefined;
     for (const prop of props) {
       const propName = prop.getName();
+      if (propName === CFC_CARRIER_PROPERTY) {
+        carrier = prop;
+        continue;
+      }
 
       let propTypeNode = getExplicitPropertyTypeNode(
         context.typeNode,
@@ -311,23 +317,30 @@ export class ObjectFormatter implements TypeFormatter {
 
       if ((prop.flags & ts.SymbolFlags.Method) !== 0) continue;
 
-      // Get the actual property type and recursively delegate to the main schema generator
-      const resolvedPropType = safeGetPropertyType(
-        prop,
-        type,
+      const instantiatedPropType = instantiatedPropertyType(
+        context.instantiatedAs,
+        propName,
         checker,
-        propTypeNode,
       );
+      // Get the actual property type and recursively delegate to the main schema generator
+      const resolvedPropType = propTypeNode && context.boundTypeParameters &&
+          holdsTypeParameter(
+            propTypeNode,
+            checker,
+            context.boundTypeParameters.arguments,
+          ) &&
+          !usesParameterUnreachably(propTypeNode, checker)
+        ? checker.getTypeFromTypeNode(propTypeNode)
+        : safeGetPropertyType(prop, type, checker, propTypeNode);
 
-      if (isFunctionLike(resolvedPropType)) {
-        // Special case: ModuleFactory/HandlerFactory types that return Stream or Cell
-        // should generate { asCell: ["stream"] } or { asCell: ["cell"] } instead of being skipped
-        const wrapperSchema = getWrapperSchemaFromCallable(
-          resolvedPropType,
-          checker,
-        );
-        if (wrapperSchema) {
-          // This is a factory that returns a wrapper type (Stream or Cell)
+      const callable = classifyCallableProperty(
+        instantiatedPropType ?? resolvedPropType,
+        checker,
+        context.boundTypeParameters,
+      );
+      if (callable) {
+        if (callable.kind === "wrapper") {
+          const wrapperSchema = callable.schema;
           if (
             !isOptionalSymbol(prop) &&
             !isDefaultNodeWithUndefined(propTypeNode, checker)
@@ -358,6 +371,7 @@ export class ObjectFormatter implements TypeFormatter {
         resolvedPropType,
         context,
         propTypeNode,
+        instantiatedPropType,
       );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(
@@ -390,14 +404,25 @@ export class ObjectFormatter implements TypeFormatter {
     // Handle string/number index signatures → additionalProperties with description
     const stringIndex = checker.getIndexTypeOfType(type, ts.IndexKind.String);
     const numberIndex = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
-    const chosenIndex = hasFabricExecPlainObjectBase(type, checker)
-      ? undefined
-      : stringIndex ?? numberIndex;
+    const chosenIndex = stringIndex ?? numberIndex;
     if (chosenIndex) {
+      const indexNode = checker.getIndexInfoOfType(
+        type,
+        stringIndex ? ts.IndexKind.String : ts.IndexKind.Number,
+      )?.declaration?.type;
+      const boundIndex = indexNode && context.boundTypeParameters &&
+        holdsTypeParameter(
+          indexNode,
+          checker,
+          context.boundTypeParameters.arguments,
+        );
+      const readIndex = boundIndex &&
+        !usesParameterUnreachably(indexNode, checker);
       const apSchema = this.#schemaGenerator.formatChildType(
-        chosenIndex,
+        readIndex ? checker.getTypeFromTypeNode(indexNode) : chosenIndex,
         context,
-        undefined,
+        boundIndex ? indexNode : undefined,
+        instantiatedValueType(context.instantiatedAs, checker),
       );
       // Attempt to read JSDoc from index signature declarations
       const sym = type.getSymbol?.();
@@ -437,7 +462,14 @@ export class ObjectFormatter implements TypeFormatter {
     }
     if (required.length > 0) schema.required = required;
 
-    return schema;
+    const labels = carrier &&
+      this.#schemaGenerator.labelsCarriedBy(carrier, context);
+    return labels
+      ? labels.reduce<MutableJSONSchema>(
+        (labelled, label) => withIfcLabels(labelled, label),
+        schema,
+      )
+      : schema;
   }
 
   #lookupBuiltInSchema(

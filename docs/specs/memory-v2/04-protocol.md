@@ -21,7 +21,9 @@ rewrite. In particular:
   remains deferred for this pass
 - the toolshed v2 websocket route requires a signed `session.open`
   invocation whose subject, challenge, audience, and session descriptor match
-  the current request
+  the current request, or, where the server advertises `connectionAuth`, a
+  `session.open` naming a principal a signed `connection.auth` authenticated
+  on the same connection
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
@@ -59,7 +61,9 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdPagination": true,
     "entityIdLookup": true,
     "sessionHoldings": true,
-    "sessionReadCeiling": true
+    "sessionReadCeiling": true,
+    "presenceV1": true,
+    "sessionClose": true
   }
 }
 ```
@@ -80,7 +84,9 @@ If the server accepts the protocol, it returns:
     "entityIdPagination": true,
     "entityIdLookup": true,
     "sessionHoldings": true,
-    "sessionReadCeiling": true
+    "sessionReadCeiling": true,
+    "presenceV1": true,
+    "sessionClose": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -189,12 +195,13 @@ toolshed memory endpoint must advertise the same audience. Otherwise a client
 can sign for one instance and fail when routing sends it to another instance.
 
 Changing the toolshed service DID is an audience rotation. During rotation,
-clients must discover the new value from `hello.ok` and sign new `session.open`
-requests for it. Existing open sessions can continue only while their
-connection remains alive and keeps using challenges issued by the server that
-accepted them. Reconnects and new sessions must use the new audience. Operators
-should coordinate rotation with deployment routing and client reconnect
-behavior.
+clients must discover the new value from `hello.ok` and sign new
+`session.open` or `connection.auth` requests for it, according to the
+negotiated authentication mode. Existing open sessions can continue only
+while their connection remains alive and keeps using challenges issued by the
+server that accepted them. Reconnects and new sessions must use the new
+audience. Operators should coordinate rotation with deployment routing and
+client reconnect behavior.
 
 Standalone and test memory hosts may use a deterministic local DID, but they
 still need to advertise an audience. The public client treats a missing audience
@@ -203,11 +210,13 @@ as a protocol error.
 The challenge is scoped to this WebSocket connection. The current
 implementation generates 32 cryptographically random bytes and encodes them as
 64 hexadecimal characters. The challenge expires at `expiresAt`, in unix
-seconds. The client signs the challenge and audience into the next
-`session.open` invocation. The server accepts the current challenge only once.
-After a successful `session.open`, the response includes a new
-`sessionOpen.challenge`. The client uses that new challenge for the next
-`session.open` on the same connection.
+seconds. A client using signed `session.open` signs the challenge and audience
+into its next invocation. The server accepts that signed-open challenge only
+once. After a successful `session.open`, the response includes a new
+`sessionOpen.challenge`, which a signed-open client uses for its next open on
+the same connection. With `connectionAuth`, the client keeps the audience and
+initial challenge from `hello.ok` across session opens, and asks for a fresh
+challenge with `connection.challenge` when a key must sign again.
 
 `persistentSchedulerState` was RETIRED 2026-08-04 (server-execution v2
 Phase 1 stage C: the persisted observation form was deleted and reduced
@@ -265,6 +274,27 @@ the client refuses to open the session against a server that does not
 advertise it, before signing a `session.open`. A client declaring none is
 unaffected on any server.
 
+`presenceV1` advertises that the server relays presence rooms over this
+connection — the `presence.join`, `presence.publish`, and `presence.leave`
+commands and the `presence/upsert` and `presence/remove` pushes of section
+4.13. It is build-inherent and defaults to `false` when absent: a client
+connected to an older server does not send a presence message, and reports
+presence as unavailable to whatever asked for it.
+
+`sessionClose` advertises that the server ends one session on a
+`session.close` request (section 4.3.7) and leaves the connection and its other
+sessions open. It is build-inherent and defaults to `false` when absent: a
+client connected to an older server closes a session locally, and the server
+keeps the session attached until the connection closes.
+
+`connectionAuth` advertises that the server verifies `connection.auth`, and
+that a `session.open` may name an authenticated principal of its connection
+in place of carrying a signature (section 4.5.1). A server advertises it when
+its host verifies `connection.auth`; toolshed does under the
+`sharedMemoryConnection` experimental flag. It defaults to `false` when
+absent: a client then signs each `session.open`, one at a time, since each
+uses the connection's current challenge and receives the next.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -279,6 +309,9 @@ interface SessionOpenRequest {
   type: "session.open";
   requestId: string;
   space: SpaceId;
+  // An authenticated principal of the connection (section 4.5.1). A request
+  // naming one carries neither `invocation` nor `authorization`.
+  principal?: DID;
   session: {
     sessionId?: SessionId;
     seenSeq?: number;
@@ -368,6 +401,9 @@ Rules:
 
 - the client MUST open or resume a session before issuing any memory commands
   for that space on the current connection
+- a connection may hold sessions for several spaces, and several sessions for
+  one space, each opened as the principal its own `session.open` was
+  authorized as
 - `sessionId` is caller-supplied in the current pass when the client wants to
   resume an existing logical session; server-issued, principal-bound ids remain
   deferred
@@ -387,8 +423,9 @@ Rules:
 - a successful resume transfers ownership to the new connection, invalidates the
   old owner for that session, and MAY emit `session/revoked` to the previous
   owner with reason `"taken-over"`
-- a successful `session.open` rotates the one-time connection challenge and
-  returns the next challenge in `sessionOpen`
+- a successful `session.open` returns a new challenge in `sessionOpen` for
+  signed-open clients; a connection-auth client does not replace its audience
+  or held challenge from that response
 - a stale `sessionToken` MUST fail with `SessionRevokedError`
 - when a resumed session already has watches installed, `sync` carries the
   catch-up delta the client missed while offline
@@ -407,13 +444,20 @@ Rules:
   watch set if the session was reopened fresh — declaring its holdings on that
   `session.watch.set` (section 4.3.5) so the re-establishment carries the
   difference rather than the whole union
+- a retry after a failed handshake or session restoration discards the previous
+  transport connection before sending `hello` again. A connection accepts
+  `hello` only once; the fresh connection also supplies a new authentication
+  challenge. Mounted sessions retain their watch intent and unconfirmed commits
+  while they await restoration on that connection. A transport that cannot
+  discard its failed connection stops recovery with the original failure,
+  rejecting pending writes and restoration waiters instead of repeating `hello`
 - a `session.open` denied with an `AuthorizationError` the server did NOT mark
   `retriable` is permanent: the client stops reopening that session and
   terminates it with the real error rather than retrying the identical handshake
   forever. A `retriable` authorization race (an expired, used, or mismatched
-  challenge; a stale signed `exp`) and every transport-level disconnect still
-  retry, so a transient blip or a fresh-challenge race heals. A permanent
-  protocol-flag mismatch at `hello` ends the whole connection the same way. See
+  challenge; a stale signed `exp`) or a transport-level disconnect can recover
+  through retries on a transport that can discard its failed connection. A
+  permanent protocol-flag mismatch at `hello` ends the whole connection. See
   [`../../features/authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md)
   for how the client, the runner storage layer, and the CLI act on this
   classification end to end.
@@ -445,6 +489,9 @@ interface HelloMessage {
     entityIdLookup?: boolean;
     sessionHoldings?: boolean;
     sessionReadCeiling?: boolean;
+    presenceV1?: boolean;
+    sessionClose?: boolean;
+    connectionAuth?: boolean;
   };
 }
 
@@ -458,10 +505,20 @@ interface RequestMessage {
     | "session.watch.set"
     | "session.watch.add"
     | "session.ack"
-    | "event.attention.resolve";
+    | "session.close"
+    | "event.attention.resolve"
+    | "presence.join"
+    | "presence.publish"
+    | "presence.leave";
   requestId: string;
   space: SpaceId;
   sessionId?: SessionId;
+}
+
+/** Requests about the connection itself, which name no space. */
+interface ConnectionRequestMessage {
+  type: "connection.auth" | "connection.challenge" | "connection.release";
+  requestId: string;
 }
 ```
 
@@ -490,9 +547,10 @@ Per-commit invocation / authorization persistence is deferred in this pass.
 
 Every position where a message names fields holds a plain object. Those
 positions are the message itself, and within it `session`, `invocation`,
-`commit`, `query`, `db`, `db.tables`, each entry of `holdings`, and a
-`hello` message's `flags`. Both sides refuse anything else there, and the
-refusal is the one a string or a number in that position gets.
+`commit`, `query`, `db`, `db.tables`, each entry of `holdings`, a
+`hello` message's `flags`, and a `presence.publish` message's `facets`
+together with each value in it. Both sides refuse anything else there, and
+the refusal is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
 records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
@@ -506,6 +564,34 @@ The `signature` of a `session.open` authorization is a `FabricBytes`, and
 a `transact` commit carries links inside the documents it writes. The
 requirement is on the container, not on what the container holds.
 
+#### Slots in a message
+
+A server bounds the work one client message can cost it by the number of
+slots the message stands for, as well as by its size. A slot is an array
+element or a record member written in the message, and a run of holes adds
+one slot for each hole past the first that it stands for. The count is what
+bounds the work of a small message that stands for a great deal: a run of
+holes is written as a count, so a few bytes can stand for billions of slots,
+and a compressed envelope can expand a small frame into millions of elements.
+The size of the text itself, including one long string, is bounded separately
+by the 256 MiB limit on an expanded envelope.
+
+A message standing for more than 1,000,000 slots is refused before it is
+parsed: its elements and members are counted by scanning its text, and its
+holes before any of the parsed message is walked. When the message's root
+record names a string `requestId`, the refusal is a `response` on that
+request, with error name `MessageTooLargeError`, so the request fails rather
+than waiting forever. Otherwise the refusal is the one any unreadable message
+gets: a `response` with `requestId: "invalid"` and error name
+`InvalidMessageError`.
+
+The limit applies to every message a client sends. A `session.open` declaring
+holdings costs three slots or more per holding, so a replica declaring more
+than about 330,000 holdings in one space cannot resume. The limit does not
+apply to what a server reads from its own storage, or to what a client reads
+from a server, since a stored document may stand for more slots than one
+message may.
+
 ### 4.2.2 Server → Client: Response and Session Effect
 
 The server sends:
@@ -513,6 +599,8 @@ The server sends:
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
 - `session/revoked` when a session loses ownership to a newer connection
+- `presence/upsert` and `presence/remove` for the presence rooms the
+  session has joined (section 4.13)
 
 ```typescript
 // Shown at module scope.
@@ -933,7 +1021,42 @@ Semantics:
 - watch mutations are applied in order per session; clients must serialize
   `session.watch.set` and `session.watch.add`
 
-### 4.3.7 Branch Lifecycle Commands
+### 4.3.7 `session.close` — End One Session
+
+`session.close` ends a session and leaves the connection open. A client that
+holds sessions for several spaces on one connection uses it to release one of
+them.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface SessionCloseRequest {
+  type: "session.close";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+}
+
+/** `ok` of the response. */
+type SessionCloseResult = Record<string, never>;
+```
+
+Semantics:
+
+- the session leaves the connection: a later request naming it gets a
+  `SessionError`, and the server sends it no further `session/effect`
+- the session's presence memberships end, and the rooms' other members are
+  told (section 4.13.1)
+- the session stays resumable for the detach grace a session keeps after its
+  connection closes, so a client that opens it again soon after, presenting
+  its latest `sessionToken`, resumes it
+- the connection's other sessions are unaffected
+- a `session.close` naming a session the connection does not hold gets a
+  `SessionError`
+
+### 4.3.8 Branch Lifecycle Commands
 
 Branch create / delete / merge lifecycle commands are not currently exposed on
 the v2 wire. The engine already carries branch state internally, but public wire
@@ -954,7 +1077,8 @@ Write-class requests may carry `invocation` / `authorization` payloads so they
 can be persisted alongside accepted commits, but the current wire protocol
 still uses plain JSON envelopes rather than full UCAN message framing.
 
-On memory WebSocket routes, `session.open` itself is authenticated:
+On memory WebSocket routes, `session.open` itself is authenticated, in one of
+two ways. A signed `session.open` carries its own authorization:
 
 - the request must carry `invocation` and `authorization`
 - `invocation.cmd` must be `"session.open"`
@@ -971,6 +1095,100 @@ On memory WebSocket routes, `session.open` itself is authenticated:
 - the signature must verify against `invocation.iss` for the hash of
   `invocation`
 
+A `session.open` naming a `principal` rests on the connection's
+authentication of that principal, where the server advertises
+`connectionAuth`. A key authenticates at connection level and renews before
+its lease expires:
+
+```typescript
+// Shown at module scope.
+type DID = string;
+
+interface ConnectionAuthInvocation {
+  iss: DID;
+  cmd: "connection.auth";
+  aud: DID;
+  args: { protocol: "memory" };
+  challenge: string;
+  iat: number;
+  exp: number;
+}
+
+interface ConnectionAuthRequest {
+  type: "connection.auth";
+  requestId: string;
+  invocation: ConnectionAuthInvocation;
+  authorization: { signature: Uint8Array };
+}
+
+/** `ok` of the response. */
+interface ConnectionAuthResult {
+  principal: DID;
+  /** Unix second the authentication runs out at. */
+  expiresAt: number;
+}
+
+interface ConnectionChallengeRequest {
+  type: "connection.challenge";
+  requestId: string;
+}
+
+/** `ok` of the response. */
+interface ConnectionChallengeResult {
+  challenge: { value: string; expiresAt: number };
+}
+
+interface ConnectionReleaseRequest {
+  type: "connection.release";
+  requestId: string;
+  principal: DID;
+}
+```
+
+- `invocation.cmd` must be `"connection.auth"` and `invocation.args.protocol`
+  the memory protocol
+- `invocation.aud` must match the server audience from `hello.ok`
+- `invocation.challenge` must be a challenge the server issued on this
+  connection — in `hello.ok`, in a `session.open` response, or in response to
+  `connection.challenge` — that has not expired and that `invocation.iss` has
+  not already signed
+- `invocation.exp` must not be expired beyond the server clock-skew grace
+- the signature must verify against `invocation.iss` for the hash of
+  `invocation`
+
+A challenge that is unknown to the connection, expired, or already signed by
+the same key is refused with a `retriable` `AuthorizationError`; every other
+refusal is permanent. One challenge accepts several keys, once each, so
+authenticating two keys needs no ordering between them. A client holding no
+usable challenge asks for one with `connection.challenge`.
+
+An authentication is a lease. It runs out at the invocation's `exp`, or an
+hour after it was accepted, whichever is sooner, and the response says
+which. From then on a `session.open` naming the principal is refused, a
+request on a session opened as it is refused with a `retriable`
+`AuthorizationError`, and such a session is sent no `session/effect`. A new
+`connection.auth` for the same key, over a challenge of its own, renews the
+lease: the sessions are served again, each evaluated in full so nothing it
+missed is lost. A client renews ahead of the end. A `connection.release`
+ends the authentication early and leaves the sessions the principal opened
+under the lease they had. A connection holds at most 64 principals, and a
+`connection.auth` for a new one past that is refused, permanently, until one
+is released.
+
+A `session.open` naming a principal the connection has not authenticated is
+refused with a permanent `AuthorizationError`. One naming an authenticated
+principal is admitted as that principal exactly as a signed open is admitted
+as its verified issuer: the space's ACL decides what the session may do, and
+a resume by a principal other than the one the session is bound to is
+refused. It uses no challenge, so such opens are handled concurrently across
+spaces. Its session descriptor is not signed; the connection is what
+authenticates the sender.
+
+A signed `connection.auth` authorizes more than a signed `session.open`
+does: every space its key can reach through this server while its lease and
+connection remain valid, where a signed open is good for one space. The
+challenge binds it to one connection.
+
 Opening a previously unused space may initialize empty backing storage, but
 `session.open` is not itself a logical write or claim.
 
@@ -980,17 +1198,26 @@ the space ACL document (wire entity id `of:<space DID>`) for every command:
 | Stored ACL state | Effective access |
 | --- | --- |
 | valid ACL with a concrete OWNER | Explicit principal grant, then `"*"`; normal READ < WRITE < OWNER ordering |
-| never-created ACL, server sequence 0 | Authenticated READ only; the first write must be a valid ACL-only genesis by the space identity or a service DID |
+| never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
 
-The exact space DID and configured service DIDs retain implicit OWNER so they
-can initialize or repair ACL state. A valid ACL mutation is a whole-document,
+Configured service DIDs hold implicit OWNER on every space, so they can
+initialize or repair ACL state. The exact space DID holds OWNER only while the
+space has no ACL document and no history, which is what genesis needs and all
+it needs; after that it holds what the ACL grants it, like any other principal.
+A space DID therefore cannot repair a malformed or retracted ACL, and cannot
+claim a populated space that has none. A valid ACL mutation is a whole-document,
 space-scoped replacement on the default branch and must retain at least one
 concrete (non-`"*"`) OWNER. Patch, deletion, mixed ACL/data commits, and
 last-owner removal are rejected. These shape and genesis rules are hard
 storage invariants in both `observe` and `enforce`; `observe` relaxes only
-ordinary capability shortfalls on an already valid ACL.
+READ and WRITE shortfalls on an already valid ACL, and refuses a principal
+lacking OWNER, so no principal can write a space's ACL while a deployment
+stages its access control. The one ACL mutation a principal without OWNER may
+make, in both modes, is removing its own entry: a replacement whose document is
+the stored one less that principal's entry, and nothing else, from a list with
+no `"*"` entry.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority) in
@@ -1001,25 +1228,23 @@ that writes the ACL through an ordinary value-surface `set` emits `op: "patch"`
 and is refused with "ACL mutations must replace the space-scoped ACL document";
 it must address the whole document instead.
 
-Genesis remains an explicit transaction. For a fresh named space, the storage
-manager briefly authenticates as the derived space identity, writes the genesis
-document against a confirmed absent ACL, closes that bootstrap session, and
-mounts the durable session as the active user. The document is whichever the
-caller registered beside the space key
-(`registerSpaceIdentity(identity, { genesisAcl })` — the space is then born
-with exactly that ACL, this admission check is the only validation it
-receives, and an open of a space that already exists proceeds only if it is
-owned exactly as that document says — grants below OWNER are the owner's to
-evolve — else is refused), else the fallback
-`{ [activeUser]: "OWNER", "*": "WRITE" }`. The wildcard grant is the rollout
-default until ACL management has a UI, spelled once as the runner's
-`DEFAULT_GENESIS_GRANTS`; the active user remains the concrete owner who can
-later narrow it. This preserves user/session-scoped partitioning. When the
-active identity already is
-the space DID (the home space), the same flow instead writes
-`{ [space]: "OWNER" }`; that narrow path also privatizes a populated legacy
-home with no ACL. Populated named spaces with no ACL remain public under the
-compatibility row above.
+Genesis remains an explicit transaction, and creating a space is the only
+thing that writes one. A create action generates a fresh key pair from random
+data, opens one session authenticated as that key through the same route every
+later session for the DID takes, and commits the genesis document against a
+confirmed absent ACL: the creator as OWNER, together with any grants the
+creator chose (`StorageManager.createSpace(acl, root?)`, reached as
+`Runtime.createSpace()`). The key is used for nothing else, and is dropped once
+the commit is confirmed. The creator is the concrete owner, and can later grant
+access to other principals or to `"*"`. Opening a DID that has no history
+writes nothing: it is not a space, and stays that way.
+
+The one space born on open is a Home space, whose DID is its user's own. When
+the active identity is the space DID and the space has no ACL document and no
+history, the storage manager's first mount writes `{ [space]: "OWNER" }` in a
+temporary bootstrap session and then mounts the durable session. A populated
+Home space with no ACL document is left as it stands. Populated spaces with no
+ACL remain public under the compatibility row above.
 
 The server's unauthenticated `writeDocument` operator path cannot create a
 fresh space or mutate the ACL document while ACL policy is active. Its access
@@ -1250,6 +1475,20 @@ Clients MUST:
 The server processes writes serially within a branch, or with equivalent
 serializable isolation.
 
+A connection handles the frames it is handed in turns, and a turn is per space.
+A frame naming a space is handled after the frames handed over before it for
+that space, and after every frame naming no space that was handed over before
+it. A frame handled in the connection's own turn — `hello`, a `connection.*`
+request, a message the server cannot read, and a signed `session.open`, which
+uses the connection's one current challenge — is handled after every frame
+handed over before it, so a `session.open` handed over behind the
+`connection.auth` it depends on finds its principal authenticated, and two
+signed opens handed over together are handled one at a time whatever spaces
+they name. Frames for different spaces on
+one connection do not wait for each other, so a `transact` waiting for its
+space's publication lock delays nothing addressed to another space. Presence
+messages stay outside these turns (section 4.13.4).
+
 For live sync, transact verdicts return INLINE before the independently batched
 fan-out: N commits can apply against one watch-union recompute, which is where
 the subscription pipeline's throughput comes from. A per-space publication lock
@@ -1328,3 +1567,210 @@ view — so no frame stream to order against) also applies immediately.
 | Per-subscription routing                   | Watch-set union + session cache                           | Overlap is deduped at the session layer                   |
 | Re-subscribe each live query independently | Restore one watch set                                     | The client still restores interests after reconnect       |
 | Hash-centric semantic commit identity      | `(sessionId, localSeq)` before accept, `seq` after accept | UCAN envelope refs remain content-addressed               |
+
+## 4.13 Presence
+
+Presence is the ephemeral, per-participant state one client shows another —
+a display name with a caret and selection, a pointer — relayed over the
+memory connection because every client already holds one. It shares the
+connection, the `hello` negotiation, and the session's admission to a space,
+and nothing else of the memory protocol: a presence message is not a commit,
+carries no `seq`, is never acknowledged, and is handled outside the ordered
+frame queue the commands wait in. The server keeps room state in memory only
+and forgets a participant the moment their membership ends. The server
+advertises the capability as `presenceV1` (section 4.1.1).
+
+### 4.13.1 Rooms and Membership
+
+A room is addressed by an opaque identifier under a space. Joining requires an
+open session for that space on the same connection: space access, decided by
+the memory ACL, is what admits a participant, and there is no separate
+presence authentication. A membership belongs to one session on one
+connection, and a session is in a room at most once. Two sessions on the same
+connection each hold a membership of their own, with a participant id of its
+own, and neither can publish under or end the other's. Several observers of
+one room on a client share the one membership their session holds.
+
+The server assigns the participant id at join and identifies every later
+publication by the membership it arrives on, never by a claimed id. A
+membership ends, and the room's other members are told, on an explicit
+`presence.leave`, on the connection closing, on a `session.close` of the
+joining session, and on the joining session being revoked or detached — a
+takeover by another connection resuming the same session included.
+
+### 4.13.2 Record
+
+```typescript
+// Shown at module scope.
+
+import type { FabricValue } from "@commonfabric/api";
+/** Latest published state of one room participant. */
+interface PresenceRecord {
+  /** Server-assigned id for this membership; unpredictable and never reused. */
+  participantId: string;
+
+  /**
+   * DID the publishing session was opened as, stamped by the server from
+   * its session registry. Absent when the session has no bound principal.
+   */
+  principal?: string;
+
+  /** Strictly increasing within one membership. */
+  revision: number;
+
+  /** Plain-text display name, bounded; never rendered as HTML. */
+  name: string;
+
+  /**
+   * Per-kind state keyed by facet name: each facet a record of fabric values.
+   * The server bounds the map and reads nothing inside a facet; a consumer
+   * decodes the facets it knows and ignores the rest.
+   */
+  facets: Record<string, Record<string, FabricValue>>;
+}
+```
+
+The server holds a publication to these bounds and refuses one outside them
+with a `PresenceError` on the request's own response; the connection and its
+sessions are unaffected:
+
+| Bound | Value |
+| --- | --- |
+| Room id | `^[A-Za-z0-9_-]{22,128}$` |
+| Display name | 1–80 code points, ≤ 256 UTF-8 bytes, no control or surrogate code points |
+| Facet name | `^[a-z][a-z0-9-]{0,31}$` |
+| Facets per record | ≤ 8 |
+| Published record | ≤ 8 KiB, name and facets wire-encoded |
+| Members per room | ≤ 128 |
+
+### 4.13.3 Messages
+
+Client to server, each a request envelope that receives a `response`:
+
+```typescript
+// Shown at module scope.
+
+import type { FabricValue } from "@commonfabric/api";
+type SpaceId = string;
+type SessionId = string;
+
+interface PresenceJoinRequest {
+  type: "presence.join";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+}
+
+/** `ok` of the join response. */
+interface PresenceJoinResult {
+  participantId: string;
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+}
+
+interface PresencePublishRequest {
+  type: "presence.publish";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+  revision: number;
+  name: string;
+  facets: Record<string, Record<string, FabricValue>>;
+}
+
+interface PresenceLeaveRequest {
+  type: "presence.leave";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+}
+
+interface PresenceRecord {
+  participantId: string;
+  principal?: string;
+  revision: number;
+  name: string;
+  facets: Record<string, Record<string, FabricValue>>;
+}
+```
+
+A join on a membership that already exists returns the same participant id
+and a current snapshot. A publish before a join, and a publish whose
+`revision` does not exceed the membership's last accepted one, are refused
+with a `PresenceError`. A leave by a session that is not a member does
+nothing. A member that has never published is in no snapshot and announced to
+nobody.
+
+Server to client, pushes with no request id, addressed to the session the
+receiving membership joined through:
+
+```typescript
+// Shown at module scope.
+
+import type { FabricValue } from "@commonfabric/api";
+type SpaceId = string;
+type SessionId = string;
+
+interface PresenceUpsert {
+  type: "presence/upsert";
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+  participant: PresenceRecord;
+}
+
+interface PresenceRemove {
+  type: "presence/remove";
+  space: SpaceId;
+  sessionId: SessionId;
+  room: string;
+  participantId: string;
+}
+
+interface PresenceRecord {
+  participantId: string;
+  principal?: string;
+  revision: number;
+  name: string;
+  facets: Record<string, Record<string, FabricValue>>;
+}
+```
+
+### 4.13.4 Ordering
+
+The connection parses each frame as it is handed to it. A `presence.*`
+message is handled at that point; every other message waits for its turn
+(section 4.11.2), so a presence message never waits for the commands already
+waiting there. The WebSocket hosts hand each frame to the connection as soon
+as the frame before it has been handed over, without waiting for that one to
+be handled, so a presence frame behind a large `transact` on the same socket
+reaches the room while the command is still being decided.
+
+Within one membership the revision orders publications: the server relays only
+a record whose revision exceeds the last it accepted for that membership, and
+a client applies only a record whose revision exceeds the last it holds for
+that participant. Outbound, presence pushes take the same send path as every
+other server message, which preserves order.
+
+### 4.13.5 Client Library
+
+`SpaceSession.joinPresenceRoom(room, observer)` returns a membership after
+delivering the room's current snapshot to the observer. Several observers may
+join one room on a session and share one membership and one published record.
+`publish()` sends the record at the next revision without waiting; a
+publication overtaken by a newer one before it is sent is dropped, and one the
+server refuses reaches the observer as a `failure` event. A session restore
+rejoins every room the session was in, delivers the new snapshot — the server
+assigned a new participant id with the new connection — and republishes the
+last record at a fresh revision. A session that terminates ends its rooms with
+a `failure` event carrying the cause, and nothing follows it.
+
+## Routed public-stage Mode A
+
+The opt-in router path uses the dedicated [Mode A contract](routed-mode-a.md):
+router-audience client signatures, attested issuance and exact-byte receipt,
+single-use socket-bound tickets, durable replay custody and independent toolshed
+ACL/ownership checks. Direct Memory hosts keep the protocol described above.

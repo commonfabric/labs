@@ -18,6 +18,7 @@ export type BuiltinToolId =
   | "resolve_piece"
   | "describe_handle"
   | "finish_task"
+  | "weaver_action"
   | "search_patterns"
   | "record_feedback"
   | "search_skills"
@@ -163,6 +164,15 @@ export const LOOM_RETRIEVAL_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
 ]);
 
 /**
+ * The tool that asks the person's client to act mid-turn. It exists only when
+ * the host opted the run in by supplying the door it waits on, and it is
+ * never a default parent tool.
+ */
+export const CLIENT_ACTION_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set(
+  ["weaver_action"] as const,
+);
+
+/**
  * The tool a run returns its structured result through. It exists only in a
  * run configured with a structured-result schema; elsewhere there is nothing
  * for a submission to be validated against or recorded as.
@@ -196,6 +206,9 @@ export interface HarnessToolBackingAvailability {
 
   /** Whether the run was configured with a structured-result schema. */
   structuredResultAvailable?: boolean;
+
+  /** Whether the host opted this run in to asking the client to act. */
+  clientActionsAvailable?: boolean;
 }
 
 /** The gated tools this run cannot back, and so does not offer. */
@@ -223,6 +236,7 @@ export const withheldToolIds = (
     ...(availability.structuredResultAvailable
       ? []
       : STRUCTURED_RESULT_TOOL_IDS),
+    ...(availability.clientActionsAvailable ? [] : CLIENT_ACTION_TOOL_IDS),
   ]);
 
 /**
@@ -255,6 +269,7 @@ export const parentToolIdsForBacking = (
     ...(availability.structuredResultAvailable
       ? STRUCTURED_RESULT_TOOL_IDS
       : []),
+    ...(availability.clientActionsAvailable ? CLIENT_ACTION_TOOL_IDS : []),
   ].filter((toolId, index, ids) =>
     !withheld.has(toolId) && ids.indexOf(toolId) === index
   );

@@ -91,7 +91,10 @@ node-based analyzer, a printed node gives way to the caller's own type at that
 position when that type carries something, and to the type the node was
 printed from when the caller's is `any`, `unknown`, or an unbound type
 parameter. The schema hints attached to the node still apply, through the
-context's `hintsNode`.
+context's `hintsNode`. A printed member of a type literal the caller built reads
+as the property would in the object type the literal stands for: a callable is
+left out, unless calling it makes a stream, a cell, or a database, which reads
+as that wrapper's `asCell`, with the UI contract hint the member carries.
 
 A print can carry syntax its type does not: in place of printing a type, the
 checker writes a member's own annotation where it denotes the member's type,
@@ -149,7 +152,9 @@ reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
 one per schema, naming each unread type once. An authored `any`, or a name
 declared as `any`, is a reading, not a guess, and is not reported; nor is a
 guess inside an intersection that accepts nothing, which leaves nothing of it in
-the schema.
+the schema. Reaching the nesting limit of a CFC alias chain instead reports
+`cfc-schema:recursion-limit` as an error: the unread remainder could discard
+policies, so compilation must refuse the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
@@ -291,8 +296,8 @@ by any repo test.
 | Dictionary with both string and number index | treated as object map, not array | `type-utils.ts` | untested directly |
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties` (checker-driven property enumeration) | via `ObjectFormatter`; fixture `record-union-keys` | record-mapped-types.test.ts |
-| Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property | skip: `type-utils.ts`, `object-formatter.ts`; exception: `object-formatter.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
-| `FabricPrimitive` class (`FabricBytes`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
+| Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
+| `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
@@ -367,9 +372,10 @@ same-named types emit `$ref`s to it.
 `NATIVE_TYPE_SCHEMAS` (`src/formatters/native-type-formatter.ts`), as of
 this writing: `VNode` →
 `{ $ref: "https://commonfabric.org/schemas/vnode.json" }`; `Date`, `RegExp`,
-and `Uint8Array` → `{ type: "object" }`; the seven `FabricPrimitive` classes
-(`FabricBytes`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`,
-`FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) → `{ type: "<Name>" }`
+and `Uint8Array` → `{ type: "object" }`; the nine `FabricPrimitive` classes
+(`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`,
+`FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`,
+`FabricUnavailable`) → `{ type: "<Name>" }`
 (the `FabricPrimitive`
 schema
 vocabulary, each name being the `.schemaType` its class's instances report);
@@ -454,12 +460,15 @@ get synthetic `$defs` names `AnonymousType_N` (`ensureSyntheticName`; fixture
 the `$ref`-with-siblings shape `{ "$ref": "#/$defs/AnonymousType_1", "asCell":
 ["cell"], "default": [] }`).
 
-Stack keys are specialized for `Default` and wrapper reference nodes —
-kind + type flags + argument text + file + position instead of type identity
-(`createStackKey`) — because TypeScript reuses one type object for
-identical wrapper instantiations at different positions, which would otherwise
-create false cycles (fixtures `nested-default-aliases`,
-`default-array-recursive`).
+A wrapper (`Default`, a cell, a scope wrapper around a cell) is not a cycle's
+entry, because TypeScript reuses one type object for identical wrapper
+instantiations at different positions, which would otherwise create false
+cycles; the cycle is found at the wrapper's value instead (fixtures
+`nested-default-aliases`, `default-array-recursive`). Nor is `never`, which
+holds no type and so is never met inside itself. A wrapper the checker reduces
+to `never` has `never` for its own type and for its payload's:
+`PerUser<never>` is `never & brand`, which is `never`, and its payload is read
+as the value it wraps (§10), not as its recursion.
 
 **Dead computation (observed implementation note):** every run performs a full
 DFS cycle pre-pass (`getCycles`, using `safe*` wrappers that
@@ -588,7 +597,12 @@ pre-cleanup schemas.
   formats member-wise, preserving `{ type: "undefined" }` / `{ type: "null" }`,
   skipping conditional/type-parameter members, deduping identical member
   schemas (`isWrapperUnion` / `formatWrapperUnion` / `maybeWrapInAnyOf`).
-  Mixed unions fall to `UnionFormatter`. Primitive alternatives merge only
+  Mixed unions fall to `UnionFormatter`. A wrapper that CFC labels hold, as
+  `Confidential<Cell<T>, …>` does, is a labeled value rather than a wrapper
+  here: a union holding one falls to `UnionFormatter`, which reads it through
+  its CFC alias, so `Confidential<Cell<string>, ["b"]> | undefined` keeps
+  `ifc` on the cell's alternative (tested: cfc-authoring "a labeled cell that
+  may be missing", the runner's cfc-labeled-cell-input). Primitive alternatives merge only
   when both schemas contain exclusively `type` and `enum`; metadata-bearing
   alternatives, including Cell wrappers, remain separate even when their
   underlying primitive types match.
@@ -750,7 +764,7 @@ defaults-no-def-mutation.test.ts).
 `UnionFormatter` (`src/formatters/union-formatter.ts`), after the
 Default paths of §7:
 
-- **Nullable special case**: exactly one non-null member + `null` →
+- **Nullable special case**: exactly one non-null alternative + `null` →
   `{ anyOf: [<member>, { type: "null" }] }` — `anyOf` over `oneOf`
   deliberately, "for better consumer compatibility" per the nullable-case
   comment in `union-formatter.ts`. Emission order is member-first; goldens
@@ -772,9 +786,14 @@ Default paths of §7:
   **`type` arrays** — how `string | undefined` becomes
   `{ type: ["string","undefined"] }` (fixture `default-with-undefined-union`).
   Singletons unwrap.
-- **`widenLiterals`** additionally merges structurally-identical-modulo-enum
-  member schemas before the anyOf pass (`mergeIdenticalSchemas`). It does
-  **not** reach the all-literal path:
+- **`widenLiterals`** additionally merges member schemas that differ only in
+  their literal values, an `enum` or a `const` whose values share one base
+  type, widening those to that type, before the anyOf pass
+  (`mergeIdenticalSchemas`). Every other keyword, at any depth, must match
+  for members to merge, and the merged member keeps it: a cell and a plain
+  value of one type, two cells under different labels, two named types (two
+  `$ref`s), and literals of more than one type all stay separate members.
+  It does **not** reach the all-literal path:
   `"a" | "b"` still emits `{ enum: ["a","b"] }` under `widenLiterals: true`
   (probe; the all-literal `enum` branch runs first and never consults the
   flag).
@@ -783,6 +802,41 @@ Default paths of §7:
   union order. Union alias nodes resolve through non-generic alias
   declarations to recover member nodes (`getUnionTypeNode`).
   Empty unions **throw**.
+- The checker folds a member that is itself a union into the union it is a
+  member of, so one member node can stand for several members
+  (`pairUnionMemberNodes`, which `#labelsOf` in `schema-generator.ts` reads
+  members through as well):
+  - A member node that writes a union, through parentheses and aliases
+    without type parameters, pairs through the members it writes, each read
+    at its own node. `Shape | null`, with `type Shape = A | B`, stays
+    `{ anyOf: [{ type: "null" }, A, B] }`.
+  - A member node whose type is a union it does not write, such as
+    `Confidential<A | B, …>`, which the checker distributes into `A & …` and
+    `B & …`, pairs with none of them. In the general case it is read once,
+    as one alternative for all of them, where it is a CFC alias that
+    `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
+    `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
+    only the node can spell, as a `PolicyOf<typeof rules>` binding. Several
+    such nodes can stand for the same members, as two whose policies differ
+    only in a `typeof` binding do where the bindings have one type, and each
+    is an alternative of its own, in the order written. Its members are
+    otherwise read by their types: `boolean` stands for `true` and `false`,
+    `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
+    §10's.
+- The checker can also collapse several written CFC alternatives into a
+  single semantic member. Each remains an alternative of its own, including
+  `Confidential<A, [PolicyOf<typeof readers>]> |
+  Confidential<A, [PolicyOf<typeof writers>]>` when `readers` and `writers`
+  have the same declared type. This applies with or without `null`, and when
+  the payload is itself a union. Where accepted CFC nodes share a semantic
+  member, the written union is read before type-only CFC dispatch and before
+  tracking that type as a cycle (`UnionFormatter.formatCollapsedUnion`).
+  The alternatives sharing a member are themselves read inline, so an
+  anonymous recursive definition cannot identify distinct policy bindings as
+  one reading (`GenerationContext.inlineUnionMember`). Each alternative's
+  payload still follows the usual definition and cycle rules. Tested:
+  cfc-authoring.test.ts, narrowed-capture-labels.test.ts, and
+  the runner's cfc-narrowed-capture-floor.test.ts.
 
 ## 9. Intersections
 
@@ -818,11 +872,13 @@ as a type's aliasSymbol, so `type Rec = PerUser<Inner>` reads as `Rec`, and
 only the chain finds the wrapper. The chain ends at a wrapper's name, so
 `Scoped<T, S>`, the type the four are declared with, is not read as one
 written directly. The payload of a wrapper found that way is
-the wrapper's first argument, with the arguments of each generic alias along
-the chain substituted for its parameters, the same walk that lowers a CFC alias
-reached through aliases (§11): `type Rec<T> = PerUser<{ value: T }>` read as
-`Rec<string>` → `{ type: "object", properties: { value: { type: "string" } },
-required: ["value"], scope: "user" }`. Aliases are followed by declaration,
+the wrapper's first argument as the last alias along the chain writes it, read
+with each generic alias's parameters bound to the arguments written for them,
+the same walk that lowers a CFC alias reached through aliases (§11):
+`type Rec<T> = PerUser<{ value: T }>` read as `Rec<string>` →
+`{ type: "object", properties: { value: { type: "string" } },
+required: ["value"], scope: "user" }`, and a generic declaration the payload
+names, as in `PerUser<Box<T>>`, reads with the argument too. Aliases are followed by declaration,
 bare or namespace-qualified (`cf.PerUser<T>`), so two same-named aliases in
 different modules do not stop the walk. Such a type is not hoisted (§5.1), and
 is a scope wrapper for the union rule below. Tested: scope-wrappers.test.ts,
@@ -840,6 +896,20 @@ scopes.`; tested, scope-wrappers.test.ts). With a cell boundary
 both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).
+
+A payload whose schema is a boolean becomes an object for the scope to sit on:
+`PerUser<any>` → `{ scope: "user" }`, and a payload that accepts nothing →
+`{ not: true, scope }`. `never & brand` is `never`, so a wrapper around
+`never`, or around a payload the checker reduces to it such as
+`string & number`, has no type of its own, and a node naming the wrapper is
+what keeps its scope: `PerUser<never>` → `{ not: true, scope: "user" }` at the
+root and as a property, and `Cell<PerUser<never>>` →
+`{ not: true, scope: "user", asCell: ["cell"] }` (tested,
+scope-wrappers.test.ts, and end-to-end in ts-transformers
+`never-payload-schema.test.ts`). Where no node names the wrapper, `never`
+carries no alias or brand to find it by, so an alias of one
+(`type Rec = PerUser<never>`), a record's values, and a tuple's elements lower
+as `never` does, to `false`.
 
 The payload is read from the node when a node names the wrapper, so that
 structure only the node carries reaches the schema. The wrapper type's own
@@ -905,10 +975,12 @@ inside those payloads.
 | `WriteAuthorizedBy<T, typeof b>` | `{ writeAuthorizedBy: { __ctWriterIdentityOf: { file, path: [binding], moduleIdentity? } } }` |
 | `TrustedActionWriteWithIntegrity<…>` | writeAuthorizedBy metadata + `uiContract { helper: "UiAction", action, trustedPattern, requiredEventIntegrity }` |
 | `TrustedActionWrite<…>` | same, with `requiredEventIntegrity` defaulting to `[trustedPattern]` |
+| `WritePolicyAnyOf<T, [P, …]>` | `{ writePolicyAnyOf: [p, …] }`, each `p` the lowering of one member `P` — a `WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` over `unknown`, directly or through a user alias. The tuple must be written in place and nonempty, with no optional or rest member, and each member must lower to a writer; otherwise generation throws |
 | `TrustedActionUiContract<…>` | `{ uiContract: { helper: "UiAction", action, trustedPattern, requiredEventIntegrity? } }` |
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |
-| `ProjectionOf<T, P>` / `Projection<T, P>` | `{ projection: { from: "/", path: P } }` |
+| `ProjectionOf<T, P>` | `{ projection: { from: "/", path: P } }` |
+| `Projection<SourceRef>` | what the checker resolves it to: `ProjectionOf<Root, Path>` for a `Ref<Root, Path>`, `never` for anything else, member by member for a union |
 
 Mechanics:
 
@@ -925,61 +997,282 @@ Mechanics:
   own declaration as ordinary metadata.
   An authored wrapper around a library alias is also read from its declaration,
   preserving any binding fixed inside the wrapper.
+- `Projection` is a conditional type, so the lowering never follows it by
+  syntax: a user alias chain that reaches it stops there, and the type written
+  with it is read as the checker resolved it, as the direct spelling is.
 - A canonical alias reached by its own name reads its payload, like its
-  labels, from the reference's own argument nodes. A payload that is itself a
+  labels, from the reference's own argument nodes when that reference names
+  the same alias. A reference to a conditional alias whose one branch other
+  than `never` names the canonical alias holds its arguments as that branch
+  writes them: an argument that is one of the conditional alias's parameters
+  is the reference's argument for it, and one holding no parameter is itself.
+  An argument holding a parameter the conditional checks or infers is read
+  from its type, since the checker binds such a parameter member by member,
+  and so is any other argument that holds a parameter without being one
+  (`T[]`, `keyof T`).
+  Any other reference to an alias the checker resolved to it (`MyProjection<R>`
+  to `ProjectionOf<Root, Path>`) holds that alias's arguments, so the canonical
+  alias is read from its type alone. A `WriteAuthorizedBy` written through
+  another alias, whose binding neither way reads, is the
+  `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
+  since its schema would carry no write restriction. A binding node that is
+  not a direct `typeof` of an identifier reports the same error, including an
+  alias for `typeof writer` passed through another alias's parameter: its type
+  does not stand in for the written binding. A parameter bound only to a type,
+  with no argument node, remains a type-only read rather than an authored
+  indirect binding and is not reported by this check. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
   `AnyOf` clauses. A named type in the payload stays a `$ref` to its
   definition.
+- A policy's type can lose its alias name. A payload member its metadata
+  carrier cannot intersect is reduced away: `Confidential<string | null, L>` is
+  `string & carrier`, and `Confidential<null, L>` is `never`. A rewrite such as
+  `NonNullable<…>`, which intersects with `{}`, drops the name too. A written
+  reference that names the policy still lowers it from its own arguments,
+  `null` and a `typeof` writer binding included. A payload that is itself
+  `never`, as in `Confidential<never, L>` or `Confidential<string & number, L>`,
+  accepts nothing, and lowers to `{ not: true, ifc }` like any payload whose
+  schema is `false`, whether written directly or through an alias (`type Sec<T>
+  = Confidential<T, L>`, `Sec<never>`). Read from a type alone, the value is its
+  one member besides the carriers, labelled with each carrier's metadata as its
+  types spell it (`cfcCarriedParts`), provided every value in it reads. A writer
+  binding, which only a `typeof` node names, does not, and a policy read in part
+  could claim what its author never wrote together, such as an `ownerPrincipal`
+  without its `writeAuthorizedBy`. Then the value is its payload alone. The
+  `null` the checker dropped is in the schema neither way.
+- A default-library alias that maps an object's members (`Readonly`,
+  `Partial`, `Required`, `Pick`, `Omit`) does not keep a labelled operand's
+  carrier as a member of its own: over an object it folds the carrier into
+  the object it builds, as one more property, which `Pick` may leave out,
+  and over a primitive it builds an object of the primitive's methods. Read
+  by type, such an alias over a labelled operand (an intersection holding
+  carriers, or such an alias in turn) is the type the checker builds, read
+  as any other type is and never holding the carrier, labelled with the
+  operand's labels, read from its carriers in full or not at all. Only
+  where `Readonly`, `Partial` or `Required` stands over a primitive, which
+  such an alias leaves as it is, is the value the primitive. So
+  `Readonly<Sec<string>>` is a labelled string, `Pick<Sec<string>,
+  "length">` a labelled `{ length: number }`, a recursion through
+  `Partial<Node>` a definition of its own, and `Pick<Sec<X>, "a">` keeps the
+  label though `Pick` drops the carrier. The checker names a `Pick` or an
+  `Omit` over literal keys by a user's alias of it, and holds that alias's
+  arguments, so an alias whose whole body references another alias is
+  followed to it, down a chain of such aliases, until it reaches one of
+  these; a chain that reaches anything else, or comes back to an alias on
+  it, is not followed. Each alias along the chain binds its parameters to the
+  arguments the one before writes for them, one left out to its parameter's
+  default, and the first alias to the checker's arguments. The operand is the
+  type the last alias's reference writes, read under that alias's bindings,
+  so the alias reads as the one it names written out with its arguments in
+  place: `Select<Sec<X>>`, where `type Select<T> = Pick<T, "a">`, as
+  `Pick<Sec<X>, "a">`, and `Select<["b"]>`, where `type Select<L> =
+  Pick<Confidential<X, L>, "a">`, as `Pick<Confidential<X, ["b"]>, "a">`. A
+  bound parameter is its argument, and a carrier's metadata is read with the
+  parameters it holds bound. Where the operand's payload is a bound
+  parameter, the checker folds the argument into the operand's intersection:
+  the carriers of an argument that is itself labeled join the operand's, and
+  an argument that leaves the intersection no carrier (`never`, `null`,
+  `undefined`, a union of the last two, or `any`) leaves the operand
+  unlabeled. Any other argument keeps the operand's carriers as they are, a
+  union among them, whose every member carries them, though the alias
+  written out distributes its intersection over the union and reads
+  unlabeled. Both sides bind the first alias's parameters to the checker's
+  arguments, never to the ones a reference writes, so they agree. Written
+  under bindings, a `Pick` or an `Omit` of a labeled operand keeps the label
+  too, while a user's alias of one there is a mapped type over a bound
+  parameter, which is not fully read (below). Any other object that holds a
+  carrier as a property, as a mapped type its author wrote does
+  (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
+  metadata the carrier's type holds read in full or none, and never holds
+  the carrier as a member: no value does.
 - User alias chains are followed with type-parameter node substitution until a
-  canonical name is reached (`resolveCfcAliasFromDeclaration` /
-  `substituteTypeNode`). Substitution starts at the authored reference's
-  declaration, including a function-local generic alias whose resolved type
-  reports an inner alias: the outer reference's arguments belong to the outer
-  declaration's parameters. Fixed writer bindings and default value arguments
-  are read from that declaration. References qualified through a namespace
-  import are followed by resolving their full type name, including within a
-  nested policy payload. Cycle detection tracks resolved declarations, so
-  aliases with the same name in different modules remain distinct. Qualified
-  metadata aliases such as `cf.CurrentPrincipal` resolve through the same
-  import. Type arguments are
-  converted to checker types only when the chain reaches a canonical policy
-  alias. Unresolvable expansions fall back to
-  ordinary generation (tested). A subtree holding a substituted parameter is
-  built afresh, with no original node, so the payload is read from the node
-  and its arguments, never back through the checker as the declaration's
-  subtree with the parameter unbound; a subtree holding none keeps its
-  declaration node. An argument a reference leaves out is its parameter's
+  canonical name is reached (`#resolveAliasChainFromDeclaration` /
+  `substituteTypeNode`), and the labels read the substituted argument nodes.
+  Substitution starts at the authored reference's declaration, including a
+  function-local generic alias whose resolved type reports an inner alias:
+  the outer reference's arguments belong to the outer declaration's
+  parameters. Fixed writer bindings and default value arguments are read from
+  that declaration. References qualified through a namespace import are
+  followed by resolving their full type name, including within a nested
+  policy payload. Cycle detection tracks resolved declarations, so aliases
+  with the same name in different modules remain distinct. Qualified metadata
+  aliases such as `cf.CurrentPrincipal` resolve through the same import. Type
+  arguments are converted to checker types only when the chain reaches a
+  canonical policy alias. Unresolvable expansions fall back to ordinary
+  generation (tested). An argument a reference leaves out is its parameter's
   default, read with the arguments before it, as the checker instantiates one.
-  A payload that still refers to a parameter that substitution had an argument
-  for but did not reach, through a kind it does not open (`T["name"]`), is a
-  guess: the payload reads as accepting anything, and the labels are lowered
-  as usual. A chain entered with no argument nodes, as from a type whose print
-  expands the alias, binds each parameter to its argument's type instead, by
-  declaration: a bare reference to the parameter, as a payload, a label, a
-  label's element, or an argument of a nested alias, reads as that type. A
-  payload node holding one (`T[]`, `{ value: T }`) is read from the type the
-  chain instantiates. Every CFC alias adds its metadata to its payload as one
-  more member of an intersection, a carrier holding only `__ct_cfc__`, so the
-  intersection's other member is the innermost payload, the argument in
-  wherever the declaration wrote the parameter (`cfcPayloadOf`). A payload
-  that is itself an intersection or a union has no one other member, and is
-  read from its declaration with each parameter bound to its argument's type
-  (`GenerationContext.boundTypeParameters`): wherever the walk reaches a bound
-  parameter, in a union's member, an intersection's part, an array's element,
-  or an object's property, its argument's type is read. A union or an
-  intersection written in the declaration is read by its written members, as
-  a print of the instantiation was, since the checker folds a member that is
-  itself a union, a CFC alias over one among them, into the whole and loses
-  its boundary and labels. A recursive definition read under bindings is
-  named by its type and its bindings together, so two instantiations of one
-  declaration keep apart. A use the binding
-  cannot reach, one the checker defers such as `T["name"]` or a conditional
-  type, accepts any value there, and the payload is reported as not fully
-  read. A label reads a parameter it holds as its type wherever the label
-  reader pairs that position. A `typeof` binding
-  supplied only as a type argument cannot be read from a type, so a
+  A reference to an alias whose whole body is one of its own parameters
+  (`type Id<X> = X`) denotes the argument it writes for that parameter, so the
+  chain, and the labels and defaults read from its syntax, start at that
+  argument (`readThroughIdentityAliases`, `src/typescript/type-node.ts`).
+- A plain generic interface or object alias whose arguments carry authored
+  `typeof` identities binds its parameters to those written arguments before
+  reading members. Forwarded alias references and inherited interface members
+  use the bindings of their own declarations, and defaults read under preceding
+  parameters. A readable property or index-signature value is read from its
+  declaration under those bindings, with its instantiated type retained beside
+  it. This preserves both a whole policy passed as a parameter
+  (`Box<WriteAuthorizedBy<string, typeof save>>`) and a writer passed into a
+  member's policy (`Pair<typeof save, typeof other>`). `Record` reads its value
+  argument by syntax when it carries an authored query, including through a
+  named policy alias. Recursive definitions retain those same bindings and query
+  origins: same-typed writers remain distinct below `$ref` boundaries. Plain
+  generics without authored query arguments retain their type-based analysis.
+  An indexed access or conditional member over bound parameters can leave a
+  writer policy's instantiated carrier without readable binding syntax. That
+  authored read reports `cfc-write-authorized-by:unread` and explains the
+  unsupported operator; compilation cannot silently discard its restriction.
+  See `packages/ts-transformers/test/generic-writer-policy.test.ts` for both
+  pattern schemas and `packages/runner/test/generic-writer-policy.test.ts` for
+  authorized and refused writes, including stored reloads.
+- The payload is read from the declaration of the last alias along the chain,
+  as written, with each parameter bound to its argument
+  (`GenerationContext.boundTypeParameters`), never from a substituted node,
+  whose rebuilt references the checker cannot resolve. A parameter's argument
+  is the node written for it, read under the bindings of the place it is
+  written: the reference itself, or the declaration before it along the
+  chain, so `type Outer<X> = Sec<X[]>` reads `Sec`'s parameter as `X[]` with
+  `X` bound to `Outer`'s argument. A default is read under the bindings of the
+  parameters before it, and a bare reference to a bound parameter is that
+  parameter's argument. Wherever the walk reaches a bound parameter, in a
+  union's member, an intersection's part, an array's element, an object's
+  property, or a member of a generic declaration the checker instantiates with
+  it, its argument is read, from its node where it has one, so what only
+  syntax says survives: a `Default`, a `PolicyOf<typeof rules>`, the binding
+  of a nested `WriteAuthorizedBy`. A node holding a bound parameter is read by
+  its syntax where its type is built from the checker's unbound parameter: an
+  object, an array, a tuple, a union, an intersection, `readonly`, a
+  default-library alias the node-based analyzer applies (`Partial`, `Pick`,
+  …; a module's own alias of that name is its own), and a `Default`; any
+  other node is read by its type. A union or an
+  intersection is thereby read by its written members, since the checker
+  folds a member that is itself a union, a CFC alias over one among them,
+  into the whole and loses its boundary and labels. A label written as a
+  bound parameter reads its argument, from its node where that names no
+  parameter of its own.
+- A chain entered with no argument nodes, as from a type whose print expands
+  the alias, binds each parameter of its first alias to its argument's type.
+  So does a chain whose written arguments name a type parameter the reading
+  does not bind, as a member of a generic declaration the checker has
+  instantiated does: its argument is in the instantiated type, not in the
+  member's syntax, and the parameter is left unbound. Every CFC alias adds its
+  metadata to its payload as one more member of an intersection, a carrier
+  holding only `__ct_cfc__`, so the intersection's other member is the
+  innermost payload, the argument in wherever the declaration wrote the
+  parameter (`cfcPayloadOf`). For such a chain, and for a written payload
+  using a parameter where no reading under bindings reaches (an indexed
+  access, a conditional type, `keyof`, a mapped type, a template literal
+  type), the payload is read from the type the chain instantiates, less the
+  `undefined` an optional member's `?` adds, where that has one other member
+  and the payload is no CFC alias of its own, whose labels the carriers merge
+  with the chain's. A payload that is itself an intersection or a union has
+  no one other member, and is read from its declaration under the bindings.
+  A payload that is a CFC alias is read as its own chain, at the type the
+  outer chain instantiates: that type's payload, every carrier taken off, is
+  the inner alias's, while the inner chain's labels are read from its own
+  arguments.
+  Such a member's payload is therefore read as the checker instantiates it,
+  so a `null` its declaration writes beside an object-shaped payload
+  (`Confidential<{ v: T } | null, L>` as `Holder<string>`'s member) is not in
+  the schema on either side, the carrier having left nothing of it.
+- A use no binding reaches, such as a type the checker defers over a bound
+  parameter (`T["name"]`, a conditional type), a mapped type over one, or a
+  parameter left unbound, accepts any value there, and the payload is reported
+  as not fully read. A mapped type reached by its type, with no written node,
+  counts as one over a bound parameter when it has no member or index
+  signature and a string is not assignable to it: over an unbound parameter
+  the checker lists none, while a concrete empty one is the empty object
+  type, to which a string is. A reading under bindings carries the type the
+  checker instantiates at the position it reads, where it has one
+  (`GenerationContext.instantiatedAs`): the payload of the type the chain
+  instantiates, and in turn, wherever the reading goes within it, the part of
+  that type in the same place: a property, the element of an array or a
+  tuple, the value of a record or an index signature, the value a cell or a
+  `Default` holds, the one member of a value that is also `undefined` or
+  `null`, the argument of an identity alias, and, for the operand of a
+  default-library alias read member by member (`Readonly`, `Partial`, `Pick`,
+  …), the alias's own instantiation. A chain entered there takes it as its
+  instantiation. A type read under bindings is
+  identified, as a recursive definition's name and in cycle detection, by its
+  type together with that instantiation and the arguments as written, or with
+  its bindings where no instantiation is carried. Each argument also retains
+  the ordered `typeof` bindings reached through its outer bindings and
+  alias bodies, identified by the writer declaration they resolve to (or by
+  the query node where no writer resolves): two writers with the same function
+  type still name distinct write policies in recursive definitions. Repeated
+  union and intersection members contribute their query origins once, so adding
+  the same policy again does not change the recursion key. An alias's arguments,
+  including defaults read under earlier arguments, contribute at their uses in
+  its body, under that position's union or intersection operator. Two
+  instantiations of one declaration keep apart. A recursion whose instantiation
+  the checker settles to the same type (`Sec<T | undefined>` inside `Sec<T>`)
+  refers to its definition when its query origins also settle. Conditional and
+  indexed aliases can retain query syntax the checker drops, or repeat a
+  parameter under an operator other than union or intersection, so their keys
+  may keep growing even when their types settle. Such chains reach the nesting
+  limit and report an error.
+- A chain is also tracked from the written reference it is entered from
+  (`SchemaGenerator.readAliasChain`), so a chain entered again from that
+  reference inside itself is found as a recursion through it. One whose
+  instantiation is only assignable both ways with the enclosing reading's, a
+  different type with the same members (`Sec<Readonly<Readonly<X>>>` inside
+  `Sec<Readonly<X>>`), refers to that reading's definition. So does one whose
+  type arguments denote the same types as that reading's, compared in their
+  written form under the bindings of the place each is written: a bound
+  parameter as its argument's form, a node holding no type parameter as the
+  type the checker gives it, by identity, a union or an intersection as its
+  members flattened, a reference as the declaration it names and its
+  arguments' forms, and an array, a tuple, `keyof`, `readonly` or a type
+  literal as that construct and its parts' forms, each member's name kept
+  apart from its optional and readonly modifiers, so `{ v?: U }` and
+  `{ "v?": U }` differ, and a numeric name apart from a string one. Any other
+  node holding a type parameter has
+  no form and settles nothing. The same reference over the same types is the
+  same reading. That
+  settles a recursion wherever the reading has lost the instantiation at its
+  position, as through a tuple's rest, `Readonly` or `Required` around the
+  alias, or a union with another value; `Nest<T[]>` denotes a deeper array at
+  each step and settles to none. The comparison is of types, never of the
+  schemas they read as: `[string, number]` and `[number, string]` read as one
+  array schema, but an alias indexing its argument (`X[0]`) tells them apart.
+  An argument holding a type parameter the reading does not bind, as a
+  payload read from its instantiation leaves its own, has no form, and
+  settles nothing. Where the arguments of either reading hold a `typeof`
+  query, neither settle applies: a writer binding is an identity that no type
+  shows, so such a recursion ends where it meets the same reading again. A
+  reading settles only to one that stores a definition, never to a wrapper's
+  or a scope's around a cell. A scope wrapper's
+  chain is read the same way, its payload being the one member its
+  instantiation intersects with the scope brand, except a scope around a
+  cell (`scopesCellHandle`): its cycle is found at the cell's value, which
+  keeps the handle the scope caps at each reference, so it settles none, and
+  under bindings, where that value is read from its syntax, a recursion
+  through one is found only at the nesting bound. A chain reached with no
+  written reference, as through a generic declaration's index signature or
+  a tuple element read by type, is tracked by the alias it is reached by,
+  and settles none: two readings of one alias through no written reference
+  may be a nesting its author wrote out, whose instantiations the checker
+  finds assignable both ways though they read differently. A reference, or
+  such an alias, entered `MAX_BOUND_NESTING` deep without settling, like the
+  same type read inside itself with the same arguments written for it, each
+  under deeper bindings, is taken for a recursion that instantiates the chain
+  without end (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author
+  wrote out (`Pair<Pair<string>>`). The bound is three nested readings. A CFC
+  alias chain reaching it reports a `cfc-schema:recursion-limit` error, including
+  one whose writer-query key cannot settle. Its unread remainder would discard
+  confidentiality or write policies, so the schema must not be used. A chain
+  reached by its alias is located at the type node its context reads where
+  there is one, and is otherwise reported without a location. The separate
+  bound on a type read under bindings and a scope-wrapper chain reaching its
+  nesting bound continue to report an unread-type warning. A scope-wrapper
+  chain reached by its alias, with no type node to name, is named in that
+  warning by a print of the type it stops at, made with `IgnoreErrors` so that
+  every type has one, a type holding `[]` among them.
+  A label reads a parameter it holds as its type wherever the label reader
+  pairs that position. A `typeof` binding that a chain entered from a type
+  receives only as a type argument cannot be read from a type, so a
   `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
   written in the alias declaration itself is read from the declaration.
 - Metadata values come from type-level literals (`extractLiteralLikeValue`).
@@ -987,27 +1280,50 @@ Mechanics:
   a label's syntax is read first, each node paired with the part of the type
   it denotes: literal nodes, tuples, type literals, `readonly`, `typeof` value
   reads, and alias references, with the alias's arguments substituted into its
-  body. Syntax the reader does not evaluate, such as a conditional or mapped
-  alias, a spread, rest, or optional tuple element, or a parameter an alias
-  leaves to its default, is read from the paired type instead, and so is a
-  label with no syntax at all. Read from nodes, the extraction recognizes
-  `AnyOf<X>` as
-  `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
-  `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
+  body. A spread tuple element (`...X`, named or not) stands for the
+  elements of the list its operand reads as, so `readonly [...L, "b"]` with
+  `L` bound to `readonly ["c", "d"]` reads as `["c", "d", "b"]`; the tuple's
+  type holds those elements spread already, so no element node pairs with a
+  part of it, and each is read alone. Syntax the reader does not evaluate,
+  such as a conditional or mapped alias, an optional tuple element, a spread
+  whose operand reads as no list (a rest element over an array type), a tuple
+  any of whose elements a spread leaves unread, or a parameter an alias leaves
+  to its default, is read from the paired type instead, and so is a label
+  with no syntax at all. Read from nodes, the extraction recognizes
+  `AnyOf<X>` as `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom
+  containing `__ctPolicyIdentityOf: { file, path }`, each where the alias the
+  reference names is that operator's brand:
+  `{ readonly __ct_cfc_any_of__?: X }` or
+  `{ readonly __ct_cfc_policy_of__?: Rules }`. An alias an author declares
+  under either name, and not as its brand, is read as the type it is, from
+  its syntax as from its type. Read from a type, an object type's
   member is read at its declared annotation, paired with its type, wherever
   that annotation denotes the member's type apart from the `undefined` an
   optional member's `?` adds (`readMemberAnnotation`,
   `src/typescript/type-node.ts`). That is how a label written in a type
   literal or an interface keeps a binding that only its syntax names. The same
   member of a generic declaration, instantiated, is read from its type, as is
-  the value of an optional member with no such annotation. `AnyOf<X>` is
-  recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`, never by an
-  alias name, so an authored type named `AnyOf` is read as itself. A
-  `PolicyOf` reached from a type alone, with no annotation that denotes it,
-  has no binding to read: its brand is read as an ordinary object,
-  `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. Projection paths
-  encode as JSON
-  Pointers with `~0`/`~1` escaping (`encodeJsonPointerPath`).
+  the value of an optional member with no such annotation. Read from a type,
+  a type parameter the reading binds is its argument, as a bare reference to
+  it is, and a spread element of a tuple (`[...L, "b"]`) is the elements of
+  the list it reads as, or one unread element where it reads as none.
+  `AnyOf<X>` is recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`,
+  never by an alias name, so an authored type named `AnyOf` is read as
+  itself. A `PolicyOf` reached from a type alone, with no annotation that
+  denotes it, has no binding to read: its brand is read as an ordinary object,
+  `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
+  extraction cannot read in full is reported as the `cfc-label:unread` warning
+  (`unread-label-diagnostics.ts`), naming the label: an argument that is not a
+  tuple, or an atom with anything unread in it, whether the atom itself, a
+  field of an object atom, or an alternative of an `AnyOf` clause. A union of
+  literals is one such thing, and that `PolicyOf` brand another. A UI
+  contract that writes no `requiredEventIntegrity` requires its trusted
+  pattern, and that list is checked too. The schema carries what it could not
+  read as no label, as an atom that serializes as `null` (an unread value, not
+  an authored `null`, which is a literal read like any other), or as a field
+  left out.
+  Projection paths encode as JSON Pointers with `~0`/`~1` escaping
+  (`encodeJsonPointerPath`).
 - `ifc` combines with the base schema's existing `ifc` one key at a time
   (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become
   `{ ifc }` / `{ not: true, ifc }`. Nested wrappers
@@ -1073,9 +1389,9 @@ helpers part of the supported authoring surface.
 The emitted key set aligns with the api's `JSONSchemaObj.ifc` member
 (`packages/api/index.ts`): `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
-`writeAuthorizedBy`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
-`ownerPrincipal` and `observes` have no direct producing alias in this package
-as of this writing.
+`writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
+`observes`, and `uiContract`. `ownerPrincipal` and `observes` have no direct
+producing alias in this package as of this writing.
 
 ## 12. Doc Comments → `description` / `tags` / `$comment`
 
@@ -1115,14 +1431,22 @@ as of this writing.
 
 Hint shape (`src/interface.ts`): `SchemaHints` is `WeakMap<ts.Node,
 SchemaHint>`, where `SchemaHint` is `{ items?: unknown; cfcUiContract?:
-UiContractHint }` and `UiContractHint` is `{ helper: "UiAction" |
-"UiPromptSlot" | "UiDisclosure"; action?; surface?; role?; kind?;
-trustedPattern?; requiredEventIntegrity? }`. Every member is read-only: the
+UiContractHint; narrowedFrom?: NarrowedFrom; spelledBy?: ts.TypeNode }`,
+`UiContractHint` is
+`{ helper: "UiAction" | "UiPromptSlot" | "UiDisclosure"; action?; surface?;
+role?; kind?; trustedPattern?; requiredEventIntegrity? }`, and `NarrowedFrom`
+is `{ type: ts.Type; typeNode?: ts.TypeNode }`. Every member is read-only: the
 generator only reads hints, and copies the `requiredEventIntegrity` list on the
-way into the emitted schema. Lookups always try the node and
+way into the emitted schema. A node holds a hint of each kind, recorded apart
+from the others. The producer writes `items` and `cfcUiContract` to the node
+and its original (`cross-stage-state.ts`), and `narrowedFrom` and `spelledBy`
+to the node alone. A `cfcUiContract` lookup tries the node and
 `ts.getOriginalNode(node)` (`src/ui-contract.ts`, called from
-`schema-generator.ts` and `object-formatter.ts`; the producer writes both —
-`cross-stage-state.ts`).
+`schema-generator.ts` and `object-formatter.ts`); an `items` lookup reads the
+current hint node (`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads
+the node, and the node inside its parentheses (`schema-generator.ts`); a
+`spelledBy` lookup reads the node (`formatChildType` in
+`schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
   `items: { type: "unknown", …element wrapper markers }` for property-only
@@ -1141,6 +1465,61 @@ way into the emitted schema. Lookups always try the node and
   against the emitted literal
   (`ts-transformers/.../schema-generator.ts`, preferring an
   existing `$UI` property when present).
+- **`narrowedFrom`** names the value a node was built from part of, such as a
+  capture narrowed to the members its callback reads. The node's schema keeps
+  the value's labels: the `ifc` that formatting `type`, spelled by `typeNode`
+  where given, attaches at its top, through the definitions it references,
+  combined into the node's own as an outer declaration's
+  (`applyNodeSchemaHints` in `schema-generator.ts`, `withIfcLabels` and
+  `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
+  the position, in definitions of its own, with nothing reported, and only for
+  its labels: a type no CFC wrapper holds, other than a union or an
+  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A cell has
+  the labels of its value, read at the value's own node where its wrapper is
+  written out. A value that may be `undefined` or `null` has the labels of its
+  one other member, and where the node's schema is such a union whose value
+  member declares labels of its own and the union none, they are combined into
+  that member's, where formatting put the part of them it could read
+  (`labeledValueMember` in `ifc-labels.ts`). A node
+  narrowed from any other union stands for any of its members, so it has the
+  union's labels, every member's confidentiality, and each other label every
+  member declares alike (`joinMemberIfcLabels`). A member is spelled by the
+  node its type is written as: the declaration's own node where that denotes
+  the member alone, as an optional property's does, and otherwise the node
+  of the union the declaration writes that it is read at (§8,
+  `pairUnionMemberNodes`). A node that stands for several members is read
+  once for all of them, and a member several such nodes stand for may be
+  under the labels of any of them. This also holds when the checker collapses
+  several written CFC alternatives into one member: their confidentiality
+  labels are all retained, including through optional and nullable reads.
+  A member with no such node is read by its type. A schema whose own reference
+  chain already holds every label is left as it is (`holdsIfcLabels`).
+- **`spelledBy`** is the annotation of the member or binding a printed node
+  holds the value of, where that annotation names a value binding, as
+  `PolicyOf<typeof rules>` does. A print spells the binding as the structural
+  type of the value it names, from which no reader can tell the binding, so
+  the node is read as the annotation spells the type at hand (`#spelling` in
+  `schema-generator.ts`):
+  - Where the annotation denotes that type, the node is read as the
+    annotation. An annotation denotes a type that is its own, or a union of
+    the same members, since a union written through an alias is a type apart
+    from the same union written out (`denotesSameType` in
+    `src/typescript/type-node.ts`, which `readMemberAnnotation` also compares
+    by).
+  - Where the two differ only by the `undefined` of an optional member's `?`,
+    which a reader may add to the annotation's type or take out of it, the
+    node is read as the members the annotation writes other than
+    `undefined`, beside `undefined` where the type at hand holds it. The
+    members are those of the union the annotation writes, read through
+    parentheses and aliases without type parameters (`readUnionMemberNodes`
+    in `src/typescript/type-node.ts`), so each member of the type is read at
+    the node that writes it. CFC nodes that stand for several members, or
+    several nodes that stand for one member, follow §8's rules for retaining
+    each written alternative and its policy bindings.
+  - Where the annotation spells neither, the node is read as any print is,
+    by the type at hand.
+
+  The node's own hints still apply.
 
 ## 14. Options
 
@@ -1154,12 +1533,12 @@ declaration file is the default library's (the transformer supplies
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);
-(2) structurally-identical-modulo-enum union members merge recursively
-(`union-formatter.ts`). It does **not** widen all-literal
-unions (§8) and has no other effects. `test/widen-literals.test.ts` pins the
-in-package behavior; consumer-side it is extracted from `toSchema` options and
-exercised via ts-transformers' injection paths
-(`ts-transformers/.../schema-generator.ts`).
+(2) union members that differ only in their literal values merge
+recursively, keeping every other keyword (`union-formatter.ts`). It does
+**not** widen all-literal unions (§8) and has no other effects.
+`test/widen-literals.test.ts` pins the in-package behavior; consumer-side it is
+extracted from `toSchema` options and exercised via ts-transformers' injection
+paths (`ts-transformers/.../schema-generator.ts`).
 
 ## 15. Fail-Loud Inventory And Silent Degradations
 

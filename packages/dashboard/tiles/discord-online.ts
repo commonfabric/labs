@@ -59,7 +59,7 @@ export async function loadHistory(): Promise<void> {
   try {
     const data = JSON.parse(await Deno.readTextFile(HISTORY_FILE));
     if (Array.isArray(data)) {
-      history.push(...data.filter(isPoint));
+      for (const point of data) if (isPoint(point)) history.push(point);
     }
   } catch { /* no file yet or unreadable: start from an empty history */ }
 }

@@ -115,7 +115,7 @@ function canReach(
     if (current === target) return true;
     if (visited.has(current)) continue;
     visited.add(current);
-    pending.push(...(outgoing.get(current) ?? []));
+    for (const next of outgoing.get(current) ?? []) pending.push(next);
   }
   return false;
 }
@@ -226,7 +226,9 @@ export function evaluateSignals(
         break;
       }
       case "delay":
-        result = inputs.length === 0 ? 0 : Math.max(...inputs);
+        result = inputs.length === 0
+          ? 0
+          : inputs.reduce((most, input) => Math.max(most, input), -Infinity);
         break;
       case "transformer":
         result = clampSignal(
@@ -234,7 +236,9 @@ export function evaluateSignals(
         );
         break;
       case "actuator": {
-        const received = inputs.length === 0 ? 0 : Math.max(...inputs);
+        const received = inputs.length === 0
+          ? 0
+          : inputs.reduce((most, input) => Math.max(most, input), -Infinity);
         result = received >= node.parameters.threshold ? received : 0;
         break;
       }

@@ -29,20 +29,48 @@ export interface UiContractHint {
 }
 
 /**
+ * The value a node was narrowed from, such as a capture written with only the
+ * members its callback reads. Only the value's own type, or the declaration
+ * spelling it, says which CFC labels it carries.
+ */
+export interface NarrowedFrom {
+  readonly type: ts.Type;
+  /** The declaration's own node for `type`, where one is at hand. */
+  readonly typeNode?: ts.TypeNode;
+}
+
+/**
  * Per-node overrides supplied by the caller, keyed by the node the hint
  * applies to. The generator only reads these, so every member is read-only.
  */
 export interface SchemaHint {
   readonly items?: unknown;
   readonly cfcUiContract?: UiContractHint;
+  /** The value the node narrows, whose CFC labels its schema keeps. */
+  readonly narrowedFrom?: NarrowedFrom;
+  /**
+   * The annotation a print of a member's type is read in place of: one that
+   * names a value binding, such as `PolicyOf<typeof rules>`, which a print
+   * spells as the structural type of the value it names.
+   */
+  readonly spelledBy?: ts.TypeNode;
 }
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;
 
-/** A recoverable schema-generation problem at its authored node, if known. */
+/**
+ * A schema-generation problem at its authored node, if known. Generation goes
+ * on past either severity; an error says the schema it produced is not one to
+ * accept, as a write restriction it could not read is not.
+ */
 export interface SchemaGenerationDiagnostic {
-  readonly severity: "warning";
-  readonly type: "schema-default:unresolved" | "schema-type:unread";
+  readonly severity: "warning" | "error";
+  readonly type:
+    | "schema-default:unresolved"
+    | "schema-type:unread"
+    | "cfc-schema:recursion-limit"
+    | "cfc-write-authorized-by:unread"
+    | "cfc-label:unread";
   readonly message: string;
   readonly node?: ts.Node;
 }
@@ -51,7 +79,10 @@ export interface SchemaGenerationDiagnostic {
 export interface SchemaGenerationOptions {
   readonly widenLiterals?: boolean;
 
-  /** Receives warnings; without a callback the generator logs them. */
+  /**
+   * Receives each diagnostic, a warning or an error; without a callback the
+   * generator logs it. An error says the schema generated is not one to accept.
+   */
   readonly onDiagnostic?: (diagnostic: SchemaGenerationDiagnostic) => void;
 
   /**
@@ -134,6 +165,14 @@ export interface GenerationContext {
   typeNode?: ts.TypeNode;
 
   /**
+   * A CFC union alternative sharing a semantic member with another written
+   * alternative. Its node is read inline, before type-based definition and
+   * cycle handling, so distinct policy bindings cannot share one definition.
+   * Consumed at that node; its payload retains ordinary cycle handling.
+   */
+  inlineUnionMember?: ts.TypeNode;
+
+  /**
    * The node whose schema hints apply at this position when it is not the node
    * read: a printed node, read by its type, keeps the hints a caller attached
    * to it.
@@ -182,18 +221,65 @@ export interface GenerationContext {
   uninterpretedTypeNodes?: ts.TypeNode[];
 
   /**
-   * Type parameters read as their arguments' types, for a payload read from
-   * the declaration that is written in them: a CFC alias chain entered from
-   * its type has no argument nodes to substitute. Wherever a bound parameter
-   * appears, its argument's type is read. A type that still depends on one
-   * where the binding cannot reach, such as `T["name"]` or a conditional
-   * type, is reported through `uninterpretedTypeNodes` as not fully read.
+   * Reads only the CFC labels a type attaches at its top: a type that no CFC
+   * wrapper holds, other than a union or an intersection, whose members can
+   * carry labels to it, is read as accepting anything, and not formatted.
    */
-  boundTypeParameters?: {
-    readonly types: ReadonlyMap<ts.TypeParameterDeclaration, ts.Type>;
-    /** The declared payload, reported where no nearer node is at hand. */
-    readonly declaredNode: ts.TypeNode;
-  };
+  labelsOnly?: boolean;
+
+  /**
+   * Type parameters read as their arguments, for a node read from the
+   * declaration that is written in them (`BoundTypeParameters`).
+   */
+  boundTypeParameters?: BoundTypeParameters;
+
+  /**
+   * Under type parameter bindings, the type the checker instantiates at the
+   * position being read, where the reading has it: the payload of the type a
+   * CFC alias chain instantiates, and in turn each property of it, its array
+   * element, and the one member of an optional or nullable value that is
+   * neither `undefined` nor `null`. A type read under bindings is identified
+   * together with it, so a recursion whose arguments the checker settles, as
+   * `Sec<T | undefined>` inside `Sec<T>` settles after one step, is found as
+   * one although its written arguments nest without end. It is set only where
+   * a reader passes it for the position it reads.
+   */
+  instantiatedAs?: ts.Type;
+}
+
+/**
+ * Type parameters bound to their arguments, for a CFC payload or a plain
+ * generic carrying authored binding identities, read from its declaration
+ * rather than from an instantiation. Wherever a bound parameter appears, its
+ * argument is read. A type that still depends on one where the binding cannot
+ * reach, such as `T["name"]` or a conditional type, is reported through
+ * `uninterpretedTypeNodes` as not fully read.
+ */
+export interface BoundTypeParameters {
+  readonly arguments: ReadonlyMap<
+    ts.TypeParameterDeclaration,
+    BoundTypeArgument
+  >;
+  /** The node read under these bindings, reported where none is nearer. */
+  readonly declaredNode: ts.TypeNode;
+}
+
+/**
+ * A type parameter's argument. One written as a type argument, or as the
+ * parameter's default, is read from its node under the bindings of the place
+ * it is written, since the node may itself name parameters bound there, and
+ * may say what its type cannot, such as a `Default` or a `typeof` binding.
+ * One with a type and no node is read as that type.
+ */
+export interface BoundTypeArgument {
+  readonly type: ts.Type;
+  readonly node?: ts.TypeNode;
+  /**
+   * The bindings `node` is written under, or, for an argument with no node,
+   * the bindings of the place the checker gave `type` at; absent where it is
+   * under none.
+   */
+  readonly bound?: BoundTypeParameters;
 }
 
 /**

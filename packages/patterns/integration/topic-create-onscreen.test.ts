@@ -26,8 +26,8 @@
  * logs by eye.
  */
 
-import { Identity } from "@commonfabric/identity";
-import { env } from "@commonfabric/integration";
+import { type DID, Identity } from "@commonfabric/identity";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -46,7 +46,7 @@ import {
 import { demandTopicBoard } from "./topic-board-fixture.ts";
 import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 /**
  * Topics per board. Small by default; an investigation asks for more.
@@ -105,6 +105,7 @@ describe("Topics create, on screen against off screen", () => {
   shell.bindLifecycle();
 
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let rendered: PieceController;
   let unrendered: PieceController;
@@ -112,8 +113,9 @@ describe("Topics create, on screen against off screen", () => {
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -152,15 +154,13 @@ describe("Topics create, on screen against off screen", () => {
     const page = shell.page();
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: RENDER
-        ? { spaceName: SPACE_NAME, pieceId: rendered.id }
-        : { spaceName: SPACE_NAME },
+      view: RENDER ? { spaceDid, pieceId: rendered.id } : { spaceDid },
       identity,
     });
     // Routed and loaded before anything is timed. Asserting the view here is
     // what makes a piece that cannot load fail as a failed load, rather than
     // as every subsequent text wait running to its safety net.
-    if (RENDER) await waitForPieceView(page, SPACE_NAME, rendered.id);
+    if (RENDER) await waitForPieceView(page, spaceDid, rendered.id);
     await waitForRuntimeIdle(page);
 
     for (let index = 0; index < SIZE; index++) {

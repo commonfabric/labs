@@ -217,6 +217,26 @@ describe("Patterns API", () => {
       expect(httpIdentity).toBe(direct);
     });
 
+    it("forwards attached source roots through the HTTP route", async () => {
+      const roots = [
+        "/api/patterns/system/default-app.tsx",
+        "/api/patterns/system/home.tsx",
+      ];
+      const query = new URLSearchParams({ identity: "" });
+      for (const root of roots) query.append("sourceRoot", root);
+      const response = await app.request(
+        `/api/patterns/system/default-app.tsx?${query}`,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(
+        await createPatternsRoute().identity("system/default-app.tsx", roots),
+      );
+      const invalid = await app.request(
+        "/api/patterns/system/default-app.tsx?identity&sourceRoot=/outside.ts",
+      );
+      expect(invalid.status).toBe(400);
+    });
+
     it("computes an identity for system/home.tsx", async () => {
       const response = await app.request(
         "/api/patterns/system/home.tsx?identity",

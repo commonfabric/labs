@@ -235,6 +235,11 @@ export abstract class BaseFabricInstance extends FabricInstance {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Type guard for `BaseFabricInstance`, which also enforces the invariant that
    * every `FabricInstance` is in fact a `BaseFabricInstance`. Concrete

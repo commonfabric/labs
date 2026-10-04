@@ -118,9 +118,9 @@ describe("delegating an acquired skill to a child", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity,
-        spaceName: `acquired-delegation-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );

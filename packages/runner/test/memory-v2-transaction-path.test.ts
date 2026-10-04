@@ -624,11 +624,9 @@ describe("memory v2 transaction path semantics", () => {
 
   it("nested write into a fresh doc materializes the doc value at the root", () => {
     // The whole doc value is what just came into existence; the activity
-    // path for subscribers watching the root should reflect that
-    // (regression for the `findMaterializedParentPath` "currentRoot is
-    // undefined" case, which previously failed to fire for path length 1
-    // -- the storage-boundary "value" prefix makes single-segment user
-    // writes hit that path length).
+    // path for subscribers watching the root should reflect that, for a
+    // path of length 1 too -- the storage-boundary "value" prefix makes a
+    // single-segment user write one.
     const tx = runtime.edit();
     tx.writeValueOrThrow({
       space,

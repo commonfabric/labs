@@ -4,7 +4,9 @@
  * The memory server authenticates a client by verifying the signature on its
  * `session.open` invocation; the verified issuer becomes the session principal
  * that storage partitioning keys off. Toolshed's `/api/storage/memory` route
- * and the standalone test server use this shared verifier.
+ * and the standalone test server use this shared verifier, and
+ * {@link authorizeLoopbackSessionOpen} applies it to the signed opens an
+ * in-process memory server receives.
  *
  * The handshake adds three anti-replay checks on top of the signature:
  *
@@ -129,64 +131,53 @@ export type VerifySessionOpenOptions = {
 const DEFAULT_CLOCK_SKEW_SECONDS = 120;
 
 /**
- * Verify a `session.open` authorization. Returns the verified issuer DID or
- * throws an AuthorizationError.
+ * Verifies what every signed memory invocation carries: the audience, the
+ * connection challenge, the validity window, and the issuer's signature over
+ * the whole invocation. Returns the issuer DID, or throws an
+ * `AuthorizationError` whose message opens with `what`, the name of the
+ * request being verified. What the invocation authorizes — its `cmd` and what
+ * that command names — is the caller's to check.
  */
-export const verifySessionOpenAuthorization = async (
-  message: SessionOpenMessage,
+export const verifySignedInvocation = async (
+  what: string,
+  invocation: FabricPlainObject,
+  signature: Uint8Array,
   options: VerifySessionOpenOptions,
 ): Promise<string> => {
-  const wireAuthorization = wireAuthorizationOf(message.authorization);
-  const signature = wireAuthorization?.signature.slice() ?? null;
-  if (!isFabricPlainObject(message.invocation) || signature === null) {
-    throw authorizationError("memory session.open requires authorization");
+  if (typeof invocation.iss !== "string") {
+    throw authorizationError(`${what} authorization mismatch`);
   }
-
-  const invocation = message.invocation;
-  if (
-    typeof invocation.iss !== "string" ||
-    invocation.cmd !== "session.open" ||
-    invocation.sub !== message.space ||
-    !isFabricPlainObject(invocation.args) ||
-    invocation.args.protocol !== MEMORY_PROTOCOL ||
-    !isFabricPlainObject(invocation.args.session) ||
-    !sameSessionDescriptor(invocation.args.session, message.session)
-  ) {
-    throw authorizationError("memory session.open authorization mismatch");
-  }
-
   if (typeof invocation.aud !== "string") {
-    throw authorizationError("memory session.open requires audience");
+    throw authorizationError(`${what} requires audience`);
   }
   if (invocation.aud !== options.audience) {
-    throw authorizationError("memory session.open audience mismatch");
+    throw authorizationError(`${what} audience mismatch`);
   }
 
   if (typeof invocation.challenge !== "string") {
-    throw authorizationError("memory session.open requires challenge");
+    throw authorizationError(`${what} requires challenge`);
   }
   if (invocation.challenge !== options.challenge.value) {
-    throw authorizationError("memory session.open challenge mismatch", {
+    throw authorizationError(`${what} challenge mismatch`, {
       retriable: true,
     });
   }
-  const challengeNow = options.nowSeconds ?? Math.floor(Date.now() / 1000);
-  if (options.challenge.expiresAt <= challengeNow) {
-    throw authorizationError("memory session.open challenge expired", {
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  if (options.challenge.expiresAt <= now) {
+    throw authorizationError(`${what} challenge expired`, {
       retriable: true,
     });
   }
 
   if (typeof invocation.iat !== "number" || !Number.isFinite(invocation.iat)) {
-    throw authorizationError("memory session.open requires iat");
+    throw authorizationError(`${what} requires iat`);
   }
   if (typeof invocation.exp !== "number" || !Number.isFinite(invocation.exp)) {
-    throw authorizationError("memory session.open requires exp");
+    throw authorizationError(`${what} requires exp`);
   }
-  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const skew = options.clockSkewSeconds ?? DEFAULT_CLOCK_SKEW_SECONDS;
   if (invocation.exp < now - skew) {
-    throw authorizationError("memory session.open authorization expired", {
+    throw authorizationError(`${what} authorization expired`, {
       retriable: true,
     });
   }
@@ -205,4 +196,66 @@ export const verifySessionOpenAuthorization = async (
   }
 
   return invocation.iss;
+};
+
+/**
+ * Verifies a `session.open` authorization. Returns the verified issuer DID,
+ * or throws an `AuthorizationError`.
+ */
+export const verifySessionOpenAuthorization = (
+  message: SessionOpenMessage,
+  options: VerifySessionOpenOptions,
+): Promise<string> => {
+  const wireAuthorization = wireAuthorizationOf(message.authorization);
+  const signature = wireAuthorization?.signature.slice() ?? null;
+  if (!isFabricPlainObject(message.invocation) || signature === null) {
+    return Promise.reject(
+      authorizationError("memory session.open requires authorization"),
+    );
+  }
+
+  const invocation = message.invocation;
+  if (
+    typeof invocation.iss !== "string" ||
+    invocation.cmd !== "session.open" ||
+    invocation.sub !== message.space ||
+    !isFabricPlainObject(invocation.args) ||
+    invocation.args.protocol !== MEMORY_PROTOCOL ||
+    !isFabricPlainObject(invocation.args.session) ||
+    !sameSessionDescriptor(invocation.args.session, message.session)
+  ) {
+    return Promise.reject(
+      authorizationError("memory session.open authorization mismatch"),
+    );
+  }
+
+  return verifySignedInvocation(
+    "memory session.open",
+    invocation,
+    signature,
+    options,
+  );
+};
+
+/**
+ * Authorizes a `session.open` on an in-process memory server. A signed open
+ * is verified as a deployed memory server verifies it, and admitted as the
+ * signature's issuer. An unsigned open is admitted, unverified, as the
+ * principal its `authorization.principal` names, or with no principal when it
+ * names none. Trusting that unsigned claim confines this authorizer to
+ * in-process emulation, where every client shares the process: tests, and
+ * local emulated storage such as `cf dev`.
+ */
+export const authorizeLoopbackSessionOpen = (
+  message: SessionOpenMessage,
+  context: VerifySessionOpenOptions,
+): Promise<string> | string | undefined => {
+  const { authorization } = message;
+  if (wireAuthorizationOf(authorization) !== undefined) {
+    return verifySessionOpenAuthorization(message, context);
+  }
+  return isFabricPlainObject(authorization) &&
+      typeof authorization.principal === "string"
+    ? authorization.principal
+    : undefined;
 };

@@ -275,11 +275,11 @@ describe("connector-grants", () => {
         .toEqual([{
           connection: "gmail-work",
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
         }, {
           connection: "gmail-work",
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
         }]);
     });
 
@@ -295,7 +295,11 @@ describe("connector-grants", () => {
       expect(result.unnamed).toEqual([]);
     });
 
-    it("refuses inconsistent classes for a store exposed by two pieces", () => {
+    it("describes a store two pieces declare differently with every class either declares", () => {
+      // Two pieces can expose one store with contracts that disagree, for a
+      // while: one declarer is relabeled before another. The classes describe
+      // what the store holds, and the grant is named by the connection and
+      // reaches one reference, so the disagreement withholds nothing.
       const result = resolveConnectorGrants(records({
         handlesJson: handlesJson([
           handle(MAIL_PIECE.name, "gmail-work", MAIL_REF),
@@ -308,11 +312,18 @@ describe("connector-grants", () => {
           ],
         }]),
       }));
-      expect(result.grants).toEqual([]);
-      expect(result.unnamed.map(({ state }) => state)).toEqual([
-        "degraded",
-        "degraded",
-      ]);
+      expect(
+        result.grants.map(({ name, ref, cfcClasses }) => ({
+          name,
+          ref,
+          cfcClasses,
+        })),
+      ).toEqual([{
+        name: "gmail-work",
+        ref: MAIL_REF,
+        cfcClasses: ["email", "calendar"],
+      }]);
+      expect(result.unnamed).toEqual([]);
     });
 
     it("refuses duplicate source declarations for one receipt identity", () => {
@@ -448,18 +459,185 @@ describe("connector-grants", () => {
       }]);
     });
 
-    it("reports a handle whose contract declares no class rather than naming it", () => {
+    it("grants a handle whose contract declares no class, named by its connection", () => {
+      // A contract whose columns carry the owner and no `Resource` class. The
+      // grant's name comes from the connection, so nothing about the store is
+      // unknown; the description just names no class.
+      const ownerOnly = {
+        type: "string",
+        ifc: { confidentiality: [OWNER] },
+      };
       const unlabeled = {
         name: "cf-gmail-messages--gmail-work",
-        sqlite_sources: [source("gmail-work", { subject: { type: "string" } })],
+        sqlite_sources: [source("gmail-work", { subject: ownerOnly })],
       };
       const result = resolveConnectorGrants(
         records({ piecesJson: piecesJson([unlabeled, BANK_PIECE]) }),
       );
-      expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
-      expect(result.unnamed[0]?.reason).toBe(
-        "its declared table contract carries no CFC class",
+      expect(
+        result.grants.map(({ name, ref, cfcClasses }) => ({
+          name,
+          ref,
+          cfcClasses,
+        })),
+      ).toEqual([
+        { name: "gmail-work", ref: MAIL_REF, cfcClasses: [] },
+        { name: "plaid-sim", ref: BANK_REF, cfcClasses: ["finance"] },
+      ]);
+      expect(result.unnamed).toEqual([]);
+    });
+
+    // Each of these declares something, and none of it is confidentiality:
+    // integrity alone (every loom column carries ConnectorObserved), an empty
+    // clause list, and a rule with integrity only. Granting any of them would
+    // hand sessions a store whose reads carry no confidentiality.
+    const NOT_CONFIDENTIAL: Array<[string, Record<string, unknown>]> = [
+      ["declares column types only", {
+        rows: { properties: { subject: { type: "string" } } },
+      }],
+      ["declares only integrity on its columns", {
+        rows: {
+          properties: {
+            subject: {
+              type: "string",
+              ifc: {
+                integrity: [{
+                  type:
+                    "https://loom.commonfabric.org/cfc/atom/ConnectorObserved",
+                  connector: "google.gmail-calendar.snapshot",
+                }],
+              },
+            },
+          },
+        },
+      }],
+      ["declares an empty confidentiality list", {
+        rows: {
+          properties: {
+            subject: { type: "string", ifc: { confidentiality: [] } },
+          },
+        },
+      }],
+      ["has a rule with integrity only", {
+        rows: {
+          properties: { sender: { type: "string" } },
+          rowLabel: {
+            version: 1,
+            integrity: {
+              authoredBy: {
+                principal: {
+                  protocol: "mailto",
+                  of: { match: { field: "sender", source: "\\S+", flags: "" } },
+                },
+              },
+            },
+          },
+        },
+      }],
+    ];
+    for (const [shape, tables] of NOT_CONFIDENTIAL) {
+      it(`reports a handle whose contract ${shape} rather than granting it`, () => {
+        const unlabeled = {
+          name: "cf-gmail-messages--gmail-work",
+          sqlite_sources: [{ ...source("gmail-work", {}), tables }],
+        };
+        const result = resolveConnectorGrants(
+          records({ piecesJson: piecesJson([unlabeled, BANK_PIECE]) }),
+        );
+        expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
+        expect(result.unnamed.map(({ connection, reason }) => ({
+          connection,
+          reason,
+        }))).toEqual([{
+          connection: "gmail-work",
+          reason: "its declared table contract declares no confidentiality",
+        }]);
+      });
+    }
+
+    for (
+      const [shape, table, reason] of [
+        [
+          "a rule whose confidentiality is malformed",
+          {
+            properties: { subject: { type: "string" } },
+            rowLabel: { version: 1, confidentiality: [] },
+          },
+          "malformed",
+        ],
+        [
+          "a rule that reads a column its own schema declares REAL",
+          {
+            properties: { amount: { type: "number", sqlType: "REAL" } },
+            rowLabel: {
+              version: 1,
+              confidentiality: {
+                anyOf: [{
+                  principal: {
+                    protocol: "mailto",
+                    of: {
+                      match: { field: "amount", source: "\\S+", flags: "g" },
+                    },
+                  },
+                }, { dbOwner: true }],
+              },
+            },
+          },
+          "amount",
+        ],
+      ] as const
+    ) {
+      it(`reports a handle whose contract has ${shape}, with the validator's reason`, () => {
+        // The runner refuses every read of a database whose rule is invalid,
+        // so the console refuses the grant too, and says why. Beside the rule
+        // the table also carries a labeled column: the refusal must not be
+        // skipped because something else is labeled.
+        const ruled = {
+          name: "cf-gmail-messages--gmail-work",
+          sqlite_sources: [{
+            ...source("gmail-work", {}),
+            tables: {
+              rows: table,
+              other: { properties: { subject: labeledColumn("email") } },
+            },
+          }],
+        };
+        const result = resolveConnectorGrants(
+          records({ piecesJson: piecesJson([ruled, BANK_PIECE]) }),
+        );
+        expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
+        expect(result.unnamed).toHaveLength(1);
+        expect(result.unnamed[0]!.reason).toMatch(
+          /^its declared rowLabel is invalid \(table `rows`: /,
+        );
+        expect(result.unnamed[0]!.reason).toContain(reason);
+      });
+    }
+
+    it("grants a handle whose contract labels rows by a rule alone", () => {
+      const ruled = {
+        name: "cf-gmail-messages--gmail-work",
+        sqlite_sources: [{
+          ...source("gmail-work", { subject: { type: "string" } }),
+          tables: {
+            rows: {
+              properties: { subject: { type: "string" } },
+              rowLabel: { version: 1, confidentiality: { dbOwner: true } },
+            },
+          },
+        }],
+      };
+      const result = resolveConnectorGrants(
+        records({ piecesJson: piecesJson([ruled, BANK_PIECE]) }),
       );
+      expect(
+        result.grants.map(({ name, cfcClasses }) => ({ name, cfcClasses })),
+      )
+        .toEqual([
+          { name: "gmail-work", cfcClasses: [] },
+          { name: "plaid-sim", cfcClasses: ["finance"] },
+        ]);
+      expect(result.unnamed).toEqual([]);
     });
 
     it("grants a handle with all classes its contract declares", () => {
@@ -1172,7 +1350,7 @@ describe("connector-grants", () => {
 
   describe("parseConnectorGrants()", () => {
     for (
-      const invalid of [null, "email", [], ["email", null], [
+      const invalid of [null, "email", ["email", null], [
         "email",
         "bad class",
       ]]
@@ -1188,6 +1366,31 @@ describe("connector-grants", () => {
         ).toThrow("CFC class must match");
       });
     }
+
+    it("round-trips a grant that declares no class and describes it by its connection alone", async () => {
+      const specs = parseConnectorGrants(JSON.stringify([{
+        name: "gmail-work",
+        cfcClasses: [],
+        ref: MAIL_REF,
+        source: { connection: "gmail-work", piece: MAIL_PIECE.name },
+      }]));
+      expect(specs.map(({ name, cfcClasses }) => ({ name, cfcClasses })))
+        .toEqual([{ name: "gmail-work", cfcClasses: [] }]);
+      const { grants } = await mintWellKnownGrants(
+        undefined,
+        "no-class",
+        specs,
+      );
+      const line = wellKnownGrantsContextMessage(
+        JSON.parse(JSON.stringify(grants)),
+      )!.split("\n").find((candidate) => candidate.includes(grants[0]!.token))!;
+      expect(line).toContain(
+        "gmail-work: a read-only connector database whose reads carry CFC labels.",
+      );
+      expect(line).not.toContain("``");
+      expect(line).not.toContain("gmail-work ()");
+      expect(line).not.toContain("gmail-work (gmail-work)");
+    });
 
     it("rejects competing singular and plural class metadata", () => {
       expect(() =>

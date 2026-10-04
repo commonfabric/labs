@@ -8,11 +8,13 @@
  * also the way to build a board by hand for local profiling:
  *
  *     deno run -A packages/patterns/integration/topic-board-seed.ts \
- *       --api-url=http://localhost:8000/ --space=my-board \
+ *       --api-url=http://localhost:8000/ \
  *       --passphrase="my board" --topics=60 --crossrefs=3 \
  *       --citing-topics=8 --body-words=120 --out=/tmp/board.json
  *
- * Progress goes to stderr; the fixture goes to `--out` as JSON.
+ * The board goes in a new space owned by the identity `--passphrase` derives,
+ * and the fixture's `spaceDid` names it. Progress goes to stderr; the fixture
+ * goes to `--out` as JSON.
  */
 
 import { parseArgs } from "@std/cli/parse-args";
@@ -25,7 +27,6 @@ import {
 const flags = parseArgs(Deno.args, {
   string: [
     "api-url",
-    "space",
     "passphrase",
     "topics",
     "demand",
@@ -59,7 +60,6 @@ const startedAt = performance.now();
 
 const fixture = await seedTopicBoard({
   apiUrl: new URL(required("api-url")),
-  spaceName: required("space"),
   identity: await seedIdentity(required("passphrase")),
   topicCount,
   demand,

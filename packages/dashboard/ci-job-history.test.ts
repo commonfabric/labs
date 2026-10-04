@@ -52,7 +52,7 @@ import {
   LOOM_REPO,
   REPO,
 } from "./config.ts";
-import { github } from "./lib.ts";
+import { github, STALE_RUNS_ERROR } from "./lib.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import { PERFORMANCE_VIEW_STYLES } from "./performance-views.ts";
 
@@ -119,6 +119,10 @@ function workflowRun(
     ...overrides,
   };
 }
+
+// A request for a workflow's newest page, which names no branch, as the
+// searches for successful runs on main do.
+const isNewestPage = (url: string) => /\/runs\?per_page=100&page=\d+$/.test(url);
 
 function historySamples(): CiHistorySample[] {
   return Array.from({ length: 8 }, (_, day) => ({
@@ -937,7 +941,7 @@ Deno.test("CI job history update checks freshness-gate a failed collection", asy
     const recoveryResponse = new Promise<Response>((resolve) => {
       releaseRecovery = resolve;
     });
-    globalThis.fetch = () => recoveryResponse;
+    globalThis.fetch = () => recoveryResponse.then((response) => response.clone());
     const recovery = test.collector.startRefresh(
       "check-token",
       CI_HISTORY_SOURCES.labs,
@@ -1794,6 +1798,7 @@ Deno.test("CI job history reports shared workflow discovery progress", async () 
         markSecondStarted();
         return secondResponse as Promise<T>;
       }
+      if (requests === 3) return Promise.resolve({ workflow_runs: [] } as T);
       throw new Error(`unexpected workflow request ${requests}`);
     },
   );
@@ -1871,10 +1876,11 @@ Deno.test("CI job history reports shared workflow discovery progress", async () 
           collector.progress(progress.id)?.discoveryOutstandingRequests,
           collector.progress(progress.id)?.requestsMade,
         ],
-        ["complete", 2, 2, 0, 0],
+        ["complete", 3, 3, 0, 0],
       );
     }
-    assertEquals(requests, 2);
+    // Two pages of the search, then the workflow's newest page.
+    assertEquals(requests, 3);
   } finally {
     stopShort?.();
     releaseFirst({ workflow_runs: [] });
@@ -2377,7 +2383,8 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     assertEquals((await labsAfterFailure.result).runCount, 1);
     assertEquals(store.saveCalls, 3);
     assertEquals(
-      calls.filter((url) => url.includes(`/repos/${REPO}/`)).length,
+      calls.filter((url) => url.includes(`/repos/${REPO}/`) && !isNewestPage(url))
+        .length,
       2,
     );
   } finally {
@@ -2582,6 +2589,9 @@ Deno.test("CI job history fetches selected runs once and filters unusable jobs",
       new Headers(init?.headers).get("authorization"),
       "Bearer test-token",
     );
+    if (isNewestPage(url)) {
+      return Promise.resolve(Response.json({ workflow_runs: [] }));
+    }
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
       const parsed = new URL(url);
       assertEquals(parsed.searchParams.get("branch"), "main");
@@ -2648,13 +2658,15 @@ Deno.test("CI job history fetches selected runs once and filters unusable jobs",
 
     const runCallsBeforeRefresh =
       calls.filter((call) =>
-        call.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)
+        call.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`) &&
+        !isNewestPage(call)
       ).length;
     await test.collector.refresh("test-token");
     await test.collector.refresh("test-token");
     const runCallsAfterRefresh =
       calls.filter((call) =>
-        call.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)
+        call.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`) &&
+        !isNewestPage(call)
       ).length;
     assertEquals(runCallsAfterRefresh, runCallsBeforeRefresh + 1);
   } finally {
@@ -2672,7 +2684,7 @@ Deno.test("CI job history reloads completed attempts from its server cache", asy
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      runCalls++;
+      if (!isNewestPage(url)) runCalls++;
       return Promise.resolve(Response.json({ workflow_runs: [run] }));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
@@ -2734,7 +2746,7 @@ Deno.test("CI job history reuses a fresh completed collection after a dashboard 
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      runCalls++;
+      if (!isNewestPage(url)) runCalls++;
       return Promise.resolve(Response.json({ workflow_runs: [run] }));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
@@ -3028,7 +3040,7 @@ Deno.test("CI job history preserves an all-failed refresh warning and retries af
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (input) => {
     const url = String(input);
-    calls++;
+    if (!isNewestPage(url)) calls++;
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
       return Promise.resolve(Response.json({
         workflow_runs: [{ ...run, run_attempt: failing ? 2 : 1 }],
@@ -3105,7 +3117,7 @@ Deno.test("CI job history preserves current sampling provenance after an all-fai
   Date.now = () => clock;
   globalThis.fetch = (input) => {
     const url = String(input);
-    calls++;
+    if (!isNewestPage(url)) calls++;
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
       return Promise.resolve(Response.json({
         workflow_runs: [{ ...run, run_attempt: failing ? 2 : 1 }],
@@ -3245,7 +3257,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
       restartedStore,
       <T = unknown>(path: string): Promise<T> => {
         if (path.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-          discoveryCalls++;
+          if (!isNewestPage(path)) discoveryCalls++;
           return Promise.resolve({ workflow_runs: [rerun] } as T);
         }
         return Promise.reject(
@@ -3341,7 +3353,7 @@ Deno.test("CI Gantt reuses and reloads the CI history job cache", async () => {
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      runCalls++;
+      if (!isNewestPage(url)) runCalls++;
       return Promise.resolve(Response.json({ workflow_runs: [run] }));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
@@ -5104,8 +5116,8 @@ Deno.test("CI Gantt includes failed main pushes when all conclusions are selecte
     assertEquals(gantt.runs[0].run.conclusion, "failure");
     assertEquals(gantt.runs[0].jobs[0].conclusion, "failure");
     assertEquals(runQueries.length, 1);
-    assertEquals(runQueries[0].searchParams.get("branch"), "main");
-    assertEquals(runQueries[0].searchParams.get("event"), "push");
+    assertEquals(runQueries[0].searchParams.get("branch"), null);
+    assertEquals(runQueries[0].searchParams.get("event"), null);
     assertEquals(runQueries[0].searchParams.get("status"), null);
   } finally {
     globalThis.fetch = originalFetch;
@@ -5485,6 +5497,249 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
   }
 });
 
+// Serves the search for successful runs on main from `searched` and the
+// workflow's newest page from `newest`, answering each run's jobs with one
+// timed job.
+function servingSearchAndNewestPage(
+  searched: WorkflowRun[],
+  newest: WorkflowRun[],
+): typeof fetch {
+  return ((input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (isNewestPage(url)) {
+      return Promise.resolve(Response.json({ workflow_runs: newest }));
+    }
+    if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
+      return Promise.resolve(Response.json({ workflow_runs: searched }));
+    }
+    if (url.includes("/jobs")) {
+      return Promise.resolve(Response.json({ jobs: [apiJob("Check", 90)] }));
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  }) as typeof fetch;
+}
+
+Deno.test("CI job history refuses a search that does not reach the workflow's newest page", async () => {
+  // The search was served from before run 9_302 finished, so the runs between
+  // it and the newest page are missing from both.
+  const test = await temporaryCollector();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = servingSearchAndNewestPage(
+    [workflowRun(9_301, NOW - 5 * DAY)],
+    [
+      workflowRun(9_303, NOW - HOUR, { head_branch: "feature" }),
+      workflowRun(9_302, NOW - 2 * HOUR),
+    ],
+  );
+  try {
+    await assertRejects(
+      () => test.collector.collect("stale-token", NOW),
+      Error,
+      STALE_RUNS_ERROR,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
+Deno.test("CI job history takes the runs a search lags behind from the newest page", async () => {
+  // The search reaches run 9_312 but was cut before run 9_313 finished. Older
+  // on the page are a re-run's later attempt, which the search may still know
+  // by its first, and a run on another branch; neither is a first attempt on
+  // main, so neither is the run the search has to reach.
+  const test = await temporaryCollector();
+  const originalFetch = globalThis.fetch;
+  const reached = workflowRun(9_312, NOW - 3 * HOUR);
+  globalThis.fetch = servingSearchAndNewestPage(
+    [reached, workflowRun(9_311, NOW - DAY)],
+    [
+      workflowRun(9_314, NOW - HOUR / 2, { head_branch: "feature" }),
+      workflowRun(9_313, NOW - HOUR),
+      reached,
+      workflowRun(9_310, NOW - 4 * HOUR, { run_attempt: 2 }),
+      workflowRun(9_309, NOW - 5 * HOUR, { head_branch: "feature" }),
+    ],
+  );
+  try {
+    const snapshot = await test.collector.collect("lagging-token", NOW);
+    assertEquals(snapshot.successfulRunTimes, [
+      NOW - DAY,
+      NOW - 4 * HOUR,
+      NOW - 3 * HOUR,
+      NOW - HOUR,
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
+Deno.test("CI job history holds a search only to newest-page runs inside its window", async () => {
+  // A quiet workflow's newest page reaches back past the window; the search
+  // covers only the window, so it cannot be asked to reach that run.
+  const test = await temporaryCollector();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = servingSearchAndNewestPage(
+    [],
+    [workflowRun(9_331, NOW - (CI_HISTORY_DAYS + 5) * DAY)],
+  );
+  try {
+    const snapshot = await test.collector.collect("quiet-token", NOW);
+    assertEquals(snapshot.runCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
+Deno.test("CI Gantt picks main's pushes out of the unfiltered run list", async () => {
+  const test = await temporaryCollector();
+  const main = workflowRun(9_321, NOW, { conclusion: "failure" });
+  const pages: URL[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes(`/actions/workflows/${CI_WORKFLOW}/runs`)) {
+      pages.push(url);
+      return Promise.resolve(Response.json({
+        workflow_runs: [
+          workflowRun(9_323, NOW, { head_branch: "feature" }),
+          workflowRun(9_322, NOW, { event: "pull_request" }),
+          main,
+        ],
+      }));
+    }
+    if (url.pathname.includes("/jobs")) {
+      return Promise.resolve(Response.json({
+        jobs: [apiJob("Check", 90, "failure")],
+      }));
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  };
+  try {
+    const gantt = await test.collector.gantt(
+      "main-token",
+      CI_HISTORY_SOURCES.labs,
+      { limit: 10, mainOnly: true, allConclusions: true },
+      NOW,
+    );
+    assertEquals(gantt.runs.map(({ run }) => run.databaseId), [main.id]);
+    assertEquals(pages.map((url) => url.search), ["?per_page=100&page=1"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
+Deno.test("CI Gantt leaves out runs past the history window on the last page it reads", async () => {
+  const test = await temporaryCollector();
+  const recent = workflowRun(9_341, NOW);
+  const old = workflowRun(9_340, NOW - (CI_HISTORY_DAYS + 5) * DAY);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes(`/actions/workflows/${CI_WORKFLOW}/runs`)) {
+      return Promise.resolve(Response.json({ workflow_runs: [recent, old] }));
+    }
+    if (url.pathname.includes("/jobs")) {
+      return Promise.resolve(Response.json({ jobs: [apiJob("Check", 90)] }));
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  };
+  try {
+    const gantt = await test.collector.gantt(
+      "window-edge-token",
+      CI_HISTORY_SOURCES.labs,
+      { limit: 10, mainOnly: true, allConclusions: true },
+      NOW,
+    );
+    assertEquals(gantt.runs.map(({ run }) => run.databaseId), [recent.id]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
+Deno.test("CI Gantt counts a run two pages repeat once toward its limit", async () => {
+  // A run landing between the two reads pushes page one's last run onto page
+  // two as well.
+  const test = await temporaryCollector();
+  const runs = Array.from(
+    { length: 200 },
+    (_, index) => workflowRun(40_000 - index, NOW - index * 60_000),
+  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes(`/actions/workflows/${CI_WORKFLOW}/runs`)) {
+      const page = Number(url.searchParams.get("page"));
+      return Promise.resolve(Response.json({
+        workflow_runs: page === 1 ? runs.slice(0, 100) : runs.slice(99, 199),
+      }));
+    }
+    if (url.pathname.includes("/jobs")) {
+      return Promise.resolve(Response.json({ jobs: [apiJob("Check", 90)] }));
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  };
+  try {
+    const gantt = await test.collector.gantt(
+      "repeat-token",
+      CI_HISTORY_SOURCES.labs,
+      { limit: 150, mainOnly: true, allConclusions: true },
+      NOW,
+    );
+    assertEquals(gantt.runs.length, 150);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
+Deno.test("CI Gantt stops walking the unfiltered run list at the history window", async () => {
+  const test = await temporaryCollector();
+  const pages: number[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes(`/actions/workflows/${CI_WORKFLOW}/runs`)) {
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      // Every page is full of pull request runs, each twenty days older than
+      // the page before it, so the third reaches past the history window. The
+      // list ends at the fifth.
+      return Promise.resolve(Response.json({
+        workflow_runs: page > 5 ? [] : Array.from(
+          { length: 100 },
+          (_, index) =>
+            workflowRun(30_000 + page * 100 + index, NOW - page * 20 * DAY, {
+              event: "pull_request",
+            }),
+        ),
+      }));
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  };
+  try {
+    await assertRejects(
+      () =>
+        test.collector.gantt(
+          "window-token",
+          CI_HISTORY_SOURCES.labs,
+          { limit: 10, mainOnly: true, allConclusions: true },
+          NOW,
+        ),
+      Error,
+      "No completed CI runs",
+    );
+    assertEquals(pages, [1, 2, 3]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await test.cleanup();
+  }
+});
+
 Deno.test("CI job history splits a saturated workflow-run search", async () => {
   const test = await temporaryCollector();
   const ranges: string[] = [];
@@ -5495,6 +5750,9 @@ Deno.test("CI job history splits a saturated workflow-run search", async () => {
       url.pathname,
       `/actions/workflows/${CI_WORKFLOW}/runs`,
     );
+    if (isNewestPage(url.href)) {
+      return Promise.resolve(Response.json({ workflow_runs: [] }));
+    }
     ranges.push(url.searchParams.get("created") ?? "");
     return Promise.resolve(Response.json({
       total_count: ranges.length === 1 ? 1_000 : 0,
@@ -5957,6 +6215,7 @@ Deno.test("CI job history paginates workflow searches and honors the reported to
     const collector = new RateLimitedCiJobHistoryCollector(
       new CiJobHistoryStore(`${directory}/history.json`),
       <T>(path: string) => {
+        if (isNewestPage(path)) return Promise.resolve({ workflow_runs: [] } as T);
         const page = Number(
           new URL(`https://example.test/${path}`).searchParams.get("page"),
         );

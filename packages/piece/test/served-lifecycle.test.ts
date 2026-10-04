@@ -9,7 +9,7 @@ import { expect } from "@std/expect";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
-import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
   type Cell,
   entityIdFrom,
@@ -19,8 +19,11 @@ import {
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
-import { ExecutorHost } from "@commonfabric/runner/executor/host";
-import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
+import type { ExecutorHost } from "@commonfabric/runner/executor/host";
+import {
+  type ServingMemoryServer,
+  startServingMemoryServer,
+} from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { loadVerifiedSourceClosure } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
@@ -47,8 +50,6 @@ const serviceSigner = await Identity.fromPassphrase(
   "served lifecycle service",
 );
 const aliceSigner = await Identity.fromPassphrase("served lifecycle alice");
-
-const TEST_AUDIENCE = "did:key:z6Mk-served-lifecycle-audience";
 
 function programOf(contents: string): RuntimeProgram {
   return { main: "/main.tsx", files: [{ name: "/main.tsx", contents }] };
@@ -127,50 +128,22 @@ export const revision = ${JSON.stringify(version)};
 }
 
 describe("served lifecycle verbs", () => {
+  let serving: ServingMemoryServer;
   let server: MemoryV2Server.Server;
   let host: ExecutorHost;
   let session: Session;
   let cleanups: Array<() => Promise<void>>;
 
   beforeEach(async () => {
-    server = new MemoryV2Server.Server({
-      store: new URL(`memory://served-lifecycle-${crypto.randomUUID()}`),
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: { audience: TEST_AUDIENCE },
-      subscriptionRefreshDelayMs: 0,
+    serving = await startServingMemoryServer({
+      apiUrl: new URL(import.meta.url),
+      serviceIdentity: serviceSigner,
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
     });
-    session = await createSession({
+    ({ server, host } = serving);
+    session = createSession({
       identity: serviceSigner,
       spaceDid: space as DID,
-    });
-    host = new ExecutorHost({
-      server,
-      serviceIdentity: serviceSigner.did(),
-      createRuntime: (servedSpace) => {
-        const manager = LoopbackStorageManager.connect(server, {
-          as: serviceSigner,
-          servingHomeSpace: servedSpace,
-        });
-        const runtime = new Runtime({
-          apiUrl: new URL(import.meta.url),
-          storageManager: manager,
-          servingPosture: true,
-          experimental: { serverExecution: true },
-        });
-        return Promise.resolve({
-          runtime,
-          dispose: async () => {
-            await runtime.dispose();
-            await manager.close();
-          },
-        });
-      },
-      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
-      ensureSpaceRoots: false,
     });
     cleanups = [];
   });
@@ -178,7 +151,7 @@ describe("served lifecycle verbs", () => {
   afterEach(async () => {
     await host.close();
     for (const cleanup of cleanups.reverse()) await cleanup();
-    await server.close();
+    await serving.close();
   });
 
   /** A client's view of the space, opened as alice after the verb ran. */
@@ -552,18 +525,20 @@ export default pattern(() => {
     ) {
       const delegated = mode !== "client event";
       it(`registers through the computed root action using ${mode}`, async () => {
+        // The root records the principal its `addPiece` acts for.
         const rootReceipt = await instantiate({
           program: programOf(`
-import { computed, handler, pattern, Writable } from "commonfabric";
-const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
-  ({piece}, {panels}) => { panels.addUnique(piece); },
+import { computed, currentPrincipal, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>, adder: Writable<string>}>(
+  ({piece}, {panels, adder}) => { panels.addUnique(piece); adder.set(currentPrincipal() ?? ""); },
 );
 const removePiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
   ({piece}, {panels}) => { panels.set(panels.get().filter(member => !member.equals(piece))); },
 );
 export default pattern(() => {
   const panels = new Writable<Writable<unknown>[]>([]);
-  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}), removePiece: removePiece({panels}) };
+  const adder = new Writable<string>("");
+  return { panels, adder, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels, adder}), removePiece: removePiece({panels}) };
 });
 `),
         });
@@ -652,6 +627,12 @@ export default pattern(() => {
             ),
           ),
         ).toBe(true);
+        expect(
+          await root.getCell().asSchema({
+            type: "object",
+            properties: { adder: { type: "string" } },
+          }).key("adder").pull(),
+        ).toBe(aliceSigner.did());
         expect(await pieces.remove(created.pieceId)).toBe(true);
         await panels.pull();
         expect(panels.get().length).toBe(0);

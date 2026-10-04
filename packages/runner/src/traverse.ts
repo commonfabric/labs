@@ -70,6 +70,7 @@ import { isOpaqueReference, opaqueReference } from "./back-to-cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
+  resolveRootRefForStructure,
 } from "./cfc.ts";
 import { cfcEnvelopeLabelDocumentHashes } from "./cfc/label-documents.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
@@ -80,7 +81,7 @@ import {
   type IMemorySpaceValueAddress,
   isSigilLink,
   isWriteRedirectLink,
-  type ValuePath,
+  type StoredValuePath,
 } from "./link-types.ts";
 import {
   addressKey,
@@ -883,6 +884,197 @@ export function resolveSchemaRefsCanonical(
 }
 
 /**
+ * A value for each option list and the definitions it is read against. One
+ * list can be read against more than one set of definitions within a reading,
+ * where a union with no definitions to hand its options holds options that
+ * carry definitions of their own, and it means what those definitions make it
+ * mean.
+ */
+type ByReading<T> = Map<readonly JSONSchema[], Map<unknown, T>>;
+
+/** The value `map` holds for `options` read against `definitions`. */
+function readingEntry<T>(
+  map: ByReading<T>,
+  options: readonly JSONSchema[],
+  definitions: unknown,
+): T | undefined {
+  return map.get(options)?.get(definitions);
+}
+
+/** Sets the value `map` holds for `options` read against `definitions`. */
+function setReadingEntry<T>(
+  map: ByReading<T>,
+  options: readonly JSONSchema[],
+  definitions: unknown,
+  value: T,
+): void {
+  const byDefinitions = map.get(options);
+  if (byDefinitions === undefined) {
+    map.set(options, new Map([[definitions, value]]));
+  } else {
+    byDefinitions.set(definitions, value);
+  }
+}
+
+/** One reading of a schema's handle declaration by `declaresAsCell()`. */
+interface HandleReading {
+  /** The option lists being read further up. */
+  readonly open: ByReading<true>;
+
+  /** Whether every option of a list read so far declares a handle. */
+  readonly verdicts: ByReading<boolean>;
+
+  /**
+   * The lists, each with the definitions it is read against, that a union
+   * reached again while they were being read further up, and took there as
+   * declaring no handle.
+   */
+  readonly assumed: [readonly JSONSchema[], unknown][];
+}
+
+/**
+ * Helper for `SchemaObjectTraverser.hasAsCell()`, which reads the handle
+ * declaration off `schema` with its root `$ref` resolved
+ * ({@link resolveRootRefForStructure}): its own `asCell` entry, or one that
+ * every `anyOf` or every `oneOf` option declares. An option is read the same
+ * way, against the definitions of the schema it sits in, so a union of
+ * references to handle definitions declares a handle as the same union with
+ * `asCell` at each reference does.
+ *
+ * A reading reads each option list once for each set of definitions it is
+ * read against, so definitions the lists share are read once however many
+ * reach them. A union that reaches a list still being read further up
+ * against the same definitions takes it as declaring no handle, since reading
+ * it again proves nothing. Where a list taken that way turns out to declare a
+ * handle after all, what was read through it may have fallen short, so the
+ * reading runs again, keeping the lists found to declare one: those hold
+ * however the lists further up read. A list is taken that way only while it
+ * is open, so the same run reads it to a verdict, and a run that follows is
+ * caused by a list the runs before it had not found to declare a handle and
+ * reads that list from its verdict. So there are at most as many runs as
+ * lists read, plus one.
+ */
+function declaresAsCell(schema: JSONSchema | undefined): boolean {
+  const reading: HandleReading = {
+    open: new Map(),
+    verdicts: new Map(),
+    assumed: [],
+  };
+  for (;;) {
+    const declares = readsAsHandle(schema, reading);
+    const settled = reading.assumed.every(([options, definitions]) =>
+      readingEntry(reading.verdicts, options, definitions) !== true
+    );
+    if (settled) return declares;
+    for (const byDefinitions of reading.verdicts.values()) {
+      for (const [definitions, every] of byDefinitions) {
+        if (!every) byDefinitions.delete(definitions);
+      }
+    }
+    reading.assumed.length = 0;
+  }
+}
+
+/** Whether `schema` declares a handle, within `reading`. */
+function readsAsHandle(
+  schema: JSONSchema | undefined,
+  reading: HandleReading,
+): boolean {
+  if (schema === undefined || typeof schema === "boolean") {
+    return false;
+  }
+  const declaring = resolveRootRefForStructure(schema);
+  if (ContextualFlowControl.getAsCellValues(declaring).length > 0) {
+    return true;
+  }
+  for (const options of [declaring.anyOf, declaring.oneOf]) {
+    if (
+      Array.isArray(options) &&
+      everyOptionReadsAsHandle(options, declaring.$defs, reading)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether every option in `options` declares a handle, read against
+ * `definitions`, within `reading`.
+ */
+function everyOptionReadsAsHandle(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: HandleReading,
+): boolean {
+  const known = readingEntry(reading.verdicts, options, definitions);
+  if (known !== undefined) return known;
+  if (readingEntry(reading.open, options, definitions)) {
+    reading.assumed.push([options, definitions]);
+    return false;
+  }
+  setReadingEntry(reading.open, options, definitions, true);
+  try {
+    const every = options.every((option) =>
+      readsAsHandle(cfcSchemaWithInheritedDefs(option, definitions), reading)
+    );
+    setReadingEntry(reading.verdicts, options, definitions, every);
+    return every;
+  } finally {
+    reading.open.get(options)?.delete(definitions);
+  }
+}
+
+/**
+ * `SchemaObjectTraverser.hasAsCell()` verdicts for memoizable schemas that
+ * take resolving to read — a root `$ref`, or `anyOf` or `oneOf` options — which
+ * the traversal reads once for every property and every array element under
+ * one. A verdict reached through an external reference embeds registry
+ * content, so the registry clear swaps the cache.
+ */
+let _handleVerdicts = new WeakMap<JSONSchemaObj, boolean>();
+
+onSchemaRegistryClear(() => {
+  _handleVerdicts = new WeakMap();
+});
+
+/**
+ * Like {@link declaresAsCell}, except that the verdict is kept per schema
+ * identity where the schema is memoizable. A verdict reached while an external
+ * resolution missed is not kept, since the document can still arrive.
+ */
+function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
+  if (!isMemoizableSchemaInput(schema)) return declaresAsCell(schema);
+  const cached = _handleVerdicts.get(schema);
+  if (cached !== undefined) return cached;
+  const missesBefore = externalResolutionMissCount();
+  const verdict = declaresAsCell(schema);
+  if (externalResolutionMissCount() === missesBefore) {
+    _handleVerdicts.set(schema, verdict);
+  }
+  return verdict;
+}
+
+/**
+ * Whether `schema` declares a handle at its root, itself or through the
+ * definition its root `$ref` names. A union whose every option declares a
+ * handle is a handle as well (`SchemaObjectTraverser.hasAsCell()`), but which
+ * option's handle turns on the value, so the union's branches are traversed
+ * and their merge mints it.
+ *
+ * Every handle an eager read reaches is asked this, so a handle written at the
+ * root is answered without resolving anything, and only a root `$ref` that
+ * carries no handle of its own is read through.
+ */
+function declaresHandleAtRoot(schema: JSONSchema | undefined): boolean {
+  if (!isObjectNotArray(schema)) return false;
+  if (ContextualFlowControl.getAsCellValues(schema).length > 0) return true;
+  return typeof schema.$ref === "string" &&
+    ContextualFlowControl.getAsCellValues(resolveRootRefForStructure(schema))
+        .length > 0;
+}
+
+/**
  * A data structure that maps keys to sets of values, allowing multiple values
  * to be associated with a single key without duplication.
  *
@@ -1373,6 +1565,45 @@ export type PointerCycleTracker = CompoundCycleTracker<
   any
 >;
 
+/**
+ * The route a traversal takes from its root to the position it is at, as the
+ * links it followed on the way. An object creator that derives what it mints
+ * from that route implements this, and the traversal keeps it up to date: a
+ * read carries the stored label of every link slot it passed through (CFC
+ * §8.2.4), and those labels live in the documents holding the links rather
+ * than in the one a position is in.
+ *
+ * A traversal that moves a value to another address without following a
+ * link, as an inline array item moves to a `data:` document of its own,
+ * records that as a copy.
+ */
+export interface LinkCrossingRoute {
+  /**
+   * Records that the traversal followed a link out of the slot at `source`
+   * to `target`.
+   */
+  cross(source: NormalizedFullLink, target: NormalizedFullLink): void;
+
+  /**
+   * Records that the traversal moved the value at `source` into a document
+   * of its own at `target`.
+   */
+  copy(source: NormalizedFullLink, target: NormalizedFullLink): void;
+
+  /** Where the route stands now, for `restore()`. */
+  mark(): number;
+
+  /** Removes the crossings recorded since `mark()` returned `mark`. */
+  restore(mark: number): void;
+
+  /**
+   * The part of a memo key that the route contributes at the current
+   * position. Two arrivals at one position with the same key, under one
+   * schema and one link, traverse to the same result.
+   */
+  memoKey(): string;
+}
+
 export type TraversalContext = {
   /** Probe terminal payload only while constructing a held cell reference. */
   referenceOnly?: boolean;
@@ -1461,7 +1692,69 @@ export type TraversalContext = {
    * selection depended on.
    */
   schemaDocsAvailable: Set<string>;
+
+  /**
+   * The route to the position being traversed, present only when the object
+   * creator derives what it mints from it. Each combinator branch, fixed-point
+   * round, and array item removes the crossings it recorded when it is done,
+   * so the route names the way to the current position and no other.
+   */
+  linkCrossingRoute?: LinkCrossingRoute;
 };
+
+/**
+ * Records on `context`'s route that the traversal followed a link out of
+ * `source` to `target`, when the context keeps a route.
+ */
+function noteLinkCrossing(
+  context: TraversalContext,
+  source: IMemorySpaceValueAddress,
+  target: NormalizedFullLink,
+): void {
+  context.linkCrossingRoute?.cross(getNormalizedLink(source), target);
+}
+
+/**
+ * Like `noteLinkCrossing()`, except that the traversal moved to the document
+ * address `target`.
+ */
+function noteAddressCrossing(
+  context: TraversalContext,
+  source: IMemorySpaceValueAddress,
+  target: IMemorySpaceValueAddress,
+): void {
+  context.linkCrossingRoute?.cross(
+    getNormalizedLink(source),
+    getNormalizedLink(target),
+  );
+}
+
+/**
+ * Marks where `context`'s route stands on entry to a position, for
+ * `restoreLinkCrossings()` to return it to when the position is done.
+ */
+function markLinkCrossings(context: TraversalContext): number | undefined {
+  return context.linkCrossingRoute?.mark();
+}
+
+/**
+ * Removes the link crossings recorded on `context`'s route since `mark`,
+ * which `markLinkCrossings()` returned.
+ */
+function restoreLinkCrossings(
+  context: TraversalContext,
+  mark: number | undefined,
+): void {
+  if (mark !== undefined) context.linkCrossingRoute?.restore(mark);
+}
+
+/**
+ * The part of a memo key that `context`'s route contributes at the current
+ * position, empty when the context keeps no route.
+ */
+function linkCrossingsMemoKey(context: TraversalContext): string {
+  return context.linkCrossingRoute?.memoKey() ?? "";
+}
 
 export function createTraversalContext(
   tracker: PointerCycleTracker,
@@ -2561,6 +2854,7 @@ function followPointer(
   // is resolvable when the predicate walks it; it marks off whatever the
   // schema legibly declares.
   markIfcBearingLinkCrossing(tx, doc.address.space, link.schema, link.id);
+  noteLinkCrossing(context, doc.address, link);
   if (!collected) {
     // Closure documents travel WITH the documents that refer to them, so
     // an unresolvable ref names a corrupt or deliberately malformed
@@ -2699,10 +2993,10 @@ function followPointer(
     // If the doc exists, but we don't have our entire path to the link target,
     // see if we can get there through intermediate documents.
     const lastPath = (error !== undefined)
-      ? error.path // this may not be a ValuePath
-      : valueEntry.address.path; // this is a ValuePath
+      ? error.path // this may not be a StoredValuePath
+      : valueEntry.address.path; // this is a StoredValuePath
     if (valueEntry === undefined || valueEntry.value === undefined) {
-      let lastExisting: ValuePath = ["value"];
+      let lastExisting: StoredValuePath = ["value"];
       // Never slice below "value" - it's the minimum valid path for getNormalizedLink
       if (lastPath.length > 1) {
         // It's possible an error path may not have a value. If so, we throw.
@@ -2711,7 +3005,7 @@ function followPointer(
             "traverse",
             () => ["Invalid path:", lastPath, error, valueEntry?.address],
           );
-          throw new Error("Invalid path (not a ValuePath)");
+          throw new Error("Invalid path (not a StoredValuePath)");
         }
         // The last element in path wasn't found, so chop that off
         lastExisting = ["value", ...lastPath.slice(1, -1)];
@@ -3620,6 +3914,10 @@ const TRAVERSE_FAILURES = {
     "UNEXPECTED_DOC_VALUE",
     "Unexpected type for doc value",
   ),
+  branchCycle: createTraverseFailure(
+    "BRANCH_CYCLE",
+    "Branch returns to a traversal of its own position",
+  ),
 } as const;
 
 function fail<T>(
@@ -3688,6 +3986,35 @@ export function assertSchemaMemoIdentity(
   }
 }
 
+/**
+ * The rounds in which the traversal that began a position reaches a fixed
+ * point, from the first combinator branch that comes back to a traversal of the
+ * position still in progress.
+ */
+interface PositionRounds {
+  /**
+   * What a branch that comes back to a traversal takes in its place, by memo
+   * key: that traversal's result in the latest round that reached it. A
+   * traversal with none is taken as no match.
+   */
+  readonly standIns: Map<string, TraverseResult<FabricValue>>;
+
+  /**
+   * The results of the current round that took something in place of a
+   * traversal, by memo key. A traversal reached again in the round takes its
+   * result from here.
+   */
+  readonly results: Map<string, TraverseResult<FabricValue>>;
+
+  /** The memo keys of the traversals a branch came back to in the round. */
+  readonly cameBack: Set<string>;
+}
+
+/** Whether `result` is a match, `undefined` standing for no match. */
+function isMatch(result: TraverseResult<FabricValue> | undefined): boolean {
+  return result !== undefined && result.error === undefined;
+}
+
 export class SchemaObjectTraverser<V extends FabricValue>
   extends BaseObjectTraverser {
   #sharedSchemaMemo?: SchemaMemo;
@@ -3743,6 +4070,30 @@ export class SchemaObjectTraverser<V extends FabricValue>
     string,
     TraverseResult<FabricValue>
   >();
+
+  /** The traversals in progress, by memo key, each with the depth it runs at. */
+  #inProgress = new Map<string, number>();
+
+  /**
+   * Depth of the traversal that began the position being evaluated. Every
+   * traversal below it, down to the current one, is a combinator branch
+   * evaluating that position's value at that position's address under another
+   * of its schemas; `traverseWithSchema()` begins a new position.
+   */
+  #positionDepth = 0;
+
+  /**
+   * The rounds of the position being evaluated, once a branch has come back to
+   * one of its traversals.
+   */
+  #rounds: PositionRounds | undefined;
+
+  /**
+   * Whether the traversal being evaluated has taken, itself or through a
+   * traversal below it, a result that holds only for the current round of its
+   * position. Such a result is returned but not memoized.
+   */
+  #provisional = false;
 
   schemaMemoHits = 0;
 
@@ -3985,9 +4336,35 @@ export class SchemaObjectTraverser<V extends FabricValue>
     schema: JSONSchema,
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> {
+    const outerPositionDepth = this.#positionDepth;
+    const outerRounds = this.#rounds;
+    this.#positionDepth = this.#currentDepth + 1;
+    this.#rounds = undefined;
+    try {
+      return this.#traverseBranch(doc, schema, link);
+    } finally {
+      this.#positionDepth = outerPositionDepth;
+      this.#rounds = outerRounds;
+    }
+  }
+
+  /**
+   * Like `traverseWithSchema()`, except that `doc` is the position its caller
+   * is evaluating, taken under another of the caller's schemas, as a
+   * combinator branch takes it. A branch that comes back to a traversal of the
+   * same position still in progress has read nothing that traversal has not,
+   * so it stands for that traversal's own result, which the traversal that
+   * began the position reaches in rounds (see `#settleRounds()`).
+   */
+  #traverseBranch(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchema,
+    link?: NormalizedFullLink,
+  ): TraverseResult<FabricValue> {
     // TODO(@ubik2): Need to break this up -- it's too long
     this.traverseWithSchemaCalls++;
     this.#currentDepth++;
+    const crossingsMark = markLinkCrossings(this.context);
     if (this.#currentDepth > this.#maxDepth) {
       this.#maxDepth = this.#currentDepth;
     }
@@ -4000,8 +4377,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
     try {
       // Both paths memoize by doc address + schema. The read path adds the
-      // link, the one input its object creator reads and the query path's
-      // ignores (see schemaMemoLinkKey).
+      // link and what the route of link crossings contributes, the inputs its
+      // object creator reads and the query path's ignores (see
+      // schemaMemoLinkKey and LinkCrossingRoute.memoKey).
       //
       // A hit skips a subtree, and with it the scheduler reads and tracker
       // entries that subtree records. That is sound because a hit means this
@@ -4016,17 +4394,142 @@ export class SchemaObjectTraverser<V extends FabricValue>
       const memoKey = this.traverseCells
         ? schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema)
         : schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema) + "|" +
-          schemaMemoLinkKey(link);
+          schemaMemoLinkKey(link) + "|" + linkCrossingsMemoKey(this.context);
       const cached = memo.get(memoKey);
       if (cached !== undefined) {
         this.schemaMemoHits++;
         return cached;
       }
-      const result = this.#traverseWithSchemaInner(doc, schema, link);
-      memo.set(memoKey, result);
-      return result;
+      // A key in progress at an outer position has been reached again through
+      // a descent or a link, where the cycle tracker handles the re-entry;
+      // only a key in progress at this position is a branch coming back to
+      // itself.
+      const inProgressDepth = this.#inProgress.get(memoKey);
+      if (
+        inProgressDepth !== undefined && inProgressDepth >= this.#positionDepth
+      ) {
+        const rounds = this.#rounds ??= {
+          standIns: new Map(),
+          results: new Map(),
+          cameBack: new Set(),
+        };
+        rounds.cameBack.add(memoKey);
+        this.#provisional = true;
+        return rounds.standIns.get(memoKey) ??
+          fail(TRAVERSE_FAILURES.branchCycle);
+      }
+      const roundResult = this.#rounds?.results.get(memoKey);
+      if (roundResult !== undefined) {
+        this.#provisional = true;
+        return roundResult;
+      }
+      const depth = this.#currentDepth;
+      const outerProvisional = this.#provisional;
+      this.#provisional = false;
+      this.#inProgress.set(memoKey, depth);
+      try {
+        let result = this.#traverseWithSchemaInner(doc, schema, link);
+        if (depth === this.#positionDepth && this.#rounds !== undefined) {
+          result = this.#settleRounds(
+            doc,
+            schema,
+            link,
+            memoKey,
+            crossingsMark,
+            result,
+          );
+          this.#provisional = false;
+        }
+        if (this.#provisional) {
+          this.#rounds!.results.set(memoKey, result);
+        } else {
+          memo.set(memoKey, result);
+        }
+        return result;
+      } finally {
+        if (inProgressDepth === undefined) {
+          this.#inProgress.delete(memoKey);
+        } else {
+          this.#inProgress.set(memoKey, inProgressDepth);
+        }
+        this.#provisional ||= outerProvisional;
+      }
     } finally {
       this.#currentDepth--;
+      restoreLinkCrossings(this.context, crossingsMark);
+    }
+  }
+
+  /**
+   * Runs the traversal that began the position until it reaches a fixed point,
+   * given `result` from its first round, and returns its result there.
+   *
+   * The first round takes every branch that comes back as no match. Each later
+   * round takes, in place of a traversal a branch comes back to, that
+   * traversal's result in the latest round that reached it, and a traversal
+   * reached again within a round takes its result from earlier in the round,
+   * so a round traverses each schema at the position once. Whether a branch
+   * matches turns on the value and on whether what it stands for matched,
+   * never on what that holds, since a combinator merges its matches without
+   * checking them. Under `anyOf` and `allOf`, what stands for a match in place
+   * of what stood for none can only turn no match into a match, so each round
+   * matches everything the round before did. Once a round leaves no traversal
+   * that a branch came back to matching where what stood in for it did not,
+   * the next round would take the same branches. That round matches as the
+   * schema unrolled does, and selects every property the unrolled schema
+   * selects: every schema those branches reach was traversed in the round, so
+   * what a branch standing in for one adds, the round has already selected.
+   * `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every
+   * round before that one matches a traversal the rounds before it did not,
+   * so the rounds number at most one more than the schemas at the position.
+   *
+   * Where two matching branches project one property differently, the merge
+   * keeps the later branch's projection, and the round's own merges decide
+   * which that is, which need not be the one an unrolling keeps. An unrolling
+   * need not settle on one: `R = anyOf(A, S)` with `S = anyOf(B, R)`, where
+   * `A` and `B` select different parts of one property, keeps `A`'s
+   * projection unrolled to an odd depth and `B`'s to an even one.
+   *
+   * A `oneOf` can reject in one round what it accepted in the round before, and
+   * so has no fixed point to reach; the round before the first such rejection
+   * stands.
+   */
+  #settleRounds(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchema,
+    link: NormalizedFullLink | undefined,
+    memoKey: string,
+    crossingsMark: number | undefined,
+    result: TraverseResult<FabricValue>,
+  ): TraverseResult<FabricValue> {
+    const rounds = this.#rounds!;
+    let before = result;
+    for (;;) {
+      rounds.results.set(memoKey, result);
+      for (const [key, found] of rounds.results) {
+        if (isMatch(rounds.standIns.get(key)) && !isMatch(found)) {
+          return before;
+        }
+      }
+      let rose = false;
+      for (const key of rounds.cameBack) {
+        if (
+          !isMatch(rounds.standIns.get(key)) && isMatch(rounds.results.get(key))
+        ) {
+          rose = true;
+          break;
+        }
+      }
+      if (!rose) return result;
+      for (const [key, found] of rounds.results) {
+        rounds.standIns.set(key, found);
+      }
+      rounds.results.clear();
+      rounds.cameBack.clear();
+      before = result;
+      this.#provisional = false;
+      restoreLinkCrossings(this.context, crossingsMark);
+      result = this.#traverseWithSchemaInner(doc, schema, link);
     }
   }
 
@@ -4085,7 +4588,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
               this.anyOfFastRejects++;
               continue;
             }
-            const { ok: val, error } = this.traverseWithSchema(
+            const { ok: val, error } = this.#traverseBranch(
               doc,
               mergedSchema,
               link,
@@ -4175,7 +4678,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
             continue;
           }
           // TODO(@ubik2): do i need to merge the link schema?
-          const { ok: val, error } = this.traverseWithSchema(
+          const { ok: val, error } = this.#traverseBranch(
             doc,
             branch.merged,
             link,
@@ -4223,7 +4726,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           }
           const mergedSchema = mergeSchemaOption(restSchema, optionSchema);
           // TODO(@ubik2): do i need to merge the link schema?
-          const { ok: val, error } = this.traverseWithSchema(
+          const { ok: val, error } = this.#traverseBranch(
             doc,
             mergedSchema,
             link,
@@ -4272,7 +4775,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           }
           const mergedSchema = mergeSchemaOption(restSchema, optionSchema);
           // TODO(@ubik2): do i need to merge the link schema?
-          const { ok: val, error } = this.traverseWithSchema(
+          const { ok: val, error } = this.#traverseBranch(
             doc,
             mergedSchema,
             link,
@@ -4735,12 +5238,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
         return undefined;
       }
       this.#reportMissingPlainArrayItemLink(doc, selector, target);
+      noteAddressCrossing(this.context, doc.address, target);
       return [{ address: target, value: undefined }, {
         path: target.path,
         schema: selector.schema,
       }];
     }
     if (ok.value === undefined) return undefined;
+    noteAddressCrossing(this.context, doc.address, target);
     return [{ address: target, value: ok.value }, {
       path: target.path,
       schema: selector.schema,
@@ -4871,7 +5376,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
       schema,
       "array",
     );
+    // Each element is a position of its own, reached by whatever link its
+    // slot holds, so the crossings an element records go when it is done.
+    const crossingsMark = markLinkCrossings(this.context);
     docArray.forEach((item, index) => {
+      restoreLinkCrossings(this.context, crossingsMark);
       const itemSchema = directItems ??
         schemaAtPathCanonical(settledSchema, [index.toString()]);
       const batchIndex = preparedPlainLinkIndex++;
@@ -4927,6 +5436,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
           const cellLink = getNextCellLink(
             this.tx,
+            this.context,
             curDoc,
             curSelector.schema!,
           );
@@ -5000,6 +5510,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
                 preparedTarget,
               );
             }
+            noteAddressCrossing(this.context, curDoc.address, preparedTarget);
             linkDoc = {
               address: preparedTarget,
               value: preparedResult?.ok?.value,
@@ -5053,6 +5564,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // Replace doc with a DataCellURI style doc
         // Need to read recursively here
         this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+        const elementAddress = curDoc.address;
         // TODO(@ubik2): ideally, we wouldn't use this path in query traversal.
         // Right now, we aren't passing both the link info and doc info, so we
         // will override the doc here.
@@ -5068,15 +5580,22 @@ export class SchemaObjectTraverser<V extends FabricValue>
         };
         // Our selector's path needs to be updated to match the new doc
         curSelector.path = curDoc.address.path;
+        this.context.linkCrossingRoute?.copy(
+          getNormalizedLink(elementAddress),
+          getNormalizedLink(curDoc.address),
+        );
       }
       // If we've asked for cells in the array and we don't need to traverse cells,
       // add the created cell instead. We check asCellOrStream regardless of
       // whether the value is a link — inline objects should also become cells
-      // when the schema says asCell, to avoid reading nested data on the
-      // parent's reactive transaction.
+      // when the schema declares the handle at its root, to avoid reading
+      // nested data on the parent's reactive transaction. A union whose options
+      // declare the handles declares none there: it is traversed below, and the
+      // merge of its branches mints the handle.
       if (
         !this.traverseCells &&
-        SchemaObjectTraverser.hasAsCell(curSelector.schema)
+        SchemaObjectTraverser.hasAsCell(curSelector.schema) &&
+        declaresHandleAtRoot(curSelector.schema)
       ) {
         // For my cell link, curDoc currently points to the last
         // redirect target, but we want cell properties to be based on the
@@ -5090,7 +5609,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         const isLink = isSigilLink(curDoc.value);
         if (isLink) this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
         const cellLink = isLink
-          ? getNextCellLink(this.tx, curDoc, curSelector.schema!)
+          ? getNextCellLink(this.tx, this.context, curDoc, curSelector.schema!)
           : getNormalizedLink(curDoc.address, curSelector.schema);
         arrayObj[index] = this.objectCreator.createObject(cellLink, undefined);
       } else {
@@ -5100,10 +5619,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
         const plan = !this.traverseCells && curSelector.schema !== undefined
           ? preparePlainSchemaPlan(curSelector.schema)
           : undefined;
-        const { ok: val, error } = (plan === undefined
-          ? undefined
-          : this.#traversePlainSchema(curDoc, plan)) ??
-          this.traverseWithSelector(curDoc, curSelector);
+        const traverseElement = () =>
+          (plan === undefined
+            ? undefined
+            : this.#traversePlainSchema(curDoc, plan)) ??
+            this.traverseWithSelector(curDoc, curSelector);
+        // An element reaching here as a handle is a union of handles, whose
+        // branches are traversed to mint it; as for a property, those reads
+        // resolve the reference and are not conflict dependencies.
+        const { ok: val, error } = !this.traverseCells &&
+            SchemaObjectTraverser.hasAsCell(curSelector.schema)
+          ? this.tx.runWithAmbientReadMeta(
+            excludeReadFromConflict,
+            traverseElement,
+          )
+          : traverseElement();
         if (error !== undefined) {
           // If our item doesn't match our schema, we may be able to use
           // undefined or null if those are valid according to our schema.
@@ -5136,6 +5666,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         }
       }
     });
+    restoreLinkCrossings(this.context, crossingsMark);
     return valid ? arrayObj : undefined;
   }
 
@@ -5199,10 +5730,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
         path: appendToPath(doc.address.path, propKey),
       };
       // If we have a link, the traverseWithSchema will handle that for us.
-      // If we have a value, we instead need to handle it ourselves
+      // If we have a value, we instead need to handle it ourselves, where the
+      // schema declares the handle at its root. A union whose options declare
+      // the handles declares none there: it is traversed below, and the merge
+      // of its branches mints the handle.
       if (
         !this.traverseCells &&
         SchemaObjectTraverser.hasAsCell(propSchema) &&
+        declaresHandleAtRoot(propSchema) &&
         !isSigilLink(propValue)
       ) {
         // Intentionally treat asCell/asStream as an opaque boundary in
@@ -5365,7 +5900,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
         pointerLink !== undefined)
     ) {
-      const cellLink = getNextCellLink(this.tx, doc, schema);
+      const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
 
@@ -5397,7 +5932,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
         schema,
         redirSelector?.schema,
       )!;
-      const cellLink = getNextCellLink(this.tx, redirDoc, combinedSchema);
+      const cellLink = getNextCellLink(
+        this.tx,
+        this.context,
+        redirDoc,
+        combinedSchema,
+      );
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
     if (redirDoc.value === undefined) {
@@ -5464,7 +6004,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       if (isSigilLink(redirDoc.value)) {
         this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
       }
-      const cellLink = getNextCellLink(this.tx, redirDoc, combinedSchema);
+      const cellLink = getNextCellLink(
+        this.tx,
+        this.context,
+        redirDoc,
+        combinedSchema,
+      );
       logger.debug(
         "traverse",
         () => ["Next cell link:", {
@@ -5501,38 +6046,31 @@ export class SchemaObjectTraverser<V extends FabricValue>
   }
 
   /**
-   * Check whether the schema specifies asCell
+   * Returns whether the schema declares a handle: an `asCell` entry, of
+   * whatever kind.
+   *
+   * The schema's root `$ref` is resolved first, local or external
+   * ({@link resolveRootRefForStructure}): a definition declares the handle for
+   * every position of its type, so `{ $ref: "#/$defs/Profile" }` declares one
+   * exactly when `Profile` does, as `{ $ref, asCell }` does at the reference.
    *
    * This handling gets a little blurry with anyOf or oneOf schemas, and
    * in those cases, we base the value on whether every option has the flag.
+   * An option is read the same way, through its root `$ref` against the
+   * definitions of the schema it sits in, and a union that reaches itself
+   * through an option declares no handle by way of itself.
    *
    * A future improvement is to operate on pre-processed schemas, where the
    * asCell and asStream flags are factored out when possible.
-   *
-   * We do not resolve references in the anyOf or oneOf options, which means
-   * we don't need to worry about cycles, but it also means we may miss some
-   * references that should be asCell.
-   *
-   * @param schema
-   * @returns
    */
   static hasAsCell(schema: JSONSchema | undefined): boolean {
     if (schema === undefined || typeof schema === "boolean") {
       return false;
     }
-    const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    if (
-      asCellValues.length > 0 ||
-      (Array.isArray(schema.anyOf) &&
-        schema.anyOf.every((option) =>
-          SchemaObjectTraverser.hasAsCell(option)
-        )) ||
-      (Array.isArray(schema.oneOf) &&
-        schema.oneOf.every((option) => SchemaObjectTraverser.hasAsCell(option)))
-    ) {
-      return true;
-    }
-    return false;
+    return typeof schema.$ref === "string" || Array.isArray(schema.anyOf) ||
+        Array.isArray(schema.oneOf)
+      ? declaresAsCellMemoized(schema)
+      : ContextualFlowControl.getAsCellValues(schema).length > 0;
   }
 
   #applyDefault(
@@ -5780,6 +6318,7 @@ function withoutSlotValueScope(
  * Get the link for a cell reached by following one link if available.
  * If doc.value does not contain a link, the cell will point to doc.address.
  *
+ * @param context - The traversal's shared state, which records the crossing
  * @param doc - IAttestation for the location of the link
  * @param schema - JSONSchema for the item
  *
@@ -5788,6 +6327,7 @@ function withoutSlotValueScope(
  */
 function getNextCellLink(
   tx: IExtendedStorageTransaction,
+  context: TraversalContext,
   doc: IMemorySpaceValueAttestation,
   schema: JSONSchema,
 ): NormalizedFullLink {
@@ -5821,12 +6361,14 @@ function getNextCellLink(
       readerSchema,
       lastLink.schema ?? true,
     );
-    return {
+    const target = {
       ...lastLink,
       schema: lastLink.space === doc.address.space
         ? combined
         : schemaForSpaceCrossing(tx, doc.address.space, combined),
     };
+    noteLinkCrossing(context, doc.address, target);
+    return target;
   }
   // It's fine if we don't have a pointer. In that case, just use the doc
   // address. If I have asCell in the schema, but a plain value, we want
@@ -5839,13 +6381,62 @@ function getNextCellLink(
 }
 
 // helper function - since path starts with value, the new array will too
-function appendToPath(path: ValuePath, part: string): ValuePath {
-  return [...path, part] as ValuePath;
+function appendToPath(path: StoredValuePath, part: string): StoredValuePath {
+  return [...path, part] as StoredValuePath;
 }
 
 // helper function - since path starts with value, the new array will too
-function appendPartsToPath(path: ValuePath, parts: string[]): ValuePath {
-  return [...path, ...parts] as ValuePath;
+function appendPartsToPath(
+  path: StoredValuePath,
+  parts: string[],
+): StoredValuePath {
+  return [...path, ...parts] as StoredValuePath;
+}
+
+/**
+ * How a branch list combines its options: all of them together, as an `allOf`
+ * does, or any one of them, as an `anyOf` or a `oneOf` does.
+ */
+type BranchCombinator = "allOf" | "anyOf";
+
+/** One reading of a schema's validity for a value type by `schemaTypeValidity()`. */
+interface TypeReading {
+  /** The value type the reading asks about. */
+  readonly valueType: JSONSchemaTypes;
+
+  /**
+   * What the reading keeps about the branch lists it reads as an `allOf`,
+   * from the first it reads. One array of options can be both an `allOf` and
+   * an `anyOf`, and comes to something different as each, so each way keeps
+   * its own. A schema with no `allOf`, `anyOf` or `oneOf` is read without
+   * either.
+   */
+  allOf?: BranchListReading;
+
+  /** Likewise, for the lists it reads as an `anyOf` or a `oneOf`. */
+  anyOf?: BranchListReading;
+}
+
+/** What a `TypeReading` keeps about the branch lists it reads. */
+interface BranchListReading {
+  /** The branch lists being read further up. */
+  readonly open: ByReading<true>;
+
+  /** What each branch list read in the current round came to. */
+  readonly validities: ByReading<TypeValidity>;
+
+  /**
+   * What stands in for a branch list reached again while it is being read
+   * further up: what it came to in the round before. A list with none matches
+   * nothing.
+   */
+  readonly standIns: ByReading<TypeValidity>;
+
+  /**
+   * The branch lists, each with the definitions it is read against, reached
+   * again in the current round while they were being read further up.
+   */
+  readonly reachedAgain: [readonly JSONSchema[], unknown][];
 }
 
 /**
@@ -5853,10 +6444,70 @@ function appendPartsToPath(path: ValuePath, parts: string[]): ValuePath {
  * write path can share it): whether a schema can match a value of the given
  * type name, with the same $ref resolution and allOf/anyOf/oneOf handling the
  * read-side validation uses.
+ *
+ * A schema that reaches itself again through a `$ref` — a union whose handle
+ * branch names the union — presents one of its branch lists again, since
+ * resolution hands back a definition's own list rather than a copy. A list
+ * reached again while it is being read stands for what it comes to, which the
+ * reading reaches as a least fixed point in rounds, as traversal does. The
+ * first round takes such a list as matching nothing, whatever combinator
+ * holds it, and each later round takes what the list came to in the round
+ * before. A round reads each list once for each set of definitions it is read
+ * against, so definitions that several lists share are read once however many
+ * reach them.
+ *
+ * Every list is read whether or not another has already ruled the value out,
+ * so every round reaches the same lists at the same points. In the order
+ * `False`, `True`, `Unknown`, what a combinator comes to only moves up as what
+ * it combines moves up, so each list comes to at least what it came to the
+ * round before. A round in which every list reached again came to what stood
+ * in for it is the least fixed point, and each list can move up only twice, so
+ * the rounds number at most one more than twice the lists reached again.
  */
 function schemaTypeValidity(
   schema: JSONSchema,
   valueType: JSONSchemaTypes,
+): TypeValidity {
+  const reading: TypeReading = { valueType };
+  for (;;) {
+    const validity = typeValidityWithin(schema, reading);
+    if (listsSettled(reading.allOf) && listsSettled(reading.anyOf)) {
+      return validity;
+    }
+    startNextRound(reading.allOf);
+    startNextRound(reading.anyOf);
+  }
+}
+
+/**
+ * Whether every branch list `lists` reached again came to what stood in for
+ * it, as a reading that read no list this way trivially has.
+ */
+function listsSettled(lists: BranchListReading | undefined): boolean {
+  return lists === undefined ||
+    lists.reachedAgain.every(([options, definitions]) =>
+      readingEntry(lists.validities, options, definitions) ===
+        (readingEntry(lists.standIns, options, definitions) ??
+          TypeValidity.False)
+    );
+}
+
+/** Lets what each list in `lists` came to stand in for it in the next round. */
+function startNextRound(lists: BranchListReading | undefined): void {
+  if (lists === undefined) return;
+  for (const [options, byDefinitions] of lists.validities) {
+    for (const [definitions, listValidity] of byDefinitions) {
+      setReadingEntry(lists.standIns, options, definitions, listValidity);
+    }
+  }
+  lists.validities.clear();
+  lists.reachedAgain.length = 0;
+}
+
+/** What `schema` comes to for the reading's value type, within `reading`. */
+function typeValidityWithin(
+  schema: JSONSchema,
+  reading: TypeReading,
 ): TypeValidity {
   let resolved: JSONSchema | undefined = schema;
   if (isObjectOrArray(schema) && "$ref" in schema) {
@@ -5876,6 +6527,7 @@ function schemaTypeValidity(
     return TypeValidity.False;
   }
   const schemaObj = resolved as JSONSchemaObj;
+  const valueType = reading.valueType;
   // Check the top level type flag
   let typeValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
   if ("type" in schemaObj) {
@@ -5909,83 +6561,21 @@ function schemaTypeValidity(
       throw new Error("Invalid schema type");
     }
   }
-  // Limited allOf handling
-  let allOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.allOf) {
-    // unknown & T => T
-    let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    for (const option of schemaObj.allOf) {
-      const valid = schemaTypeValidity(
-        cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-        valueType,
-      );
-      // ignore undefined result (unknown type), but if any option returns
-      // false, the whole thing is false
-      if (valid === TypeValidity.False) {
-        return TypeValidity.False;
-      } else if (valid === TypeValidity.True) {
-        match = TypeValidity.True;
-      } else if (valid === TypeValidity.Unknown && match === undefined) {
-        match = TypeValidity.Unknown;
-      }
-    }
-    allOfValidity = match ?? TypeValidity.True;
-  }
-  // Limited anyOf handling
-  let anyOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.anyOf) {
-    // unknown | T => unknown
-    let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    for (const option of schemaObj.anyOf) {
-      if (ContextualFlowControl.isTrueSchema(option)) {
-        // unknown | any => any
-        match = TypeValidity.True;
-        break;
-      }
-      const valid = schemaTypeValidity(
-        cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-        valueType,
-      );
-      if (valid === TypeValidity.False) {
-        continue;
-      } else if (match !== TypeValidity.Unknown) {
-        match = valid;
-      }
-    }
-    if (match === undefined) {
-      return TypeValidity.False;
-    } else {
-      anyOfValidity = match;
-    }
-  }
-  // Limited oneOf handling
-  // This is handled the same as anyOf here
-  let oneOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.oneOf) {
-    let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    for (const option of schemaObj.oneOf) {
-      if (ContextualFlowControl.isTrueSchema(option)) {
-        // unknown | any => any
-        match = TypeValidity.True;
-        break;
-      }
-      const valid = schemaTypeValidity(
-        cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-        valueType,
-      );
-      if (valid === TypeValidity.False) {
-        continue;
-      } else if (match !== TypeValidity.Unknown) {
-        // this may be more than one, but we don't know that the rest of
-        // the validation will pass, so don't reject.
-        match = valid;
-      }
-    }
-    if (match === undefined) {
-      return TypeValidity.False;
-    } else {
-      oneOfValidity = match;
-    }
+  // Limited allOf, anyOf, and oneOf handling; oneOf is handled the same as
+  // anyOf. Each list is read even once another has ruled the value out.
+  const definitions = schemaObj.$defs;
+  const allOfValidity = schemaObj.allOf &&
+    branchListValidity(schemaObj.allOf, "allOf", definitions, reading);
+  const anyOfValidity = schemaObj.anyOf &&
+    branchListValidity(schemaObj.anyOf, "anyOf", definitions, reading);
+  const oneOfValidity = schemaObj.oneOf &&
+    branchListValidity(schemaObj.oneOf, "anyOf", definitions, reading);
+  if (
+    allOfValidity === TypeValidity.False ||
+    anyOfValidity === TypeValidity.False ||
+    oneOfValidity === TypeValidity.False
+  ) {
+    return TypeValidity.False;
   }
   // We can't rule out a matched type based on the logical `not` clause,
   // so we don't deal with that here.
@@ -6004,6 +6594,100 @@ function schemaTypeValidity(
     return TypeValidity.True;
   }
   return TypeValidity.Unknown;
+}
+
+/**
+ * What the branch list `options`, read against `definitions`, comes to within
+ * `reading`: every option together for an `allOf`, and any one of them for an
+ * `anyOf` or a `oneOf`.
+ */
+function branchListValidity(
+  options: readonly JSONSchema[],
+  combinator: BranchCombinator,
+  definitions: JSONSchemaObj["$defs"],
+  reading: TypeReading,
+): TypeValidity {
+  let lists = reading[combinator];
+  if (lists === undefined) {
+    lists = {
+      open: new Map(),
+      validities: new Map(),
+      standIns: new Map(),
+      reachedAgain: [],
+    };
+    reading[combinator] = lists;
+  }
+  const known = readingEntry(lists.validities, options, definitions);
+  if (known !== undefined) return known;
+  if (readingEntry(lists.open, options, definitions)) {
+    lists.reachedAgain.push([options, definitions]);
+    return readingEntry(lists.standIns, options, definitions) ??
+      TypeValidity.False;
+  }
+  setReadingEntry(lists.open, options, definitions, true);
+  try {
+    const listValidity = combinator === "allOf"
+      ? everyOptionValidity(options, definitions, reading)
+      : someOptionValidity(options, definitions, reading);
+    setReadingEntry(lists.validities, options, definitions, listValidity);
+    return listValidity;
+  } finally {
+    lists.open.get(options)?.delete(definitions);
+  }
+}
+
+/** What an `allOf` over `options` comes to: unknown & T => T. */
+function everyOptionValidity(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: TypeReading,
+): TypeValidity {
+  let ruledOut = false;
+  let match: TypeValidity.True | TypeValidity.Unknown | undefined;
+  for (const option of options) {
+    const valid = typeValidityWithin(
+      cfcSchemaWithInheritedDefs(option, definitions),
+      reading,
+    );
+    // ignore undefined result (unknown type), but if any option returns
+    // false, the whole thing is false
+    if (valid === TypeValidity.False) {
+      ruledOut = true;
+    } else if (valid === TypeValidity.True) {
+      match = TypeValidity.True;
+    } else if (match === undefined) {
+      match = TypeValidity.Unknown;
+    }
+  }
+  return ruledOut ? TypeValidity.False : match ?? TypeValidity.True;
+}
+
+/** What an `anyOf` or `oneOf` over `options` comes to: unknown | T => unknown. */
+function someOptionValidity(
+  options: readonly JSONSchema[],
+  definitions: JSONSchemaObj["$defs"],
+  reading: TypeReading,
+): TypeValidity {
+  let match: TypeValidity.True | TypeValidity.Unknown | undefined;
+  for (const option of options) {
+    if (ContextualFlowControl.isTrueSchema(option)) {
+      // unknown | any => any
+      match = TypeValidity.True;
+      break;
+    }
+    const valid = typeValidityWithin(
+      cfcSchemaWithInheritedDefs(option, definitions),
+      reading,
+    );
+    if (valid === TypeValidity.False) {
+      continue;
+    } else if (match !== TypeValidity.Unknown) {
+      // For a oneOf this may be more than one, but we don't know that the
+      // rest of the validation will pass, so don't reject.
+      match = valid;
+    }
+  }
+  return match ?? TypeValidity.False;
 }
 
 /**

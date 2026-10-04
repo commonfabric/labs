@@ -22,6 +22,8 @@ import {
   ManifestSchemaError,
   TEST_SELECTION_PREFIX,
 } from "./test-selection-manifest.ts";
+import { livePages } from "./live-page.ts";
+import { TEST_SELECTION_PATH } from "./test-selection-page.ts";
 import { makeTestFlakes } from "./tiles/test-flakes.ts";
 import { makeTestSelection } from "./tiles/test-selection.ts";
 import type { Ctx, TileView } from "./types.ts";
@@ -768,6 +770,32 @@ describe("test-selection-history", () => {
       });
       await expect(source.history()).rejects.toThrow("no network");
       expect(await Deno.readTextFile(cacheFile)).toBe(persisted);
+    });
+  });
+
+  describe("the page behind the tiles", () => {
+    it("shows an open page a manifest published after it loaded", async () => {
+      const store = storeOf([measurement("2026-09-14T20:00:00.000Z")]);
+      const source = makeTestSelectionSource({
+        fetchImpl: store.fetchImpl,
+        cacheFile,
+      });
+      const pages = livePages(makeTestSelection({ source }).routes ?? []);
+      const stream = pages.open(
+        new URL(`http://dashboard/events?page=${TEST_SELECTION_PATH}`),
+      ).body!.getReader();
+      const decoder = new TextDecoder();
+      const next = async () => decoder.decode((await stream.read()).value);
+      expect(await next()).toBe(": connected\n\n");
+      expect(await next()).toContain("generated 2026-09-14 20:00 UTC");
+
+      const later = measurement("2026-09-15T00:00:00.000Z");
+      store.objects[objectName(later.generatedAt)] = serializeManifest(later);
+      time.tick(MANIFEST_SHARE_MS + 1);
+      await pages.tick();
+      expect(await next()).toContain("event: ping\n");
+      expect(await next()).toContain("generated 2026-09-15 00:00 UTC");
+      await stream.cancel();
     });
   });
 
