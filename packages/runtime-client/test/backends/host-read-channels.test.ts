@@ -1915,92 +1915,103 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
-    it("withholds the error a handler throws after an `await`, from a reader its reads refuse", async () => {
-      const storageManager = StorageManager.emulate({ as: owner });
-      let gate: HostReadGate | undefined;
-      let shown: unknown;
-      let carriedLabels = false;
-      let reported: () => void = () => {};
-      const report = new Promise<void>((resolve) => (reported = resolve));
-      const runtime = new Runtime({
-        apiUrl: new URL("http://localhost"),
-        storageManager,
-        errorHandlers: [(error) => {
-          if (gate === undefined) return;
-          carriedLabels = error.consumed !== undefined;
-          shown = gate.error(runtimeErrorReport(error), error.consumed);
-          reported();
-        }],
-      });
-      try {
-        gate = gateFor(runtime, visitor);
-        const tx = runtime.edit();
-        const input = runtime.getCell(space, "thrown-input", undefined, tx);
-        writeSeedEnvelopeDoc(tx, space);
-        seedStoredEnvelope(tx, {
-          space,
-          id: input.getAsNormalizedFullLink().id!,
-          type: "application/json",
-          path: [],
-        }, {
-          value: { n: SECRET_VALUE },
-          cfc: {
-            version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
-            },
-          },
-        } as FabricValue);
-        expect((await tx.commit()).ok).toBeDefined();
-        const compiled = await runtime.patternManager.compilePattern({
-          main: "/main.tsx",
-          files: [{
-            name: "/main.tsx",
-            contents: [
-              "import { handler, pattern, Stream } from 'commonfabric';",
-              "const boom = handler<unknown, { n: string }>(",
-              "  async (_event, { n }) => {",
-              "    const v = n;",
-              "    await Promise.resolve();",
-              "    throw new Error('after the await ' + v);",
-              "  },",
-              ");",
-              "export default pattern<{ n: string }, { go: Stream<unknown> }>(",
-              "  ({ n }) => ({ go: boom({ n }) }),",
-              ");",
-            ].join("\n"),
+    for (
+      const [thrown, raise] of [
+        ["an error", "throw new Error('after the await ' + v);"],
+        // A value that cannot carry the run's mark, which the runner wraps.
+        ["a string", "throw 'after the await ' + v;"],
+      ]
+    ) {
+      it(`withholds ${thrown} a handler throws after an \`await\`, from a reader its reads refuse`, async () => {
+        const storageManager = StorageManager.emulate({ as: owner });
+        let gate: HostReadGate | undefined;
+        let shown: unknown;
+        let carriedLabels = false;
+        let reported: () => void = () => {};
+        const report = new Promise<void>((resolve) => (reported = resolve));
+        const runtime = new Runtime({
+          apiUrl: new URL("http://localhost"),
+          storageManager,
+          errorHandlers: [(error) => {
+            if (gate === undefined) return;
+            carriedLabels = error.consumed !== undefined;
+            shown = gate.error(runtimeErrorReport(error), error.consumed);
+            reported();
           }],
-        }, { space });
-        const result = runtime.getCell(
-          space,
-          "thrown-result",
-          compiled.resultSchema,
-        );
-        const run = runtime.edit();
-        runtime.run(
-          run,
-          compiled,
-          runtime.getCell(space, "thrown-input"),
-          result,
-        );
-        await run.commit();
-        const cancel = result.sink(() => {});
-        await runtime.idle();
-        result.key("go").send({} as never);
-        await report;
-        cancel();
+        });
+        try {
+          gate = gateFor(runtime, visitor);
+          const tx = runtime.edit();
+          const input = runtime.getCell(space, "thrown-input", undefined, tx);
+          writeSeedEnvelopeDoc(tx, space);
+          seedStoredEnvelope(tx, {
+            space,
+            id: input.getAsNormalizedFullLink().id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value: { n: SECRET_VALUE },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: { confidentiality: [ownerOnly] },
+                }],
+              },
+            },
+          } as FabricValue);
+          expect((await tx.commit()).ok).toBeDefined();
+          const compiled = await runtime.patternManager.compilePattern({
+            main: "/main.tsx",
+            files: [{
+              name: "/main.tsx",
+              contents: [
+                "import { handler, pattern, Stream } from 'commonfabric';",
+                "const boom = handler<unknown, { n: string }>(",
+                "  async (_event, { n }) => {",
+                "    const v = n;",
+                "    await Promise.resolve();",
+                `    ${raise}`,
+                "  },",
+                ");",
+                "export default pattern<{ n: string }, { go: Stream<unknown> }>(",
+                "  ({ n }) => ({ go: boom({ n }) }),",
+                ");",
+              ].join("\n"),
+            }],
+          }, { space });
+          const result = runtime.getCell(
+            space,
+            "thrown-result",
+            compiled.resultSchema,
+          );
+          const run = runtime.edit();
+          runtime.run(
+            run,
+            compiled,
+            runtime.getCell(space, "thrown-input"),
+            result,
+          );
+          await run.commit();
+          const cancel = result.sink(() => {});
+          await runtime.idle();
+          result.key("go").send({} as never);
+          await report;
+          cancel();
 
-        // The runner marks the rejection with the run that raised it, so the
-        // report carries the labels the run read.
-        expect(carriedLabels).toBe(true);
-        expect(holds(shown, SECRET_VALUE)).toBe(false);
-      } finally {
-        await runtime.dispose();
-        await storageManager.close();
-      }
-    });
+          // The runner marks the rejection with the run that raised it, so the
+          // report carries the labels the run read.
+          expect(carriedLabels).toBe(true);
+          expect(holds(shown, SECRET_VALUE)).toBe(false);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
 
     it("withholds what a telemetry marker says of a failed run from a reader the run's reads refuse", async () => {
       const storageManager = StorageManager.emulate({ as: owner });
