@@ -1552,6 +1552,9 @@ Mechanics:
   restriction, writable by any writer, so each is the
   `cfc-write-authorized-by:unread` error, naming the policy
   (`WriteAuthorizedBy`, or `WritePolicyAnyOf` for a carrier holding a set).
+  So is a number index signature beside a string one whose value type holds
+  a writer policy the string one's does not: the pair is lowered as the
+  string one alone, so the policy is lost.
   Any other schema views a document whose stored envelope binds its writers
   already, and reports nothing. It reads the policy whole or not at all.
   Where the writer went unread, the policy is marked as read in part

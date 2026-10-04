@@ -4229,6 +4229,10 @@ describe("Schema: CFC authoring aliases", () => {
           "a generic member's operator syntax",
           "{ a: Erased<WriteAuthorizedBy<string, typeof save>> }",
         ],
+        [
+          "a number index signature beside a string one",
+          "{ byIndex: { [key: string]: unknown; [index: number]: WriteAuthorizedBy<string, typeof save> } }",
+        ],
       ] as const
     ) {
       it(`reports a writer reached through ${reach} as unread, and the same schema elsewhere as nothing`, async () => {
