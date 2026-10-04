@@ -1638,13 +1638,9 @@ export class RuntimeProcessor {
       // admits the read.
       const refusal = gate.metadataRefusal(rootCell);
       if (refusal !== undefined) return refusal;
-      const linked = this.#metaLinkTarget(
-        rootCell,
-        request.meta,
-        request.cell.path,
-      );
-      if (linked === undefined) return gate.nothing();
-      cell = linked;
+      const link = getMetaLink(rootCell, request.meta);
+      if (link === undefined) return gate.nothing();
+      cell = this.#linkedAt(link, request.cell.path);
     }
     // The sigil links inside the answer carry each cell's `cfcLabelView` in
     // its display form, the same redaction the top-level `cfcLabel` gets.
@@ -1693,15 +1689,21 @@ export class RuntimeProcessor {
     // link field on the cell it links to besides.
     const root = getCell(this.#runtime, { ...request.cell, path: [] });
     let linked: Cell<unknown> | undefined;
-    try {
-      linked = request.meta === "argument" || request.meta === "result"
-        ? this.#metaLinkTarget(root, request.meta, request.cell.path)
-        : undefined;
-    } catch {
-      // The link of a document the read was refused, which another writer
-      // may have left malformed: no access list makes it readable, so the
-      // refusal stands, rather than turning into an error.
-      return answer;
+    if (request.meta === "argument" || request.meta === "result") {
+      const raw = root.getMetaRaw(request.meta);
+      let link: NormalizedFullLink | undefined;
+      try {
+        link = raw === undefined ? undefined : parseLink(raw, root);
+      } catch {
+        // The link of a document the read was refused, which another writer
+        // may have left malformed (`parseLink()` throws for one): no access
+        // list makes it readable, so the refusal stands, rather than turning
+        // into an error.
+        return answer;
+      }
+      linked = link === undefined
+        ? undefined
+        : this.#linkedAt(link, request.cell.path);
     }
     const settled = await this.#hostReadGate.settle(
       getCell(this.#runtime, request.cell),
@@ -1711,17 +1713,9 @@ export class RuntimeProcessor {
     return settled ? this.handleCellGet(request) : answer;
   }
 
-  /**
-   * The cell the metadata link field `field` of `root`'s document leads to,
-   * at `path` within it, or `undefined` where the field holds no link.
-   */
-  #metaLinkTarget(
-    root: Cell<unknown>,
-    field: "argument" | "result",
-    path: readonly string[],
-  ): Cell<unknown> | undefined {
-    const link = getMetaLink(root, field);
-    return link === undefined ? undefined : this.#runtime.getCellFromLink({
+  /** The cell at `path` within the one a metadata link `link` leads to. */
+  #linkedAt(link: NormalizedFullLink, path: readonly string[]): Cell<unknown> {
+    return this.#runtime.getCellFromLink({
       ...link,
       path: [...link.path, ...path],
     });

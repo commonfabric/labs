@@ -1013,6 +1013,47 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("lets a failure other than a malformed link out of a refused metadata link read", async () => {
+      // A document whose metadata cannot be read at all, which is no
+      // refusal: the worker fails, and the host is told so.
+      const unreadable = {
+        getAsNormalizedFullLink: () => ({
+          space,
+          id: "of:metadata-unreadable",
+          scope: "space",
+          path: [],
+        }),
+        getMetaRaw: () => {
+          throw new Error("the metadata read failed");
+        },
+      };
+      const processor = buildProcessor({
+        runtime: {
+          getCellFromLink: () => unreadable,
+          trustSnapshotProvider: () => undefined,
+        },
+        identity: visitor,
+        space: visitor.did(),
+        renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+          visitor.did(),
+        ),
+      });
+      try {
+        await expect(processor.handleRequest({
+          type: RequestType.CellGet,
+          cell: {
+            space,
+            id: "of:metadata-unreadable",
+            scope: "space",
+            path: [],
+          },
+          meta: "argument",
+        })).rejects.toThrow("the metadata read failed");
+      } finally {
+        await processor.dispose();
+      }
+    });
+
     it("decides a member's one-shot read again once the access list it consulted loads", async () => {
       // The owner's space grants the visitor READ. The visitor's worker has
       // loaded a document labeled with that space, but not its access list.
