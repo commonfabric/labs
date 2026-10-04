@@ -215,6 +215,33 @@ export const cfcLabelViewSourceForCell = (
   };
 };
 
+/**
+ * The labels the document holding `cell`'s value stores at its path, with
+ * the view the cell carries, and without those of a value it links to, which
+ * {@link cfcLabelViewSourceForCell} joins. A link stored there is part of
+ * what the holding node holds, so naming where it leads is decided on these:
+ * the address is the node's content, while the linked value's labels speak
+ * for what is behind it.
+ */
+export const cfcHolderLabelViewSourceForCell = (
+  cell: LabelQueryableCell,
+): CfcLabelViewSource => {
+  const link = cell.getAsNormalizedFullLink();
+  const stored = storedMetadataForCell(cell, link);
+  const view = mergeCfcLabelViews([
+    withCfcLabelViewOrigins(
+      cfcLabelViewFromMetadata(stored.metadata, link.path),
+      [link.space],
+    ),
+    getCarriedCfcLabelView(cell),
+  ]);
+  return {
+    view,
+    readFailed: stored.readFailed,
+    spaces: cfcLabelViewOriginSpaces(view),
+  };
+};
+
 export const cfcLabelViewForCell = (
   cell: unknown,
 ): CfcLabelView | undefined => cfcLabelViewForCellWithStatus(cell).view;

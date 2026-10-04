@@ -636,6 +636,89 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("names where a link leads on the node holding it, once the documents it consults are loaded", async () => {
+      // The owner writes a link, in a document anyone may see, to one only
+      // the owner may see. A second worker of the owner's, and a visitor's,
+      // hold neither document yet.
+      const server = newLoopbackServer();
+      const writer = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      const readers: Runtime[] = [];
+      try {
+        const tx = writer.edit();
+        writeSeedEnvelopeDoc(tx, space);
+        const target = writer.getCell(space, "sealed-target", undefined, tx);
+        seedStoredEnvelope(tx, {
+          space,
+          id: target.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { note: SECRET_VALUE },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
+            },
+          },
+        } as FabricValue);
+        const holderCell = writer.getCell(space, "open-holder", undefined, tx);
+        seedStoredEnvelope(tx, {
+          space,
+          id: holderCell.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, { value: { link: target.getAsLink() } } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        await writer.storageManager.synced();
+        const targetId = target.getAsNormalizedFullLink().id;
+        const resolve = async (viewer: Identity) => {
+          const reader = new Runtime({
+            apiUrl: new URL("http://localhost"),
+            storageManager: EmulatedStorageManager.connectTo(server, {
+              as: viewer,
+            }),
+          });
+          readers.push(reader);
+          const holder = reader.getCell(space, "open-holder");
+          await holder.sync();
+          const processor = buildProcessor({
+            runtime: reader,
+            identity: viewer,
+            space: viewer.did(),
+            renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+              viewer.did(),
+            ),
+          });
+          try {
+            return await processor.handleCellResolveAsCell({
+              type: RequestType.CellResolveAsCell,
+              cell: createCellRef(holder.key("link")),
+            });
+          } finally {
+            await processor.dispose();
+          }
+        };
+        const named = { cell: expect.objectContaining({ id: targetId }) };
+
+        // The owner, with the target not loaded yet: followed, not refused
+        // as unread.
+        expect(await resolve(owner)).toEqual(named);
+        // The visitor may read the holder, so may be told the address it
+        // holds, as a read of the holder hands it the same address as a ref.
+        // What is behind it is decided when it is read.
+        expect(await resolve(visitor)).toEqual(named);
+      } finally {
+        for (const reader of readers) await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
     it("does not tell a visitor where a link in a document only its owner may see leads", async () => {
       await using docs = await shelf();
       const target = await docs.write("link-target", { x: 1 });
@@ -655,7 +738,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
       });
       const targetId = target.getAsNormalizedFullLink().id;
       try {
-        const answer = processor.handleCellResolveAsCell({
+        const answer = await processor.handleCellResolveAsCell({
           type: RequestType.CellResolveAsCell,
           cell: createCellRef(holder.key("link")),
         });
@@ -663,7 +746,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
         expect(JSON.stringify(answer)).not.toContain(targetId);
         // A cell whose path follows no link resolves to the address named.
         expect(
-          processor.handleCellResolveAsCell({
+          await processor.handleCellResolveAsCell({
             type: RequestType.CellResolveAsCell,
             cell: createCellRef(target),
           }),

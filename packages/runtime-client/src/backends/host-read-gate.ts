@@ -58,9 +58,11 @@ import type {
 } from "@commonfabric/runner/shared";
 import {
   type CfcConfClause,
+  cfcHolderLabelViewSourceForCell,
   type CfcLabelView,
   cfcLabelViewForCell,
   cfcLabelViewForResolvedCell,
+  isChannelStateDocument,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   reportCfcDenial,
@@ -596,16 +598,26 @@ export class HostReadGate {
   /**
    * The refusal of naming where a link stored at `cell`'s node leads, or
    * `undefined` where the policy admits it. A link is part of what the node
-   * holds, so it is decided on the labels at the node, as a read of the node
-   * is, and a document the replica does not hold is refused as unreadable.
+   * holds, so it is decided on the labels the document holding it stores
+   * there (`cfcHolderLabelViewSourceForCell()`), and not on those of what it
+   * links to: the address is the node's content, as a read of a record
+   * holding the link hands a host the same address as a ref. A holding
+   * document the replica does not hold, or one in a channel's own state, is
+   * refused as unreadable.
    */
   linkRefusal(
     cell: Cell<unknown>,
   ): (HostReadDecided & CellRefusedAnswer) | undefined {
     const policy = this.#policy;
     if (policy === undefined) return undefined;
-    const refusal = documentsHeld(cell)
-      ? readRefusal(cell, [], policy, this.#sources)
+    const link = cell.getAsNormalizedFullLink();
+    const refusal = cellDocumentHeld(cell) && !isChannelStateDocument(link.id)
+      ? cellLabelRefusal(
+        cell,
+        [cfcHolderLabelViewSourceForCell(cell)],
+        policy,
+        this.#sources,
+      )
       : UNHELD;
     return refusal === undefined ? undefined : this.#refuse(refusal, policy);
   }
@@ -615,8 +627,12 @@ export class HostReadGate {
    * makes, or the refusal that stands in its place where the policy refuses
    * the node holding a link it followed ({@link linkRefusal}). A cell whose
    * path follows no link resolves to itself, the address the host named.
+   * Decided once what the decision consults is loaded ({@link hold}), so a
+   * link into a document the worker has not loaded yet is followed, not
+   * refused as unread.
    */
-  resolveAsCell(cell: Cell<unknown>): CellResolveResponse {
+  async resolveAsCell(cell: Cell<unknown>): Promise<CellResolveResponse> {
+    if (!await this.hold(cell)) return this.#refuse(UNHELD);
     const resolved = cell.resolveAsCell();
     if (this.#policy !== undefined && !sameAddress(cell, resolved)) {
       const refused = this.linkRefusal(cell);

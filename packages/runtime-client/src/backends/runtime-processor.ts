@@ -2252,11 +2252,11 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(
+  async handleCellResolveAsCell(
     request: CellResolveAsCellRequest,
-  ): CellResolveResponse {
+  ): Promise<CellResolveResponse> {
     const cell = getCell(this.#runtime, request.cell);
-    const answer = this.#hostReadGate.resolveAsCell(cell);
+    const answer = await this.#hostReadGate.resolveAsCell(cell);
     if ("refused" in answer) return answer;
     const resolved = cell.resolveAsCell();
     const ref = answer.cell;
@@ -2964,8 +2964,9 @@ export class RuntimeProcessor {
     );
     if (redirect?.overwrite === "redirect") {
       // Where a redirect leads is what its document holds, so it is decided
-      // as the node holding a link is: a host refused it is told so, and not
-      // where it leads.
+      // as the node holding a link is, once what that consults is loaded: a
+      // host refused it is told so, and not where it leads.
+      await this.#hostReadGate.hold(requestedCell);
       const refused = this.#hostReadGate.linkRefusal(requestedCell);
       if (refused !== undefined) {
         throw new Error(
@@ -3768,7 +3769,7 @@ export class RuntimeProcessor {
       case RequestType.CellResolveAsCell:
         return answering(
           RequestType.CellResolveAsCell,
-          this.handleCellResolveAsCell(request),
+          await this.handleCellResolveAsCell(request),
         );
       case RequestType.CellGetCfcLabel:
         return answering(

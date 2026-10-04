@@ -4002,17 +4002,19 @@ describe("runtime-processor", () => {
             },
           }],
         },
-      }, (resolvedCell) => {
+      }, async (resolvedCell) => {
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
           },
         });
 
-        const response = resolvedOf(processor.handleCellResolveAsCell({
-          type: RequestType.CellResolveAsCell,
-          cell: sourceRef,
-        }));
+        const response = resolvedOf(
+          await processor.handleCellResolveAsCell({
+            type: RequestType.CellResolveAsCell,
+            cell: sourceRef,
+          }),
+        );
         const atom = response.cell.cfcLabelView?.entries[0].label
           .confidentiality?.[0] as Record<string, unknown>;
         expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
@@ -4043,7 +4045,7 @@ describe("runtime-processor", () => {
             label: { integrity: ["authored-by-bob"] },
           }],
         },
-      }, (resolvedCell) => {
+      }, async (resolvedCell) => {
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
@@ -4051,7 +4053,7 @@ describe("runtime-processor", () => {
         });
 
         expect(
-          processor.handleCellResolveAsCell({
+          await processor.handleCellResolveAsCell({
             type: RequestType.CellResolveAsCell,
             cell: sourceRef,
           }),
@@ -4070,7 +4072,7 @@ describe("runtime-processor", () => {
       });
     });
 
-    it("describes a resolved SQLite cell as a SQLite capability", () => {
+    it("describes a resolved SQLite cell as a SQLite capability", async () => {
       const sourceRef: CellRef = {
         id: "of:sqlite-source" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -4104,10 +4106,12 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = resolvedOf(processor.handleCellResolveAsCell({
-        type: RequestType.CellResolveAsCell,
-        cell: sourceRef,
-      }));
+      const response = resolvedOf(
+        await processor.handleCellResolveAsCell({
+          type: RequestType.CellResolveAsCell,
+          cell: sourceRef,
+        }),
+      );
 
       expect(response.cell).toEqual({
         ...resolvedRef,
