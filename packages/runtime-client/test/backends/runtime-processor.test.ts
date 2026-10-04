@@ -214,6 +214,21 @@ describe("runtime-processor", () => {
     }
   });
 
+  it("does not serve a request the client registry answers", async () => {
+    // Console forwarding is answered before a request reaches the processor,
+    // so one that arrives there is a routing error, not a request to serve.
+    const processor = buildProcessor({ runtime: { storageManager: {} } });
+
+    await expect(
+      processor.handleRequest({
+        type: RequestType.SetForwardWorkerConsole,
+        enabled: true,
+      }),
+    ).rejects.toThrow(
+      `Unknown message type: ${RequestType.SetForwardWorkerConsole}`,
+    );
+  });
+
   it("returns `null` diagnostics for a storage manager without them", async () => {
     const processor = buildProcessor({ runtime: { storageManager: {} } });
 
