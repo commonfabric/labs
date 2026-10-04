@@ -8059,7 +8059,19 @@ describe("runtime-processor", () => {
         expect(mounting.posted[0].message).toBe(
           "Invalid VDOM content: got symbol",
         );
+        // Its stack can run through a pattern's code, withheld under one.
+        expect(mounting.posted[0].stackTrace).toBeUndefined();
         expect(mounting.posted[1].message).not.toContain("sealed value");
+      });
+
+      it("keeps a renderer error's stack where no ceiling applies", () => {
+        const mounting = testClient(1);
+        const error = new Error("Invalid VDOM content: got symbol");
+        mountErrorSink(mounting.client, () => new HostReadGate(undefined, {}))(
+          error,
+          "renderer",
+        );
+        expect(mounting.posted[0].stackTrace).toBe(error.stack);
       });
 
       it("decides with the gate the worker holds when the error is raised", () => {

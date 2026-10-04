@@ -834,6 +834,9 @@ export function mountErrorSink(
         ? gate().runtimeError({
           message: report.message,
           ...(report.code === undefined ? {} : { code: report.code }),
+          ...(report.stackTrace === undefined
+            ? {}
+            : { stackTrace: report.stackTrace }),
         })
         : gate().error(report),
     );

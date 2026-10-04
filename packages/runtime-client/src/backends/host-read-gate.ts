@@ -1401,13 +1401,24 @@ export class HostReadGate {
    * as the renderer reports content it cannot render, as a host may see it:
    * as reported. Its message is the runtime's own, made from no cell, so
    * nothing in it is decided. `code` names it where the host's remedy
-   * depends on which error it is. A pattern's error goes through
-   * {@link error}.
+   * depends on which error it is. Its stack can run through a pattern's
+   * code, whose text is withheld under a policy, so under one it is
+   * withheld too. A pattern's error goes through {@link error}.
    */
   runtimeError(
-    report: { code?: RuntimeErrorCode; message: string },
+    { stackTrace, ...report }: {
+      code?: RuntimeErrorCode;
+      message: string;
+      stackTrace?: string;
+    },
   ): ErrorNotification {
-    return decided({ type: NotificationType.ErrorReport as const, ...report });
+    return decided({
+      type: NotificationType.ErrorReport as const,
+      ...report,
+      ...(stackTrace === undefined || this.#policy !== undefined
+        ? {}
+        : { stackTrace }),
+    });
   }
 
   /**
