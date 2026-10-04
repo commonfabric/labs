@@ -19,6 +19,11 @@ import {
 } from "@commonfabric/runner/cfc";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
+import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
@@ -389,6 +394,84 @@ describe("loom-root", () => {
         }),
       }),
     );
+  });
+
+  it("links an occurrence whose `addedBy` label names the caller alone or nobody, and refuses one it contests or names in a form no runtime mints", async () => {
+    /** Stores a URL occurrence at `cause` whose label map is `entries`. */
+    const occurrence = async (cause: string, entries: unknown[]) => {
+      const cell = runtime.getCell(pieces.getSpace(), cause);
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, pieces.getSpace());
+      seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
+        value: {
+          kind: "url",
+          url: `https://example.com/${cause}`,
+          addedBy: signer.did(),
+        },
+        ...(entries.length === 0 ? {} : {
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries },
+          },
+        }),
+      } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+      return cell;
+    };
+    /** A declared entry at `path` whose integrity is `atoms`. */
+    const at = (path: string[], ...atoms: unknown[]) => ({
+      path,
+      label: { integrity: atoms },
+      origin: "declared",
+    });
+    const by = (subject: string) => ({ kind: "authored-by", subject });
+    const output = root.asSchema(rootSchema);
+    const addPanel = await output.key("addPanel").pull();
+    const refused = [
+      await occurrence("contested", [
+        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
+      ]),
+      await occurrence("misspelled", [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+      ]),
+      await occurrence("root-contested", [
+        at([], by(foreignSigner.did())),
+        at(["addedBy"], by(signer.did())),
+      ]),
+    ];
+    // A refused event aborts its transaction; the handler's own error
+    // reaches the scheduler's error handlers.
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    for (const [index, panel] of refused.entries()) {
+      errors.length = 0;
+      const refusal = await sendAndSettle(
+        addPanel,
+        { panel },
+        `refused-${index}`,
+      ).then(() => undefined, (error: unknown) => error);
+      expect(refusal).toBeDefined();
+      expect(
+        errors.some((error) =>
+          error.includes("whose adder its label contests")
+        ),
+      ).toBe(true);
+    }
+    expect((await output.key("panels").pull()).length).toBe(0);
+    const linked = [
+      await occurrence("own", [at(["addedBy"], by(signer.did()))]),
+      await occurrence("claimed", []),
+    ];
+    for (const [index, panel] of linked.entries()) {
+      await sendAndSettle(addPanel, { panel }, `linked-${index}`);
+    }
+    await runtime.idle();
+    const panels = await output.key("panels").pull();
+    expect(panels.length).toBe(2);
+    expect(
+      panels.map((panel, index) => panel.resolveAsCell().equals(linked[index])),
+    ).toEqual([true, true]);
   });
 
   it("records the registering principal as a panel's adder, with an `authored-by` entry declared at the field", async () => {
