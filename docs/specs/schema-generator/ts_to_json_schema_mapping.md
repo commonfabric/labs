@@ -1122,8 +1122,11 @@ Mechanics:
   label is placed by the payload it records, never by where the carrier sits
   (`placeCarriedLabels`, `payloadReach`):
   - A restriction lands wherever the payload's data may be: on each member of
-    the value the payload names, or on the whole value where the payload has
-    an index signature, whose keys are open. Restrictions are
+    the value the payload names. It lands on the whole value where the
+    payload has an index signature, whose keys are open, or where a mapped
+    type with an `as` clause may have renamed a member, which then holds the
+    payload's data under a name the payload does not have
+    (`holdsCarriersUnderTheirNames`). Restrictions are
     `confidentiality`, `requiredIntegrity`, `maxConfidentiality` and the
     writer policies, and `exactCopyOf` and `projection`, which the runtime
     verifies at the write.
@@ -1138,9 +1141,15 @@ Mechanics:
     of its own, as an interface extending a CFC alias does, or a mapped type
     whose carrier did not come from the type it maps over.
   - A label reaching every member lands on the whole value, and one reaching
-    none lands nowhere. A payload with no members of its own, such as a
-    primitive, is the whole value, and a union payload's members are those of
-    each alternative.
+    none lands nowhere. A union payload's members are those of each
+    alternative.
+  - A payload whose type lists no members, such as `{}` or `unknown`, may
+    hold data under any key, so a restriction labels the whole value. Its
+    evidence labels the whole value only where nothing writes over members
+    and the value holds nothing besides: `Integrity<{}, L>` carries `L`, but
+    `{ ...tagged, name }` and `{ name } & Integrity<{}, L>` do not. A
+    primitive value lists no members, so a primitive payload, as in
+    `Integrity<string, L>`, labels the whole value.
   - A carrier that records no payload, its metadata alone, is taken to have
     been written around the one member it is intersected with, where there is
     one. Beside more, a restriction labels the whole value and evidence lands

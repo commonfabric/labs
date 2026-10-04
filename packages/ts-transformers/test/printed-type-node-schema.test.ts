@@ -1395,6 +1395,30 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
             {},
           ],
           [
+            "a spread of a payload with no members",
+            `Integrity<{}, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of an `unknown` payload",
+            `Integrity<unknown, ["gps"]>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
+            "a spread of minted evidence over a payload with no members",
+            `Cfc<{}, { addIntegrity: ["gps"] }>`,
+            "number",
+            "{ ...location, name }",
+            undefined,
+            {},
+          ],
+          [
             "a confidential spread of the payload's own type over it",
             `Confidential<Point, ["secret"]>`,
             "Point",
@@ -1423,7 +1447,7 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
         it(`places the labels of ${spelling}`, async () => {
           const files = await transformFiles({
             "/main.tsx": `/// <cts-enable />
-import { Confidential, Integrity, pattern } from "commonfabric";
+import { Cfc, Confidential, Integrity, pattern } from "commonfabric";
 type Point = { lat: number; long: number };
 export default pattern<{ location: ${location}; other: ${other}; name: string }>(
   ({ location, other, name }) => ({ out: ${out} }),
@@ -1448,6 +1472,11 @@ export default pattern<{ location: ${location}; other: ${other}; name: string }>
             undefined,
           ],
           [
+            "a payload whose members a mapped type renames",
+            `Rename<Confidential<Point, ["secret"]>>`,
+            secret,
+          ],
+          [
             "a kept member of an intersection",
             `Pick<Integrity<Point, ["gps"]> & { name: string }, "lat">`,
             gps,
@@ -1459,6 +1488,7 @@ export default pattern<{ location: ${location}; other: ${other}; name: string }>
             "/main.tsx": `/// <cts-enable />
 import { Confidential, Integrity, pattern } from "commonfabric";
 type Point = { lat: number; long: number };
+type Rename<T> = { [K in keyof T as K extends "lat" ? "latitude" : K]: T[K] };
 export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           }, { types: COMMONFABRIC_TYPES, typeCheck: true });
           const { input, output } = patternSchemas(

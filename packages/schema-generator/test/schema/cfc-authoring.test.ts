@@ -3838,6 +3838,7 @@ describe("Schema: CFC authoring aliases", () => {
       type Minted = Cfc<Point, { addIntegrity: readonly ["m"] }>;
       type Pin = Confidential<{ pin: string }, readonly ["s"]>;
       type Select<T> = Pick<Integrity<T, readonly ["gps"]> & { name: string }, "name">;
+      type Rename<T> = { [K in keyof T as K extends "lat" ? "latitude" : K]: T[K] };
       type Copy<T> = { readonly [K in keyof T]: T[K] };
       declare const location: Location;
       declare const recordLocation: RecordLocation;
@@ -3848,6 +3849,10 @@ describe("Schema: CFC authoring aliases", () => {
       declare const secretIndex: SecretIndex;
       declare const secretEither: SecretEither;
       declare const minted: Minted;
+      declare const tagged: Integrity<{}, readonly ["gps"]>;
+      declare const taggedUnknown: Integrity<unknown, readonly ["gps"]>;
+      declare const mintedEmpty: Cfc<{}, { addIntegrity: readonly ["gps"] }>;
+      declare const secretEmpty: Confidential<{}, readonly ["s"]>;
       declare const pin: Pin;
       declare const point: Point;
       declare const latitude: Pick<Point, "lat">;
@@ -3864,6 +3869,10 @@ describe("Schema: CFC authoring aliases", () => {
       const indexOverwrite = { ...indexLocation, ...counts };
       const recordOverwrite = { ...recordLocation, ...recordPoint };
       const mintedSpread = { ...minted, name: "x" };
+      const taggedSpread = { ...tagged, name: "x" };
+      const taggedUnknownSpread = { ...taggedUnknown, name: "x" };
+      const mintedEmptySpread = { ...mintedEmpty, name: "x" };
+      const secretEmptySpread = { ...secretEmpty, name: "x" };
       const twoPolicies = { ...location, ...pin, name: "x" };
       const eitherSpread = { ...either, name: "x" };
       const secretSpread = { ...secretLocation, name: "x" };
@@ -3946,6 +3955,12 @@ describe("Schema: CFC authoring aliases", () => {
           ["typeof indexOverwrite", undefined, {}],
           ["{ name: string } & Minted", undefined, { lat: mint, long: mint }],
           ["typeof mintedSpread", undefined, {}],
+          ['Integrity<{}, readonly ["gps"]>', gps, {}],
+          ['{ name: string } & Integrity<{}, readonly ["gps"]>', undefined, {}],
+          ["typeof taggedSpread", undefined, {}],
+          ["typeof taggedUnknownSpread", undefined, {}],
+          ["typeof mintedEmptySpread", undefined, {}],
+          ['NonNullable<Integrity<string, readonly ["gps"]> | null>', gps, {}],
           ["typeof twoPolicies", undefined, { pin: secret }],
         ] as const
       ) {
@@ -3970,6 +3985,8 @@ describe("Schema: CFC authoring aliases", () => {
           ['Pick<SecretRecord, "lat">', secret, {}],
           ["typeof secretIndexSpread", secret, {}],
           ['Pick<SecretIndex & { name: string }, "name">', secret, {}],
+          ["typeof secretEmptySpread", secret, {}],
+          ["Rename<SecretLocation>", secret, {}],
         ] as const
       ) {
         it(`places the labels of \`${value}\``, async () => {
