@@ -80,6 +80,17 @@ describe("shared-space-catalog-contract", () => {
     });
   });
 
+  it("rejects non-object offer identities from untyped callers", () => {
+    for (const offer of [null, [], "sender-and-id"]) {
+      const input = { ...entry, offer };
+      expect(() => {
+        // @ts-expect-error Untyped callers can supply a malformed offer identity.
+        return normalizeSharedSpaceRegistration(input);
+      })
+        .toThrow("Invalid shared-space offer identity.");
+    }
+  });
+
   it("rejects malformed catalog records instead of interpreting them as empty", () => {
     expect(isSharedSpaceCatalog(catalog)).toBe(true);
     for (
@@ -94,12 +105,14 @@ describe("shared-space-catalog-contract", () => {
       const change of [
         { space: "did:key:another" },
         { host: "https://spaces.example/" },
+        { host: "https://spaces.example/catalog" },
         { kind: "" },
         { title: "x".repeat(201) },
         { state: "" },
         { revision: "" },
         { from: "not-a-DID" },
         { since: -1 },
+        { since: "2026-10-04T00:00:00Z" },
       ]
     ) {
       expect(

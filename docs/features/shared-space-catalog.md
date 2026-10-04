@@ -65,7 +65,11 @@ The catalog uses additive evolution without a root version gate. Readers
 preserve extra root and entry fields and opaque `lastAction` evidence. A writer
 that cannot interpret an entry's action evidence, or finds that its action
 state differs from the entry's state, returns an `action` conflict for that
-entry. Other entries remain readable and writable. Incompatible changes to
+entry. Other entries remain readable and writable. The type and meaning of
+every existing field, including optional fields, are fixed. A different
+representation needs a new field name: changing the admission timestamp from
+epoch milliseconds to an ISO string makes the
+stored document invalid to readers of this contract. Incompatible changes to
 required fields need an explicit migration contract; changing an ignored
 `version` extension does not enable incompatible semantics.
 
@@ -165,48 +169,13 @@ record. Large-scale retention or compaction needs a separate design that
 preserves replay refusal and existing membership. This API implements neither
 automatic compaction nor a size-based reset.
 
-## Pattern access: proposed contract and merge prerequisite
+## Pattern access
 
-The SDK methods above are implemented for host clients. Authored patterns
-cannot import `@commonfabric/runtime-client`, and a raw cell link alone does
-not provide registration and membership semantics. A Labs-only Home intake
-and FabriChat room list must be able to use the same catalog with server
-execution enabled or disabled. This pattern path is required before treating
-the shared storage contract as ready for those consumers.
-
-The proposed implementation has one transition implementation in a package
-the runner can depend on, SDK wrappers for confirmed asynchronous operations,
-and pattern-facing declarations through `commonfabric`. A catalog wish or
-equivalent capability supplies a validated reactive read with explicit
-readiness and failure. Handler operations stage registration and membership
-changes in the handler's existing transaction, with the same receipt, revision,
-and server value-pin rules as the SDK. They must not start a nested asynchronous
-transaction. A staged handler result is not a committed success; consumers
-observe the event's committed outcome before promising completion.
-
-Canonical Home routing must come from trusted deployment configuration. The
-runtime's general `apiUrl` is insufficient under serving execution: it can be
-the pattern compilation origin, while loopback storage routes locally. The
-handler's acting principal must determine whose Home it may update; the service
-identity is not that principal. The current SDK refusal of unscoped serving
-runtimes remains in force.
-
-Dan and Berni need to settle the Home route source and capability shape, whether
-all writes execute in Home or creation requires a cross-space write to Home,
-and the `from`/`since` semantics above. Coordination is in the
-[FabriChat consumer Topic](https://estuary.saga-castor.ts.net/topics-dev-476ea34f/of:fid1:LWFAKJVz0hlcUUz6hlo9gGwYXajuXpUyblkS_MFOwlg).
-These questions gate the first shared Home write contract; inbox admission
-posture remains a separate decision.
-
-The pattern implementation must demonstrate, with real compiled patterns:
-
-- A Labs-only handler registers a room and the SDK reads that same entry.
-- SDK archive survives repeated pattern intake, including after a fresh load.
-- Pattern and SDK membership actions respect the same observed revision, and a
-  withheld server verdict never becomes a confirmed result.
-- A failed or unfinished catalog load never appears as an empty room list.
-- Serving execution selects the authorized person's Home and canonical route,
-  not the service identity or compilation origin.
+Authored patterns cannot import this host SDK, and it exposes no pattern-facing
+catalog capability. A raw cell link does not supply the SDK's registration,
+receipt, revision, or confirmation semantics. The
+[pattern integration plan](../plans/shared-space-catalog-pattern-access.md)
+describes the work needed for Labs-only consumers.
 
 ## Client integration
 

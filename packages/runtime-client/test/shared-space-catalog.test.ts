@@ -900,6 +900,76 @@ describe("shared-space-catalog", () => {
       );
     });
   });
+  it("refuses confirmation when the transaction cannot pin its observed value", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const before = await read(first);
+      const edit = first.edit.bind(first);
+      const unsupported = stub(first, "edit", (...args) => {
+        const tx = edit(...args);
+        Object.defineProperty(tx, "addCommitPrecondition", {
+          value: undefined,
+        });
+        return tx;
+      });
+      try {
+        await expect(registerSharedSpace(first, home, loom)).rejects.toThrow(
+          "Catalog confirmation requires commit preconditions.",
+        );
+      } finally {
+        unsupported.restore();
+      }
+      expect(await read(fresh())).toEqual(before);
+    });
+  });
+
+  it("reports a server-refused value pin as a catalog conflict", async () => {
+    await withFixture(async ({ first, fresh }) => {
+      await registerSharedSpace(first, home, loom);
+      const action: SharedSpaceMembershipChange = {
+        space: loom.space,
+        id: "archive-before-pin-refusal",
+        expectedRevision: (await read(first)).entries[loom.space].revision,
+        state: "archived",
+      };
+      await changeSharedSpaceMembership(first, home, action);
+      const before = await read(first);
+      const address = sharedSpaceCatalogCell(first, home)
+        .getAsNormalizedFullLink();
+      const edit = first.edit.bind(first);
+      const rejectedPin = stub(first, "edit", (...args) => {
+        const tx = edit(...args);
+        return interceptTransaction(tx, (method, _args, proceed) => {
+          if (method !== "addCommitPrecondition") return proceed();
+          if (!tx.addCommitPrecondition) {
+            throw new Error("Expected pin support.");
+          }
+          // An absence pin against the stored catalog forces a real server
+          // refusal without depending on when a peer's fan-out arrives.
+          return tx.addCommitPrecondition(address.space, {
+            kind: "entity-value-hash",
+            id: address.id,
+            scope: address.scope,
+            valueHash: null,
+          });
+        });
+      });
+      try {
+        expect(await registerSharedSpace(first, home, loom)).toEqual({
+          status: "conflict",
+          reason: "catalog-changed",
+        });
+        expect(await changeSharedSpaceMembership(first, home, action)).toEqual({
+          status: "conflict",
+          reason: "catalog-changed",
+        });
+      } finally {
+        rejectedPin.restore();
+      }
+      expect(await read(fresh())).toEqual(before);
+    });
+  });
+
   it("refuses stale confirmation even while the newer choice's fan-out is withheld", async () => {
     await withFixture(async ({ first, second, server }) => {
       await registerSharedSpace(first, home, loom);
