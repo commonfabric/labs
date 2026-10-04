@@ -392,6 +392,23 @@ describe("CodeMirror operation collaboration", () => {
     expect(applied).toEqual([]);
   });
 
+  it("ends a subscription the worker refused before it was made", async () => {
+    let cancellations = 0;
+    const { controller, errors } = controllerHarness({
+      initial: inactiveSnapshot("abc"),
+      apply: () => acceptedResolution("abc", 1, "X"),
+      subscribe: (_callback, onRefused) =>
+        onRefused({ refusedBy: "display-ceiling" }),
+      cancel: () => cancellations++,
+    });
+    await controller.start();
+
+    expect(errors.map((error) => error.name)).toEqual([
+      "CellReadRefusedError",
+    ]);
+    expect(cancellations).toBe(1);
+  });
+
   it("reports both sides of a reconciliation error", () => {
     const error = new CodeMirrorReconciliationError(
       "local",

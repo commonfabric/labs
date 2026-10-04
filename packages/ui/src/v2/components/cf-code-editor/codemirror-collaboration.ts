@@ -367,6 +367,12 @@ export class CodeMirrorCollaborationController {
       this.#closeOperationSession();
       return;
     }
+    // A refusal that arrived while the subscription was being made has
+    // failed the session already, with no subscription yet to end.
+    if (this.#failed) {
+      unsubscribe();
+      return;
+    }
     this.#unsubscribe = unsubscribe;
   }
 
