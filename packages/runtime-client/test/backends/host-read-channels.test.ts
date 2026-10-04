@@ -636,10 +636,11 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
-    it("names where a link leads on the node holding it, once the documents it consults are loaded", async () => {
-      // The owner writes a link, in a document anyone may see, to one only
-      // the owner may see. A second worker of the owner's, and a visitor's,
-      // hold neither document yet.
+    it("names where links lead on the nodes holding them, once the documents they consult are loaded", async () => {
+      // The owner writes a chain of links: from a document anyone may see,
+      // to one only the owner may see, through one without labels, to
+      // another. A second worker of the owner's, and a visitor's, hold none
+      // of them yet.
       const server = newLoopbackServer();
       const writer = new Runtime({
         apiUrl: new URL("http://localhost"),
@@ -649,34 +650,48 @@ describe("HostReadGate, for what crosses beside a value", () => {
       try {
         const tx = writer.edit();
         writeSeedEnvelopeDoc(tx, space);
-        const target = writer.getCell(space, "sealed-target", undefined, tx);
-        seedStoredEnvelope(tx, {
-          space,
-          id: target.getAsNormalizedFullLink().id!,
-          type: "application/json",
-          path: [],
-        }, {
-          value: { note: SECRET_VALUE },
-          cfc: {
-            version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [{ path: [], label: { confidentiality: [ownerOnly] } }],
-            },
-          },
-        } as FabricValue);
-        const holderCell = writer.getCell(space, "open-holder", undefined, tx);
-        seedStoredEnvelope(tx, {
-          space,
-          id: holderCell.getAsNormalizedFullLink().id!,
-          type: "application/json",
-          path: [],
-        }, { value: { link: target.getAsLink() } } as FabricValue);
+        const seed = (name: string, value: FabricValue, labels?: Labels) => {
+          const cell = writer.getCell(space, name, undefined, tx);
+          seedStoredEnvelope(tx, {
+            space,
+            id: cell.getAsNormalizedFullLink().id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value,
+            ...(labels && {
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: labels.map(([path, confidentiality]) => ({
+                    path,
+                    label: { confidentiality },
+                  })),
+                },
+              },
+            }),
+          } as FabricValue);
+          return cell;
+        };
+        const end = seed("chain-end", { note: "unlabeled" });
+        const middle = seed("chain-middle", { c: end.getAsLink() });
+        const sealed = seed(
+          "sealed-target",
+          { b: middle.getAsLink(), note: SECRET_VALUE },
+          [[[], [ownerOnly]]],
+        );
+        seed("open-holder", { a: sealed.getAsLink() });
+        const endId = end.getAsNormalizedFullLink().id;
+        const middleId = middle.getAsNormalizedFullLink().id;
+        const sealedId = sealed.getAsNormalizedFullLink().id;
         expect((await tx.commit()).ok).toBeDefined();
         await writer.storageManager.synced();
-        const targetId = target.getAsNormalizedFullLink().id;
-        const resolve = async (viewer: Identity) => {
+        const resolve = async (
+          viewer: Identity,
+          along: (holder: Cell<unknown>) => Cell<unknown>,
+        ) => {
           const reader = new Runtime({
             apiUrl: new URL("http://localhost"),
             storageManager: EmulatedStorageManager.connectTo(server, {
@@ -697,21 +712,47 @@ describe("HostReadGate, for what crosses beside a value", () => {
           try {
             return await processor.handleCellResolveAsCell({
               type: RequestType.CellResolveAsCell,
-              cell: createCellRef(holder.key("link")),
+              cell: createCellRef(along(holder)),
             });
           } finally {
             await processor.dispose();
           }
         };
-        const named = { cell: expect.objectContaining({ id: targetId }) };
+        const names = (id: string) => ({
+          cell: expect.objectContaining({ id }),
+        });
 
-        // The owner, with the target not loaded yet: followed, not refused
-        // as unread.
-        expect(await resolve(owner)).toEqual(named);
-        // The visitor may read the holder, so may be told the address it
-        // holds, as a read of the holder hands it the same address as a ref.
-        // What is behind it is decided when it is read.
-        expect(await resolve(visitor)).toEqual(named);
+        // The owner, with no document behind the first link loaded:
+        // followed, each document loaded as the link before it leads there,
+        // not refused as unread.
+        expect(await resolve(owner, (h) => h.key("a"))).toEqual(
+          names(sealedId),
+        );
+        expect(await resolve(owner, (h) => h.key("a").key("b"))).toEqual(
+          names(middleId),
+        );
+        expect(
+          await resolve(owner, (h) => h.key("a").key("b").key("c")),
+        ).toEqual(names(endId));
+        // The visitor may read the first holder, so may be told the address
+        // it holds, as a read of the holder hands it the same address as a
+        // ref. What is behind it is decided when it is read.
+        expect(await resolve(visitor, (h) => h.key("a"))).toEqual(
+          names(sealedId),
+        );
+        // The second link sits in the document only the owner may see, so
+        // where it leads is that document's content, as is every address
+        // reached through it.
+        for (
+          const past of [
+            await resolve(visitor, (h) => h.key("a").key("b")),
+            await resolve(visitor, (h) => h.key("a").key("b").key("c")),
+          ]
+        ) {
+          expect(past).toEqual({ refused: { refusedBy: "display-ceiling" } });
+          expect(JSON.stringify(past)).not.toContain(middleId);
+          expect(JSON.stringify(past)).not.toContain(endId);
+        }
       } finally {
         for (const reader of readers) await reader.dispose();
         await writer.dispose();

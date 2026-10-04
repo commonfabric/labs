@@ -38,6 +38,7 @@ import {
   type Cancel,
   type Cell,
   cellDocumentHeld,
+  cellLinkHolders,
   hostValueOf,
   isStream,
   type JSONSchema,
@@ -62,6 +63,7 @@ import {
   type CfcLabelView,
   cfcLabelViewForCell,
   cfcLabelViewForResolvedCell,
+  type CfcLabelViewSource,
   isChannelStateDocument,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
@@ -208,6 +210,31 @@ function documentsHeld(cell: Cell<unknown>): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * `cell` and the nodes holding each link a resolution of its path follows
+ * (`cellLinkHolders()`), or `undefined` when the resolution cannot be made.
+ */
+function linkHoldersOf(cell: Cell<unknown>): Cell<unknown>[] | undefined {
+  try {
+    return [cell, ...cellLinkHolders(cell)];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The document `cell` addresses, as a key. */
+function documentKey(cell: Cell<unknown>): string {
+  const { space, id, scope } = cell.getAsNormalizedFullLink();
+  return JSON.stringify([space, id, scope]);
+}
+
+/** The confidentiality clauses of every entry in `source`'s view. */
+function confidentialityIn(source: CfcLabelViewSource): CfcConfClause[] {
+  return source.view?.entries.flatMap((entry) =>
+    entry.label.confidentiality ?? []
+  ) ?? [];
 }
 
 /** Whether two cells name the same address, scope and path included. */
@@ -376,8 +403,12 @@ export class HostReadGate {
   }
 
   /**
-   * Loads what a decision on `cell` consults: its document, the one its path
-   * resolves to, and the access lists of the spaces their labels name.
+   * Loads what a decision on `cell` consults: its document, each document
+   * holding a link its path follows, the one it resolves to, and the access
+   * lists of the spaces their labels name. A document a link leads into can
+   * hold the next link, which the resolution follows only once that document
+   * is loaded, so they are loaded a link at a time, each at most once: one
+   * that does not load ends the walk, and a decision refuses it as unread.
    * Resolves `false` where an access list could not be loaded, on which a
    * decision is refused as unreadable. With no policy, nothing is decided,
    * and nothing is loaded for it.
@@ -385,30 +416,40 @@ export class HostReadGate {
   async hold(cell: Cell<unknown>): Promise<boolean> {
     if (this.#policy === undefined) return true;
     await cell.sync();
-    const resolved = cell.resolveAsCell();
-    if (!cellDocumentHeld(resolved)) await resolved.sync();
-    return (await this.#loadAccessLists([cell])) !== "failed";
+    const loaded = new Set<string>();
+    while (true) {
+      const pending = [...cellLinkHolders(cell), cell.resolveAsCell()].filter(
+        (document) =>
+          !cellDocumentHeld(document) && !loaded.has(documentKey(document)),
+      );
+      if (pending.length === 0) break;
+      for (const document of pending) loaded.add(documentKey(document));
+      await Promise.all(pending.map((document) => document.sync()));
+    }
+    return (await this.#loadAccessLists([cell], cellLinkHolders(cell))) !==
+      "failed";
   }
 
   /**
-   * Loads the access lists of the spaces `cells`' labels name that the
-   * replica does not hold: `none` where there were none to load, `loaded`
-   * once they are held, and `failed` where one could not be loaded.
+   * Loads the access lists of the spaces `cells`' labels name, and those of
+   * the nodes `holders`, that the replica does not hold: `none` where there
+   * were none to load, `loaded` once they are held, and `failed` where one
+   * could not be loaded.
    */
   async #loadAccessLists(
     cells: readonly Cell<unknown>[],
+    holders: readonly Cell<unknown>[] = [],
   ): Promise<"none" | "loaded" | "failed"> {
     if (this.#policy === undefined) return "none";
-    return await this.#loadAccessListsNamedBy(cells.flatMap((cell) => [
-      ...readProjected(cell, hostValueOf).consumed.confidentiality,
-      ...(cellLabelSources(cell) ?? []).flatMap((source) =>
-        source.view === undefined
-          ? []
-          : source.view.entries.flatMap((entry) =>
-            entry.label.confidentiality ?? []
-          )
+    return await this.#loadAccessListsNamedBy([
+      ...cells.flatMap((cell) => [
+        ...readProjected(cell, hostValueOf).consumed.confidentiality,
+        ...(cellLabelSources(cell) ?? []).flatMap(confidentialityIn),
+      ]),
+      ...holders.flatMap((holder) =>
+        confidentialityIn(cfcHolderLabelViewSourceForCell(holder))
       ),
-    ]));
+    ]);
   }
 
   /**
@@ -596,25 +637,33 @@ export class HostReadGate {
   }
 
   /**
-   * The refusal of naming where a link stored at `cell`'s node leads, or
+   * The refusal of naming where the links along `cell`'s path lead, or
    * `undefined` where the policy admits it. A link is part of what the node
-   * holds, so it is decided on the labels the document holding it stores
-   * there (`cfcHolderLabelViewSourceForCell()`), and not on those of what it
-   * links to: the address is the node's content, as a read of a record
-   * holding the link hands a host the same address as a ref. A holding
-   * document the replica does not hold, or one in a channel's own state, is
-   * refused as unreadable.
+   * holding it holds, so each link the resolution follows is decided on the
+   * labels its document stores where it sits
+   * (`cfcHolderLabelViewSourceForCell()`), and not on those of what it links
+   * to: the address is the node's content, as a read of a record holding the
+   * link hands a host the same address as a ref. Naming where the path
+   * leads tells what each node along it holds, so every one is decided: a
+   * document anyone may see can link into one only its owner may, and the
+   * link that one holds is its content. A holding document the
+   * replica does not hold, one in a channel's own state, or a resolution
+   * that cannot be made, is refused as unreadable.
    */
   linkRefusal(
     cell: Cell<unknown>,
   ): (HostReadDecided & CellRefusedAnswer) | undefined {
     const policy = this.#policy;
     if (policy === undefined) return undefined;
-    const link = cell.getAsNormalizedFullLink();
-    const refusal = cellDocumentHeld(cell) && !isChannelStateDocument(link.id)
+    const holders = linkHoldersOf(cell);
+    const refusal = holders !== undefined &&
+        holders.every((holder) =>
+          cellDocumentHeld(holder) &&
+          !isChannelStateDocument(holder.getAsNormalizedFullLink().id)
+        )
       ? cellLabelRefusal(
         cell,
-        [cfcHolderLabelViewSourceForCell(cell)],
+        holders.map(cfcHolderLabelViewSourceForCell),
         policy,
         this.#sources,
       )

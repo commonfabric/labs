@@ -120,6 +120,7 @@ export {
 } from "./storage/transaction-summary.ts";
 export {
   cellDocumentHeld,
+  cellLinkHolders,
   type CellLinkInput,
   cellRuntime,
   cellTx,

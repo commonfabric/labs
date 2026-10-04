@@ -137,7 +137,11 @@ import {
   findAndInlineDataUriLinks,
 } from "./data-uri.ts";
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
-import { type LastNode, resolveLink } from "./link-resolution.ts";
+import {
+  type LastNode,
+  resolveLink,
+  resolveLinkTracingDereferences,
+} from "./link-resolution.ts";
 import { areNormalizedLinksSame } from "./link-types.ts";
 import {
   areLinksSame,
@@ -4689,6 +4693,35 @@ export function cellDocumentHeld(cell: AnyCell<unknown>): boolean {
   if (hasDataUriScheme(link.id)) return true;
   return cellRuntime(cell).storageManager.open(link.space).replica
     .hasLocalDocumentCoverage?.(link.id, link.scope) === true;
+}
+
+/**
+ * The nodes holding the links a resolution of `cell`'s path follows, in the
+ * order it follows them: each a cell at the path in its document where that
+ * link sits. Whoever learns where the path leads learns what each of these
+ * holds, the address of the next. Empty where the path follows no link.
+ * Host code only.
+ */
+export function cellLinkHolders(cell: AnyCell<unknown>): Cell<unknown>[] {
+  const runtime = cellRuntime(cell);
+  const tx = cellTx(cell);
+  const { traces } = resolveLinkTracingDereferences(
+    runtime,
+    runtime.readTx(tx),
+    cell.getAsNormalizedFullLink(),
+  );
+  return traces.map(({ source }) =>
+    runtime.getCellFromLink(
+      {
+        space: source.space,
+        id: toURI(source.id),
+        scope: source.scope,
+        path: source.path,
+      },
+      undefined,
+      tx,
+    )
+  );
 }
 
 /**
