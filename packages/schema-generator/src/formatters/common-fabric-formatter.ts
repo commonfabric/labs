@@ -65,7 +65,7 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
+import { POLICY_READ_IN_PART, withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -490,36 +490,6 @@ const cfcCarriedParts = (
   return metadata.length > 0 && rest.length === 1
     ? { payload: rest[0]!, metadata }
     : undefined;
-};
-
-/**
- * Whether `value`, a label atom or a part of one, names the current principal
- * (`CurrentPrincipal`, lowered as `{ __ctCurrentPrincipal: true }`).
- */
-const namesCurrentPrincipal = (value: unknown): boolean =>
-  isObjectOrArray(value) &&
-  ((!Array.isArray(value) && value.__ctCurrentPrincipal === true) ||
-    Object.values(value).some(namesCurrentPrincipal));
-
-/**
- * `labels` without the principal claims the runtime enforces only beside a
- * writer: an `ownerPrincipal`, and each `integrity` or `addIntegrity` atom
- * naming the current principal. A write against either, with no writer
- * declared beside it, is refused. `undefined` where nothing else is left.
- */
-const withoutWriterBoundClaims = (
-  labels: Readonly<Record<string, unknown>>,
-): Record<string, unknown> | undefined => {
-  const kept: Record<string, unknown> = { ...labels };
-  delete kept.ownerPrincipal;
-  for (const key of ["integrity", "addIntegrity"] as const) {
-    const atoms = kept[key];
-    if (!Array.isArray(atoms)) continue;
-    const rest = atoms.filter((atom) => !namesCurrentPrincipal(atom));
-    if (rest.length > 0) kept[key] = rest;
-    else delete kept[key];
-  }
-  return Object.keys(kept).length > 0 ? kept : undefined;
 };
 
 /**
@@ -3220,16 +3190,19 @@ export class CommonFabricFormatter implements TypeFormatter {
 
   /**
    * `schema`, the lowering of `type`, a CFC alias chain's instantiation, with
-   * the writer policy `type` holds read whole or not at all where the schema
-   * views a document: when its writer went unread, the principal claims the
-   * runtime enforces only beside a writer are left out with it
-   * (`withoutWriterBoundClaims()`). Without its writer, such a claim refuses
-   * every write against it, its own writer's included, and stops no other,
-   * while the document the view reads stores the whole policy. A claim whose
-   * type holds no writer is the author's, and stays as written. A schema that
-   * defines a document keeps its claims, and has the unread writer reported
-   * instead; a root whose writer the caller supplies keeps them too
-   * (`GenerationContext.rootWriterSuppliedAt`).
+   * the writer policy `type` holds marked as read in part
+   * (`POLICY_READ_IN_PART`) where the schema views a document and the writer
+   * went unread here. The view reads the policy whole or not at all: once the
+   * schema is generated, a policy whose writer arrived since, as a label the
+   * value's declaration states, is whole, and one whose writer did not has
+   * the principal claims the runtime enforces only beside a writer left out
+   * with it (`settlePoliciesReadInPart()`). Without its writer, such a claim
+   * refuses every write against it, its own writer's included, and stops no
+   * other, while the document the view reads stores the whole policy. A
+   * claim whose type holds no writer is the author's, and stays as written.
+   * A schema that defines a document keeps its claims, and has the unread
+   * writer reported instead; a root whose writer the caller supplies keeps
+   * them too (`GenerationContext.rootWriterSuppliedAt`).
    */
   #withPolicyReadWhole(
     type: ts.Type,
@@ -3253,11 +3226,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       return schema;
     }
-    const { ifc, ...rest } = schema;
-    const kept = withoutWriterBoundClaims(ifc as Record<string, unknown>);
-    return kept
-      ? { ...rest, ifc: kept as NonNullable<MutableJSONSchemaObj["ifc"]> }
-      : rest;
+    return {
+      ...schema,
+      ifc: { ...schema.ifc, [POLICY_READ_IN_PART]: true } as NonNullable<
+        MutableJSONSchemaObj["ifc"]
+      >,
+    };
   }
 
   /**

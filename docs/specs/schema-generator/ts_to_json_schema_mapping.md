@@ -1387,13 +1387,17 @@ Mechanics:
   `cfc-write-authorized-by:unread` error, naming the policy
   (`WriteAuthorizedBy`, or `WritePolicyAnyOf` for a carrier holding a set).
   Any other schema views a document whose stored envelope binds its writers
-  already, and reports nothing. It reads the policy whole or not at all: where
-  the writer went unread, the principal claims the runtime enforces only
-  beside a writer, an `ownerPrincipal` and `integrity` or `addIntegrity` atoms
-  naming the current principal, are left out with it, since either alone
-  refuses every write against it, its own writer's included
-  (`#withPolicyReadWhole()`). A claim whose type holds no writer stays as
-  written. A writer the type no longer carries at all, as a mapped type the
+  already, and reports nothing. It reads the policy whole or not at all.
+  Where the writer went unread, the policy is marked as read in part
+  (`#withPolicyReadWhole()`), and settled once the schema is generated
+  (`settlePoliciesReadInPart()` in `ifc-labels.ts`). If the writer arrived
+  since, as a label the value's declaration states merged in beside the part
+  read (§13's `narrowedFrom`), the policy is whole and stays where formatting
+  put it. Otherwise the principal claims the runtime enforces only beside a
+  writer, an `ownerPrincipal` and `integrity` or `addIntegrity` atoms naming
+  the current principal, are left out with it, since either alone refuses
+  every write against it, its own writer's included. A claim whose type holds
+  no writer stays as written. A writer the type no longer carries at all, as a mapped type the
   generator does not follow can drop it, is not reported either way.
 - `SchemaGeneratorTransformer.resolvePolicyOfMarkers` replaces a valid policy
   marker with the compiled module identity, exported symbol, and policy digest.
