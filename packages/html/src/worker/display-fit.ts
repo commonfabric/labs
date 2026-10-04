@@ -300,20 +300,30 @@ export function cellLabelSources(
   cell: Cell<unknown>,
 ): CfcLabelViewSource[] | undefined {
   try {
-    const resolved = cell.resolveAsCell();
-    if (
-      isChannelStateDocument(cell.getAsNormalizedFullLink().id) ||
-      isChannelStateDocument(resolved.getAsNormalizedFullLink().id)
-    ) {
-      return undefined;
-    }
     const own = cfcLabelViewSourceForCell(cell);
+    const resolved = cell.resolveAsCell();
+    if (inChannelState(cell) || inChannelState(resolved)) return undefined;
     return sameCell(cell, resolved)
       ? [own]
       : [own, cfcLabelViewSourceForCell(resolved)];
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Whether `cell` names a place in a channel's own state. A value with no
+ * address, as `cfcLabelViewSourceForCell()` reads one by the view it
+ * carries, names no stored document, and so none.
+ */
+function inChannelState(cell: Cell<unknown>): boolean {
+  let id: string;
+  try {
+    id = cell.getAsNormalizedFullLink().id;
+  } catch {
+    return false;
+  }
+  return isChannelStateDocument(id);
 }
 
 /**
