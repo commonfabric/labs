@@ -1791,9 +1791,16 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(toOwner.result).toEqual(result);
     });
 
-    it("names the document alone in what a diagnosis says an action read and wrote, and in a cycle's steps", async () => {
+    it("names the document alone in what a diagnosis says an action read and wrote, and names a cycle's documents as they are", async () => {
       await using docs = await shelf();
+      // What an action read and wrote is spelled as telemetry spells it,
+      // `space/id/path`, which names no scope, so the instance it means cannot
+      // be told, and under a ceiling it names its document alone. A cycle's
+      // step names the document it wrote as the scheduler keys one,
+      // `space/scopeKey/id`, with no path.
       const sealedKey = `${space}/${docs.contactsId}/${SECRET_KEY}`;
+      const written = `${space}/space/${docs.contactsId}`;
+      const inline = `${space}/space/data:application/json,"${SECRET_VALUE}"`;
       const result = {
         nonIdempotent: [{
           actionId: "action:1",
@@ -1806,7 +1813,10 @@ describe("HostReadGate, for what crosses beside a value", () => {
           differingWriteKeys: [],
         }],
         cycles: [{
-          cycle: [{ actionId: "action:1", writesCell: sealedKey }],
+          cycle: [
+            { actionId: "action:1", writesCell: written },
+            { actionId: "action:2", writesCell: inline },
+          ],
           timestamp: 1,
         }],
         duration: 1,
@@ -1819,14 +1829,18 @@ describe("HostReadGate, for what crosses beside a value", () => {
           docs.documentAt,
         ).result;
         expect(holds(shown, SECRET_KEY)).toBe(false);
+        expect(holds(shown, SECRET_VALUE)).toBe(false);
         expect(shown.nonIdempotent[0].actionInfo).toEqual({
           patternName: "p",
           reads: [`${space}/${docs.contactsId}`],
           writes: [`${space}/${docs.contactsId}`],
         });
-        expect(shown.cycles[0].cycle[0].writesCell).toBe(
-          `${space}/${docs.contactsId}`,
-        );
+        // A document named alone is shown as named; a `data:` one, whose id
+        // is its content, is withheld.
+        expect(shown.cycles[0].cycle.map((step) => step.writesCell)).toEqual([
+          written,
+          PLACEHOLDER,
+        ]);
       }
       // With no ceiling, nothing is decided.
       expect(

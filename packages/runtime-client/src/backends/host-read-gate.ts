@@ -122,11 +122,6 @@ export type DocumentAt = (
 ) => Cell<unknown>;
 
 /**
- * The document a scheduler graph names by space, id and scope key (`space`
- * for the space instance), at its root, or `undefined` where the key names
- * an instance this worker cannot place.
- */
-/**
  * A document a slug's resolution read, at its root, with the labels it held
  * when the walk read it ({@link HostReadGate.walkRead}).
  */
@@ -143,6 +138,11 @@ export type WalkedDocument = {
   readonly sources: readonly CfcLabelViewSource[] | undefined;
 };
 
+/**
+ * The document a scheduler graph names by space, id and scope key (`space`
+ * for the space instance), at its root, or `undefined` where the key names
+ * an instance this worker cannot place.
+ */
 export type GraphDocumentAt = (
   space: string,
   id: string,
@@ -207,6 +207,22 @@ const placeUnscoped: AddressPlacement = (key) => {
     path: path.filter((segment) => segment.length > 0),
     root: undefined,
   };
+};
+
+/**
+ * A document as the scheduler keys one, `space/scopeKey/id`, which names no
+ * path within it, and so is named as it is.
+ */
+const placeEntity: AddressPlacement = (key) => {
+  const [space, scopeKey, ...idParts] = key.split("/");
+  const id = idParts.join("/");
+  if (
+    space === undefined || scopeKey === undefined || id.length === 0 ||
+    hasDataUriScheme(id)
+  ) {
+    return undefined;
+  }
+  return { document: key, path: [], root: undefined };
 };
 
 /** What stands in a diagnostic for a value the ceiling refuses. */
@@ -1275,10 +1291,11 @@ export class HostReadGate {
       }
       return out;
     };
-    // What an action is known to read and write, and the cell a cycle's step
-    // writes, are spelled as telemetry spells an address.
+    // What an action is known to read and write is spelled as telemetry
+    // spells an address, naming no scope; the document a cycle's step writes,
+    // as the scheduler keys a document.
     const addresses = this.#addressesShown(placeUnscoped);
-    const written = this.#addressShown(placeUnscoped);
+    const written = this.#addressShown(placeEntity);
     return decided({
       result: {
         ...result,
