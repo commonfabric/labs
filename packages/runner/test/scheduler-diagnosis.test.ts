@@ -9,6 +9,7 @@ import {
   findDifferingWriteKeys,
   findNonIdempotentPair,
   makeAddressKey,
+  parseAddressKey,
   runIdempotencyRecheck,
 } from "../src/scheduler/diagnosis.ts";
 import type { NonIdempotentReport } from "../src/telemetry.ts";
@@ -74,6 +75,25 @@ describe("scheduler-diagnosis", () => {
       expect(makeAddressKey(address("of:e1", []))).toBe(
         "did:key:zDiagnosis/of:e1/",
       );
+    });
+  });
+
+  describe("parseAddressKey", () => {
+    it("reads back the document a key names, its scope included", () => {
+      expect(parseAddressKey(makeAddressKey(address("of:e1", ["a"]))))
+        .toEqual({ space: SPACE, id: "of:e1", scope: "space" });
+      expect(
+        parseAddressKey(
+          makeAddressKey({ ...address("of:e1", ["a"]), scope: "user" }),
+        ),
+      ).toEqual({ space: SPACE, id: "of:e1", scope: "user" });
+    });
+
+    it("reads a key naming a data: document as naming none, since its id holds `/`", () => {
+      const key = makeAddressKey(
+        address('data:application/json,{"a":1}', ["a"]),
+      );
+      expect(parseAddressKey(key)).toBeUndefined();
     });
   });
 

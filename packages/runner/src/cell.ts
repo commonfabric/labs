@@ -4705,10 +4705,13 @@ export function cellDocumentHeld(cell: AnyCell<unknown>): boolean {
 export function cellLinkHolders(cell: AnyCell<unknown>): Cell<unknown>[] {
   const runtime = cellRuntime(cell);
   const tx = cellTx(cell);
+  // The caller loads what the walk reaches, so it kicks no pull of its own.
   const { traces } = resolveLinkTracingDereferences(
     runtime,
     runtime.readTx(tx),
     cell.getAsNormalizedFullLink(),
+    "value",
+    { kickCrossSpaceTargets: false },
   );
   return traces.map(({ source }) =>
     runtime.getCellFromLink(

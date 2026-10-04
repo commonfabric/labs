@@ -1621,6 +1621,50 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(toOwner.result).toEqual(result);
     });
 
+    it("names the document alone in what a diagnosis says an action read and wrote, and in a cycle's steps", async () => {
+      await using docs = await shelf();
+      const sealedKey = `${space}/${docs.contactsId}/${SECRET_KEY}`;
+      const result = {
+        nonIdempotent: [{
+          actionId: "action:1",
+          actionInfo: {
+            patternName: "p",
+            reads: [sealedKey],
+            writes: [sealedKey],
+          },
+          runs: [],
+          differingWriteKeys: [],
+        }],
+        cycles: [{
+          cycle: [{ actionId: "action:1", writesCell: sealedKey }],
+          timestamp: 1,
+        }],
+        duration: 1,
+        busyTime: 1,
+      };
+
+      for (const viewer of [visitor, owner]) {
+        const shown = gateFor(docs.runtime, viewer).diagnosis(
+          result,
+          docs.documentAt,
+        ).result;
+        expect(holds(shown, SECRET_KEY)).toBe(false);
+        expect(shown.nonIdempotent[0].actionInfo).toEqual({
+          patternName: "p",
+          reads: [`${space}/${docs.contactsId}`],
+          writes: [`${space}/${docs.contactsId}`],
+        });
+        expect(shown.cycles[0].cycle[0].writesCell).toBe(
+          `${space}/${docs.contactsId}`,
+        );
+      }
+      // With no ceiling, nothing is decided.
+      expect(
+        new HostReadGate(undefined, {}).diagnosis(result, docs.documentAt)
+          .result,
+      ).toEqual(result);
+    });
+
     it("withholds, under a ceiling, a diagnostic key that names no address it can decide", async () => {
       await using docs = await shelf();
       // Too few segments to name a document in each spelling: the scheduler
@@ -1628,13 +1672,16 @@ describe("HostReadGate, for what crosses beside a value", () => {
       // diagnosis's `space/id/path`.
       const unplaced = `${space}/${SECRET_KEY}`;
       const bare = SECRET_KEY;
+      // A `data:` id holds its content, `/` included, so neither where it
+      // ends nor what it holds can be told apart from the address.
+      const inline = `data:application/json,{"note":"${SECRET_VALUE}"}`;
       const snapshot = {
         nodes: [{
           id: "action",
           type: "computation" as const,
           isDirty: false,
           isPending: false,
-          reads: [unplaced],
+          reads: [unplaced, `${space}/${inline}/space/field`],
           writes: [],
         }],
         edges: [],
@@ -1643,15 +1690,19 @@ describe("HostReadGate, for what crosses beside a value", () => {
       const dependencies: RuntimeTelemetryMarkerResult = {
         type: "scheduler.dependencies.update",
         actionId: "action",
-        reads: [bare],
+        reads: [bare, `${space}/${inline}/field`],
         writes: [],
         timeStamp: 1,
       };
       const diagnosis = {
         nonIdempotent: [{
           actionId: "action:1",
-          runs: [{ timestamp: 1, reads: { [bare]: SECRET_VALUE }, writes: {} }],
-          differingWriteKeys: [bare],
+          runs: [{
+            timestamp: 1,
+            reads: { [bare]: SECRET_VALUE },
+            writes: { [`${space}/${inline}/field`]: "written" },
+          }],
+          differingWriteKeys: [bare, `${space}/${inline}/field`],
         }],
         cycles: [],
         duration: 1,

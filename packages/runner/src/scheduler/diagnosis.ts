@@ -12,6 +12,7 @@ import {
   getTransactionReadDetails,
   getTransactionWriteDetails,
 } from "../storage/transaction-inspection.ts";
+import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import { ignoreReadForScheduling } from "../storage/reactivity-log.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";
 import type { CellScope } from "../builder/types.ts";
@@ -84,19 +85,21 @@ export function makeAddressKey(addr: IMemorySpaceAddress): string {
 
 /**
  * The document a key {@link makeAddressKey} made names: its space, id and
- * scope, or `undefined` for a string that is no such key.
+ * scope, or `undefined` for a string that is no such key. A `data:` id holds
+ * its content, `/` included, so where it ends cannot be read back out of a
+ * key, and a key naming one is read as naming no document.
  */
 export function parseAddressKey(
   key: string,
 ): { space: string; id: string; scope: CellScope } | undefined {
   const [space, scoped] = key.split("/", 2);
   if (space === undefined || scoped === undefined) return undefined;
-  for (const scope of ["user", "session"] as const) {
-    if (scoped.startsWith(`${scope}:`)) {
-      return { space, id: scoped.slice(scope.length + 1), scope };
-    }
-  }
-  return { space, id: scoped, scope: "space" };
+  const scope =
+    (["user", "session"] as const).find((name) =>
+      scoped.startsWith(`${name}:`)
+    ) ?? "space";
+  const id = scope === "space" ? scoped : scoped.slice(scope.length + 1);
+  return hasDataUriScheme(id) ? undefined : { space, id, scope };
 }
 
 function unwrapTransactionDetailValue(
@@ -246,11 +249,9 @@ function transactionReadInvariants(
   for (const space of spaces) {
     try {
       for (const detail of getTransactionReadDetails(tx, space)) {
-        // makeAddressKey ignores scope; include it so same id+path reads
-        // under different cell scopes don't collide.
-        const key = `${normalizeCellScope(detail.address.scope)}|${
-          makeAddressKey(detail.address)
-        }`;
+        // The key names the scope, so same id+path reads under different
+        // cell scopes don't collide.
+        const key = makeAddressKey(detail.address);
         invariants.set(key, {
           address: detail.address,
           value: detail.value,

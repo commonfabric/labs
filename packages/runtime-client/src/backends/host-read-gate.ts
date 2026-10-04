@@ -33,6 +33,7 @@ import {
 } from "@commonfabric/html/worker";
 import type { CellScope } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import { isPlainObject } from "@commonfabric/utils/types";
 import {
   type Cancel,
@@ -57,6 +58,7 @@ import type {
   SchedulerGraphSnapshot,
   TriggerTraceEntry,
 } from "@commonfabric/runner/shared";
+import { addressKey } from "@commonfabric/runner/shared";
 import {
   type CfcConfClause,
   cfcHolderLabelViewSourceForCell,
@@ -145,7 +147,11 @@ type ShownAddresses = {
   (keys: readonly string[] | undefined): string[] | undefined;
 };
 
-/** Splits and places an address, or `undefined` for a string that is none. */
+/**
+ * Splits and places an address, or `undefined` for a string that is none. A
+ * `data:` id holds its content, `/` included, so neither where it ends nor
+ * what it holds can be told apart from the address, and it is not placed.
+ */
 type AddressPlacement = (key: string) => PlacedAddress | undefined;
 
 /**
@@ -155,7 +161,10 @@ type AddressPlacement = (key: string) => PlacedAddress | undefined;
 const placeScoped =
   (documentAt: GraphDocumentAt): AddressPlacement => (key) => {
     const [space, id, scopeKey, ...path] = key.split("/");
-    if (space === undefined || id === undefined || scopeKey === undefined) {
+    if (
+      space === undefined || id === undefined || scopeKey === undefined ||
+      hasDataUriScheme(id)
+    ) {
       return undefined;
     }
     return {
@@ -171,7 +180,9 @@ const placeScoped =
  */
 const placeUnscoped: AddressPlacement = (key) => {
   const [space, id, ...path] = key.split("/");
-  if (space === undefined || id === undefined) return undefined;
+  if (space === undefined || id === undefined || hasDataUriScheme(id)) {
+    return undefined;
+  }
   return {
     document: `${space}/${id}`,
     path: path.filter((segment) => segment.length > 0),
@@ -239,8 +250,7 @@ function linkHoldersOf(cell: Cell<unknown>): Cell<unknown>[] | undefined {
 
 /** The document `cell` addresses, as a key. */
 function documentKey(cell: Cell<unknown>): string {
-  const { space, id, scope } = cell.getAsNormalizedFullLink();
-  return JSON.stringify([space, id, scope]);
+  return addressKey({ ...cell.getAsNormalizedFullLink(), path: [] });
 }
 
 /** The confidentiality clauses of every entry in `source`'s view. */
@@ -248,15 +258,6 @@ function confidentialityIn(source: CfcLabelViewSource): CfcConfClause[] {
   return source.view?.entries.flatMap((entry) =>
     entry.label.confidentiality ?? []
   ) ?? [];
-}
-
-/** Whether two cells name the same address, scope and path included. */
-function sameAddress(left: Cell<unknown>, right: Cell<unknown>): boolean {
-  const a = left.getAsNormalizedFullLink();
-  const b = right.getAsNormalizedFullLink();
-  return a.space === b.space && a.id === b.id && a.scope === b.scope &&
-    a.path.length === b.path.length &&
-    a.path.every((segment, index) => segment === b.path[index]);
 }
 
 /** What the display ceiling's refusal of a host's read says. */
@@ -695,7 +696,7 @@ export class HostReadGate {
   async resolveAsCell(cell: Cell<unknown>): Promise<CellResolveResponse> {
     if (!await this.hold(cell)) return this.#refuse(UNHELD);
     const resolved = cell.resolveAsCell();
-    if (this.#policy !== undefined && !sameAddress(cell, resolved)) {
+    if (this.#policy !== undefined && !cell.equalLinks(resolved)) {
       const refused = this.linkRefusal(cell);
       if (refused !== undefined) return refused;
     }
@@ -1014,19 +1015,7 @@ export class HostReadGate {
    */
   #addressesShown(place: AddressPlacement): ShownAddresses {
     const policy = this.#policy;
-    const verdicts = new Map<string, boolean>();
-    const shown = (key: string): string => {
-      const placed = place(key);
-      if (placed === undefined) return WITHHELD;
-      if (placed.path.length === 0) return placed.document;
-      let refused = verdicts.get(placed.document);
-      if (refused === undefined) {
-        refused = placed.root === undefined ||
-          this.#cellRefusal(placed.root) !== undefined;
-        verdicts.set(placed.document, refused);
-      }
-      return refused ? placed.document : key;
-    };
+    const shown = this.#addressShown(place);
     function addresses(keys: readonly string[]): string[];
     function addresses(
       keys: readonly string[] | undefined,
@@ -1038,6 +1027,24 @@ export class HostReadGate {
       return policy === undefined ? [...keys] : [...new Set(keys.map(shown))];
     }
     return addresses;
+  }
+
+  /** One address as {@link #addressesShown} shows it. */
+  #addressShown(place: AddressPlacement): (key: string) => string {
+    if (this.#policy === undefined) return (key) => key;
+    const verdicts = new Map<string, boolean>();
+    return (key) => {
+      const placed = place(key);
+      if (placed === undefined) return WITHHELD;
+      if (placed.path.length === 0) return placed.document;
+      let refused = verdicts.get(placed.document);
+      if (refused === undefined) {
+        refused = placed.root === undefined ||
+          this.#cellRefusal(placed.root) !== undefined;
+        verdicts.set(placed.document, refused);
+      }
+      return refused ? placed.document : key;
+    };
   }
 
   /**
@@ -1158,11 +1165,29 @@ export class HostReadGate {
       }
       return out;
     };
+    // What an action is known to read and write, and the cell a cycle's step
+    // writes, are spelled as telemetry spells an address.
+    const addresses = this.#addressesShown(placeUnscoped);
+    const written = this.#addressShown(placeUnscoped);
     return decided({
       result: {
         ...result,
+        cycles: result.cycles.map((report) => ({
+          ...report,
+          cycle: report.cycle.map((step) => ({
+            ...step,
+            writesCell: written(step.writesCell),
+          })),
+        })),
         nonIdempotent: result.nonIdempotent.map((report) => ({
           ...report,
+          ...(report.actionInfo === undefined ? {} : {
+            actionInfo: {
+              ...report.actionInfo,
+              reads: addresses(report.actionInfo.reads),
+              writes: addresses(report.actionInfo.writes),
+            },
+          }),
           runs: report.runs.map((run) => ({
             ...run,
             reads: values(run.reads),
