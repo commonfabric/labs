@@ -66,7 +66,7 @@ import {
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
-import { holdsUnreadMetadataLabel } from "./unread-label-diagnostics.ts";
+import { holdsUnreadValue } from "./unread-label-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
@@ -340,16 +340,17 @@ function armLabels(
 }
 
 /**
- * Whether a label declared along `schema`'s reference chain, or along any
- * arm's of a union `schema` is, holds an atom the lowering could not read in
- * full (`holdsUnreadMetadataLabel()`).
+ * Whether the labels declared along `schema`'s reference chain, or along any
+ * arm's of a union `schema` is, hold a value the lowering could not read in
+ * full (`holdsUnreadValue()`), in a label list or any other key. A key the
+ * lowering could not read at all is not declared, so it is not seen here.
  */
 function holdsUnreadArmLabel(
   schema: MutableJSONSchema,
   context: GenerationContext,
 ): boolean {
   const labels = declaredIfcLabels(schema, context.definitions);
-  if (labels && holdsUnreadMetadataLabel(labels)) return true;
+  if (labels && holdsUnreadValue(labels)) return true;
   const resolved = resolveLocalRef(schema, context);
   return isObjectOrArray(resolved) && Array.isArray(resolved.anyOf) &&
     (resolved.anyOf as MutableJSONSchema[]).some((arm) =>

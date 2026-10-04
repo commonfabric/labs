@@ -2063,13 +2063,14 @@ type Outer<T extends { x: string }> = Confidential<{ inner: ${inner} }, readonly
           const argument of [
             "Integrity<One, readonly [string]>",
             "Confidential<One, readonly [string]>",
+            "ExactCopy<One, readonly [string]>",
           ]
         ) {
           it(`reads \`Pick<T | Sec<Two>, "x">\` in a payload read under bindings unlabeled, \`T\` bound to \`${argument}\`, on both sides`, async () => {
             // A member's label the lowering cannot read leaves every member
             // unread, as the members' labels are read in full or not at all.
             const { input, output } = await schemasOf(
-              `import type { Integrity } from "commonfabric";
+              `import type { ExactCopy, Integrity } from "commonfabric";
 ${DECLARATIONS}
 type Outer<T extends { x: string }> = Confidential<{ inner: Pick<T | Sec<Two>, "x"> }, readonly ["outer"]>;`,
               `Outer<${argument}>`,
@@ -2092,6 +2093,23 @@ type View<T> = Omit<T | Sec<Two>, never>;`;
           );
           for (const side of [read.input, read.output]) {
             expect((side as Schema).ifc).toBeUndefined();
+          }
+        });
+
+        it("keeps every member's labels where a labeled member's payload is `unknown`, on both sides", async () => {
+          // `Confidential<unknown, …>` is its carrier rather than `unknown`, so
+          // it absorbs no other member of the union.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type Inner<T> = Omit<Sec<T>, never>;
+type Nested<U> = Inner<Confidential<U, readonly ["b"]> | Confidential<Two, readonly ["c"]>>;`,
+            "Nested<unknown>",
+          );
+          for (const side of [input, output]) {
+            const { confidentiality } = (side as {
+              ifc: { confidentiality: string[] };
+            }).ifc;
+            expect([...confidentiality].sort()).toEqual(["a", "b", "c"]);
           }
         });
       });

@@ -231,8 +231,10 @@ keeps just the signature, the named members dissolving into it as they do
 in `keyof T`. A `Pick` naming a key some arm lacks, or a union with an
 arm that is no object, keeps the general path. Since the value is
 whichever arm it is, the object has the labels declared along the operand's
-references and every arm's, joined (`joinMemberIfcLabels`), each read in
-full or none of them, as a union read by type is. Unions these
+references and every arm's, joined (`joinMemberIfcLabels`), every value of
+each read in full or none of them, as a union read by type is. A metadata key
+the lowering could not read at all is not declared on the arm, so a member
+holding one counts as read. Unions these
 rules build — a tuple's items, a shared property, a merged signature — fold
 equal arms by value-model equality (`dedupeByValueEqual`), flatten a bare
 nested union, and keep an `unknown` arm beside the others as a synthetic
@@ -1046,8 +1048,10 @@ Mechanics:
   checker builds, read as any other type is and never holding the carrier,
   labeled with the labels of the members the operand may be. A union
   operand may be any of its members, each read on its own once its
-  parameters are bound, and is unlabeled where a member is `any` or
-  `unknown`, to which the checker reduces it. The checker
+  parameters are bound, and is unlabeled where a member is `any` or a bare
+  `unknown`, to which the checker reduces it; a labeled `unknown`
+  (`Confidential<unknown, L>`) is its carrier, a member like any other. The
+  checker
   distributes `Readonly`, `Partial` and `Required` over one, so each member
   of the union they build keeps its own labels. `Pick` and `Omit` build one
   object from whichever member the value is, so it has every member's
@@ -1081,7 +1085,8 @@ Mechanics:
   labeled join the operand's, a member that leaves the intersection nothing
   (`never`, `null`, `undefined`) drops out, leaving the operand unlabeled
   where none is left, `any` makes the operand `any`, unlabeled, and a
-  union holding `unknown` is `unknown`, which keeps the carriers alone. So
+  union holding a bare `unknown` is `unknown`, which keeps the carriers
+  alone. So
   `Select<Confidential<X, ["b"]> | Y>`, where
   `type Select<T> = Pick<Sec<T>, "a">`, reads as
   `Pick<Sec<Confidential<X, ["b"]> | Y>, "a">`, labeled with both. Both

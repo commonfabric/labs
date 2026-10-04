@@ -2228,9 +2228,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * parameter `bound` binds is its argument, which the checker folds into the
    * operand's intersection, as it folds any type in. So the intersection
    * distributes over a union, each member of which is read on its own,
-   * except that a union holding `any` is `any` and one holding `unknown` is
-   * `unknown`, one member adding no carrier; it is `never` for a type that
-   * leaves it nothing (`vanishesUnderCarrier()`),
+   * except that a union holding `any` is `any` and one holding a bare
+   * `unknown` is `unknown`, one member adding no carrier, while a labeled
+   * `unknown` is its carrier, a member like any other; it is `never` for a
+   * type that leaves it nothing (`vanishesUnderCarrier()`),
    * which has no members; and a type that is itself labeled folds its
    * carriers in (`#carriedMembers()`). Any other type is one member adding no
    * carrier.
@@ -2253,7 +2254,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         const read = this.#payloadParts(member, bound, context);
         if (!read) return undefined;
         for (const part of read) {
-          if ((part.payload.flags & ts.TypeFlags.Unknown) !== 0) {
+          if (
+            (part.payload.flags & ts.TypeFlags.Unknown) !== 0 &&
+            part.metadata.length === 0
+          ) {
             unknown = part;
           } else {
             members.push(part);

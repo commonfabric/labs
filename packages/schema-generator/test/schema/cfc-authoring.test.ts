@@ -3005,6 +3005,25 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    it('reads `Pick<T | Sec<{ x: string; z: 1 }>, "x">` under bindings unlabeled, `T` bound to an `ExactCopy` it cannot read in full', async () => {
+      // Every value of a member's policy is read in full, label lists or not,
+      // or none of the members' labels are.
+      const { value } = await generate(`
+        type ExactCopy<T, P extends readonly string[]> = Cfc<T, { exactCopyOf: P }>;
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T> = Confidential<
+          { inner: Pick<T | Sec<{ x: string; z: 1 }>, "x"> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<ExactCopy<{ x: string }, readonly [string]>> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        type: "object",
+        properties: { x: { type: "string" } },
+        required: ["x"],
+      });
+    });
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;
@@ -3470,6 +3489,9 @@ describe("Schema: CFC authoring aliases", () => {
         type View<T> = Omit<T | Sec<Two>, never>;
         type OmitSec<T> = Omit<Sec<T>, never>;
         type OmitSecOr<T> = OmitSec<T | Confidential<Two, readonly ["b"]>>;
+        type OmitSecNested<U> = OmitSec<
+          Confidential<U, readonly ["b"]> | Confidential<Two, readonly ["c"]>
+        >;
         type OmitSecEither<T, U> =
           OmitSec<T | U | Confidential<Two, readonly ["b"]>>;
         type ReadonlyUnion<T, U> = Readonly<Sec<T> | Sec<U>>;
@@ -3620,6 +3642,18 @@ describe("Schema: CFC authoring aliases", () => {
         expect((read.schema as Record<string, unknown>).ifc).toBeUndefined();
         expect((direct.schema as Record<string, unknown>).ifc).toBeUndefined();
         expect(read.diagnostics).toEqual([]);
+      });
+
+      it("keeps every member's labels where a labeled member's payload is `unknown`", async () => {
+        // `Confidential<unknown, …>` is its carrier rather than `unknown`, so it
+        // absorbs no other member of the union.
+        const { schema, diagnostics } = await generate(
+          "OmitSecNested<unknown>",
+          DECLARATIONS,
+        );
+        const ifc = (schema as { ifc: { confidentiality: string[] } }).ifc;
+        expect([...ifc.confidentiality].sort()).toEqual(["a", "b", "c"]);
+        expect(diagnostics).toEqual([]);
       });
     });
   });
