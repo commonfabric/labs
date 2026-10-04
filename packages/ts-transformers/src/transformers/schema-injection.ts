@@ -2828,11 +2828,12 @@ function reportAnyResultSchema(
 
 /**
  * Reports on a pattern's inferred result schema. A top-level `any`/`unknown`
- * result is an error (the whole output is permissive). A concrete result that
- * nests `unknown` fields is also an error: those fields lower to
- * `{ type: "unknown" }`, which a consumer does not materialize — it reads
- * them back as opaque references carrying no properties, the producer-side
- * form of the unknown-capture bug.
+ * result is an error (the whole output is permissive). Detected nested
+ * `unknown` fields report an error when authoring and a warning under
+ * `TransformationOptions.storedSource`, so a stored-source reload reconstructs
+ * the admitted pattern. Those fields lower to `{ type: "unknown" }`, which a
+ * consumer does not materialize: it reads them back as opaque references
+ * carrying no properties.
  */
 function reportUnknownPatternResult(
   context: TransformationContext,
