@@ -1162,10 +1162,12 @@ function resolveHomeSpaceTarget(
         // create surface (see profileCreateUI).
         throw new NoProfileError();
       }
-      // Always expose the full, ordered roster as `candidates`. The wish action
-      // below still makes `ordered[0]` the current profile and only renders the
-      // picker when no valid default exists. Keeping the roster here is important
-      // for identity-only consumers such as ProfileHome's owner edit gate.
+      // Expose the ordered roster as `candidates`: every profile that loaded,
+      // without any unselected profile whose load failed (see
+      // getProfileCandidateCells). The wish action below still makes
+      // `ordered[0]` the current profile and only renders the picker when no
+      // valid default exists. Keeping the roster here is important for
+      // identity-only consumers such as ProfileHome's owner edit gate.
       return ordered.map((cell) => ({ cell, pathPrefix: [] }));
     }
 
