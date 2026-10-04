@@ -138,6 +138,16 @@ describe("type-arguments", () => {
       });
     });
 
+    it("validates a full default against a bound anonymous index signature", async () => {
+      const schema = await schemaOfC(`
+        interface Input<T> { c: { [name: string]: T } | Default<{ first: 0 }> }
+        type Root = Input<number>;
+      `) as Record<string, unknown>;
+      expect(schema.type).toBe("object");
+      expect(schema.additionalProperties).toEqual({ type: "number" });
+      expect(schema.default).toEqual({ first: 0 });
+    });
+
     it("validates a full default when the checker absorbs the bound literal into a wider union arm", async () => {
       expect(
         await schemaOfC(`

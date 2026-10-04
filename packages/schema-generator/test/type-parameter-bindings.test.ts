@@ -6,16 +6,9 @@ import type { GenerationContext } from "../src/interface.ts";
 import { readBoundTypeNode } from "../src/type-parameter-bindings.ts";
 import { getTypeFromCode } from "./utils.ts";
 
-/** A bound member and its checker-created instantiation beside `Box<any>`. */
-async function memberOf(argument: string, suffix: string) {
-  const { type, checker, typeNode } = await getTypeFromCode(
-    `
-    interface Box<T> { value: T }
-    interface Input<T> { c: Box<T | ${suffix}>; other: Box<any> }
-    type Root = Input<${argument}>;
-  `,
-    "Root",
-  );
+/** A bound member and its checker-created instantiation beside a sibling. */
+async function memberOf(code: string) {
+  const { type, checker, typeNode } = await getTypeFromCode(code, "Root");
   const reference = typeNode as ts.TypeReferenceNode;
   const declaration = type.getSymbol()!.declarations!.find(
     ts.isInterfaceDeclaration,
@@ -44,10 +37,11 @@ async function memberOf(argument: string, suffix: string) {
 describe("type-parameter-bindings", () => {
   describe("readBoundTypeNode()", () => {
     it("returns the member's own instantiation rather than a sibling with an any argument", async () => {
-      const { member, actual, other, context } = await memberOf(
-        "number",
-        "string",
-      );
+      const { member, actual, other, context } = await memberOf(`
+        interface Box<T> { value: T }
+        interface Input<T> { c: Box<T | string>; other: Box<any> }
+        type Root = Input<number>;
+      `);
       expect(
         readBoundTypeNode(member, { ...context, instantiatedAs: other }, [
           actual,
@@ -58,12 +52,31 @@ describe("type-parameter-bindings", () => {
 
     for (const argument of ["any", "unknown", "0"]) {
       it(`returns the checker instantiation after normalizing a union argument bound to \`${argument}\``, async () => {
-        const { member, actual, context } = await memberOf(argument, "number");
+        const { member, actual, context } = await memberOf(`
+          interface Box<T> { value: T }
+          interface Input<T> { c: Box<T | number>; other: Box<any> }
+          type Root = Input<${argument}>;
+        `);
         expect(
           readBoundTypeNode(member, { ...context, instantiatedAs: actual }),
         )
           .toBe(actual);
       });
     }
+
+    it("returns the checker instantiation of an anonymous member that refers to itself", async () => {
+      const { member, actual, other, context } = await memberOf(`
+        interface Input<T> {
+          c: { value: T; next: Input<T>["c"] };
+          other: { value: T; next: Input<T>["c"] };
+        }
+        type Root = Input<number>;
+      `);
+      expect(
+        readBoundTypeNode(member, { ...context, instantiatedAs: other }, [
+          actual,
+        ]),
+      ).toBe(actual);
+    });
   });
 });
