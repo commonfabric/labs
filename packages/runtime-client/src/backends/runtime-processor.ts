@@ -1735,6 +1735,10 @@ export class RuntimeProcessor {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
+    // Where storage already holds a value, the host is answered as a read
+    // answers it, so what that read's decision consults is loaded first, as
+    // for a one-shot read.
+    await this.#hostReadGate.hold(getCell(this.#runtime, request.cell));
     let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);

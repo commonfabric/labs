@@ -4845,6 +4845,7 @@ describe("runtime-processor", () => {
     it("rejects malformed initializers and surfaces transaction failures", async () => {
       const failed = buildProcessor({
         runtime: {
+          getCellFromLink: () => ({}),
           editWithRetry: () =>
             Promise.resolve({ error: new Error("initialize failed") }),
         },

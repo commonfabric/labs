@@ -1085,6 +1085,15 @@ describe("HostReadGate, for what crosses beside a value", () => {
           ),
         });
         try {
+          // First, an initialization finding the value stored, which answers
+          // as a read does, and waits for the access list as one does.
+          expect(
+            await processor.handleRequest({
+              type: RequestType.CellInitialize,
+              cell: createCellRef(cell),
+              value: { note: "a default" },
+            }),
+          ).toEqual({ value: { note: "for members of the space" } });
           // First, the piece's argument: the access list the linked document
           // consults is settled, not only the piece's own.
           expect(
