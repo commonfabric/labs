@@ -44,6 +44,16 @@ import type {
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
 import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
+
+import type {
+  SharedSpaceCatalogHome,
+  SharedSpaceCatalogRead,
+  SharedSpaceMembershipChange,
+  SharedSpaceMembershipResult,
+  SharedSpaceRegistration,
+  SharedSpaceRegistrationResult,
+} from "../shared-space-catalog-contract.ts";
+
 export type { JSONObject, JSONSchema, JSONValue, Program };
 
 export type { CfcLabelView };
@@ -253,6 +263,15 @@ export enum RequestType {
 
   /** Answers with a ref to the home space's own cell. */
   GetHomeSpaceCell = "runtime:getHomeSpaceCell",
+
+  /** Reads the dedicated catalog snapshot for an explicitly configured Home. */
+  GetSharedSpaceCatalog = "runtime:getSharedSpaceCatalog",
+
+  /** Commits insert-if-absent membership and an optional validated offer receipt. */
+  RegisterSharedSpace = "runtime:registerSharedSpace",
+
+  /** Commits or confirms an explicit revision-checked collection choice. */
+  ChangeSharedSpaceMembership = "runtime:changeSharedSpaceMembership",
 
   /**
    * Ensures the home space's default pattern is running, answering with a ref
@@ -1798,6 +1817,39 @@ export type GetCellRequest = BaseRequest & {
   schema?: JSONSchema;
 };
 
+/** A request against the authenticated principal's canonical Home. */
+export type GetSharedSpaceCatalogRequest = BaseRequest & {
+  /** Validated catalog snapshot operation. */
+  type: RequestType.GetSharedSpaceCatalog;
+
+  /** Independently configured Home identity and host. */
+  home: SharedSpaceCatalogHome;
+};
+
+/** A validated target to remember in the canonical Home. */
+export type RegisterSharedSpaceRequest = BaseRequest & {
+  /** Catalog registration operation. */
+  type: RequestType.RegisterSharedSpace;
+
+  /** Independently configured Home identity and host. */
+  home: SharedSpaceCatalogHome;
+
+  /** Target and optional application-validated offer identity. */
+  registration: SharedSpaceRegistration;
+};
+
+/** An explicit collection choice with its observed membership revision. */
+export type ChangeSharedSpaceMembershipRequest = BaseRequest & {
+  /** Catalog membership operation. */
+  type: RequestType.ChangeSharedSpaceMembership;
+
+  /** Independently configured Home identity and host. */
+  home: SharedSpaceCatalogHome;
+
+  /** Durable action identity and expected revision. */
+  change: SharedSpaceMembershipChange;
+};
+
 /**
  * The {@link RequestType.GetHomeSpaceCell} request, which carries no payload.
  */
@@ -3291,6 +3343,9 @@ export type IPCClientRequest =
   | SqliteExecRequest
   | GetCellRequest
   | GetHomeSpaceCellRequest
+  | GetSharedSpaceCatalogRequest
+  | RegisterSharedSpaceRequest
+  | ChangeSharedSpaceMembershipRequest
   | EnsureHomePatternRunningRequest
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
@@ -4037,6 +4092,9 @@ export type PresenceUpdateNotification = {
  * is fixed by {@link Commands} rather than chosen here.
  */
 export type RemoteResponse =
+  | SharedSpaceCatalogRead
+  | SharedSpaceRegistrationResult
+  | SharedSpaceMembershipResult
   | EmptyResponse
   | NullResponse
   | BooleanResponse
@@ -4125,6 +4183,18 @@ export type Commands = {
   [RequestType.GetCell]: {
     request: GetCellRequest;
     response: CellResponse;
+  };
+  [RequestType.GetSharedSpaceCatalog]: {
+    request: GetSharedSpaceCatalogRequest;
+    response: SharedSpaceCatalogRead;
+  };
+  [RequestType.RegisterSharedSpace]: {
+    request: RegisterSharedSpaceRequest;
+    response: SharedSpaceRegistrationResult;
+  };
+  [RequestType.ChangeSharedSpaceMembership]: {
+    request: ChangeSharedSpaceMembershipRequest;
+    response: SharedSpaceMembershipResult;
   };
   [RequestType.GetHomeSpaceCell]: {
     request: GetHomeSpaceCellRequest;

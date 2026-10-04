@@ -2,6 +2,21 @@
 
 `RuntimeClient` connects a host to the Common Fabric runtime and renderer.
 
+## Shared-space catalog
+
+`getSharedSpaceCatalog(home)`, `registerSharedSpace(home, registration)`, and
+`changeSharedSpaceMembership(home, change)` access the dedicated Home catalog
+without starting the Home UI. Home is an explicitly configured principal and
+host. Registration preserves existing membership; archive and restore check the
+revision the user observed and retain evidence for a lost reply.
+
+The [catalog contract](../../docs/features/shared-space-catalog.md) describes
+confirmation, conflicts, receipts, and the obligations of product clients.
+Direct runtime callers use the same transaction functions through
+`@commonfabric/runtime-client/shared-space-catalog`. The browser-safe schema,
+types, and validation helpers are exported through
+`@commonfabric/runtime-client/shared-space-catalog-contract`.
+
 ## Reading render state
 
 `CellHandle.pull()` demands lazy producers and crosses the runtime-wide

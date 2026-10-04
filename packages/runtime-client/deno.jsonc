@@ -19,6 +19,8 @@
   },
   "exports": {
     ".": "./src/mod.ts",
+    "./shared-space-catalog-contract": "./src/shared-space-catalog-contract.ts",
+    "./shared-space-catalog": "./src/shared-space-catalog.ts",
     "./transports/message-port": "./src/client/transports/message-port/transport-message-port.ts",
     "./transports/web-worker": "./src/client/transports/web-worker/transport-web-worker.ts"
   }

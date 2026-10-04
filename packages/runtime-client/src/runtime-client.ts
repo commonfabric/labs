@@ -83,6 +83,14 @@ import {
   TelemetryNotification,
   type UploadBlobResponse,
 } from "./protocol/mod.ts";
+import type {
+  SharedSpaceCatalogHome,
+  SharedSpaceCatalogRead,
+  SharedSpaceMembershipChange,
+  SharedSpaceMembershipResult,
+  SharedSpaceRegistration,
+  SharedSpaceRegistrationResult,
+} from "./shared-space-catalog-contract.ts";
 import { assertNoKeyMaterial } from "./shared/key-material.ts";
 import {
   type EveryFieldOf,
@@ -914,6 +922,50 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     });
 
     return new CellHandle<T>(this, response.cell);
+  }
+
+  /**
+   * Reads a validated Home catalog snapshot without starting Home UI.
+   * Failed, refused, or malformed reads reject; only a successful storage
+   * read can report an absent catalog.
+   */
+  getSharedSpaceCatalog(
+    home: SharedSpaceCatalogHome,
+  ): Promise<SharedSpaceCatalogRead> {
+    return this.#conn.request<RequestType.GetSharedSpaceCatalog>({
+      type: RequestType.GetSharedSpaceCatalog,
+      home,
+    });
+  }
+
+  /**
+   * Registers an application-validated space in Home, preserving membership.
+   * Resolves after the transaction commits; errors leave completion unknown.
+   */
+  registerSharedSpace(
+    home: SharedSpaceCatalogHome,
+    registration: SharedSpaceRegistration,
+  ): Promise<SharedSpaceRegistrationResult> {
+    return this.#conn.request<RequestType.RegisterSharedSpace>({
+      type: RequestType.RegisterSharedSpace,
+      home,
+      registration,
+    });
+  }
+
+  /**
+   * Commits or confirms an explicit collection choice. A lost reply is
+   * confirmed by repeating the same action, never by rebasing its revision.
+   */
+  changeSharedSpaceMembership(
+    home: SharedSpaceCatalogHome,
+    change: SharedSpaceMembershipChange,
+  ): Promise<SharedSpaceMembershipResult> {
+    return this.#conn.request<RequestType.ChangeSharedSpaceMembership>({
+      type: RequestType.ChangeSharedSpaceMembership,
+      home,
+      change,
+    });
   }
 
   async getHomeSpaceCell(): Promise<CellHandle<unknown>> {
