@@ -125,6 +125,20 @@ export type DocumentAt = (
  * for the space instance), at its root, or `undefined` where the key names
  * an instance this worker cannot place.
  */
+/**
+ * A document a slug's resolution read, at its root, with the labels it held
+ * when the walk read it ({@link HostReadGate.walkRead}).
+ */
+export type WalkedDocument = {
+  readonly root: Cell<unknown>;
+
+  /** Whether the replica held the document, and where it leads, then. */
+  readonly held: boolean;
+
+  /** Its labels then, as `cellLabelSources()` reads them. */
+  readonly sources: readonly CfcLabelViewSource[] | undefined;
+};
+
 export type GraphDocumentAt = (
   space: string,
   id: string,
@@ -686,6 +700,23 @@ export class HostReadGate {
   }
 
   /**
+   * What `read` reads of where the links at `cell` lead, once
+   * {@link linkRefusal} admits it, or the refusal in its place. Decided once
+   * what it consults is loaded ({@link hold}), a decision whose access lists
+   * cannot be loaded refused as unreadable, and read straight after, with
+   * no wait between, so that what is read is what was decided.
+   */
+  async followLink<T>(
+    cell: Cell<unknown>,
+    read: () => T,
+  ): Promise<(HostReadDecided & CellRefusedAnswer) | { followed: T }> {
+    const refused = await this.hold(cell)
+      ? this.linkRefusal(cell)
+      : this.#refuse(UNHELD);
+    return refused ?? { followed: read() };
+  }
+
+  /**
    * The cell the links along `cell`'s path lead to, as a ref {@link ref}
    * makes, or the refusal that stands in its place where the policy refuses
    * the node holding a link it followed ({@link linkRefusal}). A cell whose
@@ -754,13 +785,20 @@ export class HostReadGate {
    * (`walked`, each at its root), once each is loaded.
    */
   async slugReference(
-    walked: readonly Cell<unknown>[],
+    walked: readonly WalkedDocument[],
     answer:
       | { piece: Cell<unknown>; pathAfter: string[] }
       | { refusal: SlugRefusal },
   ): Promise<SlugReferenceResponse> {
-    for (const root of walked) {
-      const refusal = await this.hold(root) ? this.#cellRefusal(root) : UNHELD;
+    const policy = this.#policy;
+    for (const { root, held, sources } of walked) {
+      if (policy === undefined) break;
+      const loaded = await this.#loadAccessListsNamedBy(
+        (sources ?? []).flatMap(confidentialityIn),
+      );
+      const refusal = held && loaded !== "failed"
+        ? cellLabelRefusal(root, sources, policy, this.#sources)
+        : UNHELD;
       if (refusal === undefined) continue;
       const { refusedBy } = this.#refuse(refusal).refused;
       return decided({
@@ -776,6 +814,19 @@ export class HostReadGate {
         ? { refusal: answer.refusal }
         : { piece: this.pieceRef(answer.piece), pathAfter: answer.pathAfter },
     );
+  }
+
+  /**
+   * `root`, a document a slug's resolution has just read, with the labels it
+   * holds now, as the read saw it. The answer is made from what the walk
+   * read, and the walk waits for each document it reaches, so its documents
+   * are decided on these, not on labels one holds by the time the walk ends.
+   */
+  walkRead(root: Cell<unknown>): WalkedDocument {
+    if (this.#policy === undefined) {
+      return { root, held: true, sources: [] };
+    }
+    return { root, held: documentsHeld(root), sources: cellLabelSources(root) };
   }
 
   /**

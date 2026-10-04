@@ -147,6 +147,7 @@ import {
   type DocumentAt,
   type GraphDocumentAt,
   HostReadGate,
+  type WalkedDocument,
 } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
@@ -2970,22 +2971,30 @@ export class RuntimeProcessor {
     // arrives, plus what the server resolves at the address itself when the
     // value stored there is a link.
     await requestedCell.sync();
-    const redirect = parseLink(
-      requestedCell.getRaw(),
-      requestedCell.getAsNormalizedFullLink(),
-    );
+    const redirectAt = () =>
+      parseLink(
+        requestedCell.getRaw(),
+        requestedCell.getAsNormalizedFullLink(),
+      );
+    let redirect = redirectAt();
     if (redirect?.overwrite === "redirect") {
       // Where a redirect leads is what its document holds, so it is decided
       // as the node holding a link is, once what that consults is loaded: a
-      // host refused it is told so, and not where it leads.
-      await this.#hostReadGate.hold(requestedCell);
-      const refused = this.#hostReadGate.linkRefusal(requestedCell);
-      if (refused !== undefined) {
+      // host refused it is told so, and not where it leads. Read again as
+      // decided, since the document may have moved while it loaded.
+      const decided = await this.#hostReadGate.followLink(
+        requestedCell,
+        redirectAt,
+      );
+      if ("refused" in decided) {
         throw new Error(
           `The worker refused to name where this redirect leads ` +
-            `(${refused.refused.refusedBy}).`,
+            `(${decided.refused.refusedBy}).`,
         );
       }
+      redirect = decided.followed;
+    }
+    if (redirect?.overwrite === "redirect") {
       const target = this.#runtime.getCellFromLink({
         ...redirect,
         space: redirect.space ?? cc.getSpace(),
@@ -3101,13 +3110,16 @@ export class RuntimeProcessor {
   ): Promise<SlugReferenceResponse> {
     const cc = this.#getSpaceCtx(request.space);
     const space = cc.getSpace();
-    // Each document the walk read, at its root: the answer, and a failure's
-    // message, are made from what they hold, so the gate decides it on them.
-    const walked: Cell<unknown>[] = [];
+    // Each document the walk read, at its root, with its labels as the walk
+    // read it: the answer, and a failure's message, are made from what they
+    // held, so the gate decides it on them.
+    const walked: WalkedDocument[] = [];
     const read = (cell: Cell<unknown>) => {
       const { space, id, scope } = cell.getAsNormalizedFullLink();
       walked.push(
-        this.#runtime.getCellFromLink({ space, id, scope, path: [] }),
+        this.#hostReadGate.walkRead(
+          this.#runtime.getCellFromLink({ space, id, scope, path: [] }),
+        ),
       );
     };
     try {

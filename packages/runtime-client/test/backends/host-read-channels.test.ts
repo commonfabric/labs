@@ -497,6 +497,30 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("decides a slug's answer on the labels each document held when the walk read it", async () => {
+      await using docs = await shelf();
+      const pointer = await docs.write("slug-pointer", { to: "private" }, [[
+        [],
+        [ownerOnly],
+      ]]);
+      const gate = gateFor(docs.runtime, visitor);
+      const walked = [gate.walkRead(pointer)];
+      // The document loses its label before the answer, made from what it
+      // held while it had one, is decided.
+      await docs.write("slug-pointer", { to: "public" });
+      const answer = await gate.slugReference(walked, {
+        refusal: { code: "missing", message: `made from ${SECRET_VALUE}` },
+      });
+
+      expect(holds(answer, SECRET_VALUE)).toBe(false);
+      expect(answer).toEqual({
+        refusal: {
+          code: "display-ceiling",
+          message: expect.stringContaining("refused"),
+        },
+      });
+    });
+
     it("decides a slug reference to a member on each document the walk read", async () => {
       await using docs = await shelf();
       const pieceMeta = (name: string) => ({
@@ -1083,6 +1107,7 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(await gate.fromMetadata(member, build)).toEqual(refused);
       expect(await gate.slug(member)).toEqual(refused);
       expect(await gate.resolveAsCell(member)).toEqual(refused);
+      expect(await gate.followLink(member, () => "followed")).toEqual(refused);
     });
 
     it("refuses a member's document at once where nothing can load its access list", async () => {
