@@ -12,6 +12,7 @@ import type { DID } from "@commonfabric/identity";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
   type CellHandle,
+  CellReadRefusedError,
   type CfcLabelView,
   NAME,
   type RuntimeClient,
@@ -739,9 +740,15 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       // cancellation, not a failure to surface. Read the cell's own runtime,
       // not the ambient `this.runtime` (cleared to undefined on logout).
       if (cell.runtime().signal.aborted) return;
-      console.error("cf-profile-badge: failed to resolve profile cell", e);
       this._resolvedCell = undefined;
       this._navigable = false;
+      // A profile the worker will not say where it is, is shown as withheld,
+      // an answer rather than a failure.
+      if (e instanceof CellReadRefusedError) {
+        this._applyRefusal(generation);
+        return;
+      }
+      console.error("cf-profile-badge: failed to resolve profile cell", e);
       this._applyValue(undefined);
     }
   }

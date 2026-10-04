@@ -1,7 +1,11 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import {
+  type CellHandle,
+  CellReadRefusedError,
+  type CellRef,
+} from "@commonfabric/runtime-client";
 
 import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
@@ -180,6 +184,36 @@ describe("CFCellLink", () => {
     refuse();
 
     expect(element._name).toBe("Content hidden by policy");
+  });
+
+  it("names a link whose resolution the worker refuses as withheld, and reports no error", async () => {
+    const errors: unknown[] = [];
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    try {
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = {
+        ref: () => ({
+          id: "of:refused-link",
+          space: "did:key:test-space",
+          scope: "space",
+          path: [],
+        }),
+        resolveAsCell: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+        runtime: () => ({ signal: { aborted: false } }),
+      };
+      await element._resolveCell();
+
+      expect(element._name).toBe("Content hidden by policy");
+      expect(element._resolvedCell).toBeUndefined();
+      expect(errors).toEqual([]);
+    } finally {
+      console.error = consoleError;
+    }
   });
 
   it("resubscribes when the resolved handle changes with the same ref", () => {

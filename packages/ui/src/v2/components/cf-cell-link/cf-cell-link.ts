@@ -11,6 +11,7 @@ import type { DID } from "@commonfabric/identity/did";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
   type CellHandle,
+  CellReadRefusedError,
   CellRef,
   cellRefToKey,
   NAME,
@@ -222,10 +223,17 @@ export class CFCellLink extends BaseElement {
         // cancellation, not a failure to surface. Read the cell's own runtime,
         // not the ambient `this.runtime` (cleared to undefined on logout).
         if (cell.runtime().signal.aborted) return;
-        console.error("Failed to resolve cell:", e);
         this.#linkTarget.cancel();
         this._prepareSubscriptionTarget(undefined);
         this._setResolvedCell(undefined);
+        // A link the worker will not say where it leads is named as
+        // withheld, an answer rather than a failure.
+        if (e instanceof CellReadRefusedError) {
+          this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+          this.requestUpdate();
+          return;
+        }
+        console.error("Failed to resolve cell:", e);
       }
       return;
     }
