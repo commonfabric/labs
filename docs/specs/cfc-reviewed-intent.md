@@ -376,6 +376,14 @@ sent records say.
   holds while every runtime that runs patterns over the subject's home space
   enforces writer claims or persists flow labels. Snapshot copies and custody
   seals rest on the same condition.
+- **A builtin identity named by the module itself.** Today the runtime takes a
+  module's policy-facing identity from its `debugName` before its provenance,
+  so a module that carries a `debugName` of its own can run under a builtin's
+  identity and mint that builtin's `TransformedBy` stamp. Every stamp check
+  here, the custody seal's and snapshot copies' rest on builtin identities
+  coming only from modules the runtime registered; a separate fix makes that
+  so. Until it lands, a record or destination stamp is only as strong as that
+  assumption.
 - **Retry after a failure.** The consent is in memory and spent by its first
   commit, so a commit that fails, or a host that goes away, needs a new review.
 - **A record whose link failed.** The record and its receipt exist, and the
