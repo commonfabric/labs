@@ -354,7 +354,8 @@ export const referentDraft = (
  * Mints a referent handle for `referent` — content a tool observed, or an
  * admitted research kit, as its `kind` says — returning the updated table and
  * the token. Minting is idempotent per referent: the same kind, source,
- * content, label, and label source share one token, so a row a run retrieves
+ * content, label, label source, and (for a command result) provenance share
+ * one token, so a row a run retrieves
  * twice is held once, and a document and a research kit with the same content
  * are two referents. The suffix is derived the way an address handle's is.
  */
@@ -768,8 +769,9 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has a malformed label`,
       );
     }
-    // A label source belongs to a kind: a row or a query labels a document,
-    // only research labels research, and only a child labels a return. A
+    // A label source belongs to a kind: a row, a query, or a command labels a
+    // document, only research labels research, and only a child labels a
+    // return. A
     // record pairing them otherwise was not minted by this module.
     const labelSources = kind === "document"
       ? ["row", "query", "command"]

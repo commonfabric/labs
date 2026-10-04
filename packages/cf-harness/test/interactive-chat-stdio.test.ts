@@ -2262,3 +2262,37 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
     "typed_commands",
   ]);
 });
+
+Deno.test("interactive NDJSON transport refuses an answer carrying both an outcome and a typed settlement", async () => {
+  const output: string[] = [];
+  await runHarnessInteractiveChatNdjsonTransport({
+    lines: [
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "request-1",
+        method: "resolve_client_action",
+        params: {
+          sessionId: "session-1",
+          actionId: "action-1",
+          outcome: "done",
+          settlement: {
+            status: "failed_to_deliver",
+            reason: "the Weaver could not reach the service",
+            landed: "no",
+          },
+        },
+      }),
+    ],
+    writeLine: (line) => {
+      output.push(line);
+    },
+    createService: (onEvent) => new HarnessInteractiveChatService({ onEvent }),
+  });
+
+  const [response] = decodeLines(output);
+  assertEquals(
+    "ok" in response && !response.ok ? response.error.code : undefined,
+    "invalid_request",
+  );
+});

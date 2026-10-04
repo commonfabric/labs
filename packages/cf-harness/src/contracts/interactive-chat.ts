@@ -229,7 +229,8 @@ export interface HarnessChatStartSessionParams {
    * mismatch is refused with `protocol_mismatch` before the session starts;
    * an absent declaration requires nothing. An accepted stdio `start_session`
    * or `start_turn` answer carries the console's `protocol` echo beside the
-   * status, whether or not the host declared one.
+   * status, whether or not the host declared one. Requiring a feature turns
+   * nothing on: `clientActions` still opts the session in to `weaver_action`.
    */
   protocol?: HarnessClientProtocolDeclaration;
 
@@ -321,10 +322,10 @@ export type HarnessChatRequestParamsByMethod = {
   start_turn: HarnessChatStartTurnParams;
   cancel_turn: HarnessChatCancelTurnParams;
   close_session: HarnessChatCloseSessionParams;
-  /** A final-action answer, or a typed request's settlement. */
+  /** A final-action answer, or a typed request's settlement, never both. */
   resolve_client_action:
-    | HarnessChatResolveClientActionParams
-    | HarnessCommandResolveBody;
+    | (HarnessChatResolveClientActionParams & { settlement?: never })
+    | (HarnessCommandResolveBody & { outcome?: never; result?: never });
   status: HarnessChatStatusParams;
   list_events: HarnessChatListEventsParams;
   list_turns: HarnessChatListTurnsParams;

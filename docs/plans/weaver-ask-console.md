@@ -170,7 +170,9 @@ so the console must accept a duplicate result idempotently. Reconnect resends
 that result without executing again; distinguish unexecuted, performed, and
 execution-uncertain actions. Durable client restoration is a separate follow-up.
 Pending requests become interrupted after console restart; they are not replayed
-as commands. Do not promise exactly-once mutation across a lost command
+as commands. A late answer to a request already settled, by restart or
+otherwise, is refused with 409 `action_resolved`; 404 `unknown_action` is kept
+for an id the session never issued. Do not promise exactly-once mutation across a lost command
 response.
 
 **Attribution.** A read on the Weaver's reviewed read-only list runs
