@@ -1785,7 +1785,7 @@ What this costs, and what is not covered:
 
 ## From the reviewed-intent build (2026-10-02)
 
-**SC-57 [normative] A trusted surface's gesture mints a consumed-once intent
+**SC-59 [normative] A trusted surface's gesture mints a consumed-once intent
 record — §6.4.3, §6.4.4, §6.5, §3.8.1, §3.8.4, §8.10.7.** `open`. The spec
 describes `IntentOnce` as a refinement of a gesture whose parameters were
 rendered (§3.8.1) and whose destination carries integrity (§3.8.4), consumed
@@ -1806,12 +1806,11 @@ of the operation, the descriptor's digest, the consumer, the subject, the
 parameters and their digest, a random idempotency key, `at`, `exp`,
 `maxAttempts`, and informational evidence, stamped
 `TransformedBy{builtin cfc-reviewed-intent}`; the consumer verifies that stamp
-before it acts. Both digests are the data-model hash `hashStringOf`, specified
-byte for byte in
-[the hash byte format](./space-model-formal-spec/2-hash-byte-format.md), so a
-consumer outside the process can compute them. The CFC author ruled on
-2026-10-01 that for a send the gesture is the release, and that a short intent
-lasts ten minutes, so `exp` is at most ten minutes after the gesture.
+before it acts, through the runner's `verifyReviewedIntentRecord`, which
+computes both digests itself; they are not a cross-process format. The CFC
+author ruled on 2026-10-01 that for a send the gesture is the release, and
+that a short intent lasts ten minutes, so `exp` is at most ten minutes after
+the gesture.
 
 Proposed edit: §6.4.3 names the reviewed-intent record as the persisted form
 of `IntentOnce` that a trusted surface produces, with its verification (a

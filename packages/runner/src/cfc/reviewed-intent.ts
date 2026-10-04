@@ -574,9 +574,9 @@ export function parseReviewedIntentDescriptor(
 }
 
 /**
- * The digest a record carries as `endpoint` for `descriptor`: the data-model
- * hash `hashStringOf`, whose bytes
- * `docs/specs/space-model-formal-spec/2-hash-byte-format.md` specifies.
+ * The digest a record carries as `endpoint` for `descriptor`. It is compared
+ * by {@link verifyReviewedIntentRecord}, inside the runner, and is not a
+ * format another process reproduces.
  */
 export const reviewedIntentEndpoint = (
   descriptor: ReviewedIntentDescriptor,

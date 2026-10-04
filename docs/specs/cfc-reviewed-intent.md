@@ -74,16 +74,16 @@ cell, and a pattern binds that cell. For a messaging consumer:
   names the way the intent is carried, and `consumer` names the application that
   acts on records.
 - `parameters` are the only keys a record carries. A key is a name that starts
-  with a letter and holds letters, digits and underscores. A `destinations` parameter
-  takes between `min` and `max` destination cells the pattern binds, and
-  `integrity` is a nonempty list of atom patterns each destination's integrity
-  must satisfy together, as one conjunction whose variables are shared across
-  the patterns. An optional `space` names the space every destination must be
-  in; absent, it is the subject's home space. Each destinations parameter
-  states its own rules, since a payee and a funding source need different
-  ones. A `text` parameter is text the actor enters on the surface, at most
-  `maxLength` (zero or more) Unicode code points, counted as JSON Schema counts
-  them.
+  with a letter and holds letters, digits and underscores. A `destinations`
+  parameter takes between `min` and `max` destination cells the pattern binds,
+  and `integrity` is a nonempty list of atom patterns each destination's
+  integrity must satisfy together, as one conjunction whose variables are shared
+  across the patterns. An optional `space` names the space every destination
+  must be in; absent, it is the subject's home space. Each destinations
+  parameter states its own rules, since a payee and a funding source need
+  different ones. A `text` parameter is text the actor enters on the surface, at
+  most `maxLength` (zero or more) Unicode code points, counted as JSON Schema
+  counts them.
 - `windowMs` is how long after the gesture a record stays good. A record takes
   the smaller of this and ten minutes.
 - `maxAttempts` bounds the delivery attempts a consumer makes on one record.
@@ -113,34 +113,34 @@ one on every write after a labeled read), a builtin id left open, and
 `PolicyCertified`, which survives every combination, so a pattern that reads
 only a certified value and writes a constant carries it.
 
-What such a pattern guarantees is narrower than "a trusted source": the value
-at the destination was written, as itself or within a value written whole, by
-a transaction under the named builtin's identity, and nothing has written at,
+What such a pattern guarantees is narrower than "a trusted source": the value at
+the destination was written, as itself or within a value written whole, by a
+transaction under the named builtin's identity, and nothing has written at,
 above, or below it since. It says nothing about whose data the builtin wrote,
 which is why each destination must also be in the declared space; that answers
-whose data it is only when the consumer trusts every writer of that space,
-since anyone who can write the space can run the same builtin there. Nor does
-it say what decided the builtin's inputs. Prepare and verification refuse a
-builtin whose inputs a pattern decides when the runtime can tell: one its
-module registry holds, which pattern code invokes with inputs it chooses
-(`ifElse`, `map`, `fetchText`, `llm`, and the rest), a host operation that
-copies a value a pattern chose (the snapshot copy, the custody seal, and the
-reviewed intent itself), and the compile cache, which writes what
-`compileAndRun` compiled from source a pattern can supply. A builtin the runtime does not know is taken at the
+whose data it is only when the consumer trusts every writer of that space, since
+anyone who can write the space can run the same builtin there. Nor does it say
+what decided the builtin's inputs. Prepare and verification refuse a builtin
+whose inputs a pattern decides when the runtime can tell: one its module
+registry holds, which pattern code invokes with inputs it chooses (`ifElse`,
+`map`, `fetchText`, `llm`, and the rest), a host operation that copies a value a
+pattern chose (the snapshot copy, the custody seal, and the reviewed intent
+itself), and the compile cache, which writes what `compileAndRun` compiled from
+source a pattern can supply. A builtin the runtime does not know is taken at the
 descriptor's word, so a descriptor's author names a builtin whose writes no
 pattern steers, as an address book's import from a channel the user connected
 is.
 
 A record carries the descriptor's digest as `endpoint`
-(`reviewedIntentEndpoint`), and its parameters' digest as `payloadDigest`.
-Both are the data-model hash `hashStringOf`: the unpadded base64url SHA-256
-over the value's type-tagged bytes, without the `fid1:` prefix, which
-[the hash byte format](space-model-formal-spec/2-hash-byte-format.md)
-specifies, so a consumer outside the process can compute it. The operation
-does not check who wrote the descriptor: a consumer acts only on records whose
-`endpoint` is the digest of the descriptor it publishes, so a descriptor a
-pattern wrote, with a weaker integrity requirement or a misleading
-`endpointName`, yields records no consumer acts on.
+(`reviewedIntentEndpoint`), and its parameters' digest as `payloadDigest`. A
+consumer verifies a record through the runner's `verifyReviewedIntentRecord`,
+which computes and compares both, so the two digests are internal to the runner
+and not a format another process reproduces. If a consumer outside the process
+ever needs them, fixing their encoding is a later format decision for the
+data-model codec's owner. The operation does not check who wrote the descriptor:
+a consumer acts only on records whose `endpoint` is the digest of the descriptor
+it publishes, so a descriptor a pattern wrote, with a weaker integrity
+requirement or a misleading `endpointName`, yields records no consumer acts on.
 
 ## The operation
 
@@ -327,7 +327,8 @@ action time the consumer also:
 
 1. checks that the descriptor it passed is its current one, and that `subject`
    is the principal it acts as;
-2. recomputes `payloadDigest` over exactly what it will send;
+2. sends exactly the parameters the verified record holds, whose digest the
+   check compared;
 3. resolves each destination's `source` itself, in the space the check
    confirmed, and refuses if what it finds differs from `parameters` (it never
    substitutes);
