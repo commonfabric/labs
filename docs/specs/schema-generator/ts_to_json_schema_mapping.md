@@ -844,9 +844,10 @@ Default paths of §7:
 
 - Cell-branded intersections are declined; native resolution runs
   first; empty intersections throw.
-- Brand-only (all `__@`-keyed) and empty-object constituents are filtered
-  before validation; a single survivor delegates directly
- .
+- Brand-only (all `__@`-keyed) and empty-object constituents, and CFC
+  metadata carriers, whose labels §11 reads, are filtered before validation;
+  a single survivor delegates directly, and where none survives the full set
+  is merged.
 - Unsupported shapes — non-object constituent, constituent with an index
   signature, or a checker error — produce a **permissive fallback, not a
   throw**: `{ type: "object", additionalProperties: true, $comment:
@@ -1026,6 +1027,48 @@ Mechanics:
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
   `AnyOf` clauses. A named type in the payload stays a `$ref` to its
   definition.
+- A label lands on the part of a value its policy was written around. Each
+  carrier records that payload beside its metadata (`CfcStamp<T, M>`,
+  `packages/api/cfc.ts`), because TypeScript merges a carrier into whatever
+  its value is merged into: an intersection, a spread, a mapped type. So a
+  label is placed by the payload it records, never by where the carrier sits
+  (`placeCarriedLabels`, `payloadReach`):
+  - A restriction lands wherever the payload's data may be: on each member of
+    the value the payload names, or on the whole value where the payload has
+    an index signature, whose keys are open. Restrictions are
+    `confidentiality`, `requiredIntegrity`, `maxConfidentiality` and the
+    writer policies, and `exactCopyOf` and `projection`, which the runtime
+    verifies at the write.
+  - Evidence (`integrity`, `addIntegrity`) lands only where the payload's data
+    must be: on members whose declarations are the payload's own, a member
+    `Record` synthesizes counting where the payload's has no declaration
+    either. It does so only where nothing between the value and its carriers
+    writes over members (`holdsCarriersUnwritten`): an intersection, or a
+    mapped type over one. A spread's result never qualifies, since a later
+    spread of the payload's own type keeps the payload's declarations. Nor
+    does an object type holding a carrier beside members or an index signature
+    of its own, as an interface extending a CFC alias does, or a mapped type
+    whose carrier did not come from the type it maps over.
+  - A label reaching every member lands on the whole value, and one reaching
+    none lands nowhere. A payload with no members of its own, such as a
+    primitive, is the whole value, and a union payload's members are those of
+    each alternative.
+  - A carrier that records no payload, its metadata alone, is taken to have
+    been written around the one member it is intersected with, where there is
+    one. Beside more, a restriction labels the whole value and evidence lands
+    nowhere (`payloadOfStamp`).
+
+  So `A & Integrity<B, L>` labels `B`'s members alone, and
+  `Omit<A & Integrity<B, L>, keyof B>` carries no label. `{ ...b, name }`
+  carries `B`'s restrictions on `B`'s members and none of its evidence.
+  `Integrity<A & B, L>` with its name dropped labels the whole value. A type
+  can state evidence its value does not carry, as a generic spread
+  `{ ...a, ...b }` typed `A & B` does, or `Object.assign`. Such a type reads
+  as it states. Tested: cfc-authoring.test.ts ("a carrier that records the
+  payload its policy was written around", "a carrier that records no
+  payload"), and end-to-end in ts-transformers
+  `printed-type-node-schema.test.ts` ("a labeled payload merged into a larger
+  value").
 - A policy's type can lose its alias name. A payload member its metadata
   carrier cannot intersect is reduced away: `Confidential<string | null, L>` is
   `string & carrier`, and `Confidential<null, L>` is `never`. A rewrite such as
@@ -1035,13 +1078,30 @@ Mechanics:
   `never`, as in `Confidential<never, L>` or `Confidential<string & number, L>`,
   accepts nothing, and lowers to `{ not: true, ifc }` like any payload whose
   schema is `false`, whether written directly or through an alias (`type Sec<T>
-  = Confidential<T, L>`, `Sec<never>`). Read from a type alone, the value is its
-  one member besides the carriers, labelled with each carrier's metadata as its
-  types spell it (`cfcCarriedParts`), provided every value in it reads. A writer
-  binding, which only a `typeof` node names, does not, and a policy read in part
-  could claim what its author never wrote together, such as an `ownerPrincipal`
-  without its `writeAuthorizedBy`. Then the value is its payload alone. The
-  `null` the checker dropped is in the schema neither way.
+  = Confidential<T, L>`, `Sec<never>`). Read from a type alone, the
+  value is the intersection of its members besides the carriers
+  (`cfcCarriedParts`), labeled with each carrier's metadata as its types
+  spell it, provided every value in it reads. A writer binding, which only a
+  `typeof` node names, does not, and a policy read in part could claim what
+  its author never wrote together, such as an `ownerPrincipal` without its
+  `writeAuthorizedBy`. Then the value is its payload alone. The `null` the
+  checker dropped is in the schema neither way. One member is read as itself.
+  A payload that is itself an intersection leaves several, and only the
+  payload each carrier records says which of them its policy was written
+  around: `A & Confidential<B, L>` is the type `Confidential<A & B, L>` is,
+  yet labels `B`'s members alone, while `Confidential<A & B, L>` labels the
+  whole value (above). A payload the checker drops from an intersection, as it
+  drops `unknown` and `{}`, leaves none, only the carriers of nested
+  policies. The checker's public API builds no intersection apart from the
+  carriers, so several members, or none, are read in place, as their
+  intersection reads: by the CFC formatter where it claims the type for
+  anything besides its carriers, as it claims a cell, and otherwise as §9
+  reads an intersection, a carrier no constituent of it. So
+  `NonNullable<Confidential<A & B, L>>` reads as `Confidential<A & B, L>`
+  does, `string & Brand` as a labeled string, and none as a labeled object
+  with no properties, as a lone carrier reads (below). A payload holding a
+  union distributes, `(A | C) & B` being `(A & B) | (C & B)`, and each
+  member of the union is labeled.
 - A default-library alias that maps an object's members (`Readonly`,
   `Partial`, `Required`, `Pick`, `Omit`) does not keep a labelled operand's
   carrier as a member of its own: over an object it folds the carrier into
@@ -1050,9 +1110,12 @@ Mechanics:
   by type, such an alias over a labelled operand (an intersection holding
   carriers, or such an alias in turn) is the type the checker builds, read
   as any other type is and never holding the carrier, labelled with the
-  operand's labels, read from its carriers in full or not at all. Only
+  operand's labels, read from its carriers in full or not at all and placed
+  by the payloads they record (above). Only
   where `Readonly`, `Partial` or `Required` stands over a primitive, which
-  such an alias leaves as it is, is the value the primitive. So
+  such an alias leaves as it is, is the value the primitive; a payload of
+  several members, or none, is an intersection, which they map as they map
+  an object. So
   `Readonly<Sec<string>>` is a labelled string, `Pick<Sec<string>,
   "length">` a labelled `{ length: number }`, a recursion through
   `Partial<Node>` a definition of its own, and `Pick<Sec<X>, "a">` keeps the
@@ -1070,8 +1133,9 @@ Mechanics:
   `Pick<Sec<X>, "a">`, and `Select<["b"]>`, where `type Select<L> =
   Pick<Confidential<X, L>, "a">`, as `Pick<Confidential<X, ["b"]>, "a">`. A
   bound parameter is its argument, and a carrier's metadata is read with the
-  parameters it holds bound. Where the operand's payload is a bound
-  parameter, the checker folds the argument into the operand's intersection:
+  parameters it holds bound. Where a member of the operand's payload is a
+  bound parameter, the checker folds the argument into the operand's
+  intersection:
   the carriers of an argument that is itself labeled join the operand's, and
   an argument that leaves the intersection no carrier (`never`, `null`,
   `undefined`, a union of the last two, or `any`) leaves the operand
@@ -1085,8 +1149,9 @@ Mechanics:
   parameter, which is not fully read (below). Any other object that holds a
   carrier as a property, as a mapped type its author wrote does
   (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
-  metadata the carrier's type holds read in full or none, and never holds
-  the carrier as a member: no value does.
+  metadata the carrier's type holds read in full or none and placed by the
+  payload it records (above), and never holds the carrier as a member: no
+  value does.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`#resolveAliasChainFromDeclaration` /
   `substituteTypeNode`), and the labels read the substituted argument nodes.

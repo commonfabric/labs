@@ -29,7 +29,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
 
   it("observes and then fails closed for writeAuthorizedBy claims emitted from authored types", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       function localFunction() {}
 
@@ -125,7 +125,7 @@ describe("CFC authoring surface trust-sensitive claims", () => {
           name: "/main.tsx",
           contents: `/// <cts-enable />
             import { lift, pattern } from "commonfabric";
-            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
             type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
 
             function localFunction(value: string) {

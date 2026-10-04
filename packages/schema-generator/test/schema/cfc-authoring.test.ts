@@ -79,7 +79,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("lowers AnyOf as one explicit confidentiality clause", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
 
@@ -113,7 +113,7 @@ describe("Schema: CFC authoring aliases", () => {
         `,
         "/entry.ts": `
           import type { AnyOf as Or, PolicyOf as P } from "./cfc-types.ts";
-          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
           type Confidential<T, X extends readonly unknown[]> =
             Cfc<T, { confidentiality: X }>;
           declare const rules: unknown;
@@ -153,7 +153,7 @@ describe("Schema: CFC authoring aliases", () => {
         `,
         "/entry.ts": `
           import * as other from "./other.ts";
-          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
           declare const rules: unknown;
           interface SchemaRoot {
             policy: Cfc<string, { confidentiality: [other.PolicyOf<typeof rules>] }>;
@@ -191,7 +191,7 @@ describe("Schema: CFC authoring aliases", () => {
         `,
         "/entry.ts": `
           import * as cf from "./barrel.ts";
-          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
           declare const rules: unknown;
           interface SchemaRoot {
             policy: Cfc<string, { confidentiality: [cf.Policy<typeof rules>] }>;
@@ -233,7 +233,7 @@ describe("Schema: CFC authoring aliases", () => {
         `,
         "/entry.ts": `
           import * as wrapped from "./wrapper.ts";
-          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
           declare const unrelatedRules: unknown;
           interface SchemaRoot {
             policy: Cfc<string, { confidentiality: [wrapped.PolicyOf<typeof unrelatedRules>] }>;
@@ -259,7 +259,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("lowers Confidential and projection aliases through the canonical Cfc carrier", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
       type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
@@ -317,7 +317,7 @@ describe("Schema: CFC authoring aliases", () => {
   it("lowers a canonical alias a conditional user alias resolves to from its own arguments", async () => {
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Pick2<A, B> = A extends string ? Confidential<B, readonly ["x"]> : never;
       interface SchemaRoot {
@@ -337,7 +337,7 @@ describe("Schema: CFC authoring aliases", () => {
   it("reads the writer a conditional alias passes to `WriteAuthorizedBy` as its branch writes it", async () => {
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       type Guarded<X, B> = X extends string ? WriteAuthorizedBy<X, B> : never;
       type Swapped<B, X> = X extends string ? WriteAuthorizedBy<X, B> : never;
@@ -387,7 +387,7 @@ describe("Schema: CFC authoring aliases", () => {
     // `Either` the checker took is not written anywhere a node could say.
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
       type Either<X, B, C> = X extends string
@@ -423,7 +423,7 @@ describe("Schema: CFC authoring aliases", () => {
   it("does not treat a type-only argument as an authored indirect writer binding", async () => {
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       type Protected<T, Binding> = Cfc<
         WriteAuthorizedBy<T, Binding>,
@@ -445,7 +445,7 @@ describe("Schema: CFC authoring aliases", () => {
   it("reports nothing for a policy read from a type alone, which has no reference to spell a binding in", async () => {
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
       function save() {}
@@ -472,7 +472,7 @@ describe("Schema: CFC authoring aliases", () => {
     // its other members, `none` to `never`, with no alias name left.
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       function save() {}
@@ -521,7 +521,7 @@ describe("Schema: CFC authoring aliases", () => {
     // `{ not: true }` beside the labels.
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Sec<T> = Confidential<T, readonly ["a"]>;
       interface SchemaRoot {
@@ -551,16 +551,19 @@ describe("Schema: CFC authoring aliases", () => {
     // `{}`, which drops the name as a reduction does.
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
       function save() {}
-      type Labelled = Cfc<Confidential<string[], readonly ["a"]>, { ownerPrincipal: CurrentPrincipal }>;
-      type Owned = Cfc<WriteAuthorizedBy<string[], typeof save>, { ownerPrincipal: CurrentPrincipal }>;
+      type Labeled<T> = Cfc<Confidential<T, readonly ["a"]>, { ownerPrincipal: CurrentPrincipal }>;
+      type Owned<T> = Cfc<WriteAuthorizedBy<T, typeof save>, { ownerPrincipal: CurrentPrincipal }>;
+      type Pair = { a: string } & { b: number };
       interface SchemaRoot {
-        labelled: NonNullable<Labelled | null>;
-        owned: NonNullable<Owned | null>;
+        labeled: NonNullable<Labeled<string[]> | null>;
+        owned: NonNullable<Owned<string[]> | null>;
+        labeledPair: NonNullable<Labeled<Pair> | null>;
+        ownedPair: NonNullable<Owned<Pair> | null>;
       }
     `,
       "SchemaRoot",
@@ -569,21 +572,183 @@ describe("Schema: CFC authoring aliases", () => {
       new SchemaGenerator().generateSchema(type, checker),
     );
 
+    const ifc = {
+      confidentiality: ["a"],
+      ownerPrincipal: { __ctCurrentPrincipal: true },
+    };
     const payload = { type: "array", items: { type: "string" } };
-    expect(schema.properties?.labelled).toEqual({
-      ...payload,
-      ifc: {
-        confidentiality: ["a"],
-        ownerPrincipal: { __ctCurrentPrincipal: true },
-      },
-    });
+    expect(schema.properties?.labeled).toEqual({ ...payload, ifc });
     expect(schema.properties?.owned).toEqual(payload);
+    const pair = {
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "number" } },
+      required: ["a", "b"],
+    };
+    expect(schema.properties?.labeledPair).toEqual({ ...pair, ifc });
+    expect(schema.properties?.ownedPair).toEqual(pair);
+  });
+
+  describe("a policy no reference names, whose payload is not one member", () => {
+    // A policy's carriers are members of the intersection its type is, beside
+    // its payload's members, so a payload that is itself an intersection
+    // leaves several members besides the carriers, and one the checker drops
+    // from an intersection, as it drops `{}`, leaves none. With the alias name
+    // gone, the value is read as those members' intersection, and the
+    // carriers label it as the policy written by name is labeled.
+
+    const DECLARATIONS = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      declare const BRAND: unique symbol;
+      type Branded = { readonly [BRAND]: true };
+      interface Named { n: string }
+      /** A documented part. */
+      interface Documented { d: string }
+    `;
+
+    /** The schemas of `value` written by name and with its name dropped. */
+    const byNameAndDropped = async (value: string) => {
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `
+        type Policy = ${value};
+        interface SchemaRoot {
+          byName: Policy;
+          dropped: NonNullable<Policy | null>;
+        }
+      `,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const definitions = schema.$defs as Record<string, unknown>;
+      return {
+        byName: definitions.Policy,
+        dropped: schema.properties?.dropped,
+      };
+    };
+
+    it("reads an intersection of objects as their properties together, labeled", async () => {
+      const { dropped } = await byNameAndDropped(
+        'Confidential<{ a: string } & { b: number }, readonly ["a"]>',
+      );
+      expect(dropped).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    for (
+      const payload of [
+        "{ a: string } & { b: number } & { c: boolean }",
+        "Named & { b: number }",
+        "Documented & { b: number }",
+        "string & Branded",
+        "string[] & Branded",
+        "Cell<{ a: string }> & Branded",
+      ]
+    ) {
+      it(`reads a payload of \`${payload}\` as the policy written by name`, async () => {
+        const { byName, dropped } = await byNameAndDropped(
+          `Confidential<${payload}, readonly ["a"]>`,
+        );
+        expect((byName as Record<string, unknown>).ifc).toEqual({
+          confidentiality: ["a"],
+        });
+        expect(dropped).toEqual(byName);
+      });
+    }
+
+    it("labels each member of a union the payload distributes into", async () => {
+      // `(A | C) & B` is `(A & B) | (C & B)`, and the carriers distribute with
+      // it, so each member of the union is a policy of several members.
+      const { dropped } = await byNameAndDropped(
+        'Confidential<({ a: string } | { c: boolean }) & { b: number }, readonly ["a"]>',
+      );
+      const members = (dropped as Record<string, unknown>).anyOf as Record<
+        string,
+        unknown
+      >[];
+      expect(members.map((member) => Object.keys(member.properties!)))
+        .toEqual([["a", "b"], ["c", "b"]]);
+      expect(members.map((member) => member.ifc)).toEqual([
+        { confidentiality: ["a"] },
+        { confidentiality: ["a"] },
+      ]);
+    });
+
+    it("reads each nested policy's carriers", async () => {
+      const { byName, dropped } = await byNameAndDropped(
+        'Integrity<Confidential<{ a: string } & { b: number }, readonly ["c"]>, readonly ["i"]>',
+      );
+      expect((byName as Record<string, unknown>).ifc).toEqual({
+        confidentiality: ["c"],
+        integrity: ["i"],
+      });
+      expect(dropped).toEqual(byName);
+    });
+
+    it("reads nested policies over a payload the checker dropped as the policies written by name", async () => {
+      const { byName, dropped } = await byNameAndDropped(
+        'Integrity<Confidential<{}, readonly ["c"]>, readonly ["i"]>',
+      );
+      expect(byName).toEqual({
+        type: "object",
+        properties: {},
+        ifc: { confidentiality: ["c"], integrity: ["i"] },
+      });
+      expect(dropped).toEqual(byName);
+    });
+
+    it("labels only the payload's members of an intersection written with a policy as one member", async () => {
+      // The checker flattens `A & Confidential<B, L>` into the one
+      // intersection `Confidential<A & B, L>` is, but the carrier records
+      // `B`, so the label lands on `B`'s members alone.
+      const { byName, dropped } = await byNameAndDropped(
+        '{ a: string } & Confidential<{ b: number }, readonly ["a"]>',
+      );
+      expect(byName).toEqual({
+        type: "object",
+        properties: {
+          a: { type: "string" },
+          b: { type: "number", ifc: { confidentiality: ["a"] } },
+        },
+        required: ["a", "b"],
+      });
+      expect(dropped).toEqual(byName);
+    });
+
+    it("labels a recursion through the policy's type, which is its own definition", async () => {
+      // The recursion's reference drops the name as the root's does, so the
+      // type recurs as itself, read from its carriers alone.
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `
+        type Chain = Confidential<{ next?: NonNullable<Chain | null> } & { v: number }, readonly ["a"]>;
+        interface SchemaRoot { chain: NonNullable<Chain | null> }
+      `,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const definitions = schema.$defs as Record<string, Record<string, any>>;
+      const resolve = (at: any) =>
+        typeof at?.$ref === "string"
+          ? definitions[at.$ref.split("/").pop()]!
+          : at;
+      const chain = resolve(schema.properties?.chain);
+      expect(chain.ifc).toEqual({ confidentiality: ["a"] });
+      expect(resolve(chain.properties.next)).toBe(chain);
+    });
   });
 
   it("formats a projection reached through a user alias over the root its reference carries", async () => {
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
       type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
       type Ref<Root, Path extends readonly unknown[]> = {
@@ -655,7 +820,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("expands nested aliases before lowering canonical Cfc metadata", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type SecretText<T> = Confidential<T, readonly ["secret"]>;
 
@@ -677,7 +842,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("preserves CFC metadata under writable cell wrappers", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
 
       interface SchemaRoot {
@@ -704,7 +869,7 @@ describe("Schema: CFC authoring aliases", () => {
     // mechanism this test covers alongside the remaining canonical aliases.
 
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, { addIntegrity: X }>;
@@ -801,7 +966,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("preserves object-shaped integrity atoms authored through Cfc metadata", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
 
       interface Message {
         senderId: string;
@@ -826,7 +991,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("preserves object-shaped confidentiality atoms authored through canonical aliases", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
 
       interface SchemaRoot {
@@ -852,7 +1017,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("preserves object-shaped confidentiality atoms referenced with typeof", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
 
       const HEALTH_RECORD_CONFIDENTIALITY = {
@@ -880,7 +1045,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("preserves primitive Cfc metadata through generic aliases", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
 
       type AuthorshipIntegrity<Author extends string> = {
         readonly kind: "authored-by";
@@ -912,7 +1077,7 @@ describe("Schema: CFC authoring aliases", () => {
 
   it("preserves tuple metadata through chained generic Cfc aliases", async () => {
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
 
       type TrustedActionWriteWithIntegrity<
@@ -987,7 +1152,7 @@ describe("Schema: CFC authoring aliases", () => {
     const { type, checker } = await getTypeFromFiles(
       {
         "/trusted.ts": `
-        export type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        export type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
         export type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
 
         export type TrustedActionWriteWithIntegrity<
@@ -1116,7 +1281,7 @@ describe("Schema: CFC authoring aliases", () => {
     // through an indexed access, which no reading of the declaration under
     // bindings reaches; the type `Contact` instantiates holds it.
     const code = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Secret<T extends { name: string }> =
         Confidential<{ name: T["name"] }, readonly ["owner"]>;
@@ -1146,7 +1311,7 @@ describe("Schema: CFC authoring aliases", () => {
     // the lowering no argument to substitute; the payload's own alias still
     // lowers its label.
     const { checker, sourceFile } = await createTestProgram(`
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type Owned<T> = Confidential<Integrity<T, readonly ["inner"]>, readonly ["outer"]>;
@@ -1176,7 +1341,7 @@ describe("Schema: CFC authoring aliases", () => {
   it("lowers a parenthesized label", async () => {
     const { type, checker } = await getTypeFromCode(
       `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       interface SchemaRoot { t: Confidential<string, (readonly ["x"])> }
     `,
@@ -1199,7 +1364,7 @@ describe("Schema: CFC authoring aliases", () => {
     // `WriteAuthorizedBy` binding.
 
     const ALIASES = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, { addIntegrity: X }>;
@@ -1342,7 +1507,7 @@ describe("Schema: CFC authoring aliases", () => {
     // own reference with the parameter unbound.
 
     const BASE_ALIASES = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type RepresentsCurrentUser<T> = Cfc<T, { addIntegrity: readonly [{ kind: "represents-principal"; subject: { __ctCurrentPrincipal: true } }] }>;
       type Sec<T> = Confidential<T, readonly ["a"]>;
@@ -1642,7 +1807,7 @@ describe("Schema: CFC authoring aliases", () => {
       it(`reads \`${value}\` with the alias its author declared`, async () => {
         const { type, checker } = await getTypeFromCode(
           `
-            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
             type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
             type CD = readonly ["c", "d"];
             const rules = { name: "r" } as const;
@@ -1671,7 +1836,7 @@ describe("Schema: CFC authoring aliases", () => {
     // a `null` atom; the generator reports it instead of saying nothing.
 
     const ALIASES = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
     `;
@@ -1915,7 +2080,7 @@ describe("Schema: CFC authoring aliases", () => {
     ) => {
       const { type, checker } = await getTypeFromCode(
         `
-        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
         type Confidential<T, X extends readonly unknown[]> =
           Cfc<T, { confidentiality: X }>;
         type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
@@ -2145,7 +2310,7 @@ describe("Schema: CFC authoring aliases", () => {
     // the chain, each parameter bound to the argument written for it.
 
     const ALIASES = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
@@ -3024,7 +3189,7 @@ describe("Schema: CFC authoring aliases", () => {
     // no schema holds the carrier as a member.
 
     const ALIASES = `
-      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Sec<T> = Confidential<T, readonly ["a"]>;
       type Pair = { x?: string; y: number };
@@ -3091,6 +3256,10 @@ describe("Schema: CFC authoring aliases", () => {
             required: ["y"],
             ifc: secret,
           },
+        ],
+        [
+          'Pick<Sec<{ x?: string } & { y: number }>, "x">',
+          { type: "object", properties: { x }, ifc: secret },
         ],
         ["Readonly<Sec<string>>", { type: "string", ifc: secret }],
         [
@@ -3215,6 +3384,25 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    it("reads `Readonly` of a labeled branded primitive as the unlabeled one, labeled", async () => {
+      // A payload of several members is an intersection, which `Readonly`
+      // maps as it maps an object rather than leaving it as it is.
+      const branded = `
+        declare const BRAND: unique symbol;
+        type Branded = { readonly [BRAND]: true };
+      `;
+      const labeled = await generate(
+        "Readonly<Sec<string & Branded>>",
+        branded,
+      );
+      const unlabeled = await generate("Readonly<string & Branded>", branded);
+      expect(labeled.schema).toEqual({
+        ...(unlabeled.schema as Record<string, unknown>),
+        ifc: secret,
+      });
+      expect(labeled.diagnostics).toEqual([]);
+    });
+
     it("reads such an alias over an unlabelled type as the type it builds", async () => {
       // Only a labelled operand is read in the alias's place; any other is
       // the mapped type the checker builds, a named one no reference to it.
@@ -3274,6 +3462,7 @@ describe("Schema: CFC authoring aliases", () => {
         type SelectSecond<A, B extends { x?: string }> = Pick<B, "x">;
         type SelectDefault<T extends { x?: string } = Sec<Pair>> = Pick<T, "x">;
         type SelectSec<T extends { x?: string }> = Pick<Sec<T>, "x">;
+        type SelectPair<T extends { x?: string }> = Pick<Sec<T & { y: number }>, "x">;
         type SelectBoth<T extends { x?: string }, L extends readonly unknown[]> =
           Pick<Confidential<Sec<T>, L>, "x">;
         type SelectNothing<T> = Pick<Sec<T>, never>;
@@ -3307,6 +3496,16 @@ describe("Schema: CFC authoring aliases", () => {
             'SelectSec<Confidential<Pair, readonly ["b"]>>',
             'Pick<Sec<Confidential<Pair, readonly ["b"]>>, "x">',
             { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectPair<Confidential<{ x?: string }, readonly ["b"]>>',
+            'Pick<Sec<Confidential<{ x?: string }, readonly ["b"]> & { y: number }>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            "SelectPair<never>",
+            'Pick<Sec<never & { y: number }>, "x">',
+            undefined,
           ],
           [
             'SelectBoth<Pair, readonly ["b"]>',
@@ -3406,7 +3605,7 @@ describe("Schema: CFC authoring aliases", () => {
     ) => {
       const { type, checker } = await getTypeFromCode(
         `
-        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
         type Confidential<T, X extends readonly unknown[]> =
           Cfc<T, { confidentiality: X }>;
         interface SchemaRoot { field: ${declaration} }
@@ -3484,7 +3683,7 @@ describe("Schema: CFC authoring aliases", () => {
     const plainAndWidened = async (declaration: string) => {
       const { type, checker } = await getTypeFromCode(
         `
-        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
         type Confidential<T, X extends readonly unknown[]> =
           Cfc<T, { confidentiality: X }>;
         type A = { a: string };
@@ -3553,5 +3752,251 @@ describe("Schema: CFC authoring aliases", () => {
         anyOf: [{ type: "undefined" }, { type: "string", asCell: ["cell"] }],
       });
     });
+  });
+
+  describe("a carrier that records the payload its policy was written around", () => {
+    // `CfcStamp` keeps the payload a policy names beside its metadata. A
+    // restriction lands wherever the payload's data may be in a merged value:
+    // on the members the payload names, or on the whole value when an index
+    // signature leaves the payload's names open. Evidence lands only where the
+    // payload's data must be: on members whose declarations are the payload's
+    // own, and never in a spread's result, where a later spread of the
+    // payload's own type writes over its members and keeps their
+    // declarations.
+
+    const DECLARATIONS = `
+      type Cfc<T, M> = T & {
+        readonly __ct_cfc__?: { readonly meta?: M; readonly of?: T };
+      };
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Point = { lat: number; long: number };
+      type Location = Integrity<Point, readonly ["gps"]>;
+      type RecordLocation = Integrity<Record<"lat" | "long", number>, readonly ["gps"]>;
+      type IndexLocation = Integrity<Record<string, number>, readonly ["gps"]>;
+      type EitherCoordinate = Integrity<{ lat: number } | { long: number }, readonly ["gps"]>;
+      type SecretLocation = Confidential<Point, readonly ["s"]>;
+      type SecretRecord = Confidential<Record<"lat" | "long", number>, readonly ["s"]>;
+      type SecretIndex = Confidential<Record<string, number>, readonly ["s"]>;
+      type SecretEither = Confidential<{ lat: number } | { long: number }, readonly ["s"]>;
+      type Minted = Cfc<Point, { addIntegrity: readonly ["m"] }>;
+      type Pin = Confidential<{ pin: string }, readonly ["s"]>;
+      type Select<T> = Pick<Integrity<T, readonly ["gps"]> & { name: string }, "name">;
+      type Copy<T> = { readonly [K in keyof T]: T[K] };
+      declare const location: Location;
+      declare const recordLocation: RecordLocation;
+      declare const indexLocation: IndexLocation;
+      declare const either: EitherCoordinate;
+      declare const secretLocation: SecretLocation;
+      declare const secretRecord: SecretRecord;
+      declare const secretIndex: SecretIndex;
+      declare const secretEither: SecretEither;
+      declare const minted: Minted;
+      declare const pin: Pin;
+      declare const point: Point;
+      declare const latitude: Pick<Point, "lat">;
+      declare const counts: Record<string, number>;
+      declare const recordPoint: Record<"lat" | "long", number>;
+      declare const other: number;
+      const spread = { ...location, name: "x" };
+      const overwriteOne = { ...location, lat: other, name: "x" };
+      const overwriteBoth = { ...location, lat: other, long: other };
+      const sameTypeOverwrite = { ...location, ...point, name: "x" };
+      const sameTypePartial = { ...location, ...latitude, name: "x" };
+      const recordSpread = { ...recordLocation, name: "x" };
+      const indexSpread = { ...indexLocation, name: "x" };
+      const indexOverwrite = { ...indexLocation, ...counts };
+      const recordOverwrite = { ...recordLocation, ...recordPoint };
+      const mintedSpread = { ...minted, name: "x" };
+      const twoPolicies = { ...location, ...pin, name: "x" };
+      const eitherSpread = { ...either, name: "x" };
+      const secretSpread = { ...secretLocation, name: "x" };
+      const secretSameTypeOverwrite = { ...secretLocation, ...point, name: "x" };
+      const secretRecordSpread = { ...secretRecord, name: "x" };
+      const secretIndexSpread = { ...secretIndex, name: "x" };
+      const secretEitherSpread = { ...secretEither, name: "x" };
+    `;
+
+    const gps = { integrity: ["gps"] };
+    const mint = { addIntegrity: ["m"] };
+    const secret = { confidentiality: ["s"] };
+
+    /** Where `schema`'s labels sit: on the whole value, and on each member. */
+    const placement = (schema: Record<string, any>) => ({
+      whole: schema.ifc,
+      members: Object.fromEntries(
+        Object.entries(schema.properties ?? {}).flatMap(([name, member]) =>
+          (member as Record<string, any>).ifc
+            ? [[name, (member as Record<string, any>).ifc]]
+            : []
+        ),
+      ),
+    });
+
+    /** The schema of `value`, with a reference to a definition resolved. */
+    const schemaOf = async (value: string) => {
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `interface SchemaRoot { value: ${value} }`,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const definitions = (schema.$defs ?? {}) as Record<string, any>;
+      const at = schema.properties?.value as Record<string, any>;
+      return typeof at.$ref === "string"
+        ? definitions[at.$ref.split("/").pop()!]
+        : at;
+    };
+
+    describe("evidence", () => {
+      for (
+        const [value, whole, members] of [
+          ["{ name: string } & Location", undefined, { lat: gps, long: gps }],
+          ["Readonly<{ name: string } & Location>", undefined, {
+            lat: gps,
+            long: gps,
+          }],
+          ['Omit<{ name: string } & Location, "lat">', undefined, {
+            long: gps,
+          }],
+          ['Pick<{ name: string } & Location, "name">', undefined, {}],
+          ['Pick<{ name: string } & Location, "lat">', gps, {}],
+          ["Pick<Location, never>", undefined, {}],
+          ['Integrity<Point & { name: string }, readonly ["gps"]>', gps, {}],
+          ["Select<Point>", undefined, {}],
+          ['Pick<RecordLocation, "lat">', gps, {}],
+          ["Readonly<IndexLocation>", gps, {}],
+          ['Pick<IndexLocation & { name: string }, "name">', undefined, {}],
+          ["typeof spread", undefined, {}],
+          ["typeof overwriteOne", undefined, {}],
+          ["typeof overwriteBoth", undefined, {}],
+          ["typeof sameTypeOverwrite", undefined, {}],
+          ["typeof sameTypePartial", undefined, {}],
+          ["Copy<typeof sameTypeOverwrite>", undefined, {}],
+          ["Copy<typeof sameTypeOverwrite> & { extra: string }", undefined, {}],
+          ["typeof sameTypeOverwrite & Location", undefined, {}],
+          ["Copy<{ name: string } & Location>", undefined, {
+            lat: gps,
+            long: gps,
+          }],
+          ["typeof recordSpread", undefined, {}],
+          [
+            '{ [K in "lat" | "long" | "__ct_cfc__"]?: (typeof recordOverwrite)[K] }',
+            undefined,
+            {},
+          ],
+          ["typeof indexSpread", undefined, {}],
+          ["typeof indexOverwrite", undefined, {}],
+          ["{ name: string } & Minted", undefined, { lat: mint, long: mint }],
+          ["typeof mintedSpread", undefined, {}],
+          ["typeof twoPolicies", undefined, { pin: secret }],
+        ] as const
+      ) {
+        it(`places the labels of \`${value}\``, async () => {
+          expect(placement(await schemaOf(value))).toEqual({ whole, members });
+        });
+      }
+    });
+
+    describe("restrictions", () => {
+      for (
+        const [value, whole, members] of [
+          ["typeof secretSpread", undefined, { lat: secret, long: secret }],
+          ["typeof secretSameTypeOverwrite", undefined, {
+            lat: secret,
+            long: secret,
+          }],
+          ["typeof secretRecordSpread", undefined, {
+            lat: secret,
+            long: secret,
+          }],
+          ['Pick<SecretRecord, "lat">', secret, {}],
+          ["typeof secretIndexSpread", secret, {}],
+          ['Pick<SecretIndex & { name: string }, "name">', secret, {}],
+        ] as const
+      ) {
+        it(`places the labels of \`${value}\``, async () => {
+          expect(placement(await schemaOf(value))).toEqual({ whole, members });
+        });
+      }
+    });
+
+    it("places each alternative's evidence on its own member of a union payload", async () => {
+      const value = await schemaOf("EitherCoordinate & { name: string }");
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: undefined, members: { lat: gps } },
+        { whole: undefined, members: { long: gps } },
+      ]);
+    });
+
+    it("places no evidence in a spread of a union payload", async () => {
+      const value = await schemaOf("typeof eitherSpread");
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: undefined, members: {} },
+        { whole: undefined, members: {} },
+      ]);
+    });
+
+    it("places each alternative's restriction on its own member of a spread union payload", async () => {
+      const value = await schemaOf("typeof secretEitherSpread");
+      expect(value.anyOf.map(placement)).toEqual([
+        { whole: undefined, members: { lat: secret } },
+        { whole: undefined, members: { long: secret } },
+      ]);
+    });
+  });
+
+  describe("a carrier that records no payload", () => {
+    // A carrier holding its metadata alone says nothing about which members
+    // its policy was written around. Beside one member, that member is the
+    // payload. Beside more, a restriction labels the whole value and evidence
+    // lands nowhere.
+
+    const DECLARATIONS = `
+      type Bare<T, M> = T & { readonly __ct_cfc__?: M };
+      type Point = { lat: number; long: number };
+    `;
+
+    const labelsOf = async (value: string) => {
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `interface SchemaRoot { value: ${value} }`,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const at = schema.properties?.value as Record<string, any>;
+      return {
+        whole: at.ifc,
+        members: Object.fromEntries(
+          Object.entries((at.properties ?? {}) as Record<string, any>)
+            .flatMap(([name, member]) =>
+              member.ifc ? [[name, member.ifc]] : []
+            ),
+        ),
+      };
+    };
+
+    for (
+      const [value, whole] of [
+        [
+          'NonNullable<Bare<Point, { integrity: readonly ["gps"] }> | null>',
+          { integrity: ["gps"] },
+        ],
+        [
+          '{ name: string } & Bare<Point, { integrity: readonly ["gps"] }>',
+          undefined,
+        ],
+        [
+          '{ name: string } & Bare<Point, { confidentiality: readonly ["s"] }>',
+          { confidentiality: ["s"] },
+        ],
+      ] as const
+    ) {
+      it(`places the labels of \`${value}\``, async () => {
+        expect(await labelsOf(value)).toEqual({ whole, members: {} });
+      });
+    }
   });
 });

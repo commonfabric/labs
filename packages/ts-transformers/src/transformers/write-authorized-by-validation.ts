@@ -148,6 +148,18 @@ function findWriteAuthorizedByReferences(
       return;
     }
 
+    // What a CFC carrier records holds its payload again, as `of`, besides
+    // its metadata: walked whole, it would reach every policy in the payload a
+    // second time. Only its metadata, which may name policies of its own, as
+    // `WritePolicyAnyOf`'s members, is walked.
+    if (
+      ts.isTypeReferenceNode(current) && isCarrierRecord(current, context)
+    ) {
+      const metadata = current.typeArguments?.[1];
+      if (metadata) visit(metadata, typeParamMap);
+      return;
+    }
+
     if (ts.isTypeReferenceNode(current)) {
       const declaration = getTypeDeclaration(current, context);
       if (declaration) {
@@ -214,13 +226,47 @@ function namesPolicyType(
     ? reference.typeName
     : reference.typeName.right;
   if (isWriteAuthorizedByLikeTypeName(name.text)) return true;
+  return isWriteAuthorizedByLikeTypeName(declaredAliasName(reference, context));
+}
+
+/** The name of the type alias `reference` resolves to, through any import. */
+function declaredAliasName(
+  reference: ts.TypeReferenceNode,
+  context: TransformationContext,
+): string | undefined {
+  return declaredAlias(reference, context)?.name.text;
+}
+
+/** The type alias `reference` resolves to, through any import. */
+function declaredAlias(
+  reference: ts.TypeReferenceNode,
+  context: TransformationContext,
+): ts.TypeAliasDeclaration | undefined {
   let symbol = context.checker.getSymbolAtLocation(reference.typeName);
   if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
     symbol = context.checker.getAliasedSymbol(symbol);
   }
-  return isWriteAuthorizedByLikeTypeName(
-    symbol?.declarations?.find(ts.isTypeAliasDeclaration)?.name.text,
-  );
+  return symbol?.declarations?.find(ts.isTypeAliasDeclaration);
+}
+
+/**
+ * Whether `reference` is a CFC carrier's record of its policy, `CfcStamp`, as
+ * the carrier itself writes it: within the body of the `Cfc` alias declared
+ * beside it. An author's own alias of that name, written anywhere else, is an
+ * ordinary type whose arguments are walked.
+ */
+function isCarrierRecord(
+  reference: ts.TypeReferenceNode,
+  context: TransformationContext,
+): boolean {
+  const record = declaredAlias(reference, context);
+  if (record?.name.text !== "CfcStamp") return false;
+  let enclosing: ts.Node | undefined = reference.parent;
+  while (enclosing && !ts.isTypeAliasDeclaration(enclosing)) {
+    enclosing = enclosing.parent;
+  }
+  return enclosing !== undefined && enclosing.name.text === "Cfc" &&
+    enclosing.getSourceFile() === record.getSourceFile();
 }
 
 /**
