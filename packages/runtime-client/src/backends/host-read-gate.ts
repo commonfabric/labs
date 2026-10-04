@@ -444,6 +444,33 @@ export class HostReadGate {
    */
   async hold(cell: Cell<unknown>): Promise<boolean> {
     if (this.#policy === undefined) return true;
+    await this.#loadResolution(cell);
+    return (await this.#loadAccessLists([cell], cellLinkHolders(cell))) !==
+      "failed";
+  }
+
+  /**
+   * Loads what naming where the links along `cell`'s path lead consults
+   * ({@link linkRefusal}): the documents of the resolution, and the access
+   * lists the nodes holding its links name, and not those of what they lead
+   * to, on which the decision is not made. Resolves as {@link hold} does.
+   */
+  async #holdLinks(cell: Cell<unknown>): Promise<boolean> {
+    if (this.#policy === undefined) return true;
+    await this.#loadResolution(cell);
+    const holders = linkHoldersOf(cell) ?? [];
+    return (await this.#loadAccessListsNamedBy(
+      holders.flatMap((holder) =>
+        confidentialityIn(cfcHolderLabelViewSourceForCell(holder))
+      ),
+    )) !== "failed";
+  }
+
+  /**
+   * Loads `cell`'s document, each document holding a link its path follows,
+   * and the one it resolves to, a link at a time, each at most once.
+   */
+  async #loadResolution(cell: Cell<unknown>): Promise<void> {
     await cell.sync();
     const loaded = new Set<string>();
     while (true) {
@@ -451,12 +478,10 @@ export class HostReadGate {
         (document) =>
           !cellDocumentHeld(document) && !loaded.has(documentKey(document)),
       );
-      if (pending.length === 0) break;
+      if (pending.length === 0) return;
       for (const document of pending) loaded.add(documentKey(document));
       await Promise.all(pending.map((document) => document.sync()));
     }
-    return (await this.#loadAccessLists([cell], cellLinkHolders(cell))) !==
-      "failed";
   }
 
   /**
@@ -702,15 +727,15 @@ export class HostReadGate {
   /**
    * What `read` reads of where the links at `cell` lead, once
    * {@link linkRefusal} admits it, or the refusal in its place. Decided once
-   * what it consults is loaded ({@link hold}), a decision whose access lists
-   * cannot be loaded refused as unreadable, and read straight after, with
-   * no wait between, so that what is read is what was decided.
+   * what it consults is loaded, as {@link resolveAsCell} is, a decision whose
+   * access lists cannot be loaded refused as unreadable, and read straight
+   * after, with no wait between, so that what is read is what was decided.
    */
   async followLink<T>(
     cell: Cell<unknown>,
     read: () => T,
   ): Promise<(HostReadDecided & CellRefusedAnswer) | { followed: T }> {
-    const refused = await this.hold(cell)
+    const refused = await this.#holdLinks(cell)
       ? this.linkRefusal(cell)
       : this.#refuse(UNHELD);
     return refused ?? { followed: read() };
@@ -721,12 +746,13 @@ export class HostReadGate {
    * makes, or the refusal that stands in its place where the policy refuses
    * the node holding a link it followed ({@link linkRefusal}). A cell whose
    * path follows no link resolves to itself, the address the host named.
-   * Decided once what the decision consults is loaded ({@link hold}), so a
-   * link into a document the worker has not loaded yet is followed, not
-   * refused as unread.
+   * Decided once what the decision consults is loaded: the documents the
+   * resolution crosses, and the access lists the nodes holding its links
+   * name, not those of what they lead to. So a link into a document the
+   * worker has not loaded yet is followed, not refused as unread.
    */
   async resolveAsCell(cell: Cell<unknown>): Promise<CellResolveResponse> {
-    if (!await this.hold(cell)) return this.#refuse(UNHELD);
+    if (!await this.#holdLinks(cell)) return this.#refuse(UNHELD);
     const resolved = cell.resolveAsCell();
     if (this.#policy !== undefined && !cell.equalLinks(resolved)) {
       const refused = this.linkRefusal(cell);

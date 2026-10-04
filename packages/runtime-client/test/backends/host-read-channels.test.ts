@@ -1131,6 +1131,16 @@ describe("HostReadGate, for what crosses beside a value", () => {
       expect(await gate.slug(member)).toEqual(refused);
       expect(await gate.resolveAsCell(member)).toEqual(refused);
       expect(await gate.followLink(member, () => "followed")).toEqual(refused);
+      // Where a link leads is decided on the node holding it, so an access
+      // list only its target's label names is not waited on.
+      const holder = await docs.write("holds-a-member-link", {
+        link: member.getAsLink(),
+      });
+      expect(await gate.resolveAsCell(holder.key("link"))).toEqual({
+        cell: expect.objectContaining({
+          id: member.getAsNormalizedFullLink().id,
+        }),
+      });
     });
 
     it("refuses a member's document at once where nothing can load its access list", async () => {
