@@ -1638,7 +1638,11 @@ export class RuntimeProcessor {
       // admits the read.
       const refusal = gate.metadataRefusal(rootCell);
       if (refusal !== undefined) return refusal;
-      const linked = this.#metaLinkTarget(rootCell, request);
+      const linked = this.#metaLinkTarget(
+        rootCell,
+        request.meta,
+        request.cell.path,
+      );
       if (linked === undefined) return gate.nothing();
       cell = linked;
     }
@@ -1688,9 +1692,9 @@ export class RuntimeProcessor {
     // A metadata field is decided on its document's root, and a metadata
     // link field on the cell it links to besides.
     const root = getCell(this.#runtime, { ...request.cell, path: [] });
-    const linked = request.meta === undefined
-      ? undefined
-      : this.#metaLinkTarget(root, request);
+    const linked = request.meta === "argument" || request.meta === "result"
+      ? this.#metaLinkTarget(root, request.meta, request.cell.path)
+      : undefined;
     const settled = await this.#hostReadGate.settle(
       getCell(this.#runtime, request.cell),
       ...(request.meta === undefined ? [] : [root]),
@@ -1700,21 +1704,18 @@ export class RuntimeProcessor {
   }
 
   /**
-   * The cell the metadata link field `request.meta` of `root`'s document
-   * leads to, at `request.cell`'s path, or `undefined` where the field is no
-   * link field or holds no link.
+   * The cell the metadata link field `field` of `root`'s document leads to,
+   * at `path` within it, or `undefined` where the field holds no link.
    */
   #metaLinkTarget(
     root: Cell<unknown>,
-    request: CellGetRequest,
+    field: "argument" | "result",
+    path: readonly string[],
   ): Cell<unknown> | undefined {
-    if (request.meta !== "argument" && request.meta !== "result") {
-      return undefined;
-    }
-    const link = getMetaLink(root, request.meta);
+    const link = getMetaLink(root, field);
     return link === undefined ? undefined : this.#runtime.getCellFromLink({
       ...link,
-      path: [...link.path, ...request.cell.path],
+      path: [...link.path, ...path],
     });
   }
 
@@ -2359,6 +2360,8 @@ export class RuntimeProcessor {
         prepared.consumed,
       );
       if (refused !== undefined) return refused;
+      // Checked again after the wait: a client that left, or a worker
+      // disposed, while the decision loaded keeps no consent.
       if (unavailable()) throw new Error("Snapshot sharing is unavailable");
       const id = crypto.randomUUID();
       this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
