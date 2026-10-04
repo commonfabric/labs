@@ -75,6 +75,7 @@ import {
   holdsIfcLabels,
   joinMemberIfcLabels,
   labeledValueMember,
+  settlePoliciesReadInPart,
   stateReferencedIfcLabels,
   withIfcLabels,
 } from "./ifc-labels.ts";
@@ -1328,6 +1329,9 @@ export class SchemaGenerator {
         isDefaultLibrarySourceFile: options.isDefaultLibrarySourceFile,
       }),
       ...(options?.printedFrom && { printedFrom: options.printedFrom }),
+      ...(options?.definesDocument && { definesDocument: true }),
+      ...(options?.rootWriterSupplied && typeNode &&
+        { rootWriterSuppliedAt: typeNode }),
       ...(schemaHints && { schemaHints }),
     };
 
@@ -1358,6 +1362,7 @@ export class SchemaGenerator {
 
     if (unread.length > 0) reportUnreadTypes(context, unread);
 
+    settlePoliciesReadInPart(result);
     stateReferencedIfcLabels(result);
     assertScopeDeclarationsAreReachable(result);
     return result;
@@ -1410,6 +1415,14 @@ export class SchemaGenerator {
     typeNode?: ts.TypeNode,
     instantiatedAs?: ts.Type,
   ): MutableJSONSchema {
+    // Data its document holds itself defines that document, however the
+    // schema around it reads (`SchemaHint.definesDocument`).
+    if (
+      typeNode && !context.definesDocument &&
+      context.schemaHints?.get(typeNode)?.definesDocument
+    ) {
+      context = { ...context, definesDocument: true };
+    }
     // A bound type parameter reads as its argument: its node where it has one,
     // under the bindings of the place it is written, and its type where it
     // does not. A `Default` around one is read as the wrapper, whose value

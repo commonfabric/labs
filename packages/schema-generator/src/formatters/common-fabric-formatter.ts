@@ -47,6 +47,7 @@ import {
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
+import { writerPolicyHeldBy } from "../typescript/writer-policy.ts";
 import {
   type CellWrapperKind,
   getCellBrand,
@@ -64,7 +65,7 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
+import { POLICY_READ_IN_PART, withIfcLabels } from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -490,6 +491,28 @@ const cfcCarriedParts = (
     ? { payload: rest[0]!, metadata }
     : undefined;
 };
+
+/**
+ * The remedy `cfc-write-authorized-by:unread` gives for a writer policy read
+ * where no syntax names its writer, in a schema that defines a document.
+ */
+const UNREAD_DOCUMENT_WRITER_REMEDY =
+  "This schema defines a document, which would admit any writer, and no " +
+  "syntax names the writer where the policy is read, as none does where it " +
+  "is reached through another type's parameter, an index signature, a " +
+  "tuple, or a type inferred from a value. Write the policy in the declared " +
+  "type of the field, or of the cell, as in `new Writable<Policy>(…)`.";
+
+/**
+ * The remedy `cfc-write-authorized-by:unread` gives, in a schema that defines
+ * a document, for a writer policy a generic member's operator syntax reads
+ * where no syntax names its writer.
+ */
+const OPERATOR_ERASED_WRITER_REMEDY =
+  "This schema defines a document, which would admit any writer, and the " +
+  "generic member's operator syntax cannot preserve its authored writer " +
+  "binding. Write the protected member directly or pass the policy " +
+  "unchanged through a parameter.";
 
 /**
  * Whether `symbol` is one of the default library's aliases that map an
@@ -927,7 +950,12 @@ export class CommonFabricFormatter implements TypeFormatter {
         context,
         resolvedCfcAlias,
         "cfc",
-        () => this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
+        () =>
+          this.#withPolicyReadWhole(
+            type,
+            this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
+            context,
+          ),
       );
     }
 
@@ -941,6 +969,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     // are the operand's, read from its carriers in full or not at all.
     const view = this.#libraryView(type, context);
     if (view) {
+      this.#reportCarriedWriter(
+        view.metadata.map((metadata) => metadata.type),
+        context,
+      );
       const shape = view.primitive
         ? this.#schemaGenerator.formatChildType(
           view.payload,
@@ -963,13 +995,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // carriers are read in full, or the value is its payload alone.
     const carried = cfcCarriedParts(type, context.typeChecker);
     if (carried) {
-      if (
-        carried.metadata.some((metadata) =>
-          context.typeChecker.getNonNullableType(metadata).getProperty(
-            "writeAuthorizedBy",
-          )
-        )
-      ) this.#reportUnreadOperatorWriter(context);
+      this.#reportCarriedWriter(carried.metadata, context);
       const payload = this.#schemaGenerator.formatChildType(
         carried.payload,
         context,
@@ -1888,6 +1914,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       checker.getTypeOfSymbol(carrier),
       checker,
     );
+    this.#reportCarriedWriter([value], context);
     return this.#labelsOf(
       (value.isIntersection() ? value.types : [value]).map((type) => ({
         type,
@@ -3046,9 +3073,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * an error here as well as in `WriteAuthorizedByValidationTransformer`,
    * which cannot see bindings passed through another alias's parameters. A
    * policy written through another alias whose binding has no node to read
-   * is also an error: its schema would carry no write restriction. A generic
-   * member whose operator syntax erases its bound writer reports an error
-   * with a specific authoring remedy.
+   * is also an error: its schema would carry no write restriction. A
+   * binding no syntax names, read from a type alone or erased by a generic
+   * member's operator syntax, is an error only in a schema that defines a
+   * document (`#reportWriterWithoutSyntax()`); a view reports nothing.
    */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
@@ -3058,10 +3086,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     const bindingNode = aliasArgNodes?.[1];
     if (!bindingNode) {
       if (
-        !this.#reportUnreadOperatorWriter(context) &&
+        !this.#erasesWriterThroughOperator(context) &&
         this.#writesPolicyThroughAlias(aliasName, context)
       ) {
         reportUnreadWriterBinding(context, aliasName);
+      } else if (!this.#suppliesRootWriter(context)) {
+        this.#reportWriterWithoutSyntax(aliasName, context);
       }
       return undefined;
     }
@@ -3070,9 +3100,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       // A declaration read from an instantiated type can name a parameter
       // whose argument has no syntax. It is a type-only read, not an authored
-      // indirect binding for this check to reject.
+      // indirect binding for this check to reject; it is reported only where
+      // the schema defines a document.
       const bound = this.#boundArgumentAt(bindingNode, context);
-      if (bound && !bound.argument.node) return undefined;
+      if (bound && !bound.argument.node) {
+        this.#reportWriterWithoutSyntax(aliasName, context);
+        return undefined;
+      }
       reportUnreadWriterBinding(context, aliasName);
       return undefined;
     }
@@ -3087,26 +3121,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     };
   }
 
-  /** Reports a policy whose authored operator erased its writer syntax. */
-  #reportUnreadOperatorWriter(context: GenerationContext): boolean {
+  /**
+   * Whether `context` reads a generic member whose operator syntax, such as an
+   * indexed access or a conditional type over a bound parameter, erases the
+   * writer binding the parameter's argument wrote.
+   */
+  #erasesWriterThroughOperator(context: GenerationContext): boolean {
     const node = context.typeNode;
-    if (
-      !node || !context.boundTypeParameters ||
-      !holdsTypeParameter(
+    return !!node && !!context.boundTypeParameters &&
+      holdsTypeParameter(
         node,
         context.typeChecker,
         context.boundTypeParameters.arguments,
-      ) ||
-      !usesParameterUnreachably(node, context.typeChecker)
-    ) return false;
-    reportUnreadWriterBinding(
-      context,
-      "WriteAuthorizedBy",
-      "The generic member's operator syntax cannot preserve its authored " +
-        "writer binding. Write the protected member directly or pass the " +
-        "policy unchanged through a parameter.",
-    );
-    return true;
+      ) &&
+      usesParameterUnreachably(node, context.typeChecker);
   }
 
   /**
@@ -3136,6 +3164,104 @@ export class CommonFabricFormatter implements TypeFormatter {
       context,
     ) as TypeWithInternals;
     return denoted.aliasSymbol?.name === aliasName;
+  }
+
+  /**
+   * Reports `aliasName`, a writer policy read where no syntax names its
+   * writer, as unread where the schema defines a document
+   * (`GenerationContext.definesDocument`), whose stored envelope would hold no
+   * write restriction. Any other schema views a document that stores its own,
+   * so a type-only read there, such as a computed's capture, is not reported.
+   */
+  #reportWriterWithoutSyntax(
+    aliasName: string,
+    context: GenerationContext,
+  ): void {
+    if (context.definesDocument) {
+      reportUnreadWriterBinding(
+        context,
+        aliasName,
+        this.#erasesWriterThroughOperator(context)
+          ? OPERATOR_ERASED_WRITER_REMEDY
+          : UNREAD_DOCUMENT_WRITER_REMEDY,
+      );
+    }
+  }
+
+  /**
+   * `schema`, the lowering of `type`, a CFC alias chain's instantiation, with
+   * the writer policy `type` holds marked as read in part
+   * (`POLICY_READ_IN_PART`) where the schema views a document and the writer
+   * went unread here. The view reads the policy whole or not at all: once the
+   * schema is generated, a policy whose writer arrived since, as a label the
+   * value's declaration states, is whole, and one whose writer did not has
+   * the principal claims the runtime enforces only beside a writer left out
+   * with it (`settlePoliciesReadInPart()`). Without its writer, such a claim
+   * refuses every write against it, its own writer's included, and stops no
+   * other, while the document the view reads stores the whole policy. A
+   * claim whose type holds no writer is the author's, and stays as written.
+   * A schema that defines a document keeps its claims, and has the unread
+   * writer reported instead; a root whose writer the caller supplies keeps
+   * them too (`GenerationContext.rootWriterSuppliedAt`).
+   */
+  #withPolicyReadWhole(
+    type: ts.Type,
+    schema: MutableJSONSchema,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    if (
+      context.definesDocument || this.#suppliesRootWriter(context) ||
+      !isObjectOrArray(schema) || !isObjectOrArray(schema.ifc) ||
+      schema.ifc.writeAuthorizedBy !== undefined ||
+      schema.ifc.writePolicyAnyOf !== undefined
+    ) {
+      return schema;
+    }
+    const checker = context.typeChecker;
+    const carried = cfcCarriedParts(type, checker);
+    if (
+      !carried?.metadata.some((metadata) =>
+        writerPolicyHeldBy(metadata, checker)
+      )
+    ) {
+      return schema;
+    }
+    return {
+      ...schema,
+      ifc: { ...schema.ifc, [POLICY_READ_IN_PART]: true } as NonNullable<
+        MutableJSONSchemaObj["ifc"]
+      >,
+    };
+  }
+
+  /**
+   * Like {@link #reportWriterWithoutSyntax}, except for the writer policy any
+   * of `metadata` holds, the metadata of carriers read from a type alone.
+   */
+  #reportCarriedWriter(
+    metadata: readonly ts.Type[],
+    context: GenerationContext,
+  ): void {
+    const policies = metadata.flatMap((type) =>
+      (type.isIntersection() ? type.types : [type]).flatMap((part) =>
+        writerPolicyHeldBy(part, context.typeChecker) ?? []
+      )
+    );
+    // A root whose writer the caller supplies has one writer read; any other
+    // is still unread.
+    const unread = this.#suppliesRootWriter(context)
+      ? policies.slice(1)
+      : policies;
+    if (unread[0]) this.#reportWriterWithoutSyntax(unread[0], context);
+  }
+
+  /**
+   * Whether `context` reads the root of a schema whose root policy's writer
+   * the caller supplies (`GenerationContext.rootWriterSuppliedAt`).
+   */
+  #suppliesRootWriter(context: GenerationContext): boolean {
+    return context.rootWriterSuppliedAt !== undefined &&
+      context.typeNode === context.rootWriterSuppliedAt;
   }
 
   #writeAuthorizedByIdentityForBinding(

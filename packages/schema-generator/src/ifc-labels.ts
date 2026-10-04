@@ -232,6 +232,81 @@ export const labeledValueMember = (
 };
 
 /**
+ * The key a view's `ifc` holds, during one generation, where it read a writer
+ * policy without its writer (`settlePoliciesReadInPart()`). The generation
+ * removes it before it returns the schema.
+ */
+export const POLICY_READ_IN_PART = "__ctPolicyReadInPart";
+
+/**
+ * Whether `value`, a label atom or a part of one, names the current principal
+ * (`CurrentPrincipal`, lowered as `{ __ctCurrentPrincipal: true }`).
+ */
+const namesCurrentPrincipal = (value: unknown): boolean =>
+  isObjectOrArray(value) &&
+  ((!Array.isArray(value) && value.__ctCurrentPrincipal === true) ||
+    Object.values(value).some(namesCurrentPrincipal));
+
+/**
+ * `labels` without the principal claims the runtime enforces only beside a
+ * writer: an `ownerPrincipal`, and each `integrity` or `addIntegrity` atom
+ * naming the current principal. A write against either, with no writer
+ * declared beside it, is refused. `undefined` where nothing else is left.
+ */
+const withoutWriterBoundClaims = (
+  labels: Readonly<Record<string, unknown>>,
+): Record<string, unknown> | undefined => {
+  const kept: Record<string, unknown> = { ...labels };
+  delete kept.ownerPrincipal;
+  for (const key of ["integrity", "addIntegrity"] as const) {
+    const atoms = kept[key];
+    if (!Array.isArray(atoms)) continue;
+    const rest = atoms.filter((atom) => !namesCurrentPrincipal(atom));
+    if (rest.length > 0) kept[key] = rest;
+    else delete kept[key];
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+/**
+ * Settles each writer policy a view read in part (`POLICY_READ_IN_PART`),
+ * once the whole schema is generated, so that the view holds the policy whole
+ * or not at all. Where the writer arrived since, as a label the value's
+ * declaration states merged in beside the part read, the policy is whole and
+ * stays. Where none did, its principal claims are left out with the writer
+ * (`withoutWriterBoundClaims()`), since either alone refuses every write
+ * against it.
+ *
+ * It rewrites `ifc` in place, on positions the formatter built for this
+ * generation, as `stateReferencedIfcLabels()` does.
+ */
+export const settlePoliciesReadInPart = (schema: MutableJSONSchema): void => {
+  if (!isObjectOrArray(schema)) return;
+  const visited = new Set<MutableJSONSchema>();
+  const visit = (node: MutableJSONSchema): void => {
+    if (!isObjectOrArray(node) || visited.has(node)) return;
+    visited.add(node);
+    if (isObjectOrArray(node.ifc) && POLICY_READ_IN_PART in node.ifc) {
+      const { [POLICY_READ_IN_PART]: _, ...labels } = node.ifc as Record<
+        string,
+        unknown
+      >;
+      const kept = labels.writeAuthorizedBy !== undefined ||
+          labels.writePolicyAnyOf !== undefined
+        ? labels
+        : withoutWriterBoundClaims(labels);
+      if (kept) node.ifc = kept as NonNullable<MutableJSONSchemaObj["ifc"]>;
+      else delete node.ifc;
+    }
+    forEachSubschema(node, (child) => {
+      visit(child as MutableJSONSchema);
+      return false;
+    }, { includeDefs: true, includeUnused: true });
+  };
+  visit(schema);
+};
+
+/**
  * Writes beside each local `$ref` that carries `ifc` the labels of the
  * definitions it reaches, combined with its own, so that resolving the
  * reference keeps all of them. A definition keeps its own labels, which are
