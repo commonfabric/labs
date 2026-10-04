@@ -29,7 +29,6 @@ import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   type AtomPattern,
-  containsAtomPatternVariable,
   isAtomPattern,
   matchAtomPattern,
   matchAtomPatternConjunction,
@@ -37,8 +36,10 @@ import {
 import type { CfcConfClause } from "./clause.ts";
 import {
   canonicalJson,
+  containsAtomPatternVariable,
   evidenceHolds,
   hasExactKeys,
+  isTrustedGestureOn,
   type ReadEvidence,
   readEvidence,
   rootWrittenByBuiltin,
@@ -51,7 +52,6 @@ import { CUSTODY_SEAL_WRITER } from "./custody-seal.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { SNAPSHOT_SHARE_WRITER } from "./share-snapshot.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
-import { isTrustedGestureOn } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Builtin implementation identity that alone writes reviewed intents. */
@@ -417,6 +417,20 @@ const HOST_COPYING_WRITERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Whether this runtime's module registry holds a module under `ref`. The
+ * registry's lookup refuses a string ref only when it holds none, by
+ * throwing, so the refusal is the answer.
+ */
+const registryHolds = (runtime: Runtime, ref: string): boolean => {
+  try {
+    runtime.moduleRegistry.getModule(ref);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Refuses a descriptor whose destination integrity names a builtin whose
  * writes a pattern decides: one this runtime's module registry holds, which
  * pattern code invokes with inputs it chooses, or a host operation that
@@ -437,7 +451,7 @@ const refuseSteeredWriters = (
           "Reviewed intent descriptor requires each destination integrity pattern to name one builtin's `TransformedBy`",
         );
       }
-      if (runtime.moduleRegistry.has(builtinId)) {
+      if (registryHolds(runtime, builtinId)) {
         throw new Error(
           debugStr`Reviewed intent descriptor requires destination integrity from $quote${builtinId}, a builtin pattern code invokes`,
         );

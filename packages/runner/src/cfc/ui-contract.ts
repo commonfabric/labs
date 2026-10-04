@@ -626,25 +626,15 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
 
 /**
  * Whether `event` is a trusted gesture: an event the renderer marked, whose
- * provenance says the browser trusted a DOM event on a UI surface. It shows
- * that a person acted, and not on what; {@link isTrustedGestureOn} adds which
- * surface.
+ * provenance says the browser trusted a DOM event on a UI surface. This is
+ * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
+ * their match on which surface it was, so it shows that a person acted and
+ * not on what.
  */
 export const isTrustedGesture = (event: unknown): boolean =>
   isRendererTrustedEvent(event) && isObjectNotArray(event) &&
   isTrustedDomProvenance(event.provenance) &&
   isObjectNotArray(event.provenance.ui);
-
-/**
- * Whether `event` is a trusted gesture on the host surface whose
- * `provenance.ui.pattern` mark is `surface`: the test a host operation's
- * commit applies to the gesture that authorizes it.
- */
-export const isTrustedGestureOn = (event: unknown, surface: string): boolean =>
-  isTrustedGesture(event) && isObjectNotArray(event) &&
-  isObjectNotArray(event.provenance) &&
-  isObjectNotArray(event.provenance.ui) &&
-  event.provenance.ui.pattern === surface;
 
 const pathsEqual = (
   left: readonly unknown[],

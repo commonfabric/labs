@@ -56,10 +56,7 @@ import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
-import {
-  containsAtomPatternVariable,
-  matchAtomPattern,
-} from "./atom-pattern.ts";
+import { matchAtomPattern } from "./atom-pattern.ts";
 import {
   type CfcConfClause,
   clauseAlternatives,
@@ -71,8 +68,10 @@ import {
 } from "./exchange-eval.ts";
 import {
   canonicalJson,
+  containsAtomPatternVariable,
   evidenceHolds,
   hasExactKeys,
+  isTrustedGestureOn,
   type ReadEvidence,
   readEvidence,
   rootWrittenByBuiltin,
@@ -91,7 +90,6 @@ import {
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
 import { runtimeWritePolicyAuthorization } from "./types.ts";
-import { isTrustedGestureOn } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Builtin implementation identity that alone may write a custody box. */

@@ -5,7 +5,9 @@
  * a trusted gesture commits. This module holds the pieces of that pattern
  * that do not depend on what is reviewed: recording a review's reads and
  * checking them again, loading what a pattern's cell resolves to, writing a
- * value as one comparable string, and recognizing a document a builtin wrote.
+ * value as one comparable string, recognizing a document a builtin wrote,
+ * accepting a trusted gesture on one surface, and telling a pattern that names
+ * what it matches outright from one that leaves part of it open.
  */
 
 import type { JSONValue } from "@commonfabric/api";
@@ -24,6 +26,7 @@ import type {
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import type { ImplementationIdentity } from "./types.ts";
+import { isTrustedGesture } from "./ui-contract.ts";
 
 /** A read a review made, with the digest of what it read. */
 export interface ReadEvidence {
@@ -135,3 +138,26 @@ export const rootWrittenByBuiltin = (
     (entry.label.integrity ?? []).some((atom) => deepEqual(atom, stamp))
   );
 };
+
+/**
+ * Whether `event` is a trusted gesture on the host surface whose
+ * `provenance.ui.pattern` mark is `surface`: the test a host operation's
+ * commit applies to the gesture that authorizes it.
+ */
+export const isTrustedGestureOn = (event: unknown, surface: string): boolean =>
+  isTrustedGesture(event) && isObjectNotArray(event) &&
+  isObjectNotArray(event.provenance) &&
+  isObjectNotArray(event.provenance.ui) &&
+  event.provenance.ui.pattern === surface;
+
+/**
+ * Whether atom pattern `pattern` holds a `{ var }` placeholder anywhere, or a
+ * record carrying a `var` key in any arrangement: whether any part of it is
+ * left open rather than stated.
+ */
+export const containsAtomPatternVariable = (pattern: unknown): boolean =>
+  Array.isArray(pattern)
+    ? pattern.some(containsAtomPatternVariable)
+    : isObjectNotArray(pattern) &&
+      (Object.hasOwn(pattern, "var") ||
+        Object.values(pattern).some(containsAtomPatternVariable));

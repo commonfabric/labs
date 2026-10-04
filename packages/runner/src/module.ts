@@ -80,11 +80,6 @@ export class ModuleRegistry {
     this.#moduleMap.set(ref, target);
   }
 
-  /** Whether a module is registered under `ref`. */
-  has(ref: string): boolean {
-    return this.#moduleMap.has(ref);
-  }
-
   /**
    * The module registered under `ref`.
    *

@@ -19,14 +19,17 @@ import type { NormalizedFullLink } from "../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type CfcConfClause, clauseAlternatives } from "./clause.ts";
-import { evidenceHolds, readEvidence } from "./host-review.ts";
+import {
+  evidenceHolds,
+  isTrustedGestureOn,
+  readEvidence,
+} from "./host-review.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcObservationFitsCeiling } from "./observation.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { representsPrincipalSubject } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
-import { isTrustedGestureOn } from "./ui-contract.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 /** Destination whose stored identity or resolved space determines the audience. */
