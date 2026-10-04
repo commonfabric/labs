@@ -201,6 +201,56 @@ const outcomesOf = (h: ReturnType<typeof harness>) =>
 
 describe("coordinator", () => {
   describe("a typed command", () => {
+    for (
+      const { title, action, fixtureName, loomActor } of [
+        {
+          title: "holds an automatic read under its named agent's provenance",
+          action: query,
+          fixtureName: "resolve-executed-success",
+          loomActor: "agent:people-discovery",
+        },
+        {
+          title: "holds a tapped mutation under the user's provenance",
+          action: {
+            ...mutation,
+            invocation: {
+              ...mutation.invocation as Record<string, unknown>,
+              command: "loom.add",
+            },
+          },
+          fixtureName: "resolve-executed-partial",
+          loomActor: "user",
+        },
+      ]
+    ) {
+      it(title, async () => {
+        const h = harness({ calls: [{ actions: [action] }] });
+        await h.start();
+        await h.delivered(requestFor("id-1"));
+        const body = settle(fixtureName, "id-1");
+        if (
+          body.settlement.status !== "executed" ||
+          !("attribution" in body.settlement)
+        ) {
+          throw new Error("Expected an executed command fixture");
+        }
+        body.settlement.attribution.loomActor = loomActor;
+        expect((await h.answer(body)).ok).toBe(true);
+        await h.callsDone;
+        const settlement = outcomesOf(h)[0].settlement as { handle: string };
+        const referent = resolveReferentToken(h.table(), settlement.handle);
+        assertValidHarnessHandleTable(h.table());
+        await h.finish();
+
+        expect(referent?.kind).toBe("document");
+        if (referent?.kind !== "document") {
+          throw new Error("Expected a held command document");
+        }
+        expect(referent.labelSource).toBe("command");
+        expect(referent.provenance?.loomActor).toBe(loomActor);
+      });
+    }
+
     it("holds the executed body as a command referent and hands the model its metadata and token", async () => {
       const h = harness();
       await h.start();
@@ -241,6 +291,7 @@ describe("coordinator", () => {
         provenance: {
           command: "loom.inspect",
           actor: "agent",
+          loomActor: "agent:cf-harness",
           loomId: "loom-0123456789abcdef",
           version: 12,
           originLoomId: "loom-fedcba9876543210",
@@ -393,6 +444,7 @@ describe("coordinator", () => {
       ).toEqual({
         command: "loom.move",
         actor: "user",
+        loomActor: "user",
         loomId: "loom-0123456789abcdef",
         originLoomId: "loom-fedcba9876543210",
       });

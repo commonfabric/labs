@@ -301,6 +301,8 @@ const referentIdentityKey = (
     // Only a command result carries provenance, so every other referent keeps
     // the identity it was minted under. Absent fields are dropped, so a
     // provenance reads as the same identity before and after it is persisted.
+    // A present `loomActor` distinguishes executor actors; omitting it keeps
+    // the identity of results whose writer supplied only `actor`.
     ...(referent.provenance !== undefined
       ? [
         Object.fromEntries(

@@ -19,12 +19,12 @@ import {
   type HarnessCommandResultProvenance,
   type HarnessCommandSettlement,
   type HarnessCommandSettlementRecord,
-  type HarnessTypedClientAction,
   legacyOutcomeOfHarnessCommandSettlement,
   readHarnessCommandCatalog,
-  readHarnessCommandResultProvenance,
 } from "../contracts/client-command.ts";
 import type { HarnessClientActionOutcomeKind } from "../contracts/client-action.ts";
+
+export { harnessCommandResultProvenance } from "../contracts/client-command.ts";
 
 /** An outcome as the model reads it: everything but the body. */
 export type HarnessCommandModelOutcome = Omit<HarnessCommandOutcome, "body">;
@@ -195,37 +195,6 @@ export const boundHarnessCommandCatalog = (
     compacted += 1;
   }
   return { entries, ...(compacted > 0 ? { compacted } : {}) };
-};
-
-/**
- * The provenance a command's held result carries: the command, who it ran
- * as, the loom it named, the version the command answered with, and the loom
- * the session was asked from. Undefined when the parts do not make a
- * provenance the handle table accepts, which the contract's readers rule out
- * for any settlement they admitted.
- */
-export const harnessCommandResultProvenance = (
-  invocation: Extract<
-    HarnessTypedClientAction,
-    { kind: "invoke_command" }
-  >["invocation"],
-  attribution: HarnessCommandAttribution,
-  outcome: HarnessCommandOutcome,
-): HarnessCommandResultProvenance | undefined => {
-  const version = outcome.outputs?.version;
-  return readHarnessCommandResultProvenance({
-    command: invocation.command,
-    actor: attribution.actor,
-    ...(invocation.target !== undefined
-      ? { loomId: invocation.target.loomId }
-      : {}),
-    ...(Number.isSafeInteger(version) && (version as number) >= 0
-      ? { version }
-      : {}),
-    ...(attribution.originLoomId !== undefined
-      ? { originLoomId: attribution.originLoomId }
-      : {}),
-  });
 };
 
 /** What a typed settlement writes to the log and hands the model. */

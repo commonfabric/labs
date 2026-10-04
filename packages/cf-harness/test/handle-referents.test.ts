@@ -285,6 +285,50 @@ describe("referent handles", () => {
       }
     });
 
+    it("includes a present `loomActor` in identity and omits an absent one", async () => {
+      const provenance = { command: "loom.inspect", actor: "agent" as const };
+      const row = {
+        ...ROW,
+        source: "weaver_action",
+        labelSource: "command" as const,
+        provenance,
+      };
+      const legacy = await mintReferentHandle(
+        createHarnessHandleTable("run-provenance-actors"),
+        row,
+      );
+      const absent = await mintReferentHandle(legacy.table, {
+        ...row,
+        provenance: { ...provenance, loomActor: undefined },
+      });
+      expect(absent.token).toBe(legacy.token);
+      const named = await mintReferentHandle(absent.table, {
+        ...row,
+        provenance: { ...provenance, loomActor: "agent:people-discovery" },
+      });
+      const other = await mintReferentHandle(named.table, {
+        ...row,
+        provenance: { ...provenance, loomActor: "agent:other" },
+      });
+      expect(named.token).not.toBe(legacy.token);
+      expect(other.token).not.toBe(named.token);
+      const persisted = JSON.parse(JSON.stringify(other.table));
+      expect(() => assertValidHarnessHandleTable(persisted)).not.toThrow();
+      const again = await mintReferentHandle(persisted, {
+        ...row,
+        provenance: { ...provenance, loomActor: "agent:people-discovery" },
+      });
+      expect(again.token).toBe(named.token);
+      expect(again.table.referents).toHaveLength(3);
+      const mismatch = {
+        ...named.table.referents![1],
+        provenance: { ...provenance, loomActor: "user" },
+      };
+      expect(() =>
+        assertValidHarnessHandleTable({ ...named.table, referents: [mismatch] })
+      ).toThrow(/invalid handle table/);
+    });
+
     it("refuses to mint a command result without its provenance", async () => {
       await expect(
         mintReferentHandle(createHarnessHandleTable("run-referents"), {
