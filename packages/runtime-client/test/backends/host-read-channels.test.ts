@@ -585,6 +585,73 @@ describe("HostReadGate, for what crosses beside a value", () => {
       }
     });
 
+    it("names the piece a slug leads to in another space, for its owner on a worker that has loaded neither", async () => {
+      const server = newLoopbackServer();
+      const elsewhere = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, {
+          as: visitor,
+        }),
+      });
+      const writer = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      const reader = new Runtime({
+        apiUrl: new URL("http://localhost"),
+        storageManager: EmulatedStorageManager.connectTo(server, { as: owner }),
+      });
+      try {
+        // A piece anyone may see, in a space other than the slug's.
+        const tx = elsewhere.edit();
+        const piece = elsewhere.getCell(
+          visitor.did(),
+          "piece-elsewhere",
+          undefined,
+          tx,
+        );
+        writeSeedEnvelopeDoc(tx, visitor.did());
+        seedStoredEnvelope(tx, {
+          space: visitor.did(),
+          id: piece.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: { title: "elsewhere" },
+          patternIdentity: { identity: "pattern-elsewhere", symbol: "main" },
+        } as FabricValue);
+        expect((await tx.commit()).ok).toBeDefined();
+        await elsewhere.storageManager.synced();
+        await pointSlug(writer, "far-away", piece);
+        await writer.storageManager.synced();
+
+        const toOwner = slugProcessorFor(reader, owner);
+        try {
+          expect(
+            await toOwner.handleSlugResolve({
+              type: RequestType.SlugResolve,
+              space,
+              slug: "far-away",
+            }),
+          ).toEqual({
+            piece: {
+              cell: expect.objectContaining({
+                id: piece.getAsNormalizedFullLink().id,
+              }),
+            },
+            pathAfter: [],
+          });
+        } finally {
+          await toOwner.dispose();
+        }
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await elsewhere.dispose();
+        await server.close();
+      }
+    });
+
     for (const via of ["fromMetadata", "fromCell"] as const) {
       it(`builds nothing for a visitor ${via}() refuses, and builds the owner's answer`, async () => {
         await using docs = await shelf();
@@ -912,6 +979,35 @@ describe("HostReadGate, for what crosses beside a value", () => {
         } finally {
           await pieces.dispose();
         }
+      } finally {
+        await processor.dispose();
+      }
+    });
+
+    it("keeps a refused metadata link read a refusal where the link is malformed", async () => {
+      await using docs = await shelf();
+      // A piece only its owner may see, whose argument a foreign writer left
+      // malformed.
+      const piece = await docs.write("malformed-argument", { note: "x" }, [[
+        [],
+        [ownerOnly],
+      ]], { argument: { "/": { "link@1": { id: "of:x", path: "nope" } } } });
+      const processor = buildProcessor({
+        runtime: docs.runtime,
+        identity: visitor,
+        space: visitor.did(),
+        renderConfidentialityCeiling: defaultRenderConfidentialityCeiling(
+          visitor.did(),
+        ),
+      });
+      try {
+        expect(
+          await processor.handleRequest({
+            type: RequestType.CellGet,
+            cell: createCellRef(piece),
+            meta: "argument",
+          }),
+        ).toEqual({ refused: { refusedBy: "display-ceiling" } });
       } finally {
         await processor.dispose();
       }

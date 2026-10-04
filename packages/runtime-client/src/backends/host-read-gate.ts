@@ -67,6 +67,7 @@ import {
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
   type CfcLabelViewSource,
+  cfcLabelViewSourceForCell,
   isChannelStateDocument,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
@@ -132,10 +133,13 @@ export type DocumentAt = (
 export type WalkedDocument = {
   readonly root: Cell<unknown>;
 
-  /** Whether the replica held the document, and where it leads, then. */
+  /** Whether the replica held the document then. */
   readonly held: boolean;
 
-  /** Its labels then, as `cellLabelSources()` reads them. */
+  /**
+   * The labels the document stored then, or `undefined` for one in a
+   * channel's own state, which carries none a display could be decided on.
+   */
   readonly sources: readonly CfcLabelViewSource[] | undefined;
 };
 
@@ -847,12 +851,17 @@ export class HostReadGate {
    * holds now, as the read saw it. The answer is made from what the walk
    * read, and the walk waits for each document it reaches, so its documents
    * are decided on these, not on labels one holds by the time the walk ends.
+   * Each is decided on its own document alone: where it leads is a document
+   * the walk reads next, and records then, once it has loaded it.
    */
   walkRead(root: Cell<unknown>): WalkedDocument {
-    if (this.#policy === undefined) {
-      return { root, held: true, sources: [] };
-    }
-    return { root, held: documentsHeld(root), sources: cellLabelSources(root) };
+    return {
+      root,
+      held: cellDocumentHeld(root),
+      sources: isChannelStateDocument(root.getAsNormalizedFullLink().id)
+        ? undefined
+        : [cfcLabelViewSourceForCell(root)],
+    };
   }
 
   /**
