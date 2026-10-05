@@ -76,7 +76,7 @@ export class ModuleRegistry {
     const target = Object.isExtensible(module)
       ? module
       : cloneModuleRecord(module);
-    nameRegisteredModule(target, ref);
+    recordRegisteredModule(target, ref);
     this.#moduleMap.set(ref, target);
   }
 
@@ -88,7 +88,7 @@ export class ModuleRegistry {
    * that declared it (`.asScope("user")`, or the `PerUser<>` annotation the
    * transformer lowers to it).
    *
-   * The copy is named and recorded through {@link nameRegisteredModule} like
+   * The copy is named and recorded through {@link recordRegisteredModule} like
    * the module it copies, so it keeps the `{ kind: "builtin", builtinId }`
    * policy identity `resolvePolicyFacingImplementationIdentity` reads from
    * {@link registeredBuiltinRef}. A copy made any other way is not on record,
@@ -100,7 +100,7 @@ export class ModuleRegistry {
     if (!module) throw new Error(`Unknown module ref: ${ref}`);
     if (defaultScope === undefined) return module;
     const scoped: Module = { ...module, defaultScope };
-    nameRegisteredModule(scoped, ref);
+    recordRegisteredModule(scoped, ref);
     return scoped;
   }
 
@@ -112,15 +112,15 @@ export class ModuleRegistry {
 /**
  * The modules a registry handed out, each with the ref it is registered under.
  *
- * Membership is what makes a module a builtin: it is the only source of a
- * `{ kind: "builtin", builtinId }` policy identity, and host operations read
- * that identity as proof of which builtin wrote a value (the custody seal's
- * witness, reviewed snapshot copies, the trusted-builtin arm of
- * `writeAuthorizedBy`). It is keyed by the module object and written only
- * here, so, like verified provenance, the lookup itself is the anti-spoof
- * check: a module that arrives as data (a stored graph is data, and a module in
- * it can carry any member, `debugName` included) was never handed out by a
- * registry and is not on record.
+ * Membership is the only way a MODULE resolves to a
+ * `{ kind: "builtin", builtinId }` policy identity. (Host operations that are
+ * not modules name themselves on their own transaction through
+ * `setCfcImplementationIdentity`.) What that identity is trusted for is listed
+ * on `resolvePolicyFacingImplementationIdentity`. The record is keyed by the
+ * module object and written only here, so, like verified provenance, the
+ * lookup itself is the anti-spoof check: a module that arrives as data (a
+ * stored graph is data, and a module in it can carry any member, `debugName`
+ * included) was never handed out by a registry and is not on record.
  */
 const registeredModules = new WeakMap<Module, string>();
 
@@ -135,8 +135,8 @@ export function registeredBuiltinRef(module: Module): string | undefined {
 /**
  * Record a module the registry hands out under `ref`, and name it with the ref.
  *
- * The record is the module's policy identity (see {@link registeredModules}).
- * The name is for diagnostics only.
+ * The record is what gives the module its policy identity (see
+ * {@link registeredModules}). The name is for diagnostics only.
  *
  * The name is defined rather than assigned, and every attribute is stated
  * rather than left to default, because `Object.defineProperty` carries forward
@@ -145,7 +145,7 @@ export function registeredBuiltinRef(module: Module): string | undefined {
  * puts the name in `moduleToEncodableForm`'s key set and so into every
  * content-derived id built from that module.
  */
-function nameRegisteredModule(module: Module, ref: string): void {
+function recordRegisteredModule(module: Module, ref: string): void {
   Object.defineProperty(module, "debugName", {
     value: ref,
     writable: false,

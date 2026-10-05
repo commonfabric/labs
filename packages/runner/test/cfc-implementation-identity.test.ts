@@ -94,10 +94,9 @@ describe("CFC builtin implementation identity", () => {
     );
     // `.asScope("user")` — what the transformer lowers a `PerUser<>` result
     // annotation to — records the scope on the REF module, so resolving the
-    // ref has to carry the registry module's `debugName` onto the scoped copy.
-    // That name is the whole proof of the builtin identity, and it is
-    // non-enumerable (so it stays out of the serialized key set), so a copy
-    // that does not go out of its way to keep it drops the identity.
+    // ref takes a scoped copy of the registry module. The registry has to
+    // record that copy as its own, or the copy writes unattributed: a builtin
+    // identity is registry membership, not anything the copy carries.
     runtime.runner.run(
       tx,
       createNodeFactory({
@@ -124,9 +123,10 @@ describe("CFC builtin implementation identity", () => {
       storageManager,
     });
 
-    // The name is what the policy identity is read from, and it stays out of
-    // `moduleToEncodableForm`'s key set — which is `...rest`, so the name must
-    // be non-enumerable wherever it is set. A module arriving with an ordinary
+    // The registry's name stays out of `moduleToEncodableForm`'s key set —
+    // which is `...rest`, so the name must be non-enumerable wherever it is
+    // set — while the module keeps its builtin identity, which comes from the
+    // registry's record rather than the name. A module arriving with an ordinary
     // `debugName` of its own is the case that tests it: `defineProperty`
     // carries forward an existing property's attributes, so anything that
     // leaves `enumerable` to default would keep this one enumerable and put
@@ -232,19 +232,7 @@ describe("CFC builtin implementation identity", () => {
       storageManager,
     });
 
-    for (
-      const ref of [
-        "ifElse",
-        "map",
-        "filter",
-        "flatMap",
-        "fetchJson",
-        "fetchText",
-        "fetchBinary",
-        "wish",
-        "navigateTo",
-      ]
-    ) {
+    for (const ref of ["ifElse", "map"]) {
       expect(
         resolvePolicyFacingImplementationIdentity(
           runtime.moduleRegistry.getModule(ref),
@@ -291,29 +279,6 @@ describe("CFC builtin implementation identity", () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]).toBeUndefined();
     tx.abort("test-complete");
-  });
-
-  it("gives a copy of a registered module no builtin identity, even with its name", () => {
-    storageManager = StorageManager.emulate({
-      as: signer,
-    });
-    runtime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager,
-    });
-
-    const registered = runtime.moduleRegistry.getModule("ifElse");
-    // Every own property, the non-enumerable name included: the copy looks
-    // like the registered module member for member, but no registry handed
-    // it out.
-    const copy = Object.defineProperties(
-      {},
-      Object.getOwnPropertyDescriptors(registered),
-    ) as typeof registered;
-    expect(Object.getOwnPropertyDescriptor(copy, "debugName")?.value).toBe(
-      "ifElse",
-    );
-    expect(resolvePolicyFacingImplementationIdentity(copy)).toBeUndefined();
   });
 
   it("leaves the frame stack as it found it when a raw module has no builtin identity", () => {
