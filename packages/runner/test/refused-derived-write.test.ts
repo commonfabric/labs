@@ -22,13 +22,9 @@ import { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 
 const AUDIENCE = "did:key:z6Mk-runner-refused-derived-write-audience";
 
-/**
- * Opens each session on the one in-process server, as `signer`. A commit
- * waits for `beforeTransact`, when one is set, before it reaches the server.
- */
+/** Opens each session on the one in-process server, as `signer`. */
 class LoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
-  beforeTransact: (() => Promise<void>) | undefined;
   readonly #server: MemoryV2Server.Server;
 
   constructor(server: MemoryV2Server.Server) {
@@ -54,11 +50,6 @@ class LoopbackSessionFactory implements SessionFactory {
         authorization: { principal: signer?.did() },
       }),
     );
-    const transact = session.transact.bind(session);
-    session.transact = async (...args: Parameters<typeof transact>) => {
-      await this.beforeTransact?.();
-      return transact(...args);
-    };
     return { client, session };
   }
 }
@@ -79,16 +70,15 @@ describe("refused derived write", () => {
   let server: MemoryV2Server.Server;
   let runtimes: Runtime[];
 
-  let factories: Map<Runtime, LoopbackSessionFactory>;
-
   const open = (identity: Identity): Runtime => {
-    const factory = new LoopbackSessionFactory(server);
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
-      storageManager: TestStorageManager.overServer({ as: identity }, factory),
+      storageManager: TestStorageManager.overServer(
+        { as: identity },
+        new LoopbackSessionFactory(server),
+      ),
     });
     runtimes.push(runtime);
-    factories.set(runtime, factory);
     return runtime;
   };
 
@@ -101,7 +91,6 @@ describe("refused derived write", () => {
       subscriptionRefreshDelayMs: 0,
     });
     runtimes = [];
-    factories = new Map();
   });
 
   afterEach(async () => {
@@ -187,25 +176,37 @@ describe("refused derived write", () => {
     };
   };
 
-  it("keeps the value a READ principal computes but cannot store, after one refused commit", async () => {
+  it("reverts the value a READ principal computes but cannot store, after one refused commit", async () => {
     const { ownerRuntime, space, derived, counts } = await readerDerives(
       2,
       (n: number) => n * 2,
     );
 
     expect(counts.refusals).toBe(1);
-    expect(derived.get()).toBe(4);
-    // The second run reads the kept value and has nothing to write.
-    expect(counts.runs).toBe(2);
+    expect(counts.runs).toBe(1);
+    expect(derived.get()).toBeUndefined();
     const stored = ownerRuntime.getCell<number>(space, "derived");
     await stored.sync();
     expect(stored.get()).toBeUndefined();
   });
 
-  it("stores the whole document written over a kept value once the principal may write", async () => {
-    // The second write is a change to one field of the kept value, and the
-    // store holds no value to apply such a patch to.
+  it("issues one more write when an input of the refused computation changes", async () => {
+    const { ownerRuntime, readerRuntime, space, counts, settled } =
+      await readerDerives(2, (n: number) => n * 2);
+    expect(counts.refusals).toBe(1);
 
+    await ownerRuntime.editWithRetry((tx) => {
+      ownerRuntime.getCell<number>(space, "source", undefined, tx).set(3);
+    });
+    await ownerRuntime.storageManager.synced();
+    await readerRuntime.storageManager.pullOpenSpacesToHead();
+    await settled();
+
+    expect(counts.runs).toBe(2);
+    expect(counts.refusals).toBe(2);
+  });
+
+  it("stores the value a refused computation derives once the principal may write", async () => {
     const { ownerRuntime, readerRuntime, space, reader, counts, settled } =
       await readerDerives(
         { n: 2 },
@@ -230,36 +231,207 @@ describe("refused derived write", () => {
     expect(stored.get()).toEqual({ doubled: 6, from: "reader" });
   });
 
-  it("refuses a write over a kept value when the store changed the document since", async () => {
-    // The reader's change is to `doubled` alone, and the owner's concurrent
-    // one to `from` alone, so only a read of the whole document can conflict.
+  it("leaves a document two principals may write alone once each has derived it from a sum only one of them reads in full", async () => {
+    // The owner reads both terms of `sum` and the reader only one, the other
+    // sitting in a space the reader has no grant on. Each writes `sum` to a
+    // space the reader holds READ on, and `doubled`, computed from `sum`, to
+    // a space both may write. The reader's `sum` is refused and reverted, so
+    // its `doubled` is computed from the `sum` the owner stored.
 
-    const { ownerRuntime, readerRuntime, space, reader, derived, counts } =
-      await readerDerives(
-        { n: 2 },
-        ({ n }: { n: number }) => ({ doubled: n * 2, from: "reader" }),
-        { doubled: 0, from: "owner" },
+    const owner = await Identity.fromPassphrase("refused write owner");
+    const reader = await Identity.fromPassphrase("refused write reader");
+    const ownerRuntime = open(owner);
+    const withheldSpace = await ownerRuntime.createSpace();
+    const readOnlySpace = await ownerRuntime.createSpace({
+      grants: { [reader.did()]: "READ" },
+    });
+    const writableSpace = await ownerRuntime.createSpace({
+      grants: { [reader.did()]: "WRITE" },
+    });
+    await ownerRuntime.editWithRetry((tx) => {
+      ownerRuntime.getCell<number>(readOnlySpace, "available", undefined, tx)
+        .set(2);
+    });
+    await ownerRuntime.editWithRetry((tx) => {
+      ownerRuntime.getCell<number>(withheldSpace, "withheld", undefined, tx)
+        .set(3);
+    });
+    await ownerRuntime.storageManager.synced();
+
+    /**
+     * Subscribes, in `runtime`, one action writing `sum` from the terms and
+     * one writing `doubled` from `sum`, where `terms` are the terms that
+     * runtime's principal may read. Returns the `doubled` cell and a count of
+     * the writes made to it.
+     */
+    const derives = async (
+      runtime: Runtime,
+      terms: readonly [MemorySpace, string][],
+    ) => {
+      const termCells = terms.map(([space, name]) =>
+        runtime.getCell<number>(space, name)
       );
-    expect(counts.refusals).toBe(1);
-    expect(derived.get()).toEqual({ doubled: 4, from: "reader" });
+      const sum = runtime.getCell<number>(readOnlySpace, "sum");
+      const doubled = runtime.getCell<number>(writableSpace, "doubled");
+      for (const cell of [...termCells, sum, doubled]) await cell.sync();
 
-    await new ACLManager(ownerRuntime, space).grant(reader.did(), "WRITE");
-    factories.get(readerRuntime)!.beforeTransact = async () => {
-      factories.get(readerRuntime)!.beforeTransact = undefined;
+      const counts = { doubledWrites: 0 };
+      const writeSum: Action = (tx) => {
+        let value = 0;
+        for (const cell of termCells) value += cell.withTx(tx).get() ?? 0;
+        if (sum.withTx(tx).get() !== value) sum.withTx(tx).set(value);
+      };
+      const writeDoubled: Action = (tx) => {
+        const value = (sum.withTx(tx).get() ?? 0) * 2;
+        if (doubled.withTx(tx).get() !== value) {
+          counts.doubledWrites++;
+          doubled.withTx(tx).set(value);
+        }
+      };
+      for (const action of [writeSum, writeDoubled]) {
+        runtime.scheduler.subscribe(
+          action,
+          { reads: [], shallowReads: [], writes: [] },
+          { isEffect: true },
+        );
+      }
+      await runtime.scheduler.idleWithPendingCommits();
+      await runtime.storageManager.synced();
+      return { doubled, counts };
+    };
+
+    // Brings each runtime in turn up to what the store holds, and lets it
+    // store whatever it derives from that.
+    const exchange = async () => {
+      for (const runtime of [ownerRuntime, readerRuntime]) {
+        await runtime.storageManager.pullOpenSpacesToHead();
+        await runtime.scheduler.idleWithPendingCommits();
+        await runtime.storageManager.synced();
+      }
+    };
+
+    const asOwner = await derives(ownerRuntime, [
+      [readOnlySpace, "available"],
+      [withheldSpace, "withheld"],
+    ]);
+    const readerRuntime = open(reader);
+    const asReader = await derives(readerRuntime, [
+      [readOnlySpace, "available"],
+    ]);
+    await exchange();
+    const settledWrites = {
+      owner: asOwner.counts.doubledWrites,
+      reader: asReader.counts.doubledWrites,
+    };
+
+    for (let round = 0; round < 3; round++) await exchange();
+
+    expect({
+      owner: asOwner.counts.doubledWrites,
+      reader: asReader.counts.doubledWrites,
+    }).toEqual(settledWrites);
+    expect(asOwner.doubled.get()).toBe(10);
+    expect(asReader.doubled.get()).toBe(10);
+  });
+
+  describe("a computation that read from a space its principal is refused", () => {
+    /**
+     * Opens, as the owner, a space the reader has no grant on holding
+     * `withheld`, and one the reader may write holding `out`. Subscribes an
+     * action in the reader's runtime that writes `withheld + 1` to `out`,
+     * after the reader has synced `withheld` when `warm` is set. Returns once
+     * the reader is idle.
+     */
+    const readerDerivesFromRefused = async (warm: boolean) => {
+      const owner = await Identity.fromPassphrase("refused write owner");
+      const reader = await Identity.fromPassphrase("refused write reader");
+      const ownerRuntime = open(owner);
+      const withheldSpace = await ownerRuntime.createSpace();
+      const writableSpace = await ownerRuntime.createSpace({
+        grants: { [reader.did()]: "WRITE" },
+      });
       await ownerRuntime.editWithRetry((tx) => {
-        ownerRuntime.getCell<{ from: string }>(space, "derived", undefined, tx)
-          .key("from").set("concurrent");
+        ownerRuntime.getCell<number>(withheldSpace, "withheld", undefined, tx)
+          .set(5);
+      });
+      await ownerRuntime.editWithRetry((tx) => {
+        ownerRuntime.getCell<number>(writableSpace, "out", undefined, tx)
+          .set(4);
       });
       await ownerRuntime.storageManager.synced();
-    };
-    const tx = readerRuntime.edit();
-    derived.withTx(tx).key("doubled").set(6);
-    const result = await tx.commit();
 
-    expect(result.error?.name).toBe("ConflictError");
-    const stored = ownerRuntime.getCell<unknown>(space, "derived");
-    await ownerRuntime.storageManager.pullOpenSpacesToHead();
-    await stored.sync();
-    expect(stored.get()).toEqual({ doubled: 0, from: "concurrent" });
+      const readerRuntime = open(reader);
+      const withheld = readerRuntime.getCell<number>(withheldSpace, "withheld");
+      const out = readerRuntime.getCell<number>(writableSpace, "out");
+      await out.sync();
+      if (warm) await withheld.sync();
+
+      const counts = { runs: 0 };
+      const action: Action = (tx) => {
+        counts.runs++;
+        const value = (withheld.withTx(tx).get() ?? 0) + 1;
+        if (out.withTx(tx).get() !== value) out.withTx(tx).set(value);
+      };
+      readerRuntime.scheduler.subscribe(
+        action,
+        { reads: [], shallowReads: [], writes: [] },
+        { isEffect: true },
+      );
+      await readerRuntime.scheduler.idleWithPendingCommits();
+      await readerRuntime.storageManager.synced();
+      const stored = ownerRuntime.getCell<number>(writableSpace, "out");
+      await ownerRuntime.storageManager.pullOpenSpacesToHead();
+      await stored.sync();
+      return {
+        ownerRuntime,
+        readerRuntime,
+        reader,
+        withheldSpace,
+        out,
+        stored,
+        counts,
+      };
+    };
+
+    it("stores nothing when the refusal is known before the computation runs", async () => {
+      const { out, stored, counts } = await readerDerivesFromRefused(true);
+
+      expect(counts.runs).toBe(1);
+      expect(stored.get()).toBe(4);
+      expect(out.get()).toBe(4);
+    });
+
+    it("stores nothing when the computation's own read is the first of the space", async () => {
+      // The first run reads `withheld` as absent while its load is in flight,
+      // and the second runs once that load has been refused.
+
+      const { out, stored, counts } = await readerDerivesFromRefused(false);
+
+      expect(counts.runs).toBe(2);
+      expect(stored.get()).toBe(4);
+      expect(out.get()).toBe(4);
+    });
+
+    it("stores the value it derives once the principal is admitted to the space", async () => {
+      const {
+        ownerRuntime,
+        readerRuntime,
+        reader,
+        withheldSpace,
+        stored,
+      } = await readerDerivesFromRefused(true);
+      expect(stored.get()).toBe(4);
+
+      await new ACLManager(ownerRuntime, withheldSpace).grant(
+        reader.did(),
+        "READ",
+      );
+      await readerRuntime.storageManager.retrySpaceAccess!(withheldSpace);
+      await readerRuntime.scheduler.idleWithPendingCommits();
+      await readerRuntime.storageManager.synced();
+
+      await ownerRuntime.storageManager.pullOpenSpacesToHead();
+      expect(stored.get()).toBe(6);
+    });
   });
 });

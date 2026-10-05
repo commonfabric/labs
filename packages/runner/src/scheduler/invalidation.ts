@@ -8,6 +8,7 @@ import type {
   MemoryAddressPathComponent,
   StorageNotification,
 } from "../storage/interface.ts";
+import { isRefusedDerivedWrite } from "../storage/rejection.ts";
 import { summarizeTriggerTraceValue } from "./diagnostics.ts";
 import { dirtyFanOutAll, dirtyFanOutForCause } from "./fan-out.ts";
 import type { MaterializerIndexState } from "./materializers.ts";
@@ -167,9 +168,14 @@ export function processStorageNotification(
       // "own retirement is not a trigger" rider, RULED 2026-08-16): the
       // `integrate` a retiring echo produces carries the echo's own
       // transaction as `source`, so the writer does not re-run for the
-      // flip of its OWN output to the authoritative value.
-      const isOwnCommitSource =
-        (notification.type === "commit" || notification.type === "integrate") &&
+      // flip of its OWN output to the authoritative value. The revert of
+      // a derived write the space refused for lack of a grant is a third
+      // case: the writer's inputs are what they were, so a re-run would
+      // issue the same write and take the same refusal.
+      const isOwnCommitSource = (notification.type === "commit" ||
+        notification.type === "integrate" ||
+        (notification.type === "revert" &&
+          isRefusedDerivedWrite(notification.reason, notification.source))) &&
         notification.source !== undefined &&
         notification.source.sourceAction === action;
       const plan = planPullTriggeredAction({

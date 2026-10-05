@@ -3276,6 +3276,30 @@ export class Runtime {
   }
 
   /**
+   * Returns a promise for the loads in flight for the documents `tx` read as
+   * absent in spaces, other than `outputSpaces`, that the memory server has
+   * yet to admit or refuse this runtime, or `undefined` when none is in
+   * flight. The promise resolves, once every such load has settled, with
+   * how many of those documents exist after all. The server judges an absence
+   * claim only in the space a commit is sent to, so a claim in any other
+   * space is one nothing checks: until its load settles, the read says
+   * neither that the document is absent nor that the space refuses the
+   * principal.
+   */
+  unsettledInputLoads(
+    tx: IExtendedStorageTransaction,
+    outputSpaces: ReadonlySet<MemorySpace>,
+  ): Promise<number> | undefined {
+    const wait = this.#awaitUnexaminedAbsences(
+      tx,
+      (space) =>
+        !outputSpaces.has(space) &&
+        this.storageManager.spaceAdmissionPending?.(space) === true,
+    );
+    return typeof wait === "number" ? undefined : wait;
+  }
+
+  /**
    * Wait for the loads in flight for every document `tx` read as absent that
    * no involved replica has examined, resolving with how many exist after
    * all — the signal that the transaction's reads ran against documents it
@@ -3288,10 +3312,12 @@ export class Runtime {
    * unexamined absences ({@link IStorageProvider.unexaminedAbsences}) and
    * counts the present ones afterwards; a provider without the capability
    * contributes zero. Synchronous zero when nothing is in flight, so a
-   * round with no cold reads never leaves the synchronous path.
+   * round with no cold reads never leaves the synchronous path. Reads in a
+   * space `include` returns `false` for are left out.
    */
   #awaitUnexaminedAbsences(
     tx: IExtendedStorageTransaction,
+    include?: (space: MemorySpace) => boolean,
   ): number | Promise<number> {
     const reads = getDirectTransactionReadActivities(tx.tx);
     if (!reads) return 0;
@@ -3303,7 +3329,9 @@ export class Runtime {
       return 0;
     }
     const spaces = new Set<MemorySpace>();
-    for (const read of reads) spaces.add(read.space);
+    for (const read of reads) {
+      if (include?.(read.space) !== false) spaces.add(read.space);
+    }
     const absencesPerProvider: {
       presentCount: NonNullable<IStorageProvider["presentCount"]>;
       absences: readonly UnexaminedAbsence[];

@@ -439,20 +439,6 @@ const rejectionAttribution = (
   ],
 });
 
-/**
- * Whether `rejection` refused a derived write for lack of a grant: an
- * `AuthorizationError` the server did not mark retriable, of a transaction
- * whose writes are derived from its reads. Such a write is kept locally rather
- * than reverted, since the principal can compute it but never store it.
- */
-const isRefusedDerivedWrite = (
-  rejection: StorageTransactionRejected,
-  source: IStorageTransaction | undefined,
-): boolean =>
-  source?.derivedWrites === true &&
-  rejection.name === "AuthorizationError" &&
-  (rejection as { retriable?: boolean }).retriable !== true;
-
 const activeCommitPreconditions = (
   preconditions: readonly CommitPrecondition[] | undefined,
 ): readonly CommitPrecondition[] =>
@@ -548,13 +534,6 @@ type PendingVersion =
   & {
     /** A sealed verdict already accepted this operation at the store seq. */
     acceptedSeq?: number;
-
-    /**
-     * Seq of the confirmed version this entry was layered on. While the
-     * confirmed seq still equals it, the entry sits directly on the value its
-     * writer read.
-     */
-    baseSeq: number;
   }
   & (
     | {
@@ -576,14 +555,6 @@ type PendingVersion =
 
 type ConfirmedVersion = MaterializedVersion & {
   seq: number;
-
-  /**
-   * Whether `value` is the store's value at `seq` with a derived write folded
-   * over it by this replica alone, because the space refused that write for
-   * lack of a grant. The store never held it: a frame at a later seq replaces
-   * it, and a write over it goes to the store whole rather than as a patch.
-   */
-  localFold?: true;
 
   /** Partial local promotion of a wave whose contributions share one seq.
    * An authoritative frame replaces this record, so same-seq delivery is
@@ -676,8 +647,7 @@ const pendingVersion = (
     | { op: "set"; value: EntityDocument }
     | { op: "patch"; patches: PatchOp[]; value: EntityDocument }
     | { op: "delete" },
-  baseSeq: number,
-): PendingVersion => ({ localSeq, baseSeq, ...operation });
+): PendingVersion => ({ localSeq, ...operation });
 
 const confirmedVersion = (
   seq: number,
@@ -2129,6 +2099,12 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  spaceAdmissionPending(space: MemorySpace): boolean {
+    return this.#spaceAccessErrors.get(space) === undefined &&
+      this.#providers.get(space)?.admissionPending === true;
+  }
+
+  /** @inheritDoc */
   spaceAccessError(space: MemorySpace): Error | undefined {
     return this.#spaceAccessErrors.get(space);
   }
@@ -3451,6 +3427,11 @@ class Provider
     return this.#followReplacement((replica) => replica.synced());
   }
 
+  /** Whether the memory server has yet to decide on this space's session. */
+  get admissionPending(): boolean {
+    return this.replica.admissionPending;
+  }
+
   /** See SpaceReplica.inputSynced (stage F's serving-loop barrier). */
   inputSynced(): Promise<void> {
     return this.#followReplacement((replica) => replica.inputSynced());
@@ -4440,6 +4421,17 @@ export class SpaceReplica
   async inputSynced(): Promise<void> {
     await this.#sessionClient?.delivered();
     await Promise.all([...this.#syncPromises]);
+  }
+
+  /**
+   * Whether the memory server has yet to decide on this replica's session:
+   * none is mounted, and no permanent authorization denial is recorded. Until
+   * it decides, a document read here as absent may belong to a space the
+   * principal is refused.
+   */
+  get admissionPending(): boolean {
+    return this.#sessionSession === undefined &&
+      this.authorizationError() === undefined;
   }
 
   /**
@@ -5741,7 +5733,7 @@ export class SpaceReplica
     const preconditions = activeCommitPreconditions(transaction.preconditions);
     const operations = withCommitTiming(
       ["commitNative", "normalize"],
-      () => this.#wholeOverLocalFolds(documentOperationsOf(transaction)),
+      () => documentOperationsOf(transaction),
     );
 
     const sqliteOps = transaction.sqliteOps ?? [];
@@ -5796,10 +5788,7 @@ export class SpaceReplica
     },
   ): SealedNativeCommit {
     return this.#sealOperations(
-      this.#wholeOverLocalFolds(
-        documentOperationsOf(transaction),
-        options?.identity,
-      ),
+      documentOperationsOf(transaction),
       source,
       activeCommitPreconditions(transaction.preconditions),
       transaction.sqliteOps ?? [],
@@ -5829,18 +5818,13 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[];
     reads: ClientCommit["reads"];
   } {
-    const operations = this.#wholeOverLocalFolds(
-      documentOperationsOf(transaction),
-      identity,
-    );
     return {
-      operations: storeOperationsOf(operations, transaction.sqliteOps ?? []),
-      preconditions: activeCommitPreconditions(transaction.preconditions),
-      reads: this.#readsOverLocalFolds(
-        operations,
-        this.#buildReads(source, this.#nextLocalSeq, identity),
-        identity,
+      operations: storeOperationsOf(
+        documentOperationsOf(transaction),
+        transaction.sqliteOps ?? [],
       ),
+      preconditions: activeCommitPreconditions(transaction.preconditions),
+      reads: this.#buildReads(source, this.#nextLocalSeq, identity),
     };
   }
 
@@ -5869,11 +5853,7 @@ export class SpaceReplica
     }
     const commit: ClientCommit = {
       localSeq,
-      reads: this.#readsOverLocalFolds(
-        operations,
-        options?.reads ?? this.#buildReads(source, localSeq, identity),
-        identity,
-      ),
+      reads: options?.reads ?? this.#buildReads(source, localSeq, identity),
       // Cell ops first, folded SQLite ops last — the same commit shape
       // commitOperations builds, so the wave batch is made of ordinary
       // client commits.
@@ -6524,10 +6504,7 @@ export class SpaceReplica
       ["commitOperations", "buildCommit"],
       (): ClientCommit => ({
         localSeq,
-        reads: this.#readsOverLocalFolds(
-          operations,
-          this.#buildReads(source, localSeq),
-        ),
+        reads: this.#buildReads(source, localSeq),
         // Cell ops first, folded SQLite ops last (applied in array order by the
         // engine; sqlite ops are not entity revisions and carry no id/scope).
         operations: storeOperationsOf(operations, sqliteOps),
@@ -7231,9 +7208,6 @@ export class SpaceReplica
         )
         : undefined;
       await this.#waitForConflictReadRepair(rejection);
-      if (isRefusedDerivedWrite(rejection, source)) {
-        this.#foldRefusedWrite(localSeq, touched, identity);
-      }
       this.#dropPending(localSeq);
       // Every drop funnels through here (server conflict, preempt, cascade,
       // reset — this is dropPending's only call site), so scanning right
@@ -7267,110 +7241,6 @@ export class SpaceReplica
     } finally {
       this.#rejectedPendingLayers.delete(localSeq);
       dropped.resolve();
-    }
-  }
-
-  /**
-   * Returns `operations` with each patch of a document whose confirmed value
-   * is a local fold turned into a whole-document set. The store's value
-   * differs from the one the patch was computed against, so only the whole
-   * document says what the write means.
-   */
-  #wholeOverLocalFolds(
-    operations: NativeCommitOperation[],
-    identity?: ScopeKeyIdentity,
-  ): NativeCommitOperation[] {
-    return operations.map((operation) => {
-      if (operation.op !== "patch") return operation;
-      const record = this.#docs.get(
-        docKey(operation.id, this.instanceKey(operation.scope, identity)),
-      );
-      if (record?.confirmed.localFold !== true) return operation;
-      const { patches: _patches, ...whole } = operation;
-      return { ...whole, op: "set" };
-    });
-  }
-
-  /**
-   * Returns `reads` with a read of the whole document added, at its confirmed
-   * seq, for each document `operations` writes whose confirmed value is a
-   * local fold. Such a write goes to the store whole, so it has to conflict
-   * with any change the store took to the document since, not only with
-   * changes to the paths its writer read; a read the commit already makes of
-   * the whole document at that seq is not repeated.
-   */
-  #readsOverLocalFolds(
-    operations: readonly NativeCommitOperation[],
-    reads: ClientCommit["reads"],
-    identity?: ScopeKeyIdentity,
-  ): ClientCommit["reads"] {
-    const added: ConfirmedCommitRead[] = [];
-    for (const operation of operations) {
-      const scope = normalizeCellScope(operation.scope);
-      const record = this.#docs.get(
-        docKey(operation.id, this.instanceKey(operation.scope, identity)),
-      );
-      if (record?.confirmed.localFold !== true) continue;
-      const seq = record.confirmed.seq;
-      const covered = [...reads.confirmed, ...added].some((read) =>
-        read.id === operation.id &&
-        normalizeCellScope(read.scope) === scope &&
-        read.path.length === 0 && read.nonRecursive !== true &&
-        read.seq === seq
-      );
-      if (!covered) {
-        added.push({
-          id: operation.id,
-          scope,
-          path: toCommitReadPath([]),
-          seq,
-        });
-      }
-    }
-    return added.length === 0
-      ? reads
-      : { ...reads, confirmed: [...reads.confirmed, ...added] };
-  }
-
-  /**
-   * Helper for `#finalizeRejection()`, which keeps the write of the refused
-   * commit `localSeq` as each touched document's confirmed value, marked as a
-   * local fold, instead of letting the drop revert it. A document is folded
-   * only where that write sits directly on the confirmed version it was made
-   * over, with no other pending write beneath it; the drop reverts the rest.
-   */
-  #foldRefusedWrite(
-    localSeq: number,
-    touched: readonly LocalDocAddress[],
-    identity?: ScopeKeyIdentity,
-  ): void {
-    for (const { id, scope, scopeKey } of touched) {
-      const record = this.#docs.get(
-        docKey(id, this.instanceKey(scope, identity, scopeKey)),
-      );
-      const entry = record?.pending[0];
-      if (
-        record === undefined || entry === undefined ||
-        entry.localSeq !== localSeq ||
-        entry.baseSeq !== record.confirmed.seq ||
-        record.confirmed.localWavePromotion !== undefined
-      ) {
-        continue;
-      }
-      record.confirmed = {
-        ...confirmedVersion(
-          record.confirmed.seq,
-          applyPendingVersion(record.confirmed.value, entry, {
-            space: this.#space,
-            id,
-            scope,
-          }),
-          record.confirmed.coverClass,
-        ),
-        localFold: true,
-      };
-      record.pending = record.pending.slice(1);
-      record.materialized = undefined;
     }
   }
 
@@ -8109,11 +7979,6 @@ export class SpaceReplica
       if (upsert.seq < record.confirmed.seq) {
         continue;
       }
-      // A same-seq frame is the value a local fold was made over, so the
-      // fold stands until the store moves on; the frame is still recorded as
-      // delivered below.
-      const keepsLocalFold = upsert.seq === record.confirmed.seq &&
-        record.confirmed.localFold === true;
       const previousConfirmedSeq = record.confirmed.seq;
       const previousCoverClass = record.confirmed.coverClass;
       // The covering commit's class (speculation.md §4's arrival-witness
@@ -8125,14 +7990,12 @@ export class SpaceReplica
       // commit — the stale class must not ride onto it.
       const coverClass = upsert.coverClass ??
         (upsert.seq === previousConfirmedSeq ? previousCoverClass : undefined);
-      if (!keepsLocalFold) {
-        record.confirmed = confirmedVersion(
-          upsert.seq,
-          upsert.deleted === true ? undefined : upsert.doc,
-          coverClass,
-        );
-        record.materialized = undefined;
-      }
+      record.confirmed = confirmedVersion(
+        upsert.seq,
+        upsert.deleted === true ? undefined : upsert.doc,
+        coverClass,
+      );
+      record.materialized = undefined;
       // The arrival wake fires on a FORWARD move — and on a same-seq
       // frame whose class arrives LATE (undefined -> defined): an entry
       // failed CLOSED at its floor under an unknown class (a mixed-window
@@ -8755,9 +8618,7 @@ export class SpaceReplica
   ): void {
     const { id, scope, ...pending } = operation;
     const record = this.#record(id, scope, identity);
-    record.pending.push(
-      pendingVersion(localSeq, pending, record.confirmed.seq),
-    );
+    record.pending.push(pendingVersion(localSeq, pending));
   }
 
   /**

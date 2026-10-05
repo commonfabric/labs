@@ -119,6 +119,44 @@ Subscription teardown also cancels pending render callbacks so they cannot
 restore a removed subtree. Transient transport errors preserve the mounted
 content and do not masquerade as revoked authority.
 
+## Scheduler: a computation that read a refused space stores nothing
+
+A denied read is an absent value for one principal only. A reactive
+computation that reads one and writes to a space the principal may write would
+store a value that no principal with access computes, and each of those
+principals would store its own value over it in turn. So the scheduler sends
+none of the writes of a reactive computation whose transaction read from a
+space the memory server refuses its principal
+(`packages/runner/src/scheduler/run.ts`, at the commit):
+
+- The read itself is unchanged: it is absent, and it does not throw. What
+  changes is that the run's transaction is aborted in place of committed, so
+  each document it would have written keeps the value the server holds.
+- The run registers with the runtime's `SpaceAccessWatch`, so the computation
+  runs again when the verdict on that space changes, and its writes are sent
+  once the principal is admitted.
+- A read that found a document absent while its load was still in flight, in a
+  space the memory server has yet to admit or refuse the principal, says
+  neither that the document is absent nor that the space is refused. The run's
+  transaction is aborted, and the computation runs again once those loads have
+  settled. This reaches only a space the run does not write: a read in the
+  space it writes is left to the server, which judges the absence claim the
+  commit carries.
+- An event handler's transaction is not held to any of this. Its writes are
+  acts, and commit as they do for any absent read.
+- A run is held for its loads once. Where they settle and none of the
+  documents exists after all, the next run is sent: a load that failed leaves
+  its document unexamined, and holding again would wait on a load that fails
+  the same way.
+- A serving runtime is exempt. Its session is the space owner's, so a refusal
+  of it says nothing about the principal whose run it is. So is a client under
+  `serverExecution`, whose derivations go to the speculation overlay and are
+  never sent.
+
+A principal with no access to an input therefore sees, for each output of the
+computation, the value a principal with access stored, or nothing where none
+has.
+
 ## CLI: surface the denial for the space it was asked to reach
 
 The CLI reads `storageManager.authorizationError(space)` for the one space it
