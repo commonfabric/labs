@@ -287,6 +287,58 @@ export function atomLe(a: unknown, b: unknown): boolean {
           ]);
       });
 
+      it("reports a function exported by two kernel files", () => {
+        const twin: SourceFile = {
+          path: `${KERNEL_DIR}label.ts`,
+          text: atomLeSource.text,
+        };
+        const findings = collectFindings(
+          input({ kernelFiles: [atomLeSource, twin] }),
+        );
+        expect(findings.map((finding) => [finding.file, finding.message]))
+          .toEqual([[
+            `${KERNEL_DIR}label.ts`,
+            "`atomLe()` is also exported by " +
+            "packages/runner/src/cfc/kernel/store-labels.ts; a kernel " +
+            "function has one home",
+          ]]);
+      });
+
+      it("reports a re-export and a dynamic import reaching outside the kernel", () => {
+        const file = kernelFile(
+          `export { x } from "../clause.ts";\n` +
+            `export * from "@commonfabric/runner/cfc/trust";\n` +
+            `export type { T } from "../types.ts";\n` +
+            `export { y } from "./label.ts";\n` +
+            atomLeSource.text.replace(
+              "return proposed === current;",
+              `return import("../prepare.ts") !== null;`,
+            ),
+        );
+        const findings = collectFindings(input({ kernelFiles: [file] }));
+        expect(findings.map((finding) => [finding.line, finding.message]))
+          .toEqual([
+            [
+              1,
+              "imports `../clause.ts`, which is outside the kernel and not " +
+              "a shared type module; a kernel function takes no " +
+              "transaction, reads no dial and calls no hook",
+            ],
+            [
+              2,
+              "imports `@commonfabric/runner/cfc/trust`, which is outside " +
+              "the kernel and not a shared type module; a kernel function " +
+              "takes no transaction, reads no dial and calls no hook",
+            ],
+            [
+              12,
+              "imports `../prepare.ts`, which is outside the kernel and not " +
+              "a shared type module; a kernel function takes no " +
+              "transaction, reads no dial and calls no hook",
+            ],
+          ]);
+      });
+
       it("reports a value import reaching outside the kernel", () => {
         const file = kernelFile(
           `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
@@ -481,7 +533,7 @@ export function atomLe(a: unknown, b: unknown): boolean {
   });
 
   describe("valueImports()", () => {
-    it("returns the specifiers of value and bare imports and skips type imports", () => {
+    it("returns the specifiers of value imports, re-exports and dynamic imports in file order, and skips type-only ones", () => {
       const source = [
         `import { a } from "./a.ts";`,
         `import type { B } from "../b.ts";`,
@@ -491,6 +543,12 @@ export function atomLe(a: unknown, b: unknown): boolean {
         `import {`,
         `  f,`,
         `} from "./f.ts";`,
+        `export { g } from "./g.ts";`,
+        `export * from "./h.ts";`,
+        `export * as i from "./i.ts";`,
+        `export type { J } from "./j.ts";`,
+        `const k = await import("./k.ts");`,
+        `export { l };`,
       ].join("\n");
       expect(valueImports(source).map(({ specifier }) => specifier)).toEqual([
         "./a.ts",
@@ -498,6 +556,10 @@ export function atomLe(a: unknown, b: unknown): boolean {
         "./side-effect.ts",
         "./d.ts",
         "./f.ts",
+        "./g.ts",
+        "./h.ts",
+        "./i.ts",
+        "./k.ts",
       ]);
     });
   });

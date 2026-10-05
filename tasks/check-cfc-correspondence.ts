@@ -218,19 +218,30 @@ export function exportedFunctions(source: string): ExportedFunction[] {
   return found;
 }
 
-/** A value import or bare import, with its specifier. */
-const VALUE_IMPORT =
-  /^import\s+(?!type\s)(?:[^"']*?\s+from\s+)?["']([^"'\n]+)["']/gm;
+/**
+ * The three ways a module reaches another for its value: an `import`
+ * declaration that is not `import type`, bare imports included; an `export`
+ * list or `export *` with a `from` clause that is not `export type`; and an
+ * `import(...)` expression, wherever it sits. An `export { type X } from`
+ * list is read as a value re-export, which errs toward reporting.
+ */
+const VALUE_IMPORTS = [
+  /^import\s+(?!type\s)(?:[^"']*?\s+from\s+)?["']([^"'\n]+)["']/gm,
+  /^export\s+(?!type\s)(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm,
+  /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g,
+];
 
-/** Every specifier a file imports for its value, with where. */
+/** Every specifier a file reaches for its value, with where, in file order. */
 export function valueImports(
   source: string,
 ): { specifier: string; at: number }[] {
   const found: { specifier: string; at: number }[] = [];
-  for (const match of source.matchAll(VALUE_IMPORT)) {
-    found.push({ specifier: match[1], at: match.index });
+  for (const pattern of VALUE_IMPORTS) {
+    for (const match of source.matchAll(pattern)) {
+      found.push({ specifier: match[1], at: match.index });
+    }
   }
-  return found;
+  return found.sort((a, b) => a.at - b.at);
 }
 
 /** Whether `specifier` stays inside the kernel directory. */
@@ -300,6 +311,16 @@ function kernelFileFindings(
           `${recorded.sha256.slice(0, 12)}…; re-derive it from ` +
           `${header.file} §${header.section} and update the header`,
       });
+    }
+    const elsewhere = seen.get(name);
+    if (elsewhere !== undefined) {
+      findings.push({
+        file: file.path,
+        line,
+        message: `\`${name}()\` is also exported by ${elsewhere.file}; a ` +
+          "kernel function has one home",
+      });
+      continue;
     }
     seen.set(name, { file: file.path, header });
   }
