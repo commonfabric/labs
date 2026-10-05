@@ -268,6 +268,52 @@ the item chose rather than one a binding gave it. A slug bound to the same
 collection reaches the member through the same forward resolution, so
 `<space>/top/42` and `<space>/<board>/items/42` are two routes to one answer.
 
+#### The declaration
+
+An item declares its collections in one field of its result, `collections`: a
+map from each declared field's name to what that collection declares.
+
+```ts
+// Shown for illustration only.
+collections: {
+  items: {
+    forward: <link to the map from member name to member>,
+    reverse: <link to the rows pairing each member with its name>,
+    naming: { policy: { … }, compact: true },
+  },
+}
+```
+
+The key is the declared field's name, so it is the collection's name in an
+address through the item, and it names a field the item holds. An address that
+stops at the field, `<space>/<board>/items`, reads that field as stored: the
+membership, in whatever form the item keeps it. Only a member segment after it
+goes through the declaration.
+
+`forward` and `reverse` are links rather than field names. A link reaches a
+sibling field, a computed value, or a cell in another document alike, so the
+declaration says where a collection's resolution lives without constraining
+how the item stores it. The walk follows `forward` to a map and looks the member
+up as a key, followed through its links to a piece — the lookup a slug bound to
+a collection already makes. `reverse` is required for the reason
+[What a collection declares](#what-a-collection-declares) gives: without it a
+renderer cannot shorten a reference to a member.
+
+`naming` carries the policy and compact-spelling eligibility a collection
+publishes about its names. It carries no name of its own: the key is the
+collection's name in an item-relative address, and the name a binding gives a
+collection is the binding's.
+
+A field the map does not hold is an ordinary path. The walk reads `collections`
+on each item it passes through, which is what keeps the rule local to the item:
+nothing outside the item can make one of its fields a collection.
+
+The resolver lives in `runner`, so the declaration's type does too, or below
+it, and a pattern takes it from `commonfabric` rather than from a pattern
+library. `collections` is part of the item's result schema, which makes
+declaring or undeclaring a field a contract change: either one changes what an
+address through the item means, and `pattern-compat` sees it as such.
+
 ## Resolution scope
 
 A name resolves through a scope chain, innermost first:
@@ -625,13 +671,12 @@ landed.
 Still to build: a collection declares the name it answers to, its name policy,
 and forward and reverse resolutions. Whatever allocator it needs is its own; a
 collection that accepts names from people can reuse the claim from step 2 at
-collection scope, which is itself unbuilt. An item declares which of its fields
-hold collections and where each one's forward resolution lives, and the walk
-reads that declaration: a path through an item that reaches a declared field
-resolves the next segment through the forward resolution, as [A field that
-holds a collection](#a-field-that-holds-a-collection) describes. Today the walk
-reads every segment after an item as a path, so `<space>/<board>/items/42`
-opens the entry at position 42.
+collection scope, which is itself unbuilt. An item declares its collections in
+its `collections` field, and the walk reads that declaration: a path through an
+item that reaches a declared field resolves the next segment through the
+forward resolution, as [The declaration](#the-declaration) describes. Today
+the walk reads every segment after an item as a path, so
+`<space>/<board>/items/42` opens the entry at position 42.
 
 Landed: address resolution (`packages/piece/src/slugs.ts`) splits along what
 the caller is asking for. An address alone resolves through
