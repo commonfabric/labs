@@ -91,7 +91,12 @@ import {
   DEFAULT_DOCKER_RUNSC_IMAGE,
   DEFAULT_FABRIC_MOUNT_PATH,
 } from "./sandbox/docker-runsc.ts";
-import { resolveSandboxRuntimeSelection } from "./sandbox/runtime-selection.ts";
+import {
+  CFC_VM_HOME_ENV,
+  describeSandboxRuntimeChoice,
+  resolveSandboxRuntimeSelection,
+} from "./sandbox/runtime-selection.ts";
+import type { SandboxRuntimeChoice } from "./sandbox/types.ts";
 import {
   type CfHarnessHostMountConfig,
   type CfHarnessHostMountMode,
@@ -401,11 +406,28 @@ export interface RunCfHarnessCliDependencies {
   readTextFile?: (path: string) => Promise<string>;
   /** Whether a regular file exists at `path`; `Deno.stat` when absent. */
   pathExists?: (path: string) => Promise<boolean>;
+
   /**
-   * The home the default runsc CFC policy is looked up under, for an embedder
-   * that clears `HOME` from `env` (the Loom local host); `env.HOME` otherwise.
+   * The home the default runsc CFC policy and the default macOS runsc store
+   * are looked up under, for an embedder that clears `HOME` from `env` (the
+   * Loom local host); `env.HOME` otherwise.
    */
   sandboxHomeDir?: string;
+
+  /**
+   * Platform whose default sandbox runtime applies to a run that names none,
+   * as `Deno.build.os` writes it, which it is when absent.
+   */
+  platform?: string;
+
+  /**
+   * Whether whoever starts this run can give it the sandbox selection flags,
+   * which they can when absent. An embedder that writes the argument list
+   * itself says `false`, and a refusal then names each setting's variable
+   * alone, since a flag is nothing its operator can pass.
+   */
+  sandboxSelectionFlags?: boolean;
+
   writeTextFile?: (path: string, text: string) => Promise<void>;
 
   /** The structured-result validation verdict after a completed prompt loop. */
@@ -594,15 +616,20 @@ Options:
   --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (docker runtime only; required for enforce-* modes)
   --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
-  --sandbox-runtime <kind>      docker (the default) or runsc: run runsc directly with
-                                no Docker; the same on Linux and on macOS through the
-                                darwin runsc. Tool calls may then name a sandbox session.
+  --sandbox-runtime <kind>      docker or runsc: run runsc directly with no Docker; the
+                                same on Linux and on macOS through the darwin runsc. Tool
+                                calls may then name a sandbox session. With no runtime
+                                named, macOS runs runsc from the native cfc-vm store
+                                (CFC_VM_HOME, or ~/Library/Application Support/cfc-vm) and
+                                refuses to start where that store is not set up; every
+                                other platform runs docker
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
                                 on Linux; on macOS the cfc-vm image marker, default
-                                ~/Library/Application Support/cfc-vm/images/kitchensink)
+                                images/kitchensink in the cfc-vm store)
   --sandbox-cfc-policy <path>   runsc runtime only: CFC policy file; --cfc is passed exactly
                                 when this is set (default: ~/.local/share/runsc-cfc/cfc-policy.json
-                                when present)
+                                when present; a runtime macOS defaulted to takes
+                                policy.json in the cfc-vm store after that)
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
@@ -680,7 +707,11 @@ Environment:
   CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (docker | runsc)
   CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
   CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
-  CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH)
+  CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH;
+                                for a runtime macOS defaulted to, bin/runsc in the cfc-vm
+                                store)
+  CFC_VM_HOME                   The macOS cfc-vm store, read by the darwin runsc and by the
+                                macOS default (default: ~/Library/Application Support/cfc-vm)
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
   ${CFC_RESULT_DIR_ENV} Fallback for --cfc-result-dir
@@ -1353,6 +1384,8 @@ export const parseCfHarnessCliArgs = async (
     | "pathExists"
     | "sandboxHomeDir"
     | "commandJobId"
+    | "platform"
+    | "sandboxSelectionFlags"
     | "providerSettingsStore"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
@@ -1626,6 +1659,7 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_DOCKER_NETWORK_MODE: Deno.env.get(
         "CF_HARNESS_DOCKER_NETWORK_MODE",
       ),
+      [CFC_VM_HOME_ENV]: Deno.env.get(CFC_VM_HOME_ENV),
       [CFC_RESULT_DIR_ENV]: Deno.env.get(CFC_RESULT_DIR_ENV),
       [CFC_INVOCATION_CONTEXT_DIR_ENV]: Deno.env.get(
         CFC_INVOCATION_CONTEXT_DIR_ENV,
@@ -1807,7 +1841,7 @@ export const parseCfHarnessCliArgs = async (
   const sandboxDockerRuntime = rawSandboxDockerRuntime ??
     nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_DOCKER_RUNTIME);
   // One derivation shared with the interactive entrypoints; flags win over
-  // the environment, and the default policy is looked up through
+  // the environment, and a default policy is looked up through
   // `deps.pathExists`.
   const {
     sandboxRuntimeKind,
@@ -1815,6 +1849,7 @@ export const parseCfHarnessCliArgs = async (
     sandboxCfcPolicy,
     sandboxRunscBinary,
     sandboxRunscNetworkMode,
+    sandboxRuntimeChoice,
   } = await resolveSandboxRuntimeSelection(
     env,
     {
@@ -1829,6 +1864,8 @@ export const parseCfHarnessCliArgs = async (
         : {}),
     },
     {
+      platform: deps.platform ?? Deno.build.os,
+      flags: deps.sandboxSelectionFlags ?? true,
       cwd,
       ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
       ...(deps.sandboxHomeDir !== undefined
@@ -2092,6 +2129,7 @@ export const parseCfHarnessCliArgs = async (
     ...(sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode }
       : {}),
+    sandboxRuntimeChoice,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
@@ -2846,9 +2884,17 @@ export const formatCfHarnessTranscriptEvent = (
   }
 };
 
+/**
+ * Formats what the batch CLI prints when a run ends: the final assistant text
+ * alone in `batch` mode, and in `operator` mode that text over a summary of
+ * the run. `sandbox` is how this invocation selected its sandbox runtime; the
+ * summary's `sandbox` line says which runtime that was and whether it was
+ * named or defaulted, and is left out where `sandbox` is.
+ */
 export const formatCfHarnessCliResult = (
   result: HarnessPromptLoopResult,
   outputMode: CfHarnessCliOutputMode = "operator",
+  sandbox?: SandboxRuntimeChoice,
 ): string => {
   if (outputMode === "batch") {
     return `${result.finalAssistantText}\n`;
@@ -2861,6 +2907,9 @@ export const formatCfHarnessCliResult = (
     `modelTurns: ${result.modelTurns}`,
     `cfcMode: ${result.runState.cfcEnforcementMode} (harness)`,
   ];
+  if (sandbox !== undefined) {
+    lines.push(`sandbox: ${describeSandboxRuntimeChoice(sandbox)}`);
+  }
   if (result.runState.fabricSessionCfc !== undefined) {
     const posture = result.runState.fabricSessionCfc;
     lines.push(
@@ -3860,7 +3909,13 @@ export const runCfHarnessCli = async (
         }\n`,
       );
     }
-    io.stdout(formatCfHarnessCliResult(result, parsed.outputMode));
+    io.stdout(
+      formatCfHarnessCliResult(
+        result,
+        parsed.outputMode,
+        parsed.sandboxRuntimeChoice,
+      ),
+    );
     if (parsed.printTranscript) {
       io.stdout(`${JSON.stringify(result.transcript, null, 2)}\n`);
     }

@@ -176,8 +176,15 @@ export const parseHostMountSpecs = async (
  * `env` is the environment the entrypoint was launched with. The runtime
  * selection (`CF_HARNESS_SANDBOX_RUNTIME` and its companions) is derived the
  * way the batch CLI derives it, so a chat session and a batch run started
- * from one environment execute in the same sandbox; the parameter is
- * required so a new entrypoint cannot forget it the way this one did.
+ * from one environment execute in the same sandbox. `host.platform` is the
+ * platform whose default runtime applies where `env` names none, as
+ * `Deno.build.os` writes it, and `host.homeDir` is the home an entrypoint
+ * kept aside from `env`. Both `env` and `host` are required so that a new
+ * entrypoint cannot leave the selection out. The entrypoints this serves take
+ * no selection flag, so a refusal names the variable alone.
+ *
+ * @throws HarnessControlError where `env` names no runtime on macOS and the
+ * native runtime cannot be provided.
  */
 export const resolveInteractiveProvisioning = async (
   parsed: {
@@ -188,7 +195,7 @@ export const resolveInteractiveProvisioning = async (
   },
   cwd: string,
   env: Record<string, string | undefined>,
-  options: { homeDir?: string } = {},
+  host: { platform: string; homeDir?: string },
 ): Promise<
   {
     additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
@@ -204,8 +211,10 @@ export const resolveInteractiveProvisioning = async (
     await parseHostMountSpecs(parsed.hostMountSpecs, cwd),
   );
   const runtime = await resolveSandboxRuntimeSelection(env, {}, {
+    platform: host.platform,
+    flags: false,
     cwd,
-    ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+    ...(host.homeDir !== undefined ? { homeDir: host.homeDir } : {}),
   });
   return {
     ...runtime,

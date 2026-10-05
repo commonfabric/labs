@@ -59,7 +59,10 @@ import { pieceTargetingContextMessages } from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
-import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
+import type {
+  DockerRunscAdditionalMountConfig,
+  SandboxRuntimeChoice,
+} from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
 import { wellKnownGrantsContextMessage } from "./well-known-grants.ts";
@@ -100,6 +103,9 @@ export interface HarnessSessionConfig {
   sandboxCfcPolicy?: string;
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+
+  /** How the sandbox runtime was selected, as the run records it. */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
 
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
@@ -308,6 +314,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscNetworkMode !== undefined
       ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
+      : {}),
+    ...(config.sandboxRuntimeChoice !== undefined
+      ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }
       : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }

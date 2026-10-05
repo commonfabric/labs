@@ -236,6 +236,7 @@ import type {
   DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
   SandboxRuntime,
+  SandboxRuntimeChoice,
   SandboxRuntimeMountDescription,
 } from "./sandbox/types.ts";
 import {
@@ -441,6 +442,13 @@ export interface CreateHarnessEngineOptions
   /** runsc runtime: the binary, default `runsc` on PATH. */
   sandboxRunscBinary?: string;
   sandboxRunscNetworkMode?: RunscNetworkMode;
+
+  /**
+   * How an entrypoint selected the runtime, which the run records in its
+   * runtime description. Absent for a caller that selected none.
+   */
+  sandboxRuntimeChoice?: SandboxRuntimeChoice;
+
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
@@ -747,6 +755,7 @@ export class CfHarnessEngine {
   readonly #ownedRunscConfig?: DockerRunscSandboxConfig;
   /** The runsc configuration this engine built, when it built one. */
   readonly #ownedNativeConfig?: RunscSandboxConfig;
+  readonly #sandboxRuntimeChoice?: SandboxRuntimeChoice;
   #sandboxClosed = false;
   readonly #ownsSandbox: boolean;
   readonly #resumedRun: boolean;
@@ -1032,6 +1041,7 @@ export class CfHarnessEngine {
       })
       : undefined;
     this.#ownedNativeConfig = runscConfig;
+    this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
     this.#ownsSandbox = options.sandboxRuntime === undefined ||
       options.ownsSandboxRuntime === true;
     this.sandbox = options.sandboxRuntime ??
@@ -1340,6 +1350,16 @@ export class CfHarnessEngine {
    */
   get ownedRunscSandboxConfig(): RunscSandboxConfig | undefined {
     return this.#ownedNativeConfig;
+  }
+
+  /**
+   * How the entrypoint that built this engine selected its sandbox runtime,
+   * or `undefined` where it was built without a selection. A delegating
+   * parent hands it to the child engine, whose sandbox is the parent's own or
+   * one built from the same settings.
+   */
+  get sandboxRuntimeChoice(): SandboxRuntimeChoice | undefined {
+    return this.#sandboxRuntimeChoice;
   }
 
   /**
@@ -2503,6 +2523,9 @@ export class CfHarnessEngine {
           modelProvider: this.config.modelProvider,
           ...(this.config.modelProvider === "openai-compatible-gateway"
             ? { gatewayAuthMode: this.config.gatewayAuthMode }
+            : {}),
+          ...(this.#sandboxRuntimeChoice !== undefined
+            ? { sandboxRuntimeChoice: this.#sandboxRuntimeChoice }
             : {}),
         },
       );

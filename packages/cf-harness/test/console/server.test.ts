@@ -14,9 +14,11 @@ import {
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
   parseConsoleArgs,
+} from "../../console/server.ts";
+import {
   resolveConsoleConfig,
   startConsoleServer,
-} from "../../console/server.ts";
+} from "../support/on-linux.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
 import {
   harnessSessionChatPolicy,
@@ -1224,10 +1226,11 @@ describe("console/server", () => {
       ]);
     });
 
-    it("returns the sidecar directories as its banner for a console on Docker", async () => {
+    it("returns the driver and its sidecar directories as its banner for a console on Docker", async () => {
       expect(
         consoleSandboxBanner(await resolveConsoleConfig(ARGS, {}, "/console")),
       ).toEqual([
+        "  sandbox:    docker; default on linux: the native runtime is macOS only",
         "  results:    /console/.cf-harness-console/cfc/results",
         "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
       ]);
@@ -1258,7 +1261,7 @@ describe("console/server", () => {
           await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
         ),
       ).toEqual([
-        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  sandbox:    runsc, the direct driver (no Docker); named by CF_HARNESS_SANDBOX_RUNTIME",
         "  runsc:      /store/bin/runsc",
         "  rootfs:     /store/images/kitchensink",
         "  policy:     /store/policy.json",
@@ -1327,7 +1330,7 @@ describe("console/server", () => {
         "  skills:     (not configured)",
       ]);
       expect(banner.slice(-6)).toEqual([
-        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  sandbox:    runsc, the direct driver (no Docker); named by CF_HARNESS_SANDBOX_RUNTIME",
         "  runsc:      /store/bin/runsc",
         "  rootfs:     /store/images/kitchensink",
         "  policy:     /store/policy.json",

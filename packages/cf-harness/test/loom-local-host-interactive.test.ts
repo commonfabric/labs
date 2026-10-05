@@ -10,10 +10,11 @@ import {
   type HarnessChatEventEnvelope,
   type HarnessChatResponse,
 } from "../src/contracts/interactive-chat.ts";
+import { runLoomLocalInteractiveFailureStdio } from "../src/loom-local-host.ts";
 import {
   createLoomLocalCfHarnessHost,
-  runLoomLocalInteractiveFailureStdio,
-} from "../src/loom-local-host.ts";
+  NAMES_DOCKER,
+} from "./support/on-linux.ts";
 import {
   runHarnessInteractiveChatStdio,
   type RunHarnessInteractiveChatStdioOptions,
@@ -562,6 +563,7 @@ Deno.test("local Loom interactive entrypoint returns disconnected Codex on stdou
       "interactive",
     ],
     env: {
+      ...NAMES_DOCKER,
       CF_HARNESS_HOME: home,
       CF_HARNESS_MODEL_PROVIDER: "",
     },

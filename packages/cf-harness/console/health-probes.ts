@@ -15,7 +15,7 @@ import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {
   assertRunscCfcPolicyForMode,
-  defaultDarwinCfcVmStore,
+  darwinCfcVmStore,
   type RunscSandboxConfig,
 } from "../src/sandbox/runsc.ts";
 import {
@@ -25,9 +25,14 @@ import {
   consoleHealthUrl,
 } from "./health.ts";
 
-/** Checks the running daemon's registration without starting a sandbox. */
+/**
+ * Checks the running daemon's registration without starting a sandbox.
+ * `selected` describes how the console came to run on Docker, named or the
+ * platform's default, and is carried in the runtime row's detail.
+ */
 export const consoleSandboxHealthProbe = (
   readRuntimes = () => readDockerRuntimes(DEFAULT_DOCKER_BINARY),
+  selected?: string,
 ): ConsoleHealthProbe => {
   const source = "docker info";
   const detail = "docker info --format '{{json .Runtimes}}'";
@@ -44,7 +49,7 @@ export const consoleSandboxHealthProbe = (
     label: "Sandbox Runtime",
     value: "not checked",
     source,
-    detail,
+    detail: withSelected(detail, selected),
   }];
   const unavailable = (checkedAt: string): ConsoleHealthRow[] =>
     initial.map((row) => ({
@@ -89,6 +94,13 @@ export const consoleSandboxHealthProbe = (
     },
   };
 };
+
+/**
+ * Helper for the sandbox probes, which returns the runtime row's `detail`
+ * with how the runtime was `selected` after it, where that is known.
+ */
+const withSelected = (detail: string, selected: string | undefined): string =>
+  selected === undefined ? detail : `${detail}; selected: ${selected}`;
 
 /** What a look at one host path found. */
 export type ConsolePathReading =
@@ -178,13 +190,16 @@ export const readConsolePolicy = (
  *
  * `resolve` throws where a turn would be refused. `examine` looks at one
  * path and `readPolicy` reads the policy; all three run synchronously, so an
- * observation holds no operation open.
+ * observation holds no operation open. `selected` describes how the console
+ * came to run on this driver, named or the platform's default, and is
+ * carried in the runtime row's detail.
  */
 export const consoleRunscHealthProbe = (
   resolve: () => RunscSandboxConfig,
   mode: CfcEnforcementMode,
   examine: (path: string) => ConsolePathReading = readConsolePath,
   readPolicy: (path: string) => ConsolePolicyReading = readConsolePolicy,
+  selected?: string,
 ): ConsoleHealthProbe => {
   const source = "runsc configuration";
   const initial: ConsoleHealthFact[] = [{
@@ -249,8 +264,11 @@ export const consoleRunscHealthProbe = (
         }]);
       }
       const policy = config.cfcPolicyPath;
-      const detail = `runsc ${config.runscBinary}; rootfs ${config.rootfs}; ` +
-        `CFC policy ${policy ?? "none"}`;
+      const detail = withSelected(
+        `runsc ${config.runscBinary}; rootfs ${config.rootfs}; ` +
+          `CFC policy ${policy ?? "none"}`,
+        selected,
+      );
       const binary = examine(config.runscBinary);
       const binaryRow: ConsoleHealthRow = binary.found === "unreadable"
         ? {
@@ -522,11 +540,7 @@ export const consoleVmStore = (
   options: { platform?: string; realPath?: (path: string) => string } = {},
 ): ConsoleVmStore | undefined => {
   if ((options.platform ?? Deno.build.os) !== "darwin") return undefined;
-  const directory = env.CFC_VM_HOME !== undefined && env.CFC_VM_HOME !== ""
-    ? env.CFC_VM_HOME
-    : env.HOME !== undefined && env.HOME !== ""
-    ? defaultDarwinCfcVmStore(env.HOME)
-    : undefined;
+  const directory = darwinCfcVmStore(env.CFC_VM_HOME, env.HOME);
   if (directory === undefined) return undefined;
   const configPath = join(directory, "config.json");
   let text: string;

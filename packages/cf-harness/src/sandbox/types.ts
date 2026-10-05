@@ -247,11 +247,43 @@ export class SandboxSessionUnavailableError extends Error {
   }
 }
 
+/** The sandbox runtimes an entrypoint selects between. */
+export type SandboxRuntimeKind = "docker" | "runsc";
+
+/**
+ * How a selection came to its runtime, kept so that a run and the console can
+ * tell a runtime someone named from one the platform defaulted to. Each
+ * `platform` is written as `Deno.build.os` writes it.
+ */
+export type SandboxRuntimeChoice =
+  /** A flag or the environment named the runtime. */
+  | { runtime: SandboxRuntimeKind; source: "flag" | "environment" }
+  /** Nothing named one, on a platform whose default is Docker. */
+  | { runtime: "docker"; source: "default"; platform: string }
+  /**
+   * Nothing named one, on the platform whose default is the native runtime,
+   * which runs from the cfc-vm store at `nativeStore`.
+   */
+  | {
+    runtime: "runsc";
+    source: "default";
+    platform: string;
+    nativeStore: string;
+  };
+
 export interface SandboxRuntimeDescription {
   kind: "docker-runsc-cfc" | "runsc-cfc";
   defaultWorkingDirectory: string;
   /** Whether `session` on a request is honoured rather than ignored. */
   sessions?: boolean;
+
+  /**
+   * How an entrypoint selected this runtime. A runtime does not describe this
+   * of itself: the engine adds it where it was built with a selection, and
+   * it is absent for an engine a caller built without one.
+   */
+  selection?: SandboxRuntimeChoice;
+
   cfc?: {
     runtimeRequested: boolean;
     runtimeName?: string;

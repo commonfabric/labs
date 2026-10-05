@@ -262,6 +262,9 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
+    // The argument list is written here, so whoever runs the job selects the
+    // sandbox runtime through the environment and never by a flag.
+    sandboxSelectionFlags: false,
     ...(spec.commandJobId !== undefined
       ? { commandJobId: spec.commandJobId }
       : {}),

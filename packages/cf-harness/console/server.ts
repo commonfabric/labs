@@ -163,10 +163,12 @@ import {
 } from "../src/sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {
+  describeSandboxRuntimeChoice,
   resolveSandboxRuntimeSelection,
   RUNSC_CFC_POLICY_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
+  sandboxRuntimeChoiceReason,
 } from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
@@ -727,12 +729,18 @@ export const parseConsoleArgs = (args: readonly string[]) => {
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
  * and never hand back an address for it, which is the one outcome this surface
- * exists to avoid.
+ * exists to avoid. `host.platform` is the platform whose default sandbox
+ * runtime applies where `env` names none, as `Deno.build.os` writes it, which
+ * it is when absent.
+ *
+ * @throws HarnessControlError where `env` names no sandbox runtime on macOS
+ * and the native runtime cannot be provided.
  */
 export const resolveConsoleConfig = async (
   args: readonly string[],
   env: Record<string, string | undefined>,
   cwd: string,
+  host: { platform?: string } = {},
 ): Promise<ConsoleConfig> => {
   const parsed = parseConsoleArgs(args);
   // A flag written with an empty value is refused rather than read as unset,
@@ -748,10 +756,14 @@ export const resolveConsoleConfig = async (
   };
 
   // The one derivation every entrypoint shares, over this server's own
-  // environment. Nothing beyond the runtime kind is returned unless the
-  // runtime is runsc, so a console that names no runtime hands the engine no
-  // sandbox option at all, and the engine builds the Docker driver.
-  const sandbox = await resolveSandboxRuntimeSelection(env, {}, { cwd });
+  // environment. Beyond how the runtime was chosen, nothing is returned unless
+  // the runtime is runsc, so a console on Docker hands the engine no setting
+  // of the sandbox, and the engine builds the Docker driver.
+  const sandbox = await resolveSandboxRuntimeSelection(env, {}, {
+    platform: host.platform ?? Deno.build.os,
+    flags: false,
+    cwd,
+  });
   const onDocker = sandbox.sandboxRuntimeKind !== "runsc";
 
   const loomAuthoring = await readLoomAuthoringConfig(
@@ -1025,10 +1037,12 @@ export const resolveConsoleConfig = async (
         : "space database discovery at read time",
     }, {
       name: "sandbox",
-      value: sandbox.sandboxRuntimeKind ?? "docker",
-      source: nonEmpty(env[SANDBOX_RUNTIME_ENV]) !== undefined
-        ? SANDBOX_RUNTIME_ENV
-        : "console default",
+      value: sandbox.sandboxRuntimeChoice.runtime,
+      // A default is the platform's, so its source says which platform chose
+      // and, for the native runtime, the store it runs from.
+      source: sandbox.sandboxRuntimeChoice.source === "default"
+        ? `console ${sandboxRuntimeChoiceReason(sandbox.sandboxRuntimeChoice)}`
+        : SANDBOX_RUNTIME_ENV,
     }, {
       name: "skill scripts",
       value: config.allowSkillScripts ? "run in the sandbox" : "not run",
@@ -1400,13 +1414,24 @@ export const consoleVmHealthProbes = (
 };
 
 /**
+ * Helper for `createConsoleHealth()`, which describes how this console's
+ * sandbox runtime was selected, for the runtime row's detail, or returns
+ * `undefined` for a configuration that carries no selection.
+ */
+const consoleSandboxSelected = (config: ConsoleConfig): string | undefined =>
+  config.sandboxRuntimeChoice === undefined
+    ? undefined
+    : describeSandboxRuntimeChoice(config.sandboxRuntimeChoice);
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
  * its turns resolve from the options each is built with. On macOS it also
  * asks the VM that driver runs in, from the store `env` names. `env` is the
  * process's environment unless given, since that is the one runsc runs with.
- * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
+ * `readDockerRuntimes` replaces the Docker driver's `docker info` reading,
+ * and `host.platform` replaces `Deno.build.os`.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
@@ -1415,15 +1440,22 @@ export const createConsoleHealth = (
   env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
+  host: { platform?: string } = {},
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
     config.sandboxRuntimeKind === "runsc"
       ? consoleRunscHealthProbe(
         () => resolveConsoleRunscConfig(config),
         consoleTurnEnforcementMode(config),
+        undefined,
+        undefined,
+        consoleSandboxSelected(config),
       )
-      : consoleSandboxHealthProbe(readDockerRuntimes),
-    ...consoleVmHealthProbes(config, env),
+      : consoleSandboxHealthProbe(
+        readDockerRuntimes,
+        consoleSandboxSelected(config),
+      ),
+    ...consoleVmHealthProbes(config, env, host),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,
@@ -2680,23 +2712,25 @@ export const createConsoleInteractiveServiceOptions = (
 
 /**
  * The lines naming what a turn's sandbox depends on, printed at startup for
- * the same reason the posture is.
+ * the same reason the posture is. The first names the driver and whether the
+ * environment named it or the platform defaulted to it.
  *
- * Under the Docker driver that is the two sidecar transports a run's
+ * Under the Docker driver the rest is the two sidecar transports a run's
  * mediation moves over. The engine's guard asks only that they are named, so
  * a console pointed at directories no sandbox sidecar writes starts cleanly
  * and then denies every observation of the run; printing them is what lets an
  * operator read at startup which directories that depends on. Under the
  * direct driver it is the `runsc` binary, the rootfs and the CFC policy the
- * environment selected; an unnamed binary is looked for on `PATH`, and an
- * unnamed rootfs is the driver's own default, when a turn resolves them.
+ * selection settled on; for a named `runsc`, an unnamed binary is looked for
+ * on `PATH`, and an unnamed rootfs is the driver's own default, when a turn
+ * resolves them.
  */
 export const consoleSandboxBanner = (
   config: ConsoleConfig,
 ): readonly string[] =>
   config.sandboxRuntimeKind === "runsc"
     ? [
-      "  sandbox:    runsc, the direct driver (no Docker)",
+      `  sandbox:    ${consoleSandboxLine(config)}`,
       `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
       `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
       `  policy:     ${
@@ -2709,9 +2743,25 @@ export const consoleSandboxBanner = (
       }`,
     ]
     : [
+      `  sandbox:    ${consoleSandboxLine(config)}`,
       `  results:    ${config.cfcResultDir}`,
       `  contexts:   ${config.cfcInvocationContextDir}`,
     ];
+
+/**
+ * Helper for `consoleSandboxBanner()`, which names the driver a console's
+ * turns run on and how it was selected: named in the environment, or the
+ * platform's default. A configuration that carries no selection names the
+ * driver alone.
+ */
+const consoleSandboxLine = (config: ConsoleConfig): string => {
+  const driver = config.sandboxRuntimeKind === "runsc"
+    ? "runsc, the direct driver (no Docker)"
+    : "docker";
+  return config.sandboxRuntimeChoice === undefined
+    ? driver
+    : `${driver}; ${sandboxRuntimeChoiceReason(config.sandboxRuntimeChoice)}`;
+};
 
 /**
  * The directories the server creates before it serves: the workspace, the
@@ -2764,13 +2814,16 @@ export const consoleStartupBanner = (
  * and the engine builds both lazily-cached client factories from it. A flag
  * that takes a value but was given none is refused first, so `--port --help`
  * throws; only then, where `args` ask for help, it prints the usage instead
- * and serves nothing.
+ * and serves nothing. `host.platform` is the platform whose default sandbox
+ * runtime applies where `env` names none, as `Deno.build.os` writes it, which
+ * it is when absent.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
   env: Record<string, string | undefined> = Deno.env.toObject(),
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
+  host: { platform?: string } = {},
 ): Promise<void> => {
   // A flag with no value first: the `-h` it leaves behind is not a question.
   refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
@@ -2779,7 +2832,7 @@ export const startConsoleServer = async (
     console.log(help);
     return;
   }
-  const config = await resolveConsoleConfig(args, env, cwd);
+  const config = await resolveConsoleConfig(args, env, cwd, host);
   for (const directory of consoleDataDirectories(config)) {
     await Deno.mkdir(directory, { recursive: true });
   }
@@ -2809,7 +2862,15 @@ export const startConsoleServer = async (
         ),
       ),
     indexFactory,
-    createConsoleHealth(config, launchHealth, modelOptions, env, indexFactory),
+    createConsoleHealth(
+      config,
+      launchHealth,
+      modelOptions,
+      env,
+      indexFactory,
+      undefined,
+      host,
+    ),
   );
   await server.service.initializeFromStore();
 

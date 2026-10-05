@@ -115,11 +115,38 @@ export const RUNSC_BINARY_ENV = "CF_HARNESS_RUNSC_BINARY";
 export const defaultDarwinCfcVmStore = (home: string): string =>
   joinHostPath(home, "Library", "Application Support", "cfc-vm");
 
-/** Where the macOS runsc keeps the block image a bundle can name as rootfs. */
+/**
+ * The store the macOS runsc uses, named the way it names one: `cfcVmHome`,
+ * the value of `CFC_VM_HOME`, where that is set and not empty, and otherwise
+ * the default store under `home`. `undefined` where neither names one.
+ */
+export const darwinCfcVmStore = (
+  cfcVmHome: string | undefined,
+  home: string | undefined,
+): string | undefined =>
+  cfcVmHome !== undefined && cfcVmHome !== ""
+    ? cfcVmHome
+    : home !== undefined && home !== ""
+    ? defaultDarwinCfcVmStore(home)
+    : undefined;
+
+/** The image a macOS runsc store unpacks when it is installed, by its key. */
+export const DARWIN_CFC_VM_IMAGE_KEY = "kitchensink";
+
+/**
+ * Where the macOS runsc `store` keeps the marker a bundle names as rootfs to
+ * run from the block image `imageKey`.
+ */
+export const darwinCfcVmRootfs = (
+  store: string,
+  imageKey = DARWIN_CFC_VM_IMAGE_KEY,
+): string => joinHostPath(store, "images", imageKey);
+
+/** Like `darwinCfcVmRootfs()`, except in the store under `home`. */
 export const defaultDarwinRootfs = (
   home: string,
-  imageKey = "kitchensink",
-): string => joinHostPath(defaultDarwinCfcVmStore(home), "images", imageKey);
+  imageKey = DARWIN_CFC_VM_IMAGE_KEY,
+): string => darwinCfcVmRootfs(defaultDarwinCfcVmStore(home), imageKey);
 
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 
