@@ -1,8 +1,8 @@
 /**
  * The multi-runtime harness driving the system private inbox: its owner
- * creates it and has their profiles point at it, a sender's own handler
- * delivers offers through the owner's profile, and a stranger tries to read
- * them.
+ * creates it and has their profiles point at it, current and earlier vintages
+ * alike, a sender's own handler delivers offers to the inbox the owner's
+ * profile points at, and a stranger tries to read them.
  *
  * Under server execution the inbox's space is its owner's alone, since the
  * serving loop makes the sender's write; without it, the sender's own runtime
@@ -70,19 +70,25 @@ describe("private inbox across runtimes", () => {
     });
     [owner, sender, stranger] = harness.sessions;
 
-    // Two profiles, the second already pointing at an inbox of its own.
+    // Two current profiles and two of an earlier vintage. The second of each
+    // already points at an inbox of its own.
     await owner.send("createProfile");
     await owner.send("createProfile");
+    await owner.send("createEarlierProfile");
+    await owner.send("createEarlierProfile");
     await owner.send("createOtherInbox");
     await harness.settle();
-    await owner.send("pointSecondProfileElsewhere");
+    await owner.send("pointProfileElsewhere", { index: 1 });
+    await owner.send("pointProfileElsewhere", { index: 3 });
     await harness.settleUntil(async () =>
-      (await owner.read(["profiles", 1, "inbox", "piece"])) !== undefined
+      (await owner.read(["profiles", 1, "inbox", "piece"])) !== undefined &&
+      (await owner.read(["profiles", 3, "inbox", "piece"])) !== undefined
     );
 
     await owner.send("ensurePrivateInbox");
     await harness.settleUntil(async () =>
-      (await owner.read(["profiles", 0, "inbox", "piece"])) !== undefined
+      (await owner.read(["profiles", 0, "inbox", "piece"])) !== undefined &&
+      (await owner.read(["profiles", 2, "inbox", "piece"])) !== undefined
     );
     inbox = await owner.link(["privateInbox", "piece"]);
   });
@@ -125,9 +131,12 @@ describe("private inbox across runtimes", () => {
    * refused, then asserts the first. The append is a consequence of a
    * consequence, which a `settle()` does not wait for.
    */
-  const offer = async (title: string): Promise<void> => {
+  const offer = async (
+    title: string,
+    stream: "offer" | "queuedOffer" = "offer",
+  ): Promise<void> => {
     const refusedBefore = await refusals();
-    await sender.send("offer", { space: harness.spaceDid, title });
+    await sender.send(stream, { space: harness.spaceDid, title });
     await harness.settleUntil(async () =>
       (await ownerOffers()).some((each) => each.title === title) ||
       await refusals() > refusedBefore || await senderRefusedInbox()
@@ -164,12 +173,20 @@ describe("private inbox across runtimes", () => {
     expect(other.id).not.toBe(inbox.id);
   });
 
+  it("points an earlier-vintage profile with no inbox at it, and leaves a pointed one as it was", async () => {
+    const other = await owner.link(["otherInbox", "piece"]);
+
+    expect((await profileInbox(2)).id).toBe(inbox.id);
+    expect((await profileInbox(3)).id).toBe(other.id);
+  });
+
   it("creates and re-points nothing when ensured again", async () => {
     await owner.send("ensurePrivateInbox");
     await harness.settle();
 
     expect(await owner.link(["privateInbox", "piece"])).toEqual(inbox);
     expect((await profileInbox(0)).id).toBe(inbox.id);
+    expect((await profileInbox(2)).id).toBe(inbox.id);
   });
 
   it("delivers each offer a sender's own handler sends, stamped with the sender", async () => {
@@ -187,6 +204,28 @@ describe("private inbox across runtimes", () => {
       expect(each.kind).toBe("fabrichat-room");
       expect(each.space).toBe(harness.spaceDid);
       expect(each.from).toBe(sender.identity.did());
+    }
+  });
+
+  it("delivers each offer a queued handler of the sender's sends after reading the pointer, stamped with the sender", async () => {
+    const before = (await ownerOffers()).length;
+
+    for (const title of ["queued first", "queued second"]) {
+      await offer(title, "queuedOffer");
+    }
+
+    // `receive` stamps `from` with `currentPrincipal()`, which is the sender
+    // whose event started the cascade, not the inbox's owner.
+    const offers = (await ownerOffers()).slice(before);
+    expect(offers.map((each) => each.title)).toEqual([
+      "queued first",
+      "queued second",
+    ]);
+    for (const each of offers) {
+      expect(each.kind).toBe("fabrichat-room");
+      expect(each.space).toBe(harness.spaceDid);
+      expect(each.from).toBe(sender.identity.did());
+      expect(each.from).not.toBe(owner.identity.did());
     }
   });
 

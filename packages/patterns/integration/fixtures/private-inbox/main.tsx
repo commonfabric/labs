@@ -16,6 +16,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import EarlierProfile from "./earlier-profile.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home.tsx";
@@ -55,15 +56,39 @@ function inboxLinkOf(inbox: unknown): unknown {
   return inbox;
 }
 
-/** Creates one of the owner's profiles, in a space of its own. */
+/** A stand-in profile's result, as an entry in the owner's profile list. */
+function asProfile(profile: unknown): ProfileHomeOutput;
+function asProfile(profile: unknown): unknown {
+  return profile;
+}
+
+/**
+ * Creates one of the owner's profiles, in a space of its own that grants
+ * anyone `WRITE`, as `profile-create.tsx` does.
+ */
 const createProfile = handler<
   void,
   { profiles: Writable<ProfileHomeOutput[]> }
 >((_event, { profiles }) => {
   profiles.push(
-    ProfileHome.inSpace(undefined, { grants: { "*": "READ" } })({
+    ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
       initialName: "Owner",
     }) as ProfileHomeOutput,
+  );
+});
+
+/**
+ * Creates a profile of an earlier vintage, in a space of its own that grants
+ * anyone `WRITE`.
+ */
+const createEarlierProfile = handler<
+  void,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((_event, { profiles }) => {
+  profiles.push(
+    asProfile(
+      EarlierProfile.inSpace(undefined, { grants: { "*": "WRITE" } })({}),
+    ),
   );
 });
 
@@ -77,15 +102,21 @@ const createOtherInbox = handler<
   });
 });
 
-/** Points the owner's second profile at the other inbox. */
-const pointSecondProfileElsewhere = handler<
-  void,
+/** Which of the owner's profiles to point at the other inbox. */
+export interface PointElsewhereRequest {
+  /** The profile's position in the owner's list. */
+  index: number;
+}
+
+/** Points one of the owner's profiles at the other inbox. */
+const pointProfileElsewhere = handler<
+  PointElsewhereRequest,
   {
     profiles: Writable<ProfileHomeOutput[]>;
     otherInbox: Writable<PrivateInboxHolder>;
   }
->((_event, { profiles, otherInbox }) => {
-  profiles.key(1).resolveAsCell().key("setInbox").send({
+>((event, { profiles, otherInbox }) => {
+  profiles.key(event.index).resolveAsCell().key("setInbox").send({
     inbox: otherInbox.get().piece?.resolveAsCell(),
   });
 });
@@ -102,6 +133,34 @@ const offer = handler<
     profiles.key(0).resolveAsCell().key("inbox").key("piece").resolveAsCell(),
   );
   inbox.key("receive").send({
+    kind: "fabrichat-room",
+    space: event.space,
+    title: event.title,
+  });
+});
+
+/**
+ * Queues `send` with the request, so the offer leaves from a handler that
+ * another handler's run emitted, as an offer leaves a room's creation.
+ */
+const queueOffer = handler<OfferRequest, { send: Stream<OfferRequest> }>(
+  (event, { send }) => {
+    send.send({ space: event.space, title: event.title });
+  },
+);
+
+/**
+ * Sends an offer to the inbox the owner's first profile points at, reading
+ * the pointer through the profile's own types, which reach the inbox's name
+ * and nothing it labels.
+ */
+const sendToPointedInbox = handler<
+  OfferRequest,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((event, { profiles }) => {
+  const pointer = profiles.key(0).resolveAsCell().key("inbox").get()?.piece;
+  if (pointer === undefined) return;
+  inboxOf(pointer.resolveAsCell()).key("receive").send({
     kind: "fabrichat-room",
     space: event.space,
     title: event.title,
@@ -148,14 +207,23 @@ export interface MainOutput {
   /** Creates one of the owner's profiles. */
   createProfile: Stream<void>;
 
+  /** Creates a profile of an earlier vintage. */
+  createEarlierProfile: Stream<void>;
+
   /** Creates an inbox other than the private inbox. */
   createOtherInbox: Stream<void>;
 
-  /** Points the owner's second profile at the other inbox. */
-  pointSecondProfileElsewhere: Stream<void>;
+  /** Points one of the owner's profiles at the other inbox. */
+  pointProfileElsewhere: Stream<PointElsewhereRequest>;
 
   /** Sends an offer through the owner's first profile. */
   offer: Stream<OfferRequest>;
+
+  /**
+   * Sends an offer to the inbox the owner's first profile points at, from a
+   * handler this stream's handler queues.
+   */
+  queuedOffer: Stream<OfferRequest>;
 
   /** Copies the private inbox's offers into this piece. */
   copyOffers: Stream<void>;
@@ -179,11 +247,10 @@ export default pattern<MainInput, MainOutput>((
     }),
   }),
   createProfile: createProfile({ profiles }),
+  createEarlierProfile: createEarlierProfile({ profiles }),
   createOtherInbox: createOtherInbox({ otherInbox }),
-  pointSecondProfileElsewhere: pointSecondProfileElsewhere({
-    profiles,
-    otherInbox,
-  }),
+  pointProfileElsewhere: pointProfileElsewhere({ profiles, otherInbox }),
   offer: offer({ profiles }),
+  queuedOffer: queueOffer({ send: sendToPointedInbox({ profiles }) }),
   copyOffers: copyOffers({ privateInbox, copiedOffers }),
 }));

@@ -6,6 +6,7 @@ import {
   equals,
   handler,
   pattern,
+  type Stream,
   TESTS,
   Writable,
 } from "commonfabric";
@@ -35,6 +36,29 @@ const holdNewInbox = handler<void, { holder: Writable<PrivateInboxHolder> }>(
     holder.set({ piece: linkOf(PrivateInbox({ offers: [] })) });
   },
 );
+
+/** A pointer as a profile holds it. */
+type Pointer = { piece?: Cell<PrivateInboxPiece> };
+
+/** Points a stand-in profile's pointer where the event says. */
+const setStandInInbox = handler<
+  { inbox?: Cell<PrivateInboxPiece> },
+  { inbox: Writable<Pointer> }
+>((event, { inbox }) => {
+  inbox.set(event.inbox === undefined ? {} : { piece: event.inbox });
+});
+
+/**
+ * Stands in for a profile of an earlier vintage: a pointer and `setInbox`, and
+ * none of the current profile's other fields and streams.
+ */
+const EarlierVintageProfile = pattern<
+  Record<never, never>,
+  { inbox: Pointer; setInbox: Stream<{ inbox?: Cell<PrivateInboxPiece> }> }
+>(() => {
+  const inbox = new Writable<Pointer>({}).for("inbox");
+  return { inbox, setInbox: setStandInInbox({ inbox }) };
+});
 
 /** Records the actor's principal in `me`. */
 const introduce = handler<void, { me: Writable<string> }>((_event, { me }) => {
@@ -127,10 +151,13 @@ export default pattern(() => {
     new Set(inbox.offers.map((each) => each?.id)).size === 4
   );
 
-  // Pointing profiles at an inbox: one profile already points at another
-  // inbox, and one points at nothing.
+  // Pointing profiles at an inbox: of the current vintage and of an earlier
+  // one, one profile already points at another inbox, and one points at
+  // nothing.
   const pointed = ProfileHome({ initialName: "Pointed" });
   const unpointed = ProfileHome({ initialName: "Unpointed" });
+  const earlierPointed = EarlierVintageProfile({});
+  const earlierUnpointed = EarlierVintageProfile({});
   const home = new Writable<PrivateInboxHolder>({});
   const elsewhere = new Writable<PrivateInboxHolder>({});
   const holdHomeInbox = holdNewInbox({ holder: home });
@@ -138,7 +165,7 @@ export default pattern(() => {
   const pointProfiles = pointProfilesAtPrivateInbox({
     privateInbox: home,
     // deno-lint-ignore no-explicit-any
-    profiles: [pointed, unpointed] as any,
+    profiles: [pointed, earlierPointed, earlierUnpointed, unpointed] as any,
   });
 
   const action_create_inboxes = action(() => {
@@ -147,6 +174,9 @@ export default pattern(() => {
   });
   const action_point_one_elsewhere = action(() => {
     pointed.setInbox.send({ inbox: elsewhere.get().piece?.resolveAsCell() });
+    earlierPointed.setInbox.send({
+      inbox: elsewhere.get().piece?.resolveAsCell(),
+    });
   });
   const action_point_profiles = action(() => {
     pointProfiles.send();
@@ -174,7 +204,9 @@ export default pattern(() => {
 
   const assert_only_the_unpointed_profile_points_at_home_inbox = assert(() =>
     equals(pointed.inbox?.piece, elsewhere.get().piece) &&
-    equals(unpointed.inbox?.piece, home.get().piece)
+    equals(earlierPointed.inbox?.piece, elsewhere.get().piece) &&
+    equals(unpointed.inbox?.piece, home.get().piece) &&
+    equals(earlierUnpointed.inbox?.piece, home.get().piece)
   );
 
   return {
