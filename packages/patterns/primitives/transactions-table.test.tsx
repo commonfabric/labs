@@ -46,7 +46,34 @@ const PENDING_ROW = [{
   pending: 1,
 }];
 
+// Rows that carry only what a ledger row must, in forms the table has no
+// special case for: the fallbacks decide every label these show.
+const SPARSE_ROWS = [
+  {
+    transaction_id: "s1",
+    date: "2026-09-03",
+    signed_amount: 1234.5,
+    merchant_name: "",
+    iso_currency_code: "GBP",
+    account_id: "acct-1",
+  },
+  {
+    transaction_id: "s2",
+    date: "2026-13-01",
+    signed_amount: -3,
+    merchant_name: "Kiosk",
+    iso_currency_code: "CAD",
+  },
+  {
+    transaction_id: "s3",
+    date: "sometime",
+    signed_amount: 1,
+    merchant_name: "Vending",
+  },
+];
+
 export default pattern(() => {
+  const sparse = TransactionsTable({ rows: SPARSE_ROWS });
   const table = TransactionsTable({ rows: ROWS });
   const empty = TransactionsTable({ rows: [] });
   const pendingOnly = TransactionsTable({ rows: PENDING_ROW });
@@ -95,6 +122,50 @@ export default pattern(() => {
       // A row with no status but a pending flag shows as pending.
       {
         assertion: assert(() => pendingOnly.sortedRows[0].status === "Pending"),
+      },
+
+      // Sparse rows, newest first as text: "sometime", then month 13, then s1.
+      { assertion: assert(() => sparse.sortedRows[0].id === "s3") },
+      // A date that is not year-month-day, or names no month, shows as given.
+      {
+        assertion: assert(() => sparse.sortedRows[0].dateLabel === "sometime"),
+      },
+      {
+        assertion: assert(() =>
+          sparse.sortedRows[1].dateLabel === "2026-13-01"
+        ),
+      },
+      // No currency code reads as dollars; an unlisted one shows its code.
+      { assertion: assert(() => sparse.sortedRows[0].amountLabel === "$1.00") },
+      {
+        assertion: assert(() =>
+          sparse.sortedRows[1].amountLabel === "−CAD 3.00"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          sparse.sortedRows[2].amountLabel === "£1,234.50"
+        ),
+      },
+      // A row with neither a merchant name nor a transaction name.
+      {
+        assertion: assert(() =>
+          sparse.sortedRows[2].description === "Unlabeled transaction"
+        ),
+      },
+      // No category and no account each show a placeholder; an account shows.
+      {
+        assertion: assert(() =>
+          sparse.sortedRows[2].category === "Uncategorized"
+        ),
+      },
+      { assertion: assert(() => sparse.sortedRows[2].account === "acct-1") },
+      { assertion: assert(() => sparse.sortedRows[1].account === "—") },
+      // A category's underscores read as spaces.
+      {
+        assertion: assert(() =>
+          table.sortedRows[0].category === "GENERAL SERVICES"
+        ),
       },
 
       // A first click on a non-date column sorts it ascending, as numbers.
