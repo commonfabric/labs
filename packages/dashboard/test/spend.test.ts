@@ -31,11 +31,13 @@ const source = (
   lagDays: number,
   color: string,
   knownMonths?: string[],
+  knownDays?: string[],
 ) => ({
   spend: { byDay: new Map(entries) },
   color,
   lagDays,
   ...(knownMonths ? { knownMonths: new Set(knownMonths) } : {}),
+  ...(knownDays ? { knownDays: new Set(knownDays) } : {}),
 });
 
 // Every polyline in the chart, as [x, y] point lists in drawing order.
@@ -187,6 +189,36 @@ describe("spend", () => {
     const december = lines[0].slice(11, 42).map(([, y]) => y);
     expect(new Set(december).size).toBe(1);
     expect(december[0]).toBeGreaterThan(lines[0][10][1]);
+  });
+
+  it("breaks individual report holes and highlights every sampled day", () => {
+    const knownDays = run("2026-01-01", 18, 0)
+      .map(([day]) => day)
+      .filter((day) => day !== "2026-01-06");
+    const github = source(
+      run("2026-01-01", 10, 18).filter(([day]) => day !== "2026-01-06"),
+      2,
+      "#58a6ff",
+      ["2026-01"],
+      knownDays,
+    );
+    const { chart, duration } = spendChart(
+      [github],
+      NOW,
+      knownDays.length,
+      knownDays[0],
+    );
+    expect(duration).toBe(18 * DAY);
+    const lines = polylines(chart);
+    // The entire sampled window stays highlighted, so it is two pieces rather
+    // than base pieces followed by shorter highlighted copies.
+    expect(lines.length).toBe(2);
+    expect(lines[0].length).toBe(5);
+    expect(lines[1].length).toBe(12);
+    expect(lines[0].length + lines[1].length).toBe(knownDays.length);
+    expect(
+      lines.flat().some(([x]) => Math.abs(x - (5 / 17) * 220) < 0.1),
+    ).toBe(false);
   });
 
   it("starts at known quiet days before the first spend row", () => {

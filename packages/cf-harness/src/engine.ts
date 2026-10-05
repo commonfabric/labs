@@ -258,7 +258,7 @@ import type {
   WeaverActionInput,
   WeaverActionOutput,
 } from "./tools/weaver-action.ts";
-import type { HarnessClientActionRequester } from "./contracts/client-action.ts";
+import type { HarnessClientActionRequester } from "./client-actions/coordinator.ts";
 import {
   type ReadFileToolInput,
   type ReadFileToolOutput,

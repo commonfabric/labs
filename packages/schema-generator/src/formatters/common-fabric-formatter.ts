@@ -3983,8 +3983,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * Uses type-based detection which handles complex cases like intersection types
    * and conditional type expansions.
    * Returns true ONLY for unions where ALL non-null/undefined members are wrapper types.
+   * A wrapper that CFC labels hold is not one here (see the member loop).
    * Examples that return true: Reactive<T> | undefined, Cell<T> | null, Stream<T> | null | undefined
-   * Examples that return false: string | Cell | null (mixed union, should use UnionFormatter)
+   * Examples that return false: string | Cell | null (mixed union, should use UnionFormatter),
+   * Confidential<Cell<T>, …> | undefined (a labeled value)
    */
   #isWrapperUnion(type: ts.Type, context: GenerationContext): boolean {
     // Must be a union type
@@ -4016,9 +4018,15 @@ export class CommonFabricFormatter implements TypeFormatter {
         continue;
       }
 
-      // Check if this member is a wrapper type
+      // A wrapper under CFC labels, as `Confidential<Cell<T>, …>` is, is a
+      // labeled value rather than a wrapper: the labels ride on a carrier the
+      // wrapper's own formatting reads past, so the union formatter reads it,
+      // through the CFC alias.
       const wrapperInfo = getCellWrapperInfo(memberType, context.typeChecker);
-      if (wrapperInfo !== undefined) {
+      if (
+        wrapperInfo !== undefined &&
+        cfcCarriedParts(memberType, context.typeChecker) === undefined
+      ) {
         hasWrapperMember = true;
       } else {
         hasNonWrapperMember = true;

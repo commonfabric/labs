@@ -230,7 +230,7 @@ describe("RuntimeClient", () => {
       const value = await new Promise((resolve) => {
         cell.subscribe((value) => {
           resolve(value);
-        });
+        }, { onRefused: () => {} });
       });
       assertEquals(value, input);
     });
@@ -295,7 +295,7 @@ describe("RuntimeClient", () => {
       const cancel = reader.subscribe((value) => {
         const record = value as Record<string, unknown> | undefined;
         if (record?.marker === "second") gotNext.resolve(record);
-      });
+      }, { onRefused: () => {} });
 
       const sent = {
         bytes: new FabricBytes(nextContent),
@@ -343,7 +343,7 @@ describe("RuntimeClient", () => {
         if (Array.isArray(value?.children) && value.children[0] != null) {
           childArrived.resolve();
         }
-      });
+      }, { onRefused: () => {} });
       try {
         await childArrived.promise;
         const value = VIEW_SCOPED_REQUESTED
@@ -424,7 +424,7 @@ describe("RuntimeClient", () => {
         if (!value) throw new Error("cell was not synced");
         receivedValues.push(value);
         if (receivedValues.length >= 3) gotThree.resolve();
-      });
+      }, { onRefused: () => {} });
 
       cell.set({ counter: 1 });
       cell.set({ counter: 2 });
@@ -462,13 +462,13 @@ describe("RuntimeClient", () => {
       let _updatedValue1 = undefined;
       const cancel1 = cell.subscribe((value) => {
         _updatedValue1 = value;
-      });
+      }, { onRefused: () => {} });
       let _updatedValue2 = undefined;
       const gotValue = defer<void>();
       const cancel2 = cell2.subscribe((value) => {
         _updatedValue2 = value;
         if (cell2.get() === "my-value") gotValue.resolve();
-      });
+      }, { onRefused: () => {} });
 
       await cell.set("my-value");
       await gotValue.promise;
@@ -551,7 +551,7 @@ describe("RuntimeClient", () => {
           gotInitialA.resolve();
         }
         checkBothUpdated();
-      });
+      }, { onRefused: () => {} });
 
       // Wait for initial value to arrive from backend
       await gotInitialA.promise;
@@ -568,7 +568,7 @@ describe("RuntimeClient", () => {
       const cancelB = cellB.subscribe((v) => {
         valuesB.push(v);
         checkBothUpdated();
-      });
+      }, { onRefused: () => {} });
 
       // cellB receives the cached value synchronously, in the subscribe() call
       assertEquals(
@@ -688,7 +688,11 @@ describe("RuntimeClient", () => {
         includeRef: true,
       });
 
-      assertEquals(response.value, { count: 7, label: "copied label" });
+      assertEquals("refused" in response, false);
+      assertEquals("value" in response && response.value, {
+        count: 7,
+        label: "copied label",
+      });
     });
 
     it("detaches a followed root through the runtime-client protocol", async () => {
@@ -1903,12 +1907,12 @@ export default pattern<Record<string, never>>(() => {
         const sawOne = defer<void>();
         const cancelFirst = first.subscribe((value) => {
           if (value) firstSeen.push(value.counter);
-        });
+        }, { onRefused: () => {} });
         const cancelSecond = mirror.subscribe((value) => {
           if (!value) return;
           secondSeen.push(value.counter);
           if (value.counter === 1) sawOne.resolve();
-        });
+        }, { onRefused: () => {} });
 
         await first.set({ counter: 1 });
         await sawOne.promise;
@@ -1924,7 +1928,7 @@ export default pattern<Record<string, never>>(() => {
         const firstSeenBefore = firstSeen.length;
         const watchTwo = mirror.subscribe((value) => {
           if (value?.counter === 2) sawTwo.resolve();
-        });
+        }, { onRefused: () => {} });
         await first.set({ counter: 2 });
         await sawTwo.promise;
 
@@ -1964,7 +1968,9 @@ export default pattern<Record<string, never>>(() => {
           cause,
           counterSchema,
         );
-        const cancelMirror = mirror.subscribe(() => {});
+        const cancelMirror = mirror.subscribe(() => {}, {
+          onRefused: () => {},
+        });
         await second.idle();
 
         // The second document's departure is its own: its subscription stops,
@@ -1978,7 +1984,7 @@ export default pattern<Record<string, never>>(() => {
           if (!value) return;
           seen.push(value.counter);
           if (value.counter === 3) sawThree.resolve();
-        });
+        }, { onRefused: () => {} });
         await cell.set({ counter: 3 });
         await sawThree.promise;
         // Membership rather than the last value: a write's echo can arrive

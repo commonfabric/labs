@@ -10,8 +10,14 @@
  *   - explainTriggerTrace(options?)
  */
 
-import { $conn, CellHandle, RequestType } from "@commonfabric/runtime-client";
+import {
+  $conn,
+  CellHandle,
+  CellReadRefusedError,
+  RequestType,
+} from "@commonfabric/runtime-client";
 import type {
+  CellReadRefusal,
   CellRef,
   RuntimeClient,
   TriggerTraceEntry,
@@ -149,8 +155,11 @@ export interface DebugValueSummary {
     | "string"
     | "array"
     | "object"
-    | "other";
+    | "other"
+    | "refused";
   preview?: string | number | boolean | null;
+  /** For a `refused` read, what refused it. */
+  refusedBy?: CellReadRefusal["refusedBy"];
   length?: number;
   topKeys?: string[];
   internalKeys?: string[];
@@ -454,19 +463,33 @@ export function createDebugUtils(
     const label = options?.meta ? `read ${options.meta} cell` : "readCell";
     if (log) console.log(`[debug] ${label} ref:`, ref);
     let value: unknown;
-    if (options?.meta !== undefined) {
-      const response = await rt[$conn]().request<RequestType.CellGet>({
-        type: RequestType.CellGet,
-        cell: ref,
-        meta: options.meta,
-      });
-      value = CellHandle.deserialize(
-        new CellHandle(rt, ref),
-        response.value,
-      );
-    } else {
-      const cell = new CellHandle(rt, ref);
-      value = await cell.sync();
+    try {
+      if (options?.meta !== undefined) {
+        const response = await rt[$conn]().request<RequestType.CellGet>({
+          type: RequestType.CellGet,
+          cell: ref,
+          meta: options.meta,
+        });
+        // A refused read says so, as `CellHandle.sync()` does below, rather
+        // than return as a cell that holds nothing.
+        if (response.refused !== undefined) {
+          throw new CellReadRefusedError(response.refused);
+        }
+        value = CellHandle.deserialize(
+          new CellHandle(rt, ref),
+          response.value,
+        );
+      } else {
+        const cell = new CellHandle(rt, ref);
+        value = await cell.sync();
+      }
+    } catch (error) {
+      // Named as a refusal before it is thrown, so the console reads "refused"
+      // and never an empty cell.
+      if (log && error instanceof CellReadRefusedError) {
+        console.log(`[debug] ${label} refused:`, error.refusal);
+      }
+      throw error;
     }
     if (log) console.log(`[debug] ${label} value:`, value);
     return value;
@@ -512,6 +535,13 @@ export function createDebugUtils(
     const cell = new CellHandle(rt, ref);
     const cancel = cell.subscribe((value) => {
       console.log(`[debug] cell update [${new Date().toISOString()}]:`, value);
+    }, {
+      onRefused: (refusal) => {
+        console.log(
+          `[debug] cell update refused [${new Date().toISOString()}]:`,
+          refusal,
+        );
+      },
     });
 
     console.log("[debug] Subscribed. Call the returned function to cancel.");
@@ -579,14 +609,28 @@ export function createDebugUtils(
 
     const topChanges = await Promise.all(
       summary.topChanges.map(async (change) => {
-        const currentValue = await readCellValue(
-          {
-            space: change.space,
-            id: change.entityId,
-            path: change.path,
-          },
-          { log: false },
-        );
+        let currentValue: unknown;
+        try {
+          currentValue = await readCellValue(
+            {
+              space: change.space,
+              id: change.entityId,
+              path: change.path,
+            },
+            { log: false },
+          );
+        } catch (error) {
+          // One change whose value the worker refuses is reported as
+          // refused; the rest of the explanation stands.
+          if (!(error instanceof CellReadRefusedError)) throw error;
+          return {
+            ...change,
+            currentValueSummary: {
+              kind: "refused",
+              refusedBy: error.refusal.refusedBy,
+            },
+          } satisfies ExplainedTriggerTraceChange;
+        }
 
         return {
           ...change,

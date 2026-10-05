@@ -175,6 +175,27 @@ export const custodyIngest = {
   },
 
   /**
+   * Durably appends `elements` to a list cell in one commit, as one ingest
+   * (e.g. the batch of records one POST carries). The mark binds to
+   * `elements`, the payload this ingest brought, not to the accumulated list.
+   *
+   * The elements already in the list are left as they are. A list of objects
+   * holds a link to a document for each one, and writing the whole list back
+   * from a copy would store every earlier element again under a new id on
+   * each call.
+   */
+  appendAll<E>(
+    cell: Cell<E[]>,
+    elements: E[],
+    channel: VouchedChannel,
+  ): Promise<E[]> {
+    return durableEdit(cell, (bound) => {
+      bound.pushAll(elements);
+      return elements;
+    }, channel);
+  },
+
+  /**
    * Durably read-modify-write a cell under a vouched channel (e.g. upsert one
    * item into an accumulated auth blob). The read-merge-write runs inside the
    * retry — each attempt re-reads the current value — so concurrent updates

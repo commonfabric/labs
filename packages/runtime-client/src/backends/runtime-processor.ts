@@ -61,7 +61,6 @@ import {
   type Cancel,
   type Cell,
   ContextualFlowControl,
-  convertCellsToLinks,
   encodeSqliteParams,
   entityIdFrom,
   type EventIntentOutcome,
@@ -70,12 +69,12 @@ import {
   getPatternIdentityRef,
   hasOperationStorageCapability,
   hasPresenceStorageCapability,
+  hostValueOf,
   type IExtendedStorageTransaction,
   type IOperationStorageCapability,
   isCell,
   isCellResult,
   isLoopbackHostname,
-  KeepAsCell,
   markDurableReadTx,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -144,6 +143,7 @@ import {
   isPlainObject,
 } from "@commonfabric/utils/types";
 
+import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
 import { preloadProfiles } from "./preload-profiles.ts";
 import {
@@ -167,6 +167,8 @@ import {
 import {
   type ActionRunTraceResponse,
   BooleanResponse,
+  type CellFieldsRequest,
+  type CellFieldsResponse,
   type CellGetCfcLabelRequest,
   type CellGetRequest,
   type CellGetResponse,
@@ -180,6 +182,7 @@ import {
   type CellSetRequest,
   type CellSubscribeRequest,
   type CellUnsubscribeRequest,
+  type CellValueResponse,
   type CfcLabelViewResponse,
   ClientNotificationType,
   type CreateSpaceRequest,
@@ -436,26 +439,6 @@ function sqliteParamForRuntime(
     );
   }
   return value;
-}
-
-/**
- * Converts a runtime cell value into the client wire domain. Each link it
- * mints for a cell carries the display form of that cell's CFC label view,
- * with every caveat's source redacted. A sigil link already in the value is
- * rebuilt as the container it is, view and all; stored data carries no view
- * on a link, the persist seam having stripped it, so the minted links are
- * where a view crosses.
- */
-function cellValueForClient(value: unknown): FabricValue {
-  return convertCellsToLinks(
-    value as Parameters<typeof convertCellsToLinks>[0],
-    {
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-      doNotConvertCellResults: true,
-      includeCfcLabelView: true,
-    },
-  );
 }
 
 /**
@@ -1026,6 +1009,12 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderModulePolicySource?: CfcModulePolicySource;
+
+  /**
+   * What builds every answer to a host's read of a cell. It is built with no
+   * ceiling, so it returns every read as read.
+   */
+  #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -1517,57 +1506,38 @@ export class RuntimeProcessor {
           "use `CellHandle.getCfcLabel()` for the redacted display view",
       );
     }
+    const gate = this.#hostReadGate;
     let cell = getCell(this.#runtime, request.cell);
     if (request.meta !== undefined) {
       const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-      if (request.meta === "argument" || request.meta === "result") {
-        // For the meta link fields, use the meta linked cell instead
-        const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
-        const link = getMetaLink(rootCell, request.meta);
-        if (link === undefined) return { value: undefined };
-        cell = this.#runtime.getCellFromLink({
-          ...link,
-          path: [...link.path, ...request.cell.path],
-        });
-      } else {
-        // For meta cells that aren't link cells, return the raw data
-        return {
-          value: rootCell.getMetaRaw(request.meta) as FabricValue,
-        };
+      if (request.meta !== "argument" && request.meta !== "result") {
+        // A metadata field that is not a link returns the raw data.
+        return gate.readMetadata(rootCell, request.meta);
       }
+      // A metadata link field reads the cell it links to, once its document
+      // admits the read.
+      const refusal = gate.metadataRefusal(rootCell);
+      if (refusal !== undefined) return refusal;
+      const link = getMetaLink(rootCell, request.meta);
+      if (link === undefined) return gate.nothing();
+      cell = this.#runtime.getCellFromLink({
+        ...link,
+        path: [...link.path, ...request.cell.path],
+      });
     }
-    const value = cell.get();
-    // The sigil links inside the response carry each cell's `cfcLabelView`
-    // in its display form, the same redaction the top-level `cfcLabel` below
-    // gets. Display-only: the worker neither persists nor re-imports inbound
-    // views, so a redacted copy cannot round-trip into under-labeled state.
-    //
-    // `convertCellsToLinks()` preserves a `FabricPrimitive` by identity, and
-    // the envelope's encoding carries one to the main thread with its class,
-    // so what the response holds is what the cell held.
-    const converted = cellValueForClient(value);
-    // The resolved cell's own schema-bearing ref, when asked for — for a meta
-    // link read this addresses the linked cell itself, so the caller can
-    // subscribe to it or consult its schema's declarations.
-    const refField = request.includeRef ? { cell: createCellRef(cell) } : {};
-    if (!request.includeCfcLabel) {
-      return { value: converted, ...refField };
-    }
-    // This reads the display label with `cfcLabelViewForResolvedCell()` and
-    // redacts `Caveat.source` from it, as `handleCellGetCfcLabel()` does.
-    // Returning the label with the value saves the caller a second round trip.
-    // The value read above resolved the same links and kicked any cross-space
-    // targets already, so the label read kicks none of its own.
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
-      kickCrossSpaceTargets: false,
+    // The sigil links inside the answer carry each cell's `cfcLabelView` in
+    // its display form, the same redaction the top-level `cfcLabel` gets.
+    // Display-only: the worker neither persists nor re-imports inbound views,
+    // so a redacted copy cannot round-trip into under-labeled state. The
+    // conversion preserves a `FabricPrimitive` by identity, and the
+    // envelope's encoding carries one to the main thread with its class. The
+    // read cell's own ref, when asked for, addresses for a metadata link read
+    // the linked cell itself, so the caller can subscribe to it or consult
+    // its schema's declarations.
+    return gate.read(cell, {
+      includeRef: request.includeRef,
+      includeCfcLabel: request.includeCfcLabel,
     });
-    return {
-      value: converted,
-      ...refField,
-      cfcLabel: cfcLabel === undefined
-        ? undefined
-        : redactCaveatSourcesForDisplay(cfcLabel),
-    };
   }
 
   async handleCellPull(
@@ -1592,11 +1562,12 @@ export class RuntimeProcessor {
   /** Atomically stores a default only while the target has no backing value. */
   async handleCellInitialize(
     request: CellInitializeRequest,
-  ): Promise<{ value: FabricValue }> {
+  ): Promise<CellValueResponse> {
     if (request.value === undefined) {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const initial = mapCellRefsToSigilLinks(request.value);
+    let stored: CellValueResponse | undefined;
     const result = await this.#runtime.editWithRetry((tx) => {
       const cell = getCell(this.#runtime, request.cell).withTx(tx);
       // Initialization materializes the same backing value a whole-cell write
@@ -1606,25 +1577,29 @@ export class RuntimeProcessor {
       // child write with no durable parent and can replace the visible default.
       // Follow a final write redirect only for this existence check, while
       // retaining the view schema because its scope cap controls whether that
-      // redirect is reachable. Then return the normal projected value when
-      // storage already won.
-      const stored = cell.getRaw({
+      // redirect is reachable. When storage already won, the host is sent
+      // the value this transaction found, read as every host read is, and
+      // read here, before the transaction ends, so that a write landing after
+      // it commits is not mistaken for what it selected. The transaction
+      // wrote nothing, so a read of the runtime's state sees what it saw.
+      const backing = cell.getRaw({
         lastNode: "writeRedirect",
       });
-      if (stored !== undefined) {
-        const projected = cell.get();
-        if (projected === undefined) {
+      if (backing !== undefined) {
+        if (cell.get() === undefined) {
           throw new TypeError(
             "Cell backing value is incompatible with its schema.",
           );
         }
-        return cellValueForClient(projected);
+        stored = this.#hostReadGate.read(getCell(this.#runtime, request.cell));
+        return undefined;
       }
+      stored = undefined;
       cell.set(initial);
-      return cellValueForClient(initial);
+      return hostValueOf(initial);
     });
     if (result.error) throw new Error(result.error.message);
-    return { value: result.ok };
+    return stored ?? this.#hostReadGate.sentByHost(result.ok);
   }
 
   /**
@@ -2096,7 +2071,9 @@ export class RuntimeProcessor {
 
     const cell = getCell(this.#runtime, request.cell);
 
-    const cancel = cell.sink((value, cfcLabel) => {
+    const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
+      includeCfcLabel: request.includeCfcLabel,
+    }, (value) => {
       // Log empty-schema subscriptions that produce CellResult proxies.
       // These are the call sites that need real schemas added.
       const hasSchema = hasExplicitSubscriptionSchema(request.cell.schema);
@@ -2110,27 +2087,10 @@ export class RuntimeProcessor {
             `  schema: ${JSON.stringify(request.cell.schema)}`,
         );
       }
-      const converted = cellValueForClient(value);
-      // The sink read the raw label on its tracked tx (so cfc writes re-fire
-      // it); redact Caveat.source here before it crosses to the main thread.
-      const redactedLabel = request.includeCfcLabel
-        ? (cfcLabel === undefined
-          ? undefined
-          : redactCaveatSourcesForDisplay(cfcLabel))
-        : undefined;
-
-      // `.sink` fires synchronously on invocation. Trigger the notification
-      // in a microtask so that the subscription response returns
-      // before a notification fires.
-      queueMicrotask(() =>
-        client.post({
-          type: NotificationType.CellUpdate,
-          cell: request.cell,
-          value: converted,
-          ...(request.includeCfcLabel ? { cfcLabel: redactedLabel } : {}),
-        })
-      );
-    }, { includeCfcLabel: request.includeCfcLabel === true });
+    }, (update) =>
+      // `.sink` fires synchronously on invocation. Each notification leaves
+      // in a microtask so that the subscription response returns before it.
+      queueMicrotask(() => client.post(update)));
 
     this.#subscriptions.set(key, cancel);
     return { value: true };
@@ -2367,6 +2327,27 @@ export class RuntimeProcessor {
       policy: this.#hostSelectedCell(request.policy),
     });
     return answer === undefined ? {} : { answer };
+  }
+
+  /**
+   * The fields a record holds, each as a link to its own cell, as the
+   * host-read gate decides them. Synced first, so that the labels the list
+   * is decided on are the record's.
+   *
+   * @throws When the record's space refused the worker access: a load it
+   *   refused resolves as one that found nothing, and a record the worker
+   *   could not read is not one that holds no record.
+   */
+  async handleCellFields(
+    request: CellFieldsRequest,
+  ): Promise<CellFieldsResponse> {
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.sync();
+    const storage = this.#runtime.storageManager;
+    const denied = storage.spaceAccessError?.(request.cell.space) ??
+      storage.authorizationError?.(request.cell.space);
+    if (denied !== undefined) throw denied;
+    return this.#hostReadGate.fields(cell);
   }
 
   handleCellGetCfcLabel(
@@ -3514,6 +3495,8 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.CellFields:
+        return await this.handleCellFields(request);
       case RequestType.SnapshotSharePrepare:
         return await this.handleSnapshotSharePrepare(request, client);
       case RequestType.SnapshotShareCommit:

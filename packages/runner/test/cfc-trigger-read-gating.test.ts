@@ -314,9 +314,9 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
 
   it("flag ON: a cid: trigger read is excluded (content-addressed docs never gate)", async () => {
     // Trigger entries for content-addressed schema/program docs (cid:) are
-    // structural plumbing, dropped at ingest by addCfcTriggerReads
-    // (flowReadExcluded), so a run whose only trigger is a cid: address has an
-    // empty trigger set and egresses freely even with the gate on.
+    // structural plumbing, dropped at ingest by addCfcTriggerReads, so a run
+    // whose only trigger is a cid: address has an empty trigger set and
+    // egresses freely even with the gate on.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({
       storageManager,

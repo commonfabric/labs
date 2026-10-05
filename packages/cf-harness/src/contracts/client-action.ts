@@ -7,7 +7,13 @@
 
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-/** One action the client performs after a completed task. */
+/**
+ * One action the client performs after a completed task.
+ *
+ * `command` is a final action only. Mid-turn, `weaver_action` invokes a command
+ * by id with typed arguments (`invoke_command` in `client-command.ts`) and
+ * offers the other kinds here alongside it.
+ */
 export type HarnessClientAction =
   | { kind: "open_loom"; loomId: string }
   | { kind: "command"; line: string }
@@ -258,16 +264,8 @@ export interface HarnessClientActionOutcome {
   result?: string;
 }
 
-/**
- * The host's door for asking the person's client to act mid-turn. It emits
- * one request per action in order, resolves when every one is settled, and
- * settles any still open as declined "canceled" when `signal` aborts.
- * Outcomes come back in input order. Only a host that opted in supplies one.
- */
-export type HarnessClientActionRequester = (
-  actions: readonly HarnessClientAction[],
-  signal?: AbortSignal,
-) => Promise<HarnessClientActionOutcome[]>;
+/** The in-process requester supplied by a host that opted in to client actions. */
+export type { HarnessClientActionRequester } from "../client-actions/coordinator.ts";
 
 /** Whether a value is an outcome a client may report. */
 export const isHarnessClientActionOutcomeKind = (

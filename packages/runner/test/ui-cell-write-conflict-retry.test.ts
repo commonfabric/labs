@@ -232,6 +232,62 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
     }
   });
 
+  it("a blind UI write to a document the session has not loaded commits beside a field another session created", async () => {
+    // The other session's first write to the document is a push, which
+    // reaches the store as a patch. The UI write here sees no document, so
+    // its first attempt would replace the document whole; that attempt is
+    // refused, and the retry lands the typed value beside the other
+    // session's list.
+    const noteSchema = {
+      type: "object",
+      properties: {
+        log: { type: "array", items: { type: "string" } },
+        title: { type: "string" },
+      },
+    } as const;
+    type Note = { log?: string[]; title?: string };
+    const cause = "ui-write-unloaded-document";
+
+    const otherManager = EmulatedStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    const otherRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: otherManager,
+    });
+    try {
+      const created = await otherRuntime.editWithRetry((tx) => {
+        otherRuntime.getCell<Note>(space, cause, noteSchema, tx).key("log")
+          .push("keep");
+      });
+      expect(created.error).toBeUndefined();
+      await otherRuntime.storageManager.synced();
+
+      const title = runtime.getCell<Note>(space, cause, noteSchema).key(
+        "title",
+      );
+      const outcome = await runtime.commitUiCellWrite(title, "typed", {
+        blind: true,
+      });
+      expect(outcome.error).toBeUndefined();
+      await runtime.storageManager.synced();
+
+      // Durable, and read from the session that did not write the title.
+      const stored = otherRuntime.getCell<Note>(space, cause, noteSchema);
+      await stored.sync();
+      await waitForCellValue<string | undefined>(
+        otherRuntime,
+        stored.key("title"),
+        (value) => value === "typed",
+        { stuckLabel: "the other session to see the typed title" },
+      );
+      expect(stored.get()).toEqual({ log: ["keep"], title: "typed" });
+    } finally {
+      await otherRuntime.dispose();
+      await otherManager.close();
+    }
+  });
+
   it("a retry writes the lane's newest value, never its own (no LWW inversion, no vacuous-owner strand)", async () => {
     const seed = runtime.edit();
     const cell = runtime.getCell<Doc>(space, "ui-write-lww", schema, seed);

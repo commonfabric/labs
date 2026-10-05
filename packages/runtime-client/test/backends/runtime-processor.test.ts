@@ -58,13 +58,17 @@ import {
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import {
+  EmulatedStorageManager,
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
+  type CellGetResponse,
   type CellRef,
+  type CellValueAnswer,
+  type CellValueResponse,
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
@@ -158,6 +162,17 @@ const createRuntime = (
   return { runtime, storageManager };
 };
 
+/**
+ * The value answer `response` holds, failing the case when the read was
+ * refused: no read here is made under a display ceiling.
+ */
+function admitted(
+  response: CellGetResponse | CellValueResponse,
+): Extract<CellGetResponse, CellValueAnswer> {
+  if ("refused" in response) throw new Error("The read was refused.");
+  return response;
+}
+
 // A valid `fid1:` piece id from a readable seed (handlers parse pieceId via
 // `entityIdFrom`, which requires a real tagged-hash string).
 const fid = (seed: string) => taggedHashStringOf(seed);
@@ -235,7 +250,7 @@ describe("runtime-processor", () => {
               barrierEntered.promise.then(() => "commit-barrier"),
             ]),
           ).toBe("read");
-          const value = (await pull).value;
+          const value = admitted(await pull).value;
           if (!(value instanceof FabricBytes)) {
             throw new Error("Expected a byte value from the pull");
           }
@@ -3403,6 +3418,91 @@ describe("runtime-processor", () => {
     });
   });
 
+  describe("`RuntimeProcessor` cell fields IPC", () => {
+    it("lists the fields of a record it has not loaded yet, once it has synced it", async () => {
+      const server = newLoopbackServer();
+      const connect = () =>
+        new Runtime({
+          apiUrl: new URL("http://localhost/"),
+          storageManager: EmulatedStorageManager.connectTo(server, {
+            as: cfcSigner,
+          }),
+        });
+      const writer = connect();
+      const reader = connect();
+      try {
+        const space = cfcSigner.did();
+        const record = writer.getCell(space, "fields-record", undefined);
+        await writer.editWithRetry((tx) => {
+          record.withTx(tx).set({ title: "Inbox", count: 3 });
+        });
+        await writer.storageManager.synced();
+        const ref: CellRef = {
+          id: record.getAsNormalizedFullLink().id,
+          space,
+          scope: "space",
+          path: [],
+        };
+        const processor = buildProcessor({ runtime: reader, space });
+
+        const response = await processor.handleRequest({
+          type: RequestType.CellFields,
+          cell: ref,
+        });
+
+        expect(response).toEqual({
+          fields: {
+            title: { ...ref, path: ["title"] },
+            count: { ...ref, path: ["count"] },
+          },
+        });
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
+    it("fails a list it could not read for want of access, rather than answer that the cell holds no record", async () => {
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost/"),
+        storageManager,
+      });
+      const space = cfcSigner.did();
+      const ref: CellRef = {
+        id: runtime.getCell(space, "fields-behind-a-refusal", undefined)
+          .getAsNormalizedFullLink().id,
+        space,
+        scope: "space",
+        path: [],
+      };
+      const processor = buildProcessor({ runtime, space });
+      const list = () =>
+        processor.handleRequest({ type: RequestType.CellFields, cell: ref });
+      try {
+        // Nothing stored and nothing refused: no record.
+        expect(await list()).toEqual({});
+
+        const refused = stub(
+          storageManager,
+          "spaceAccessError",
+          () => new Error("lacks READ on the space"),
+        );
+        try {
+          await expect(list()).rejects.toThrow(
+            "lacks READ on the space",
+          );
+        } finally {
+          refused.restore();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
   describe("`RuntimeProcessor` CFC label IPC", () => {
     /**
      * Runs `body` with a cell naming `ref`, whose stored label metadata reads
@@ -3631,10 +3731,10 @@ describe("runtime-processor", () => {
           },
         });
 
-        const response = processor.handleCellGet({
+        const response = admitted(processor.handleCellGet({
           type: RequestType.CellGet,
           cell: ref,
-        });
+        }));
         const atom = sourcedCaveatOf(
           (response.value as { nested: SigilLink }).nested,
         );
@@ -3672,19 +3772,19 @@ describe("runtime-processor", () => {
         },
       });
 
-      const withRef = processor.handleCellGet({
+      const withRef = admitted(processor.handleCellGet({
         type: RequestType.CellGet,
         cell: ref,
         includeRef: true,
-      });
+      }));
       expect(withRef.cell?.id).toBe("of:include-ref-cell");
       expect(withRef.cell?.schema).toEqual({ type: "string" });
 
       // Not requested: not returned.
-      const without = processor.handleCellGet({
+      const without = admitted(processor.handleCellGet({
         type: RequestType.CellGet,
         cell: ref,
-      });
+      }));
       expect(without.cell).toBeUndefined();
     });
 
@@ -3721,12 +3821,12 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = processor.handleCellGet({
+      const response = admitted(processor.handleCellGet({
         type: RequestType.CellGet,
         cell: ref,
         includeRef: true,
         includeCfcLabel: true,
-      });
+      }));
       expect(response.cell?.id).toBe("of:include-ref-label-cell");
       // The cell carries no label; the field is present-but-undefined.
       expect(response.cfcLabel).toBeUndefined();
@@ -3778,10 +3878,10 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = processor.handleCellGet({
+      const response = admitted(processor.handleCellGet({
         type: RequestType.CellGet,
         cell: ref,
-      });
+      }));
       const atom = sourcedCaveatOf(
         (response.value as { nested: SigilLink }).nested,
       );
@@ -4726,6 +4826,62 @@ describe("runtime-processor", () => {
       })).rejects.toThrow("initialize failed");
     });
 
+    it("returns the value its own transaction found, not one written after it commits", async () => {
+      /** A runtime that writes `late` once each edit has committed. */
+      class LateWriter extends Runtime {
+        late: (() => Promise<void>) | undefined;
+        override async editWithRetry<T = void>(
+          fn: (tx: IExtendedStorageTransaction) => T,
+          maxRetries?: number,
+          options?: Parameters<Runtime["editWithRetry"]>[2],
+        ) {
+          const result = await super.editWithRetry(fn, maxRetries, options);
+          await this.late?.();
+          return result;
+        }
+      }
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new LateWriter({
+        apiUrl: new URL("http://localhost/"),
+        storageManager,
+      });
+      try {
+        const schema = {
+          type: "object",
+          properties: { winner: { type: "string" } },
+          required: ["winner"],
+        } as const;
+        const cell = runtime.getCell<{ winner: string }>(
+          cfcSigner.did(),
+          "initialize-then-written",
+          schema,
+        );
+        const seed = runtime.edit();
+        cell.withTx(seed).set({ winner: "stored" });
+        expect((await seed.commit()).error).toBeUndefined();
+        runtime.late = async () => {
+          runtime.late = undefined;
+          const later = runtime.edit();
+          cell.withTx(later).set({ winner: "written after" });
+          expect((await later.commit()).error).toBeUndefined();
+        };
+        const processor = buildProcessor({ runtime });
+
+        const selected = admitted(
+          await processor.handleCellInitialize({
+            type: RequestType.CellInitialize,
+            cell: createCellRef(cell),
+            value: { winner: "default" },
+          }),
+        );
+
+        expect(selected.value).toEqual({ winner: "stored" });
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
     it("loads an existing scoped value before choosing an initializer", async () => {
       const signer = await Identity.fromPassphrase(
         `direct-scoped-cell-initialize-${crypto.randomUUID()}`,
@@ -4777,11 +4933,13 @@ describe("runtime-processor", () => {
           runtime: readerRuntime,
         }) as RuntimeProcessor;
 
-        const selected = await processor.handleCellInitialize({
-          type: RequestType.CellInitialize,
-          cell: createCellRef(readerCell),
-          value: { winner: "default" },
-        });
+        const selected = admitted(
+          await processor.handleCellInitialize({
+            type: RequestType.CellInitialize,
+            cell: createCellRef(readerCell),
+            value: { winner: "default" },
+          }),
+        );
         await readerCell.pull();
 
         expect(selected.value).toEqual({ winner: "stored" });
@@ -4818,7 +4976,7 @@ describe("runtime-processor", () => {
         const processor = buildProcessor({ runtime });
         const ref = createCellRef(cell);
 
-        const [first, second] = await Promise.all([
+        const [first, second] = (await Promise.all([
           processor.handleCellInitialize({
             type: RequestType.CellInitialize,
             cell: ref,
@@ -4829,7 +4987,7 @@ describe("runtime-processor", () => {
             cell: ref,
             value: { winner: "second" },
           }),
-        ]);
+        ])).map(admitted);
         await cell.pull();
 
         expect(first.value).toEqual(second.value);

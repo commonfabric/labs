@@ -35,7 +35,7 @@ import {
   cfcLabelViewFromMetadata,
   rebaseCfcLabelView,
 } from "./label-view-state.ts";
-import { readStoredCfcMetadata } from "./metadata.ts";
+import { readStoredCfcLabelsForReader } from "./metadata.ts";
 import { atomsOutsideCeiling } from "./observation.ts";
 import { readConsumesEntry } from "./observation-classes.ts";
 
@@ -148,10 +148,12 @@ export class CfcReadCeilingError extends Error {
 /**
  * Measures a payload read against its runtime ceiling before returning content.
  * Labels come from the stored envelope, including descendants of a raw object
- * read. A link-resolution probe issued inside dereference resolution or marked
- * as runtime wiring is machinery, as are write-destination and scheduler
- * dependency probes. A standalone link probe observes the pointer and is
- * measured here; the content read after resolution is measured at its target.
+ * read, and for a scoped instance from its broader instances' confidentiality
+ * too (`readStoredCfcLabelsForReader`). A link-resolution probe issued inside
+ * dereference resolution or marked as runtime wiring is machinery, as are
+ * write-destination and scheduler dependency probes. A standalone link probe
+ * observes the pointer and is measured here; the content read after
+ * resolution is measured at its target.
  */
 export function assertCfcReadCeiling(
   tx: IExtendedStorageTransaction,
@@ -162,20 +164,21 @@ export function assertCfcReadCeiling(
   const linkProbe = isLinkResolutionProbe(options?.meta);
   if (
     ceiling === undefined ||
-    (address.path.length > 0 && address.path[0] !== "value") ||
     isInternalVerifierRead(options?.meta) ||
     isDereferenceResolutionProbe(options?.meta) ||
     (linkProbe && isMachineryRead(options?.meta)) ||
     isWriteDestinationRead(options?.meta) ||
     isSchedulerDependencyRead(options?.meta)
   ) return;
-  const metadata = readStoredCfcMetadata(tx, address);
-  // A read addresses the stored document, so its path is rooted there.
+  // A read addresses the stored document, so its path is rooted there. A read
+  // of one of the document's own members observes no payload, so no payload
+  // label limits it.
   const documentPath = toDocumentPath(address.path);
-  let entries = cfcLabelViewFromMetadata(
-    metadata,
-    canonicalizeDocumentPath(documentPath),
-  )?.entries ?? [];
+  const payloadPath = canonicalizeDocumentPath(documentPath);
+  if (payloadPath === undefined) return;
+  const metadata = readStoredCfcLabelsForReader(tx, address);
+  let entries = cfcLabelViewFromMetadata(metadata, payloadPath)?.entries ??
+    [];
   if (linkProbe) {
     entries = entries.filter((entry) => readConsumesEntry("followRef", entry));
   } else if (documentPath.at(-1) === "length") {
@@ -187,10 +190,11 @@ export function assertCfcReadCeiling(
       meta: internalVerifierRead,
       nonRecursive: true,
     });
-    if (Array.isArray(parent)) {
+    const parentPayloadPath = canonicalizeDocumentPath(parentPath);
+    if (Array.isArray(parent) && parentPayloadPath !== undefined) {
       const parentEntries = cfcLabelViewFromMetadata(
         metadata,
-        canonicalizeDocumentPath(parentPath),
+        parentPayloadPath,
       )?.entries ?? [];
       const membershipEntries = parentEntries.filter((entry) =>
         entry.path.length === 0 && readConsumesEntry("shape", entry)
