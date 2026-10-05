@@ -1248,6 +1248,11 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                                               |
 | `--work-root`               | Where run workspaces and artifacts go. Defaults to `$CF_HARNESS_HOME/agent-runs`, falling back to `$HOME/.cf-harness/agent-runs`. |
 | `--model`                   | The model name passed to `cf-harness`.                                                                                            |
+| `--local-jobs-socket`       | Serve local jobs on this Unix socket (see [Local jobs](#local-jobs)). Off unless named.                                           |
+| `--local-job-profiles`      | The host-owned JSON file naming the profiles local jobs run under. Required with `--local-jobs-socket`.                           |
+| `--local-jobs-store`        | The local job store. Defaults to `jobs.sqlite` beside the socket.                                                                 |
+| `--max-concurrent-local`    | How many local jobs run at once, beside and apart from `--max-concurrent`. Defaults to 2.                                         |
+| `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
 The model provider is the one `cf-harness` is configured with under its harness
 home directory. The runner uses the `context` prompt role, so the default
@@ -1296,6 +1301,35 @@ records, the runner opens and reuses one storage-only runtime for each distinct
 record host without changing the process's deployment settings. The runner and
 inspection commands share this connection path. The runner is the one command
 that the next section's rule does not bound to a single deployment.
+
+### Local jobs
+
+With `--local-jobs-socket` and `--local-job-profiles`, the runner also runs
+local jobs: work a local caller hands it directly, which never enters the
+fabric. It serves them first and on its own, so they run whether or not the
+Fabric lane starts; a Fabric lane that fails to start is reported and leaves the
+local jobs served. With `--local-only` there is no Fabric lane.
+
+The door is HTTP on the Unix socket, mode 0600, with a bearer token in
+`<socket>.token`, also 0600 and minted at each start: reaching the socket is the
+authority. A caller enqueues
+`{caller, profile, idempotencyKey, task,
+instructions?, context?, resultSchema, tools?, maxModelTurns?}`
+with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
+`GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
+with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
+ends after the job's terminal state. `GET /health` says which lanes run.
+
+A profile, named in the host's file, is the authority a job runs with: its
+tools, its host Loom files, its model-turn cap, and the prompt-slot role its
+task binds as. A request may name fewer tools and fewer turns, and nothing else.
+A job runs through the same `cf-harness` path as an agent run, with no fabric
+session, and reports a `step` event for each tool its loop calls and a `command`
+event for each command the host ran for it.
+
+A job the runner was running when it stopped or crashed ends `interrupted`
+(`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
+have changed things.
 
 ## One deployment per process
 

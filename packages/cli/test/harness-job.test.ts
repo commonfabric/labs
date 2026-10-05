@@ -35,6 +35,8 @@ interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
   role?: string;
+  systemPrompt?: string;
+  maxModelTurns?: number;
   signal?: AbortSignal;
 }
 
@@ -107,6 +109,9 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.systemPrompt = prompt.systemPrompt;
+              seen.maxModelTurns = prompt.maxModelTurns ??
+                loopOptions.maxModelTurns;
               seen.role = prompt.promptSlotBinding?.role;
               seen.signal = prompt.signal;
               return script({
@@ -204,6 +209,21 @@ describe("runHarnessJob()", () => {
         modelTurns: 2,
         toolCalls: 1,
       });
+    });
+
+    it("gives the harness the spec's instructions and turn cap, and neither when the spec names none", async () => {
+      const { seen } = await runScripted(
+        plainSpec({ instructions: "Answer in one word.", maxModelTurns: 6 }),
+        answering("Titan"),
+      );
+      const plain = await runScripted(plainSpec(), answering("Titan"));
+
+      expect(seen.systemPrompt).toContain("Answer in one word.");
+      expect(seen.maxModelTurns).toBe(6);
+      expect(plain.seen.systemPrompt ?? "").not.toContain(
+        "Answer in one word.",
+      );
+      expect(plain.seen.maxModelTurns).not.toBe(6);
     });
 
     it("leaves usage out of the report when the loop reports none", async () => {
