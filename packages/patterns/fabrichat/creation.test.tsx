@@ -96,7 +96,7 @@ const reasonOf = (
 
 /** What the first room in `rooms` says of its messages through its link. */
 const linkedCount = (rooms: Writable<ChatIndexEntry[]>): string => {
-  const messages = rooms.key(0).key("room").key("messages").get();
+  const messages = rooms.key(0).key("room").get()?.get()?.messages;
   return `count:${messages?.count ?? "none"} ` +
     `newestAt:${messages?.newestAt ?? "none"}`;
 };
