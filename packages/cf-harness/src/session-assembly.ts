@@ -23,6 +23,7 @@
 import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
+import type { HarnessLoomCommandsConfig } from "./loom-commands.ts";
 import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
 import type { CfHarnessEngine } from "./engine.ts";
 import type {
@@ -138,6 +139,9 @@ export interface HarnessSessionConfig {
   /** Explicit host-owned backing for read-only Loom retrieval. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
+  /** Explicit host-owned broker for the commands the host admits. */
+  loomCommands?: HarnessLoomCommandsConfig;
+
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
 
@@ -192,6 +196,7 @@ export const harnessSessionToolBacking = (
   fabricSessionAvailable: config.fabricSession !== undefined,
   loomAuthoringAvailable: config.loomAuthoring !== undefined,
   loomRetrievalAvailable: config.loomRetrieval !== undefined,
+  loomCommandsAvailable: config.loomCommands !== undefined,
   patternIndexAvailable: config.patternIndex !== undefined,
   skillsShSearchAvailable: config.skillsSh !== undefined,
   skillsShAcquisitionAvailable: config.skillsSh !== undefined,
@@ -343,6 +348,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.loomRetrieval !== undefined
       ? { loomRetrieval: config.loomRetrieval }
+      : {}),
+    ...(config.loomCommands !== undefined
+      ? { loomCommands: config.loomCommands }
       : {}),
     ...(config.patternIndex !== undefined
       ? { patternIndex: config.patternIndex }
