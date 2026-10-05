@@ -43,6 +43,7 @@
     "./v2/routed-host": "./v2/routed-host.ts",
     "./v2/routed-listener": "./v2/routed-listener.ts",
     "./v2/routed-epochs": "./v2/routed-epochs.ts",
+    "./v2/routed-directory": "./v2/routed-directory.ts",
     "./v2/session-open-auth": "./v2/session-open-auth.ts",
     "./v2/storage-path": "./v2/storage-path.ts",
     "./v2/schema-table-links": "./v2/schema-table-links.ts",

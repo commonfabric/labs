@@ -146,10 +146,13 @@ certificate private key, compromise exposes that key too.
 ## Routing and input handling
 
 9. **Use an authoritative space directory.** The router accepts a canonical
-   space DID, looks up its assigned toolshed, and denies unknown spaces in this
-   public stage. A client cannot supply an upstream address. Route changes need
-   a fenced ownership epoch so a stale router cannot keep sending writes to the
-   former owner; resume must reauthorize on the new toolshed.
+   space DID and looks up its assigned toolshed. The directory places a DID it
+   does not list by its `unlisted` rule, which derives the toolshed from the
+   DID's last character and stays fixed for the deployment, and without that
+   rule denies it. A client cannot supply an upstream address; choosing its DID
+   selects a toolshed only through the rule, which grants no authority. Route
+   changes need a fenced ownership epoch so a stale router cannot keep sending
+   writes to the former owner; resume must reauthorize on the new toolshed.
 10. **Treat routing metadata as untrusted.** A binary envelope's cleartext space
     DID is a routing hint. The toolshed must decompress and parse the
     authenticated message, compare its canonical `space` and session binding
@@ -256,8 +259,10 @@ certificate private key, compromise exposes that key too.
   lease expires. Renewing with the same proof cannot extend a backend context.
 - Disconnecting a client or killing its router eventually removes its backend
   authority within the documented lease; an expired proof cannot reopen it.
-- The router denies unknown spaces in this public stage, and a client cannot
-  select a toolshed or create a space by choosing a new DID.
+- Without an `unlisted` rule the router denies spaces the directory does not
+  list, and with one a client selects a toolshed only through the rule. The
+  toolshed still refuses a space without an ACL, so a client cannot create a
+  space by choosing a new DID.
 - Incompatible client flags are rejected even when the router's upstream
   advertises compatible flags. A header/body space mismatch, ambiguous JSON, and
   a compressed expansion attack fail before any write or watch is admitted.

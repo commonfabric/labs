@@ -32,9 +32,13 @@ the percent-encoded form emitted by `URLSearchParams`. Repeated parameters,
 additional fields and malformed escapes are refused. A dedicated socket denies
 frames naming another space. The URL grants no authority and never selects a
 private endpoint: each space frame still requires authoritative directory
-admission and toolshed verification. Unknown DIDs receive the same generic
-request denial after authentication; the upgrade does not reveal directory
-membership.
+placement and toolshed verification. The directory places a DID it does not list
+by its optional `unlisted` rule, which maps the DID's last character to a
+toolshed. The router reads the rule and the toolshed list once, and each
+toolshed the rule and, when there is one, its own index; a snapshot that changes
+them is refused until restart. Without a rule, unlisted DIDs receive the same
+generic request denial after authentication. The upgrade does not reveal
+directory membership.
 
 `sharedMemoryConnection` controls the runner's socket topology. Both topologies
 supply a `SessionPrincipal`, so authentication follows the peer's advertised

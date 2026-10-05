@@ -1,5 +1,10 @@
 /** Private Mode A endpoint policy, enabled only by tracked deployment configuration. */
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
+import {
+  parseUnlistedPlacement,
+  type UnlistedPlacement,
+  unlistedToolshed,
+} from "@commonfabric/memory/v2/routed-directory";
 import { RoutedEpochStore } from "@commonfabric/memory/v2/routed-epochs";
 import { RoutedMemoryHost } from "@commonfabric/memory/v2/routed-host";
 import { listenRoutedMemory } from "@commonfabric/memory/v2/routed-listener";
@@ -78,6 +83,9 @@ function load(path: string): RouterConfig {
   return { ...value, routers } as unknown as RouterConfig;
 }
 
+/** An Ed25519 `did:key`: the multicodec prefix and 32 bytes, base58btc. */
+const ED25519_DID_SHAPE = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
+
 /** Directory snapshot shared with the placement broker; no request supplies an address. */
 export class MemoryRouterPolicy {
   readonly config: RouterConfig;
@@ -88,6 +96,19 @@ export class MemoryRouterPolicy {
   #generation = 0;
   #available = true;
   #owners = new Map<string, number>();
+  /** Every DID the directory lists, whichever toolshed it names. */
+  #listed = new Set<string>();
+  /** This toolshed's index in the directory. */
+  #here = -1;
+  #unlisted: UnlistedPlacement | undefined;
+  /**
+   * The `unlisted` rule and this toolshed's index as first read. Changing
+   * either would move spaces the rule placed without their stores, so a
+   * snapshot that does is unavailable until a restart, as a changed rule or
+   * toolshed list is to the router. Toolsheds added after this one change
+   * nothing here.
+   */
+  #topology: string | undefined;
 
   /** Loads the private endpoint's allowlist and validates the first directory snapshot. */
   constructor(path: string) {
@@ -126,6 +147,13 @@ export class MemoryRouterPolicy {
       parseRoutedJson(source),
     );
     requireRouted(
+      Object.keys(directory).every((key) =>
+        ["version", "deployment", "toolsheds", "spaces", "unlisted"].includes(
+          key,
+        )
+      ),
+    );
+    requireRouted(
       directory.version === 1 &&
         directory.deployment === this.config.deployment &&
         Array.isArray(directory.toolsheds) && directory.toolsheds.length > 0 &&
@@ -137,28 +165,48 @@ export class MemoryRouterPolicy {
       return shed.did;
     });
     requireRouted(sheds.filter((did) => did === identity.did()).length === 1);
+    const here = sheds.indexOf(identity.did());
+    const unlisted = parseUnlistedPlacement(directory.unlisted, sheds.length);
+    const topology = unlisted === undefined
+      ? ""
+      : `${here}|${unlisted.epoch}:${
+        [...unlisted.lastCharacter.values()].join(",")
+      }`;
+    this.#topology ??= topology;
+    requireRouted(topology === this.#topology);
     const spaces = Object.entries(routedObject(directory.spaces));
     requireRouted(spaces.length <= 10000);
     const owners = new Map<string, number>();
+    const listed = new Set<string>();
     for (const [did, value] of spaces) {
       const placement = routedObject(value);
+      // A DID validated in an earlier snapshot is still canonical, and
+      // validating 10,000 again would empty the identity cache.
       requireRouted(
-        isCanonicalEd25519DID(did) &&
+        (this.#listed.has(did) || isCanonicalEd25519DID(did)) &&
           Number.isSafeInteger(placement.toolshed) &&
           typeof placement.toolshed === "number" && placement.toolshed >= 0 &&
           placement.toolshed < sheds.length &&
           typeof placement.epoch === "number" &&
           Number.isSafeInteger(placement.epoch) && placement.epoch > 0,
       );
-      if (sheds[placement.toolshed] === identity.did()) {
-        owners.set(did, placement.epoch);
-      }
+      listed.add(did);
+      if (placement.toolshed === here) owners.set(did, placement.epoch);
     }
     // Placement changes for other toolsheds leave this one's contexts valid,
-    // so only a change in its own ownership triggers the fence.
+    // so only a change in its own ownership triggers the fence: a listed
+    // placement here, or a DID the rule assigns here being listed or
+    // unlisted. The rule and this index are fixed, so they assign the same.
+    const claimed = (did: string) =>
+      unlisted !== undefined && unlistedToolshed(unlisted, did) === here;
     const changed = owners.size !== this.#owners.size ||
-      [...owners].some(([did, epoch]) => this.#owners.get(did) !== epoch);
+      [...owners].some(([did, epoch]) => this.#owners.get(did) !== epoch) ||
+      [...listed].some((did) => !this.#listed.has(did) && claimed(did)) ||
+      [...this.#listed].some((did) => !listed.has(did) && claimed(did));
     this.#owners = owners;
+    this.#listed = listed;
+    this.#here = here;
+    this.#unlisted = unlisted;
     this.#source = source;
     this.#stamp = recorded;
     if (changed || !this.#available) this.#generation++;
@@ -178,10 +226,51 @@ export class MemoryRouterPolicy {
     return this.#available;
   }
 
-  /** Synchronously fences an engine turn against the current owning epoch. */
+  /**
+   * Changes whenever this toolshed's ownership or the snapshot's availability
+   * changes; the private endpoint fences its contexts when it does.
+   */
+  get generation(): number {
+    this.#current();
+    return this.#generation;
+  }
+
+  /**
+   * Synchronously fences an engine turn against the current owning epoch: a
+   * listed space's own, or the `unlisted` rule's for a DID the directory does
+   * not list. `space` must be a canonical DID, as the routed host validates
+   * before asking; a caller that has not validated it uses `owns`.
+   */
   ownership(space: string): number | undefined {
     this.#current();
-    return this.#owners.get(space);
+    if (this.#listed.has(space) || this.#unlisted === undefined) {
+      return this.#owners.get(space);
+    }
+    return unlistedToolshed(this.#unlisted, space) === this.#here
+      ? this.#unlisted.epoch
+      : undefined;
+  }
+
+  /**
+   * Whether this toolshed owns `space`, which may be any string. A string
+   * the rule places must have an Ed25519 `did:key`'s shape, so no other name,
+   * such as an internal cell database's, opens as a space. That check needs
+   * no point decompression, so it costs nothing per turn; `creates` checks
+   * the point before a store is made.
+   */
+  owns(space: string): boolean {
+    return this.ownership(space) !== undefined &&
+      (this.#listed.has(space) || ED25519_DID_SHAPE.test(space));
+  }
+
+  /**
+   * Whether a space with no store may be created here: only a canonical DID
+   * the `unlisted` rule places here, since a listed space's store must
+   * already be in place.
+   */
+  creates(space: string): boolean {
+    return !this.#listed.has(space) && this.owns(space) &&
+      isCanonicalEd25519DID(space);
   }
 
   /** Refreshes ownership; an unreadable or invalid snapshot owns nothing. */
@@ -190,6 +279,8 @@ export class MemoryRouterPolicy {
       this.#refresh();
     } catch {
       this.#owners.clear();
+      this.#listed.clear();
+      this.#unlisted = undefined;
       this.#source = undefined;
       this.#stamp = undefined;
       if (this.#available) {

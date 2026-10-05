@@ -1,12 +1,16 @@
 /** Disposable real toolshed protocol fixture for the Rust router exercise. */
 
-import { Identity } from "@commonfabric/identity";
+import { Identity, isCanonicalEd25519DID } from "@commonfabric/identity";
 import { toFileUrl } from "@std/path";
 
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import type { MemorySpace } from "../../interface.ts";
 import { verifyConnectionAuthorization } from "../../v2/connection-auth.ts";
 import * as Engine from "../../v2/engine.ts";
+import {
+  parseUnlistedPlacement,
+  unlistedToolshed,
+} from "../../v2/routed-directory.ts";
 import { RoutedEpochStore } from "../../v2/routed-epochs.ts";
 import { RoutedMemoryHost } from "../../v2/routed-host.ts";
 import { listenRoutedMemory } from "../../v2/routed-listener.ts";
@@ -69,17 +73,27 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
   Engine.close(engine);
   const ownership = (space: string): number | undefined => {
     const directory = JSON.parse(Deno.readTextFileSync(config.directory));
+    const here = directory.toolsheds.findIndex((shed: { did: string }) =>
+      shed.did === identity.did()
+    );
     const entry = directory.spaces[space];
-    return entry !== undefined &&
-        directory.toolsheds[entry.toolshed].did === identity.did()
-      ? entry.epoch
+    if (entry !== undefined) {
+      return entry.toolshed === here ? entry.epoch : undefined;
+    }
+    const rule = parseUnlistedPlacement(
+      directory.unlisted,
+      directory.toolsheds.length,
+    );
+    return rule !== undefined && unlistedToolshed(rule, space) === here
+      ? rule.epoch
       : undefined;
   };
   const server = new Server({
     store,
     acl: { mode: "enforce" },
     requireExplicitAcl: true,
-    ownsSpace: (space) => ownership(space) !== undefined,
+    ownsSpace: (space) =>
+      isCanonicalEd25519DID(space) && ownership(space) !== undefined,
     authorizeSessionOpen: verifySessionOpenAuthorization,
     authorizeConnection: verifyConnectionAuthorization,
     sessionOpenAuth: { audience: identity.did() },

@@ -118,7 +118,7 @@ export const memoryServer = new MemoryServer.Server({
   },
   ...(routerPolicy !== undefined
     ? {
-      ownsSpace: (space: string) => routerPolicy.ownership(space) !== undefined,
+      ownsSpace: (space: string) => routerPolicy.owns(space),
       requireExplicitAcl: true,
     }
     : {}),
