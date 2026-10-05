@@ -51,7 +51,7 @@ describe("cell-handle", () => {
               requests.push(request);
               return Promise.resolve({ value: { ready: true } });
             },
-            publishRead: () => {},
+            peersOf: () => [],
           }),
         } as unknown as RuntimeClient;
         const cell = new CellHandle<{ ready: boolean }>(runtime, ref);
@@ -852,7 +852,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
-          publishRead: () => {},
+          peersOf: () => [],
         }),
       } as unknown as RuntimeClient;
       return { runtime, requests };
@@ -1768,6 +1768,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -1807,6 +1808,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -1964,6 +1966,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2003,7 +2006,7 @@ describe("cell-handle", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
-        publishRead: () => {},
+        peersOf: () => [],
         signal: { aborted: false },
       };
       const runtime = {
@@ -2358,6 +2361,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2410,7 +2414,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
-          publishRead: () => {},
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2512,6 +2516,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2592,7 +2597,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
-          publishRead: () => {},
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2646,6 +2651,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -2826,6 +2832,7 @@ describe("cell-handle", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       } as unknown as RuntimeClient;
@@ -3215,11 +3222,11 @@ describe("cell-handle", () => {
 
   describe("CellHandle reads that change what it holds", () => {
     // What a read finds reaches the handle's subscribers when it differs from
-    // what the handle holds, and goes to the connection, which hands it to
-    // every other handle on the cell. Each case starts from a handle holding
-    // a value its subscriber was given. What was heard is compared with
-    // `toStrictEqual()`, since `toEqual()` passes a list missing a trailing
-    // `undefined`.
+    // what the handle holds, and goes to every other handle the connection
+    // names as subscribed to the same cell. Most cases start from handles
+    // holding a value their subscribers were given. What was heard is compared
+    // with `toStrictEqual()`, since `toEqual()` passes a list missing a
+    // trailing `undefined`.
 
     const ref: CellRef = {
       id: "of:changed-read-cell" as CellRef["id"],
@@ -3228,69 +3235,129 @@ describe("cell-handle", () => {
       path: [],
     };
     /**
-     * A handle holding `["held"]`, on a runtime that answers each read with
-     * `answer`, with what its subscriber heard and what the connection was
-     * handed to pass on.
+     * A runtime whose connection answers each read with what `answer` returns,
+     * acknowledges each write, and names every handle `subscribed()` made on
+     * it as subscribed to the same cell.
      */
-    const holding = (answer: unknown) => {
-      const published: unknown[] = [];
+    const answering = (answer: () => Promise<unknown>) => {
+      const handles: CellHandle<string[]>[] = [];
       const runtime = {
         [$conn]: () => ({
           signal: new AbortController().signal,
-          request: () => Promise.resolve({ value: answer }),
+          request: (request: { type: RequestType }) =>
+            request.type === RequestType.CellSet
+              ? Promise.resolve({})
+              : answer().then((value) => ({ value })),
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
-          publishRead: (_reader: unknown, value: unknown) => {
-            published.push(value);
-          },
+          peersOf: (cell: unknown) => handles.filter((h) => h !== cell),
         }),
       } as unknown as RuntimeClient;
-      const cell = new CellHandle<string[]>(runtime, ref, { value: ["held"] });
-      const heard: unknown[] = [];
-      cell.subscribe((value) => {
-        heard.push(value);
-      }, { onRefused: () => {} });
-      return { cell, heard, published };
+      /**
+       * A subscribed handle holding the value in `held`, and what its
+       * subscriber heard.
+       */
+      const subscribed = (
+        held: { value: string[] | undefined } = { value: ["held"] },
+      ) => {
+        const cell = new CellHandle<string[]>(runtime, ref, held);
+        handles.push(cell);
+        const heard: unknown[] = [];
+        cell.subscribe((value) => {
+          heard.push(value);
+        }, { onRefused: () => {} });
+        return { cell, heard };
+      };
+      return { subscribed };
     };
+    const answeringWith = (answer: string[] | undefined) =>
+      answering(() => Promise.resolve(answer));
 
-    it("tells its subscribers and the connection of a `pull()` that finds nothing", async () => {
-      const { cell, heard, published } = holding(undefined);
+    it("tells every handle's subscribers of a `pull()` that finds nothing", async () => {
+      const { subscribed } = answeringWith(undefined);
+      const reader = subscribed();
+      const peer = subscribed();
 
-      await expect(cell.pull()).resolves.toBeUndefined();
+      await expect(reader.cell.pull()).resolves.toBeUndefined();
 
-      expect(heard).toStrictEqual([["held"], undefined]);
-      expect(published).toStrictEqual([undefined]);
-      expect(cell.lastRead()).toStrictEqual({ value: undefined });
+      expect(reader.heard).toStrictEqual([["held"], undefined]);
+      expect(peer.heard).toStrictEqual([["held"], undefined]);
+      expect(peer.cell.lastRead()).toStrictEqual({ value: undefined });
     });
 
-    it("tells neither its subscribers nor the connection of a `sync()` that finds nothing", async () => {
-      const { cell, heard, published } = holding(undefined);
+    it("keeps what every handle holds through a `sync()` that finds nothing", async () => {
+      const { subscribed } = answeringWith(undefined);
+      const reader = subscribed();
+      const peer = subscribed();
 
-      await expect(cell.sync()).resolves.toBeUndefined();
+      await expect(reader.cell.sync()).resolves.toBeUndefined();
 
-      expect(heard).toStrictEqual([["held"]]);
-      expect(published).toStrictEqual([]);
+      expect(reader.heard).toStrictEqual([["held"]]);
+      expect(reader.cell.get()).toStrictEqual(["held"]);
+      expect(peer.heard).toStrictEqual([["held"]]);
+    });
+
+    it("tells its subscribers of a `pull()` that finds nothing after a `sync()` that did", async () => {
+      const { subscribed } = answeringWith(undefined);
+      const reader = subscribed();
+      await reader.cell.sync();
+
+      await reader.cell.pull();
+
+      expect(reader.heard).toStrictEqual([["held"], undefined]);
     });
 
     for (const read of ["sync", "pull"] as const) {
-      it(`tells its subscribers and the connection of a \`${read}()\` that finds another value`, async () => {
-        const { cell, heard, published } = holding(["found"]);
+      it(`tells every handle's subscribers of a \`${read}()\` that finds another value`, async () => {
+        const { subscribed } = answeringWith(["found"]);
+        const reader = subscribed();
+        const peer = subscribed();
 
-        await expect(cell[read]()).resolves.toEqual(["found"]);
+        await expect(reader.cell[read]()).resolves.toStrictEqual(["found"]);
 
-        expect(heard).toStrictEqual([["held"], ["found"]]);
-        expect(published).toStrictEqual([["found"]]);
-        expect(cell.get()).toEqual(["found"]);
+        expect(reader.heard).toStrictEqual([["held"], ["found"]]);
+        expect(peer.heard).toStrictEqual([["held"], ["found"]]);
+        expect(peer.cell.get()).toStrictEqual(["found"]);
       });
 
-      it(`tells neither its subscribers nor the connection of a \`${read}()\` that finds what it holds`, async () => {
-        const { cell, heard, published } = holding(["held"]);
+      it(`tells no subscriber of a \`${read}()\` that finds what every handle holds`, async () => {
+        const { subscribed } = answeringWith(["held"]);
+        const reader = subscribed();
+        const peer = subscribed();
 
-        await expect(cell[read]()).resolves.toEqual(["held"]);
+        await expect(reader.cell[read]()).resolves.toStrictEqual(["held"]);
 
-        expect(heard).toStrictEqual([["held"]]);
-        expect(published).toStrictEqual([]);
+        expect(reader.heard).toStrictEqual([["held"]]);
+        expect(peer.heard).toStrictEqual([["held"]]);
       });
     }
+
+    it("tells another handle's subscribers of a `pull()` that finds what only the reading handle holds", async () => {
+      const { subscribed } = answeringWith(undefined);
+      const reader = subscribed({ value: undefined });
+      const peer = subscribed();
+
+      await reader.cell.pull();
+
+      expect(reader.heard).toStrictEqual([undefined]);
+      expect(peer.heard).toStrictEqual([["held"], undefined]);
+    });
+
+    it("keeps a write another handle made while a `pull()` was in flight", async () => {
+      const answer = Promise.withResolvers<string[] | undefined>();
+      const { subscribed } = answering(() => answer.promise);
+      const reader = subscribed();
+      const peer = subscribed();
+      const pulling = reader.cell.pull();
+      const writing = peer.cell.set(["written"]);
+
+      answer.resolve(undefined);
+      await pulling;
+      await writing;
+
+      expect(reader.heard).toStrictEqual([["held"], undefined]);
+      expect(peer.heard).toStrictEqual([["held"], ["written"]]);
+      expect(peer.cell.get()).toStrictEqual(["written"]);
+    });
   });
 });

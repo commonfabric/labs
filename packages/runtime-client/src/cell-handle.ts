@@ -62,6 +62,12 @@ const operationQueues = new WeakMap<
   Map<string, CellOperationQueue>
 >();
 
+/**
+ * The clock every handle's write generation is drawn from, so that a read one
+ * handle made can tell whether another has mutated its value since.
+ */
+let writeClock = 0;
+
 export const $onCellUpdate = Symbol("$onCellUpdate");
 
 /**
@@ -187,9 +193,10 @@ export class CellHandle<T = unknown> {
   #updateGeneration = 0;
 
   /**
-   * Monotonic invocation order for local value mutations on this handle. Async
-   * read and strict-write responses use it to avoid replacing a later
-   * optimistic value while their remote operations remain FIFO-serialized.
+   * Monotonic invocation order for local value mutations on this handle,
+   * drawn from `writeClock`. Async read and strict-write responses use it to
+   * avoid replacing a later optimistic value while their remote operations
+   * remain FIFO-serialized, as does a read of another handle on this cell.
    */
   #writeGeneration = 0;
 
@@ -320,7 +327,7 @@ export class CellHandle<T = unknown> {
       value,
       this,
     ) as T;
-    this.#writeGeneration++;
+    this.#writeGeneration = ++writeClock;
     this.#publishWrite(snapshot);
     await this.#enqueueOperation(async (queue) => {
       // A refusal that arrived while the write waited its turn stands.
@@ -405,7 +412,7 @@ export class CellHandle<T = unknown> {
       throw new TypeError("Cell initialize requires a defined value.");
     }
     const serialized = this.#serializeWrite(value);
-    const writeGeneration = ++this.#writeGeneration;
+    const writeGeneration = this.#writeGeneration = ++writeClock;
     const updateGeneration = this.#updateGeneration;
     const { read, authoritative } = await this.#enqueueOperation(
       async (queue) => {
@@ -715,7 +722,7 @@ export class CellHandle<T = unknown> {
       cached,
       this,
     );
-    const writeGeneration = ++this.#writeGeneration;
+    const writeGeneration = this.#writeGeneration = ++writeClock;
     const append = (queue: CellOperationQueue): Promise<void> => {
       // A refusal that arrived while the append waited its turn stands, and
       // what it would append to, the value from before it, is refused.
@@ -796,13 +803,13 @@ export class CellHandle<T = unknown> {
    * called before the next value, when a refusal drops the value it was
    * given, and when the subscription is cancelled.
    *
-   * A change reaches `callback` through an update, or through a read, by this
-   * handle or by any other on the same cell under the same schema, that
-   * changes what the reading handle holds. Since no update holds
-   * nothing, a subscriber that was given a value hears that the cell now
-   * holds nothing only from a {@link pull}, as `undefined`: a `sync()` that
-   * finds nothing may have found a document not loaded yet, and is not
-   * delivered.
+   * A change reaches `callback` through an update, or through what a read
+   * finds, whether this handle made it or another on the same cell under the
+   * same schema did, unless this handle has written since that other read was
+   * made. Since no update holds nothing, a subscriber that was given a value
+   * hears that the cell now holds nothing only from a {@link pull}, as
+   * `undefined`: a `sync()` that finds nothing may have found a document not
+   * loaded yet, so the handle keeps the value it holds.
    */
   subscribe(
     callback: (
@@ -918,10 +925,10 @@ export class CellHandle<T = unknown> {
    * creates it may be in flight.
    *
    * What it finds reaches the subscribers of this handle, and of every other
-   * handle on the same cell under the same schema, when it differs from what
-   * this handle holds, `undefined` included: a pull waits for the loads its
-   * read starts, so finding nothing means the cell holds nothing, and a
-   * subscriber that was given a value is told so.
+   * handle on the same cell under the same schema that has not written since,
+   * wherever it differs from what that handle holds, `undefined` included: a
+   * pull waits for the loads its read starts, so finding nothing means the
+   * cell holds nothing, and a subscriber that was given a value is told so.
    *
    * @throws {CellReadRefusedError} When the worker refuses the read, as
    *   {@link sync} does.
@@ -942,16 +949,18 @@ export class CellHandle<T = unknown> {
    * Helper for {@link sync} and {@link pull}, which asks the worker for the
    * cell's value with `request` and caches the answer, unless a write or an
    * update this handle took meanwhile is newer. An answer that changes what
-   * the handle holds reaches its subscribers, and those of every other handle
-   * subscribed to the same cell under the same schema, except a `sync()` that
-   * finds nothing in a handle holding a value. A refused read caches the
-   * refusal and rejects.
+   * the handle holds reaches its subscribers, and the answer goes to every
+   * other handle subscribed to the same cell under the same schema, except
+   * that a `sync()` finding nothing leaves a value the handle holds in place
+   * and goes to no other handle. A refused read caches the refusal and
+   * rejects.
    */
   async #read(
     request: CellGetRequest | CellPullRequest,
   ): Promise<Readonly<T> | undefined> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
+    const startedAt = writeClock;
     const { read, response, authoritative } = await this.#enqueueOperation(
       async (queue) => {
         const authoritativeGeneration = queue.authoritativeGeneration;
@@ -984,13 +993,31 @@ export class CellHandle<T = unknown> {
     const isNews = this.#refusal !== undefined || this.#unread;
     if (isNews || (settled && !valuesOrCellsEqual(read.value, this.#value))) {
       this.#publishValue(read.value as T);
+    }
+    if (settled) {
       // The connection drops an update that holds nothing, so another handle
-      // on the cell can still hold a value this read found gone.
-      if (settled) this.#conn.publishRead(this, response.value);
-    } else {
-      this.#value = read.value;
+      // on the cell can hold a value this read found gone, whatever this
+      // handle held.
+      for (const peer of this.#conn.peersOf(this)) {
+        peer.#takeRead(response.value, startedAt);
+      }
     }
     return read.value;
+  }
+
+  /**
+   * Helper for {@link #read}, which takes `value`, the raw answer to a read
+   * another handle on this cell made, as what this handle holds, telling its
+   * subscribers when that changes it, unless this handle has mutated its
+   * value since the read was made, at `startedAt` on `writeClock`.
+   */
+  #takeRead(value: unknown, startedAt: number): void {
+    if (this.#writeGeneration > startedAt) return;
+    const applied = applyValue(value, this.#value, this) as T;
+    const isNews = this.#refusal !== undefined || this.#unread;
+    if (isNews || !valuesOrCellsEqual(applied, this.#value)) {
+      this.#publishValue(applied);
+    }
   }
 
   /** What `response`, a read's answer, holds: the value, or the refusal. */

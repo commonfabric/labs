@@ -486,18 +486,10 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     return;
   }
 
-  /**
-   * Hands `value`, the raw answer to an admitted read `reader` made, to every
-   * other handle subscribed under `reader`'s ref key, as an update from the
-   * worker would be. An `undefined` is handed on too, where
-   * `#handleCellUpdate()` drops one from the worker, so the caller hands on
-   * only an answer that says what the cell holds.
-   */
-  publishRead(reader: CellHandle<any>, value: unknown): void {
-    const subscribed = this.#subscribed.get(cellRefToKey(reader.ref()));
-    for (const instance of subscribed ?? []) {
-      if (instance !== reader) instance[$onCellUpdate](value);
-    }
+  /** The handles other than `cell` subscribed under its ref key. */
+  peersOf(cell: CellHandle<any>): CellHandle[] {
+    const subscribed = this.#subscribed.get(cellRefToKey(cell.ref()));
+    return [...subscribed ?? []].filter((instance) => instance !== cell);
   }
 
   async dispose(): Promise<void> {
