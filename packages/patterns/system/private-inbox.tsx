@@ -26,7 +26,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import type { SetProfileInboxEvent } from "./profile-home.tsx";
+import type { SetProfileInboxEvent, ShareInboxPiece } from "./profile-home.tsx";
 
 /** The longest `kind` an offer keeps; a longer one is cut to this length. */
 export const OFFER_KIND_MAX_LENGTH = 32;
@@ -154,10 +154,12 @@ export interface PrivateInboxOutput {
   receive: Stream<OfferEvent>;
 }
 
-/** What Home and a profile know of the inbox piece: its name, at most. */
-export type PrivateInboxPiece = {
-  [NAME]?: string;
-};
+/**
+ * What Home and a profile know of the inbox piece: its name, at most. A
+ * profile types any inbox it points at this way, this one or a loom daemon's,
+ * so the type is the profile's own.
+ */
+export type PrivateInboxPiece = ShareInboxPiece;
 
 /**
  * Where Home keeps its private inbox: a link to the inbox piece, absent until

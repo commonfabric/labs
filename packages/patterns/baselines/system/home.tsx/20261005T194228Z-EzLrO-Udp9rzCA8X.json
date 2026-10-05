@@ -1224,16 +1224,8 @@
       "PrivateInboxHolder": {
         "properties": {
           "piece": {
-            "$ref": "#/$defs/PrivateInboxPiece",
+            "$ref": "#/$defs/ShareInboxPiece",
             "description": "The inbox piece."
-          }
-        },
-        "type": "object"
-      },
-      "PrivateInboxPiece": {
-        "properties": {
-          "$NAME": {
-            "type": "string"
           }
         },
         "type": "object"
