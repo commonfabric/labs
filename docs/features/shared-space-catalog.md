@@ -87,6 +87,12 @@ make an older action impossible to confirm; clients surface that conflict
 rather than replaying it. These records are application confirmation metadata,
 not a general command queue or a complete action history.
 
+An operation result describes the request. Its returned entry is the observation
+made by that operation, and can already have been superseded when the caller
+receives it. Consumers obtain current membership from the catalog's reactive
+read surface; they never install membership from an operation reply.
+`confirmed` means the action was applied, not that it remains the latest choice.
+
 ## Confirmation and unavailable data
 
 Mutation methods resolve after their Fabric transaction completes. The
@@ -94,8 +100,10 @@ transaction's result carries the entry it selected, rather than a subsequent
 local read that may already reflect another action. A read-only transaction can
 complete locally, so an `existing` or `confirmed` result additionally pins the
 catalog's value at the memory server with an `entity-value-hash` precondition.
-That check remains active independently of the optional commit-preconditions
+That SDK check remains active independently of the optional commit-preconditions
 flag. A failed value pin returns `conflict` with reason `catalog-changed`.
+The pin is an implementation guarantee of these direct SDK methods, rather
+than a requirement that every catalog consumer expose a value-pinning API.
 An ordinary transaction conflict may re-evaluate the same action against a
 fresh snapshot; that action still carries its original observed revision.
 
@@ -175,7 +183,10 @@ Authored patterns cannot import this host SDK, and it exposes no pattern-facing
 catalog capability. A raw cell link does not supply the SDK's registration,
 receipt, revision, or confirmation semantics. The
 [pattern integration plan](../plans/shared-space-catalog-pattern-access.md)
-describes the work needed for Labs-only consumers.
+specifies Home-owned state and handlers as the intended public interface.
+It includes replacing direct SDK mutation with calls to that interface and
+using ordinary cell subscriptions for observation. The direct SDK access
+described here is the implemented surface pending that integration.
 
 ## Client integration
 
