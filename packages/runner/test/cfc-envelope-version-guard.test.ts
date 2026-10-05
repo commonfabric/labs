@@ -566,6 +566,17 @@ describe("CFC envelope version guard", () => {
         path: ["secret"],
         label: { confidentiality: ["vaulted"], secrecy: ["vaulted"] },
       }]),
+      "a template-origin entry keyed at a payload path": entriesHolding([{
+        path: ["secret"],
+        label: { confidentiality: ["vaulted"] },
+        origin: "label-metadata",
+        observes: "labelMetadata",
+      }]),
+      "a template-origin entry a payload read consumes": entriesHolding([{
+        path: ["cfc", "labels", "value", "secret", "confidentiality"],
+        label: { confidentiality: ["vaulted"] },
+        origin: "label-metadata",
+      }]),
       "a label map of a version this build does not know": {
         version: 1,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,

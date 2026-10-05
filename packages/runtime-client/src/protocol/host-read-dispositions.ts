@@ -83,6 +83,7 @@ export const REQUEST_DISPOSITIONS = {
     kind: "ungated",
     why: "a cell's display label, whatever the ceiling",
   },
+  [RequestType.CellFields]: DECIDED,
   [RequestType.SnapshotSharePrepare]: {
     kind: "trusted-operation",
     why: "the snapshot the owner is asked to confirm sharing",

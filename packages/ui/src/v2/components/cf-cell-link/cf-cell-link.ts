@@ -6,6 +6,7 @@ import { BaseElement } from "../../core/base-element.ts";
 
 import "../cf-chip/index.ts";
 
+import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity/did";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
@@ -317,6 +318,13 @@ export class CFCellLink extends BaseElement {
       this._subscribedCellKey = nextCellKey;
       this._unsubscribe = namedCell.subscribe((val) => {
         this._updateNameFromValue(val);
+      }, {
+        // A name the worker will not show is named as withheld, not shown as
+        // a link that has none.
+        onRefused: () => {
+          this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+          this.requestUpdate();
+        },
       });
     }
   }

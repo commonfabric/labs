@@ -1696,17 +1696,14 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
   });
 
   describe("meta-seam exemption", () => {
-    // The measurement quantifies over paths a schema could have declared a
-    // policy at, and the raw meta seam is not one: `setMetaRaw` lands on a
-    // document-root sibling of `value` (`schema`, `internal`, and the rest of
-    // the `MetaField` union), which no value schema describes.
-    //
-    // One route does reach a ceiling there — a document-root declaration
-    // resolves at every meta path by longest prefix — but it widens the
-    // ceiling over the whole payload, and a declaration on a single result
-    // field, which is how a pattern normally labels one, leaves the seam's
-    // ceiling empty. Such a pattern is then un-updatable: the pattern updater,
-    // `setsrc`, and setup over an existing piece all stamp meta.
+    // The measurement quantifies over payload writes, and a meta write is not
+    // one: `setMetaRaw` lands on a document-root sibling of `value`
+    // (`schema`, `internal`, and the rest of the `MetaField` union), a member
+    // of the document rather than its payload. It names no payload path (spec
+    // §4.6.5), so nothing is measured or stamped for it. Measuring it would
+    // leave a piece un-updatable whenever its pattern declares on a single
+    // result field, which is how a pattern normally labels one: the pattern
+    // updater, `setsrc`, and setup over an existing piece all write meta.
     //
     // The seam is outside the check at every rung, so these cases assert on
     // both the strict reject and the persist-and-flag diagnostic below it.
@@ -1775,17 +1772,14 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         // identical reason string).
         expect(writerFitDiagnostics(tx)).toEqual([]);
 
-        // The taint is not lost with the measurement. The join still lands as
-        // the derived component on the meta paths, so the egress, display,
-        // and observation gates read the unchanged label. (Each path carries
-        // the C2 per-class split — a `value` entry and a `shape` entry — so
-        // the paths are compared as a set.)
+        // Nor is any payload path labeled for the meta writes: a document's
+        // own member carries no label until a stored entry can name one
+        // (`cfc-spec-changes.md` SC-55).
         const stamped = replicaEntries(storageManager, targetId).filter((e) =>
           e.origin === "derived" &&
           (e.label.confidentiality ?? []).includes("secret")
         );
-        expect([...new Set(stamped.map((e) => e.path.join("/")))].sort())
-          .toEqual(["internal", "schema"]);
+        expect(stamped).toEqual([]);
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -1871,15 +1865,11 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
-    it("skips the measurement even where a root declaration resolves at the meta path", async () => {
-      // The skip is unconditional, and this pins that. A document-root
-      // declared entry is a prefix of every meta path, so longest-prefix
-      // resolution hands the meta path a non-empty ceiling — but that
-      // reaches the envelope seam only because canonicalization strips a
-      // leading `"value"`, making the payload root and the document root one
-      // logical path. It says nothing about the seam, and honoring it would
-      // make a piece updatable or not according to whether its pattern
-      // carries a root `ifc`.
+    it("skips the measurement of a meta write on a document with a root declaration", async () => {
+      // A document-root declared entry labels the payload root, which a meta
+      // member is not, so it gives a meta write no ceiling to fit. Were it
+      // honored there, a piece would be updatable or not according to
+      // whether its pattern carries a root `ifc`.
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = strictRuntime(storageManager);
       try {
@@ -1937,13 +1927,12 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
-    it("keeps measuring a payload field that shares a meta field's logical path", async () => {
+    it("keeps measuring a payload field named after a meta field", async () => {
       // A payload field literally named `schema` lives at raw
-      // `["value","schema"]` and canonicalizes onto the meta root's logical
-      // path. The exemption is recorded per path across every write that
-      // reached it, so writing both in one transaction leaves the path
-      // measured — and an exempt meta path must not collapse a value write
-      // below it out of the measurement either.
+      // `["value","schema"]`, a different place from the meta member
+      // `["schema"]`. Writing both in one transaction leaves the payload write
+      // measured, and the meta write does not collapse it out of the
+      // measurement.
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = strictRuntime(storageManager);
       try {

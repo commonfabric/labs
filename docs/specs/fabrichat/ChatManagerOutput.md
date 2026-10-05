@@ -68,7 +68,10 @@ with `wish<ChatManagerOutput>({ query: "#chatManager" })` and uses the wish's
 `result`. `#chatManager` is a home target, like `#agent_queue` and `#profile`,
 and names the role rather than the pattern that fills it. On a serving runtime,
 it resolves against the demanding identity's home space and never the service's
-([server-side builtins](../server-side-execution/builtins.md)).
+([server-side builtins](../server-side-execution/builtins.md)). A home whose
+system pattern was set up before it held a manager holds none until the home
+space is next opened, and a custom home pattern holds one only if it says so;
+until then the wish reports an error naming both remedies, with no `result`.
 
 Everything a manager holds is private to its user, as the home space is: nobody
 else learns whom a user talks to by reading it.
@@ -105,7 +108,10 @@ in it needs to be `PerUser` or `PerSession`.
 - **`rooms`** holds a [`ChatIndexEntry`](ChatIndexEntry.md) for every room this
   user belongs to and hasn't forgotten, newest first. An entry is a link to its
   room and never a copy of the room's data: what a room holds is read from the
-  room, under the reader's own access.
+  room, under the reader's own access. Through the link a reader finds the
+  room's `about`, and where its conversation stands, `messages.count` and
+  `messages.newestAt`; [`ChatIndexEntry`](ChatIndexEntry.md) says why the link
+  declares those and no more.
 - **`direct`** holds, for each counterpart principal, the entry of the direct
   room this user shares with them. It has at most one entry per counterpart. It
   keeps a direct room's entry even after the room is forgotten, so the

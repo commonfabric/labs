@@ -95,6 +95,13 @@ const reasonOf = (
     : outcome?.status ?? "none";
 };
 
+/** What the first room in `rooms` says of its messages through its link. */
+const linkedCount = (rooms: Writable<ChatIndexEntry[]>): string => {
+  const messages = rooms.key(0).key("room").get()?.get()?.messages;
+  return `count:${messages?.count ?? "none"} ` +
+    `newestAt:${messages?.newestAt ?? "none"}`;
+};
+
 const recipientsOf = (notices: Writable<ChatManagerNotice[]>): string =>
   (notices.get() ?? []).map((notice) => notice.recipient).join(",");
 
@@ -296,6 +303,13 @@ export default pattern(() => {
           groupRooms.key(0).key("room").key("about").get()?.kind === "group" &&
           groupRooms.key(0).key("room").key("about").get()?.title === "Team" &&
           !equals(groupRooms.key(0).key("room"), directHeld.key("room"))
+        ),
+      },
+      // The link carries where the conversation stands, which a new room has
+      // no messages of.
+      {
+        assertion: assert(() =>
+          linkedCount(groupRooms) === "count:0 newestAt:none"
         ),
       },
       // A request already decided changes nothing when it arrives again.

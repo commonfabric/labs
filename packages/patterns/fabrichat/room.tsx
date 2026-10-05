@@ -71,6 +71,7 @@ import {
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
+  type ChatDisplay,
   type ChatIndexEntry,
   type ChatProfile,
   type ChatRoomAbout,
@@ -168,7 +169,7 @@ export const ParticipantChip = pattern<
   const chat = startDirectWith({ participant, startDirect });
   // Who may start a chat differs by viewer, so the control is hidden by a
   // prop rather than built as a different tree (see `FabriChatMessageRow`).
-  const chatDisplay = computed(() =>
+  const chatDisplay = computed((): ChatDisplay =>
     startsDirect === true && myProfile?.get() !== undefined &&
       !equals(participant, myProfile) &&
       principalOf(participant, "represents-principal") !== undefined
@@ -183,6 +184,7 @@ export const ParticipantChip = pattern<
         <span
           data-ui-pattern={CHAT_START_SURFACE}
           data-ui-event-integrity={CHAT_START_SURFACE}
+          hidden
           style={{ display: chatDisplay }}
         >
           <cf-button
@@ -249,7 +251,7 @@ export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
     // Whether the viewer's manager lists the room differs by viewer, so the
     // control is hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
-    const addDisplay = computed(() =>
+    const addDisplay = computed((): ChatDisplay =>
       listed !== undefined && !listed.some((entry) => equals(entry.room, room))
         ? "flex"
         : "none"
@@ -261,6 +263,7 @@ export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
           id="fabrichat-add-to-chats"
           gap="2"
           align="center"
+          hidden
           style={{ display: addDisplay, padding: "1rem 1rem 0" }}
         >
           <cf-text variant="caption">
@@ -496,8 +499,12 @@ export const FabriChatRoomCore = pattern<
   const replyingTo = computed(() => bodyText(composer.get()?.replyTo?.get()));
   // Per-session and per-viewer parts are hidden by a prop, never built as a
   // different tree (see `FabriChatMessageRow`).
-  const replyDisplay = computed(() => (replyingTo ? "flex" : "none"));
-  const threadDisplay = computed(() => (hasThread ? "flex" : "none"));
+  const replyDisplay = computed(
+    (): ChatDisplay => (replyingTo ? "flex" : "none"),
+  );
+  const threadDisplay = computed(
+    (): ChatDisplay => (hasThread ? "flex" : "none"),
+  );
   const isEmpty = computed(() => mainEntries.length === 0);
   const threadShownIn = computed((): ShownIn =>
     alsoToMain.get() ? "both" : "thread"
@@ -615,7 +622,12 @@ export const FabriChatRoomCore = pattern<
             : null}
         </cf-vstack>
 
-        <cf-hstack gap="2" align="center" style={{ display: replyDisplay }}>
+        <cf-hstack
+          gap="2"
+          align="center"
+          hidden
+          style={{ display: replyDisplay }}
+        >
           <cf-text variant="caption">Replying to: {replyingTo}</cf-text>
           <cf-button size="sm" variant="ghost" onClick={cancelReply}>
             Cancel
@@ -638,6 +650,7 @@ export const FabriChatRoomCore = pattern<
         <cf-vstack
           id="fabrichat-thread"
           gap="2"
+          hidden
           style={{
             display: threadDisplay,
             borderTop: "1px solid var(--cf-theme-color-border)",
@@ -747,8 +760,9 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       rooms: ChatIndexEntry[];
     }>({ query: "#chatManager" });
     const startsDirect = computed(() => managerWish.result !== undefined);
-    // Hidden by a prop rather than a branch, as `FabriChatMessageRow` says.
-    const setupDisplay = computed(() =>
+    // Hidden by a prop rather than a branch, and `hidden` until the prop has a
+    // value, as `FabriChatMessageRow` says.
+    const setupDisplay = computed((): ChatDisplay =>
       profileWish.result === undefined ? "block" : "none"
     );
     const room = FabriChatRoomCore(
@@ -791,6 +805,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
           {room[UI]}
           <div
             id="fabrichat-profile-setup"
+            hidden
             style={{
               display: setupDisplay,
               padding: "0 1rem 1rem",

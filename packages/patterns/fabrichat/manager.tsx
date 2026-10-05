@@ -44,6 +44,7 @@ import {
   CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
+  type ChatDisplay,
   type ChatInbox,
   type ChatInboxOffer,
   type ChatIndexEntry,
@@ -799,12 +800,17 @@ export const FabriChatManagerCore = pattern<
     // The chosen room differs by session, so both parts are always rendered
     // and one is hidden by a prop: a tree built differently per session is
     // stored once for every session, and runtimes that built it differently
-    // overwrite each other without end.
-    const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
-    const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
+    // overwrite each other without end. Each part is `hidden` until its
+    // display has a value, as `FabriChatMessageRow` says.
+    const selectedDisplay = computed(
+      (): ChatDisplay => (hasSelection ? "block" : "none"),
+    );
+    const unselectedDisplay = computed(
+      (): ChatDisplay => (hasSelection ? "none" : "block"),
+    );
     // A refusal is the session's too, and is hidden by a prop for the same
     // reason.
-    const refusalDisplay = computed(() =>
+    const refusalDisplay = computed((): ChatDisplay =>
       startRefusal.get() === "" ? "none" : "block"
     );
     const noticeList = computed(
@@ -843,7 +849,7 @@ export const FabriChatManagerCore = pattern<
       principalOf(myProfile, "represents-principal") ?? ""
     );
     const addressDisplay = computed(
-      () => (myAddress === "" ? "none" : "block"),
+      (): ChatDisplay => (myAddress === "" ? "none" : "block"),
     );
     const streams = {
       openDirect: commitManager({ act: "openDirect", ...records }),
@@ -925,16 +931,25 @@ export const FabriChatManagerCore = pattern<
               </cf-hstack>
             ))}
           </cf-vstack>
-          <div id="fabrichat-selected" style={{ display: selectedDisplay }}>
+          <div
+            id="fabrichat-selected"
+            hidden
+            style={{ display: selectedDisplay }}
+          >
             <cf-render $cell={selectedRoom} />
           </div>
           <div
             id="fabrichat-unselected"
+            hidden
             style={{ display: unselectedDisplay }}
           >
             <cf-empty-state message="Choose a chat, or start one." />
           </div>
-          <div id="fabrichat-my-address" style={{ display: addressDisplay }}>
+          <div
+            id="fabrichat-my-address"
+            hidden
+            style={{ display: addressDisplay }}
+          >
             <cf-hstack gap="2" align="center">
               <cf-text variant="caption">
                 Your chat address: {myAddress}
@@ -980,6 +995,7 @@ export const FabriChatManagerCore = pattern<
               </cf-button>
               <div
                 id="fabrichat-start-refusal"
+                hidden
                 style={{ display: refusalDisplay }}
               >
                 <cf-alert status="error">{startRefusal}</cf-alert>

@@ -2,9 +2,11 @@
  * The FabriChat records, and the parts of the contracts that don't depend on
  * how a room stores its messages: the reviewed surfaces, recorded times,
  * profiles, a room's records and requests, how a message's reactions tally,
- * and the manager's records. `docs/specs/fabrichat/` states each of them, and
- * the names here are the spec's. `room-records.tsx` defines the records a room
- * stores, and `room.tsx` the room's own output types over them.
+ * and the manager's records, which `docs/specs/fabrichat/` states under the
+ * same names; and the displays an element shown by a prop takes, as
+ * `docs/common/patterns/conditional.md` describes. `room-records.tsx` defines
+ * the records a room stores, and `room.tsx` the room's own output types over
+ * them.
  *
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
  * compared through `nsecOf()`.
@@ -370,14 +372,34 @@ export const reactionTalliesOf = (
  * reads through the link. The manager runs in its user's home, not in the
  * room's space, and a server running it reads only the documents the room's
  * space shares with every member, never the ones each member has of their
- * own. The room's rendering and its data face reach those, and a served
- * handler whose declared reads reach one never runs, so neither is part of
- * the link. `cf-render` still draws the room through it, since a render reads
- * the rendering whatever the link declares.
+ * own. A served handler whose declared reads reach one of those never runs,
+ * and the link's schema is part of every manager handler's declared reads.
+ *
+ * So the link carries what the room's space shares with every member and
+ * costs little to read: what the room says about itself, and how many
+ * messages it holds and when the newest was sent, which the room derives from
+ * its messages alone. It leaves out the rest of the room's data face. A
+ * room's `canSend` is decided per reader, from their own profile, and its
+ * `messages.windows` are each session's own, so both reach documents of a
+ * member's own, as the room's rendering does. Its `messages.latest` is
+ * shared, but holds up to `maxWindowCount` messages and their reactions, which
+ * every manager handler would then load for every room; a reader that wants
+ * the messages reads them through the room. The rendering is not part of the
+ * link either, and `cf-render` still draws the room through it, since a render
+ * reads the rendering whatever the link declares.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */
   about?: ChatRoomAbout;
+
+  /** Where the conversation stands: what of `messages` every member shares. */
+  messages?: {
+    /** How many messages the room holds, obliterated tombstones included. */
+    count: number;
+
+    /** The newest message's `sentAt`; absent while there are none. */
+    newestAt?: FabricEpochNsec;
+  };
 }
 
 /** One room in a user's chat manager. */
@@ -490,3 +512,17 @@ export interface ChatManagerNotice {
   /** The DID of the person admitted. */
   recipient: string;
 }
+
+//
+// Displays
+//
+
+/**
+ * What a FabriChat element shown or hidden by a prop has as its `display`,
+ * which a computed decides. Such an element also carries a static `hidden`,
+ * which keeps it out of view until the computed has a value and which only a
+ * concrete display outranks, so every shown state names one: a computed
+ * returning `""`, `undefined` or `null` to show its element would leave it
+ * hidden for good.
+ */
+export type ChatDisplay = "block" | "flex" | "inline-flex" | "none";

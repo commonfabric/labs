@@ -58,6 +58,7 @@ import {
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
 import {
+  EmulatedStorageManager,
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
@@ -3472,6 +3473,91 @@ describe("runtime-processor", () => {
         }),
       ).resolves.toEqual({ value: { ready: true } });
       expect(calls).toEqual(["pull", "commits"]);
+    });
+  });
+
+  describe("`RuntimeProcessor` cell fields IPC", () => {
+    it("lists the fields of a record it has not loaded yet, once it has synced it", async () => {
+      const server = newLoopbackServer();
+      const connect = () =>
+        new Runtime({
+          apiUrl: new URL("http://localhost/"),
+          storageManager: EmulatedStorageManager.connectTo(server, {
+            as: cfcSigner,
+          }),
+        });
+      const writer = connect();
+      const reader = connect();
+      try {
+        const space = cfcSigner.did();
+        const record = writer.getCell(space, "fields-record", undefined);
+        await writer.editWithRetry((tx) => {
+          record.withTx(tx).set({ title: "Inbox", count: 3 });
+        });
+        await writer.storageManager.synced();
+        const ref: CellRef = {
+          id: record.getAsNormalizedFullLink().id,
+          space,
+          scope: "space",
+          path: [],
+        };
+        const processor = buildProcessor({ runtime: reader, space });
+
+        const response = await processor.handleRequest({
+          type: RequestType.CellFields,
+          cell: ref,
+        });
+
+        expect(response).toEqual({
+          fields: {
+            title: { ...ref, path: ["title"] },
+            count: { ...ref, path: ["count"] },
+          },
+        });
+      } finally {
+        await reader.dispose();
+        await writer.dispose();
+        await server.close();
+      }
+    });
+
+    it("fails a list it could not read for want of access, rather than answer that the cell holds no record", async () => {
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://localhost/"),
+        storageManager,
+      });
+      const space = cfcSigner.did();
+      const ref: CellRef = {
+        id: runtime.getCell(space, "fields-behind-a-refusal", undefined)
+          .getAsNormalizedFullLink().id,
+        space,
+        scope: "space",
+        path: [],
+      };
+      const processor = buildProcessor({ runtime, space });
+      const list = () =>
+        processor.handleRequest({ type: RequestType.CellFields, cell: ref });
+      try {
+        // Nothing stored and nothing refused: no record.
+        expect(await list()).toEqual({});
+
+        const refused = stub(
+          storageManager,
+          "spaceAccessError",
+          () => new Error("lacks READ on the space"),
+        );
+        try {
+          await expect(list()).rejects.toThrow(
+            "lacks READ on the space",
+          );
+        } finally {
+          refused.restore();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
     });
   });
 

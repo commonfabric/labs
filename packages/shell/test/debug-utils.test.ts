@@ -236,6 +236,61 @@ describe("runtime debug globals", () => {
     expect(compressionModes).toEqual([false]);
   });
 
+  it("names a read the worker refuses, rather than returning an empty cell", async () => {
+    const refusal = { refusedBy: "display-ceiling" } as const;
+    const connection = {
+      request: () => Promise.resolve({ refused: refusal }),
+      subscribe: () => Promise.resolve(),
+      unsubscribe: () => Promise.resolve(),
+      signal: new AbortController().signal,
+    };
+    const runtime = {
+      [$conn]: () => connection,
+      getTriggerTrace: () =>
+        Promise.resolve(
+          [{
+            recordedAt: 1,
+            notificationType: "commit",
+            changeIndex: 1,
+            matchedActionCount: 0,
+            mode: "pull",
+            writerActionId: "writer:a",
+            space: "did:key:space",
+            entityId: "of:sealed",
+            path: ["secret"],
+            before: { kind: "undefined" },
+            after: { kind: "object", size: 1 },
+            triggered: [],
+          }] satisfies TriggerTraceEntry[],
+        ),
+    } as unknown as RuntimeClient;
+    const global: Globals = {};
+    exposeCommonfabricGlobals(global, runtime, () => runtime, () => undefined);
+    const cf = global.commonfabric!;
+    const logged: unknown[][] = [];
+    const log = stub(console, "log", (...args: unknown[]) => {
+      logged.push(args);
+    });
+    try {
+      for (const read of [cf.readCell!, cf.readArgumentCell!]) {
+        await expect(read({ space: "did:key:space", id: "of:sealed" }))
+          .rejects.toThrow(CellReadRefusedError);
+      }
+      const explained = await cf.explainTriggerTrace!();
+      expect(explained?.topChanges[0].currentValueSummary).toEqual({
+        kind: "refused",
+        refusedBy: "display-ceiling",
+      });
+    } finally {
+      log.restore();
+    }
+    expect(logged).toContainEqual(["[debug] readCell refused:", refusal]);
+    expect(logged).toContainEqual([
+      "[debug] read argument cell refused:",
+      refusal,
+    ]);
+  });
+
   it("clearRuntimeDebugGlobals clears runtime-bound helpers", () => {
     const global: Globals = {
       commonfabric: {
