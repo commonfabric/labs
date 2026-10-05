@@ -87,6 +87,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -177,6 +178,7 @@ describe("cf-iframe cell bridge", () => {
           return Promise.resolve();
         },
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -224,6 +226,7 @@ describe("cf-iframe cell bridge", () => {
         request: () => Promise.reject(new Error("request should not be used")),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -271,6 +274,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -401,6 +405,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -540,6 +545,7 @@ describe("cf-iframe cell bridge", () => {
           if (demandedSource === cell) demandedSource = undefined;
           return Promise.resolve();
         },
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -599,6 +605,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -628,6 +635,7 @@ describe("cf-iframe cell bridge", () => {
         request: () => Promise.reject(new Error("write refused")),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -652,6 +660,7 @@ describe("cf-iframe cell bridge", () => {
             : Promise.resolve({}),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -677,6 +686,7 @@ describe("cf-iframe cell bridge", () => {
           return Promise.resolve();
         },
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -720,6 +730,7 @@ describe("cf-iframe cell bridge", () => {
             return Promise.resolve();
           },
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       });
@@ -788,6 +799,7 @@ describe("cf-iframe cell bridge", () => {
             ),
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       });
@@ -825,6 +837,7 @@ describe("cf-iframe cell bridge", () => {
             ),
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       });
@@ -891,6 +904,7 @@ describe("cf-iframe cell bridge", () => {
               },
               subscribe: () => Promise.resolve(),
               unsubscribe: () => Promise.resolve(),
+              peersOf: () => [],
               signal: { aborted: false },
             }),
           });
@@ -944,6 +958,7 @@ describe("cf-iframe cell bridge", () => {
             },
             subscribe: () => Promise.resolve(),
             unsubscribe: () => Promise.resolve(),
+            peersOf: () => [],
             signal: { aborted: false },
           }),
         });
@@ -982,6 +997,7 @@ describe("cf-iframe cell bridge", () => {
           },
           subscribe: () => Promise.resolve(),
           unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
           signal: { aborted: false },
         }),
       });
@@ -1040,6 +1056,7 @@ describe("cf-iframe cell bridge", () => {
         request: () => Promise.reject(new Error("event refused")),
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -1080,6 +1097,7 @@ describe("cf-iframe cell bridge", () => {
           return Promise.resolve();
         },
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
@@ -1155,6 +1173,7 @@ describe("cf-iframe cell bridge", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
         signal: { aborted: false },
       }),
     });
