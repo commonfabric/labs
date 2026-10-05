@@ -98,7 +98,11 @@ Its answer has three shapes:
   command was sent, and the command may have taken effect.
 
 The tool's effect class is `write` for every call, because the host does not say
-which commands only read.
+which commands only read. It is admitted at every enforcement mode and under
+every prompt-slot role with the policy reason `host_granted_command`: the
+broker's grant is its authority, as the host's schema is `submit_result`'s, and
+the scope is the whole of the limit on what a steered run can do (see the
+[implementation profile](IMPLEMENTATION_PROFILE.md)).
 
 ## The answer is Loom data
 

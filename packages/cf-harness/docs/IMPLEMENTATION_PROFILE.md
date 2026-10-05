@@ -239,6 +239,17 @@ none, and it reaches nothing but that run's own result file. A subagent run is
 not offered it. The model writing the file itself remains available to a run
 that holds a tool able to.
 
+`run_command` is admitted at every enforcement mode and under every prompt-slot
+role, with the policy reason `host_granted_command`. Its authority is the host's
+grant: the tool exists only in a run the host configured with a command broker,
+the broker runs only the commands its scope admits, and it stamps the agent
+actor on each one. An agent request's task binds as `context` and never carries
+a direct command, so the grant is what authorizes the call. The bound on that: a
+run whose model context was steered by retrieved content can run whatever the
+broker's scope admits, so the scope is the whole of the limit. `list_commands`
+is a read and follows the ordinary read rule. See
+[Host commands](LOOM_COMMANDS.md).
+
 `describe_handle` reports the referent's structural schema and path segments,
 never its data. It prefers the session Fabric's declared shape when available
 and otherwise uses a harness-captured schema, recursively removes value-bearing

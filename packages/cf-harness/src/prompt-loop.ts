@@ -2973,6 +2973,16 @@ const evaluateToolPolicy = (
     // no policy gates, returns in the same sense.
     return { allowed: true, reasonCodes: ["structured_result_return"] };
   }
+  if (descriptor.toolId === "run_command") {
+    // A host command, admitted at every mode and under every prompt-slot role.
+    // Its authority is the host's grant: the tool exists only in a run the
+    // host configured with a command broker, the broker runs only what its
+    // scope admits, and it stamps the agent actor on everything it forwards.
+    // An agent request's task binds as `context` and never carries a direct
+    // command; the grant is what authorizes the call. The bound that leaves:
+    // a prompt-injected run can do whatever the broker's scope admits.
+    return { allowed: true, reasonCodes: ["host_granted_command"] };
+  }
   switch (cfcEnforcementMode) {
     case "disabled":
       return { allowed: true, reasonCodes: ["cfc_disabled"] };
