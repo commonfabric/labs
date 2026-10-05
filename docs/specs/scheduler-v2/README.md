@@ -794,7 +794,11 @@ structured refusal details their producers recorded, so a consumer can name
 the offending input rather than only the offending label — see §10),
 *non-retryable* (every other non-permanent rejection — deterministic with
 respect to confirmed state, drops on the first attempt), and
-*permanent* (a commit-time precondition failed — drop, never retry).
+*permanent* (an `origin-committed` or `entity-absent` commit-time
+precondition failed — drop, never retry). A failed `entity-value-hash`
+precondition, a value pin, is a stale basis instead: the pinned document
+changed, and re-running against it pins the new value. With server
+execution on, a wave requeues the event handler that took the pin.
 
 **Speculation lineage.** Follow-up work dispatches immediately and
 speculatively, exactly as today — no added latency for resend chains — and
