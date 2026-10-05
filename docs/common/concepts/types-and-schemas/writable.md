@@ -136,9 +136,10 @@ export const confirm = handler<
   all of `entry`'s document. A cell that reaches its document through a link
   pins that document, not the ones holding the link.
 - **Where it works.** Only in a handler, and only for a space-scoped document;
-  anywhere else it throws. The pinned document must also be in the space the
-  handler writes, since a pin counts toward the one space a handler's commit
-  goes to.
+  anywhere else it throws. A handler's commit goes to one space, and a pin
+  claims its document's space as a write does: pinning a document in another
+  space than the handler has written throws, and so does a write to another
+  space after a pin.
 - **What it reads.** Pinning reads the whole document, so a confidentiality
   label anywhere in it applies to the handler as any read of it would.
 

@@ -901,6 +901,7 @@ const cellMethods = new Set<
 >([
   "get",
   "sample",
+  "pinDocument",
   "set",
   "send",
   "update",
@@ -1758,7 +1759,8 @@ export class CellImpl<T extends FabricValue>
   /** @inheritDoc */
   pinDocument(): void {
     const tx = this.#tx;
-    if (!tx || getTopFrame()?.inHandler !== true) {
+    const frame = getTopFrame();
+    if (!tx || frame?.inHandler !== true || frame.tx !== tx) {
       throw new Error(
         "`Cell.pinDocument()` is available only in a handler, on a cell bound " +
           "to the handler's transaction.",

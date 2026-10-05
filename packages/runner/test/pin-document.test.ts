@@ -19,6 +19,7 @@ import type {
   WaveSpaceCommit,
 } from "../src/executor/wave.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -29,6 +30,8 @@ import { ArrivalLog } from "./support/serving-waits.ts";
 
 const signer = await Identity.fromPassphrase("pin document");
 const space = signer.did() as MemorySpace;
+const elsewhere = (await Identity.fromPassphrase("pin document elsewhere"))
+  .did() as MemorySpace;
 
 type Observed = { state: string; revision: string };
 
@@ -75,6 +78,16 @@ export default pattern<
   count: count({ tally }),
 }));
 `;
+
+/** The `name` of what `body` throws, or `undefined` if it returns. */
+const errorNameOf = (body: () => void): string | undefined => {
+  try {
+    body();
+  } catch (error) {
+    return (error as { name?: string }).name;
+  }
+  return undefined;
+};
 
 /** The pins `tx` carries for its commit to `space`. */
 const pinsOf = (tx: IExtendedStorageTransaction): CommitPrecondition[] =>
@@ -215,6 +228,69 @@ describe("pinDocument()", () => {
     it("throws outside a handler", () => {
       expect(() => observedCell().pinDocument()).toThrow("only in a handler");
       expect(pinsOf(tx)).toEqual([]);
+    });
+
+    it("forwards a call through a reactive proxy over the cell", () => {
+      const proxy = observedCell().getAsReactiveProxy() as unknown as {
+        pinDocument(): void;
+      };
+      expect(() => proxy.pinDocument()).toThrow("only in a handler");
+    });
+
+    it("throws for a cell bound to a transaction other than the handler's", () => {
+      const other = runtime.edit();
+      try {
+        inHandler(() =>
+          expect(() =>
+            runtime.getCell<Observed>(
+              space,
+              "pin-rules-observed",
+              undefined,
+              other,
+            ).pinDocument()
+          ).toThrow("only in a handler")
+        );
+        expect(pinsOf(other)).toEqual([]);
+      } finally {
+        other.abort();
+      }
+    });
+
+    describe("for a document in another space", () => {
+      // A transaction commits to one space, and a pin claims its document's
+      // space for that commit as a write does.
+
+      it("throws after a write to the handler's space", () => {
+        inHandler(() => {
+          runtime.getCell<number>(space, "pin-rules-written", undefined, tx)
+            .set(1);
+          expect(
+            errorNameOf(() =>
+              runtime.getCell<Observed>(
+                elsewhere,
+                "pin-rules-far",
+                undefined,
+                tx,
+              )
+                .pinDocument()
+            ),
+          ).toBe("StorageTransactionWriteIsolationError");
+        });
+        expect(pinsOf(tx)).toEqual([]);
+      });
+
+      it("makes a later write to the handler's space throw", () => {
+        inHandler(() => {
+          runtime.getCell<Observed>(elsewhere, "pin-rules-far", undefined, tx)
+            .pinDocument();
+          expect(
+            errorNameOf(() =>
+              runtime.getCell<number>(space, "pin-rules-written", undefined, tx)
+                .set(1)
+            ),
+          ).toBe("StorageTransactionWriteIsolationError");
+        });
+      });
     });
   });
 
@@ -368,13 +444,24 @@ describe("pinDocument()", () => {
 
     it("re-runs a handler whose observation went stale, with server execution off", async () => {
       // The handler's first commit is held, after its run observed `saved`,
-      // while a peer commits.
+      // while a peer commits. On this arm the run's read of the document is
+      // in the commit's read set, which refuses a stale commit with or
+      // without a pin. The engine checks preconditions before reads, though,
+      // so the refusal that fires is the pin's, and this case holds that a
+      // failed pin is retried as a stale basis rather than dropped.
 
       const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
       try {
         const runtime = connect(server, false);
         const streams = await standUp(runtime);
         const outcomes = await admitted(server, runtime, "pin-outcome");
+        const refusals: unknown[] = [];
+        runtime.telemetry.addEventListener("telemetry", (event) => {
+          const { marker } = (event as RuntimeTelemetryEvent).detail;
+          if (marker.type === "scheduler.event.commit" && marker.error) {
+            refusals.push(marker.error);
+          }
+        });
 
         const held = new ArrivalLog<void>();
         const release = defer<void>();
@@ -406,6 +493,11 @@ describe("pinDocument()", () => {
           await acks.reached(1);
 
           expect(acks.entries).toEqual(["done"]);
+          expect(refusals).toEqual([
+            expect.stringContaining(
+              "entity-value-hash precondition target changed",
+            ),
+          ]);
           expect(outcomes).toEqual([archived]);
         } finally {
           release.resolve();

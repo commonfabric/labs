@@ -343,11 +343,16 @@ export interface IReadable<T> {
    * does not stand in for one, because a write to some fields of a document
    * can be merged past a concurrent change to its other fields.
    *
-   * @throws Error outside a handler; for a document that is not
-   *   space-scoped; and for a document the handler has already written
-   *   without pinning it first, since the run would then pin its own
-   *   uncommitted write. The document must also be in the space the handler
-   *   writes.
+   * A handler's commit goes to one space, and a pin claims its document's
+   * space for it as a write does. So pinning a document in another space than
+   * the handler has already written throws, and so does a write to another
+   * space after a pin.
+   *
+   * @throws Error outside a handler, or on a cell bound to some other
+   *   transaction; for a document that is not space-scoped; for a document
+   *   the handler has already written without pinning it first, since the run
+   *   would then pin its own uncommitted write; and for a document in another
+   *   space than the handler has already written.
    */
   pinDocument(): void;
 }
