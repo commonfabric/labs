@@ -1,7 +1,10 @@
 /**
- * Permanent rejections are the `origin-committed` and `entity-absent`
- * commit-time precondition failures (spec scheduler-v2 §7.6): retrying can
- * never succeed and MUST not happen — for `receipt-exists` a retry would
+ * Permanent rejections are the commit-time precondition failures the engine
+ * reports as `PreconditionFailedError` (spec scheduler-v2 §7.6): a failed
+ * `origin-committed` precondition, of kind `origin-committed`, and a failed
+ * `entity-absent` precondition, of kind `receipt-exists`, which is also how a
+ * create-only mark fails, since the commit sends each mark as one. Retrying
+ * can never succeed and MUST not happen — for `receipt-exists` a retry would
  * double-handle an event. A failed `entity-value-hash` precondition is a
  * `ConflictError` instead, and is not one of these.
  */

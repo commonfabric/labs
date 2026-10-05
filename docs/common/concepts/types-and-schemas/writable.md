@@ -105,7 +105,8 @@ nothing is not committed.
 `cell.pinDocument()` closes that gap. Called in a handler, it makes the commit
 conditional on the document the cell lives in still holding, when the commit
 lands, the value it holds now. If another commit has changed it, this one is
-refused as a conflict and the handler runs again against the new value. With
+refused as a conflict, and handled as any other conflict is: an event delivered
+with retries, the default, runs the handler again against the new value. With
 server execution off, the server already refuses a commit whose reads went
 stale, and the pin holds the same way there.
 

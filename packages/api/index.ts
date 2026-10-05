@@ -328,9 +328,11 @@ export interface IReadable<T> {
   /**
    * Commit the running handler only if the document this cell's value lives
    * in still holds, when the commit lands, the value it holds now. Otherwise
-   * the commit is refused as a conflict and the handler runs again against
-   * fresh state, so a handler that reads a document and writes nothing to it
-   * cannot report an observation a concurrent commit has already made stale.
+   * the commit is refused as a conflict, and handled as any other conflict
+   * is: an event delivered with retries, the default, runs the handler again
+   * against fresh state. So a handler that reads a document and writes
+   * nothing to it cannot report an observation a concurrent commit has
+   * already made stale.
    *
    * The pin covers the whole document, wherever in it this cell points, and
    * not the documents a link was followed through to reach it. The first pin
@@ -351,8 +353,10 @@ export interface IReadable<T> {
    * @throws Error outside a handler, or on a cell bound to some other
    *   transaction; for a document that is not space-scoped; for a document
    *   the handler has already written without pinning it first, since the run
-   *   would then pin its own uncommitted write; and for a document in another
-   *   space than the handler has already written.
+   *   would then pin its own uncommitted write; for a document in another
+   *   space than the handler has already written; and on a transaction that
+   *   cannot carry a commit precondition, since a pin dropped there would let
+   *   the commit through ungated.
    */
   pinDocument(): void;
 }
