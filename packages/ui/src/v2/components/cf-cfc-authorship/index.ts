@@ -5,9 +5,5 @@ if (!customElements.get("cf-cfc-authorship")) {
 }
 
 export type { CFCFCAuthorship as CFCFCAuthorshipElement } from "./cf-cfc-authorship.ts";
-export {
-  authorshipStateForLabel,
-  integrityAtomMatchesAuthor,
-} from "./cf-cfc-authorship.ts";
 
 export { CFCFCAuthorship } from "./cf-cfc-authorship.ts";
