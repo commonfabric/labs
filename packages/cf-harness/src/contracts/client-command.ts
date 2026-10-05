@@ -41,12 +41,15 @@ export const HARNESS_CLIENT_PROTOCOL_VERSION = 1 as const;
  * vocabulary offered mid-turn through `weaver_action`; `typed_commands` is the
  * typed invocation, catalog, and settlement defined in this file;
  * `browser_host` is a task's `browserHost` declaration, which only a console
- * launched with `--allow-browser-host` accepts.
+ * launched with `--allow-browser-host` accepts; `starts_run` is a catalog
+ * entry's `startsRun`, which a host sends only to a console that serves it,
+ * since a console without it refuses the entry.
  */
 export const HARNESS_CLIENT_FEATURES = [
   "client_actions",
   "typed_commands",
   "browser_host",
+  "starts_run",
 ] as const;
 
 /** One feature a host may require. */
@@ -58,7 +61,11 @@ export type HarnessClientFeature = typeof HARNESS_CLIENT_FEATURES[number];
  * that feature too.
  */
 export const HARNESS_SUPPORTED_CLIENT_FEATURES:
-  readonly HarnessClientFeature[] = ["client_actions", "typed_commands"];
+  readonly HarnessClientFeature[] = [
+    "client_actions",
+    "typed_commands",
+    "starts_run",
+  ];
 
 /**
  * The features a console that answers without a protocol echo is taken to
@@ -342,6 +349,14 @@ export interface HarnessCommandCatalogEntry {
 
   /** The full description, present when the request asked for it. */
   description?: string;
+
+  /**
+   * Present, and true, when the command answers once its work is accepted
+   * and names, in `outputs.run_id`, a run that can still fail afterwards.
+   * The service's `command.run-outcome` reads how that run stands. Only a
+   * mutation starts a run.
+   */
+  startsRun?: true;
 }
 
 /** The Weaver's answer to a catalog request. */
@@ -760,6 +775,7 @@ const readCatalogEntry = (
     "approval",
     "inputSchema",
     "description",
+    "startsRun",
   ];
   if (
     !hasOnlyKeys(record, keys) ||
@@ -770,6 +786,7 @@ const readCatalogEntry = (
   const { command, summary, scope, executes, effect, approval, inputSchema } =
     record;
   const description = own(record, "description");
+  const startsRun = own(record, "startsRun");
   if (
     !isCommandId(command) ||
     !isBoundedText(summary, HARNESS_COMMAND_SUMMARY_MAX_LENGTH) ||
@@ -782,7 +799,9 @@ const readCatalogEntry = (
     !isJsonObject(inputSchema) ||
     harnessCommandJsonBytes(inputSchema) > HARNESS_COMMAND_SCHEMA_MAX_BYTES ||
     (description !== undefined &&
-      !isBoundedText(description, HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH))
+      !isBoundedText(description, HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH)) ||
+    // Absent unless declared; a read starts nothing.
+    (startsRun !== undefined && (startsRun !== true || effect !== "mutation"))
   ) {
     return undefined;
   }
@@ -795,6 +814,7 @@ const readCatalogEntry = (
     approval,
     inputSchema,
     ...(description !== undefined ? { description } : {}),
+    ...(startsRun === true ? { startsRun } : {}),
   };
 };
 
