@@ -149,8 +149,8 @@ each names a specs pull request, the tree holds at most three, and marked code
 runs at the strict default only when it is fail-closed. Reviewing a specs ruling
 pull request instead, check that its body says whether the entry was already
 answered at specs `main`, states the runtime's conformance under the current and
-the applied text, and names the `FUTURE-SPEC-WORK.md` entry for any proof it
-owes.
+the applied text, carries its proof, and, where it defers one, says why and
+names the `FUTURE-SPEC-WORK.md` entry.
 
 `docs/history/` is exempt from the coherence sweep: those are frozen
 point-in-time records and are supposed to describe old behavior. The reverse
