@@ -18,9 +18,7 @@ import {
   type CurrentPrincipal,
   currentPrincipal,
   Default,
-  eventKey,
   handler,
-  isWellFormedDID,
   NAME,
   pattern,
   type Stream,
@@ -30,14 +28,23 @@ import {
 } from "commonfabric";
 import type { SetProfileInboxEvent } from "./profile-home.tsx";
 
-/** The longest `kind` an offer may name. */
-export const OFFER_KIND_MAX_LENGTH = 64;
+/** The longest `kind` an offer keeps; a longer one is cut to this length. */
+export const OFFER_KIND_MAX_LENGTH = 32;
+
+/** The longest `id` an offer keeps; a longer one is cut to this length. */
+export const OFFER_ID_MAX_LENGTH = 320;
 
 /** The longest `title` an offer keeps; a longer one is cut to this length. */
 export const OFFER_TITLE_MAX_LENGTH = 200;
 
-/** The longest `host` an offer may name. */
-export const OFFER_HOST_MAX_LENGTH = 256;
+/**
+ * The length `space`, `host`, `from` and `ownerOrigin` are cut to before they
+ * are checked.
+ */
+export const OFFER_ADDRESS_MAX_LENGTH = 256;
+
+/** The `kind` an offer that names none is kept with. */
+export const OFFER_DEFAULT_KIND = "loom";
 
 /** The name, in Home's space, of the space Home's private inbox lives in. */
 export const PRIVATE_INBOX_SPACE_NAME = "private-inbox";
@@ -51,87 +58,77 @@ export type OwnerPrivate<T> = Confidential<
   }]
 >;
 
-/** What an offer knows of the piece it offers: its name, at most. */
-export type OfferEntry = {
-  [NAME]?: string;
-};
-
-/** An offer as a sender sends it to `receive`. */
+/**
+ * An offer as a sender sends it to `receive`: the envelope a loom share inbox
+ * takes. Every field is optional here, and `receive` decides what it keeps.
+ */
 export interface OfferEvent {
   /**
-   * What is offered, as lowercase words joined by hyphens, such as
-   * `fabrichat-room`. A reader acts only on the kinds it knows.
+   * What is offered, such as `loom` or `fabrichat-room`. A reader acts only on
+   * the kinds it knows.
    */
-  kind: string;
+  kind?: string;
 
   /**
-   * The DID of the space the offered thing lives in. It may be left out when
-   * `entry` is given, since a link names the space it reaches into.
+   * The sender's key for the offer, the same on every resend of it. The inbox
+   * keeps one offer per `id`.
    */
+  id?: string;
+
+  /** The DID of the space the offered thing lives in. */
   space?: string;
 
-  /**
-   * The origin of the host serving the offered thing's space, such as
-   * `https://example.com`; absent for the host the inbox is read from.
-   */
+  /** The origin of the host serving that space, such as `https://example.com`. */
   host?: string;
 
-  // `Cell<…>` is written out rather than reached through an alias: the
-  // handler's event schema marks a reference position only where the wrapper
-  // is written in the event type.
-  /**
-   * The piece offered. A value sent here that is not a link arrives as a link
-   * to the event's own copy of that value, so what it reaches is the sender's
-   * claim, to be checked like any other.
-   */
-  entry?: Cell<OfferEntry>;
+  /** The origin of the sender's own host, if it names one. */
+  ownerOrigin?: string;
 
-  /** What the sender calls the offered thing, cut to the longest kept. */
+  /** What the sender calls the offered thing. */
   title?: string;
+
+  /** The DID of the sender, which must be the principal sending the event. */
+  from?: string;
+
+  /** When the sender shared the offer, in milliseconds since the epoch. */
+  sharedAt?: number;
 }
 
-/** An offer as the inbox holds it. */
+/** An offer as the inbox holds it: every field of the envelope, and more. */
 export interface Offer {
-  /**
-   * What is offered, as lowercase words joined by hyphens, such as
-   * `fabrichat-room`. A reader acts only on the kinds it knows.
-   */
+  /** What is offered, such as `loom` or `fabrichat-room`. */
   kind: string;
 
-  /** The DID of the space the offered thing lives in, if the sender named it. */
-  space?: string;
+  /** The sender's key for the offer; no two offers in the inbox share one. */
+  id: string;
+
+  /** The DID of the space the offered thing lives in. */
+  space: string;
+
+  /** The origin of the host serving that space. */
+  host: string;
+
+  /** The origin of the sender's own host, or empty. */
+  ownerOrigin: string;
+
+  /** What the sender calls the offered thing, or empty. */
+  title: string;
 
   /**
-   * The origin of the host serving the offered thing's space, if the sender
-   * named one.
-   */
-  host?: string;
-
-  /** The piece offered, if the sender named one. */
-  entry?: Cell<OfferEntry>;
-
-  /** What the sender calls the offered thing, if anything. */
-  title?: string;
-
-  /**
-   * The DID of the principal who sent the offer: the actor of the event that
-   * delivered it, which nothing in the event's payload can choose. Where
-   * server execution is on, the serving loop stamps it; where it is not, the
-   * sender's own runtime does.
+   * The DID of the principal who sent the offer. `receive` keeps an offer only
+   * when this is the event's actor, which nothing in the payload can choose.
    */
   from: string;
 
   /**
-   * The offer's id: the event key of the event that delivered it, which
-   * differs for every other delivery and which nothing in the event's payload
-   * can choose. Every run of one delivery stamps the same id.
+   * When the sender shared the offer, in milliseconds since the epoch, by the
+   * sender's clock, or by the inbox's when the sender named no time.
    */
-  id: string;
+  sharedAt: number;
 
   /**
    * When the inbox received the offer, in milliseconds since the epoch. A
-   * handler's clock reads to the second, so two offers can share it; `id`
-   * tells them apart.
+   * handler's clock reads to the second, so two offers can share it.
    */
   receivedAt: number;
 }
@@ -150,10 +147,10 @@ export interface PrivateInboxOutput {
   [NAME]: string;
   [UI]: VNode;
 
-  /** The offers received, readable by the inbox's owner alone. */
+  /** The offers received, labeled readable by the inbox's owner alone. */
   offers: Offers;
 
-  /** Appends an offer, whoever sends it, unless it is malformed. */
+  /** Appends an offer from the principal sending it, unless it is refused. */
   receive: Stream<OfferEvent>;
 }
 
@@ -182,58 +179,68 @@ export type PointTarget = {
   setInbox: Stream<SetProfileInboxEvent>;
 };
 
-/**
- * Returns whether `kind` is a well-formed offer kind: lowercase letters and
- * digits in words joined by single hyphens, at most
- * {@link OFFER_KIND_MAX_LENGTH} characters.
- */
-function isOfferKind(kind: unknown): kind is string {
-  return typeof kind === "string" && kind.length <= OFFER_KIND_MAX_LENGTH &&
-    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(kind);
+/** A DID, as an offer's `space` and `from` must be written. */
+const DID_PATTERN = /^did:[a-z0-9]+:[^\s/]+$/;
+
+/** An `http` or `https` origin, as an offer's `host` must be written. */
+const ORIGIN_PATTERN = /^https?:\/\/[^\s/]+$/;
+
+/** `value` trimmed and cut to `max` characters, or empty if not a string. */
+function trimmedText(value: unknown, max: number): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 /**
- * Returns whether `host` is absent or a well-formed origin: `http` or `https`
- * and an authority, with no path, at most {@link OFFER_HOST_MAX_LENGTH}
- * characters.
+ * Returns the offer the inbox keeps for `event`, received at `now` by its
+ * clock, or `undefined` when the event is refused. Every string is trimmed and
+ * cut to its length. The event is refused unless `space` and `from` are DIDs
+ * and `host` is an origin. An event with no `kind` is kept as
+ * {@link OFFER_DEFAULT_KIND}, one with no `id` as `<space>@<sharedAt>`, one
+ * with no positive `sharedAt` as shared at `now`, and an `ownerOrigin` that is
+ * not an origin is kept empty.
  */
-function isOfferHost(host: unknown): boolean {
-  return host === undefined ||
-    (typeof host === "string" && host.length <= OFFER_HOST_MAX_LENGTH &&
-      /^https?:\/\/[^\s/?#@]+$/.test(host));
+function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
+  const space = trimmedText(event?.space, OFFER_ADDRESS_MAX_LENGTH);
+  const host = trimmedText(event?.host, OFFER_ADDRESS_MAX_LENGTH);
+  const from = trimmedText(event?.from, OFFER_ADDRESS_MAX_LENGTH);
+  if (
+    !DID_PATTERN.test(space) || !ORIGIN_PATTERN.test(host) ||
+    !DID_PATTERN.test(from)
+  ) {
+    return undefined;
+  }
+  const claimed = Number(event?.sharedAt);
+  const sharedAt = Number.isFinite(claimed) && claimed > 0
+    ? Math.floor(claimed)
+    : Math.floor(now);
+  const ownerOrigin = trimmedText(event?.ownerOrigin, OFFER_ADDRESS_MAX_LENGTH);
+  return {
+    kind: trimmedText(event?.kind, OFFER_KIND_MAX_LENGTH) || OFFER_DEFAULT_KIND,
+    id: trimmedText(event?.id, OFFER_ID_MAX_LENGTH) || `${space}@${sharedAt}`,
+    space,
+    host,
+    ownerOrigin: ORIGIN_PATTERN.test(ownerOrigin) ? ownerOrigin : "",
+    title: trimmedText(event?.title, OFFER_TITLE_MAX_LENGTH),
+    from,
+    sharedAt,
+    receivedAt: Math.floor(now),
+  };
 }
 
 /**
- * Appends the offer `event` describes, stamped with the event's actor, its
- * event key as the offer's id, and the time. An event with no actor, with a malformed `kind` or `host`, with a
- * `space` that is not a DID, or with neither a `space` nor an `entry`, appends
- * nothing.
+ * Appends the offer `event` describes, as {@link admissibleOffer} keeps it.
+ * Nothing is appended for a refused event, for one whose `from` is not the
+ * event's actor, or for one whose `id` an offer in the inbox already has.
  */
 const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
   (event, { offers }) => {
-    const from = currentPrincipal();
-    if (
-      from === undefined || !isOfferKind(event?.kind) ||
-      !isOfferHost(event.host) ||
-      (event.space === undefined
-        ? event.entry === undefined
-        : !isWellFormedDID(event.space))
-    ) {
-      return;
-    }
-    const title = typeof event.title === "string"
-      ? event.title.slice(0, OFFER_TITLE_MAX_LENGTH)
-      : undefined;
-    offers.push({
-      kind: event.kind,
-      ...(event.space !== undefined ? { space: event.space } : {}),
-      ...(event.host !== undefined ? { host: event.host } : {}),
-      ...(event.entry !== undefined ? { entry: event.entry } : {}),
-      ...(title !== undefined ? { title } : {}),
-      from,
-      id: eventKey(),
-      receivedAt: Date.now(),
-    });
+    const offer = admissibleOffer(event, Date.now());
+    if (offer === undefined || offer.from !== currentPrincipal()) return;
+    // The explicit read keeps the append in the conflict set, so two
+    // deliveries of one `id` racing to append conflict, and the second sees
+    // the first.
+    if ((offers.get() ?? []).some((held) => held?.id === offer.id)) return;
+    offers.push(offer);
   },
 );
 
@@ -246,7 +253,7 @@ const PrivateInbox = pattern<PrivateInboxInput, PrivateInboxOutput>((
     <cf-vstack gap="2" style={{ padding: "1rem" }}>
       <h2 style={{ margin: 0, fontSize: "16px" }}>Private inbox</h2>
       <span style={{ fontSize: "13px", color: "#666" }}>
-        What others have offered you arrives here. Only you can read it.
+        What others have offered you arrives here.
       </span>
     </cf-vstack>
   ),

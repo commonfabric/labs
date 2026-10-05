@@ -7,6 +7,7 @@
 
 import {
   type Cell,
+  currentPrincipal,
   Default,
   handler,
   NAME,
@@ -23,19 +24,43 @@ import ProfileHome, {
 import PrivateInbox, {
   ensurePrivateInbox,
   type Offer,
+  type OfferEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
   type PrivateInboxOutput,
   type PrivateInboxPiece,
 } from "../../../system/private-inbox.tsx";
 
+/** The host origin every offer here names. */
+const OFFER_HOST = "https://example.com";
+
 /** An offer a sender's handler sends on to the owner's inbox. */
 export interface OfferRequest {
+  /** The sender's key for the offer. */
+  id: string;
+
   /** The DID of the space offered. */
   space: string;
 
   /** What the sender calls it. */
   title: string;
+}
+
+/**
+ * The envelope a sender sends for `request`, from the principal sending the
+ * event.
+ */
+function envelopeOf(request: OfferRequest): OfferEvent {
+  return {
+    kind: "fabrichat-room",
+    id: request.id,
+    space: request.space,
+    host: OFFER_HOST,
+    ownerOrigin: OFFER_HOST,
+    title: request.title,
+    from: currentPrincipal(),
+    sharedAt: Date.now(),
+  };
 }
 
 /** The fields of an offer a copy keeps. */
@@ -132,11 +157,7 @@ const offer = handler<
   const inbox = inboxOf(
     profiles.key(0).resolveAsCell().key("inbox").key("piece").resolveAsCell(),
   );
-  inbox.key("receive").send({
-    kind: "fabrichat-room",
-    space: event.space,
-    title: event.title,
-  });
+  inbox.key("receive").send(envelopeOf(event));
 });
 
 /**
@@ -145,7 +166,7 @@ const offer = handler<
  */
 const queueOffer = handler<OfferRequest, { send: Stream<OfferRequest> }>(
   (event, { send }) => {
-    send.send({ space: event.space, title: event.title });
+    send.send({ id: event.id, space: event.space, title: event.title });
   },
 );
 
@@ -159,11 +180,7 @@ const sendToPointedInbox = handler<
 >((event, { profiles }) => {
   const pointer = profiles.key(0).resolveAsCell().key("inbox").get()?.piece;
   if (pointer === undefined) return;
-  inboxOf(pointer.resolveAsCell()).key("receive").send({
-    kind: "fabrichat-room",
-    space: event.space,
-    title: event.title,
-  });
+  inboxOf(pointer.resolveAsCell()).key("receive").send(envelopeOf(event));
 });
 
 /** Copies the offers in the owner's private inbox into this piece. */

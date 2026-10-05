@@ -2,8 +2,9 @@
 
 Every identity has one private inbox: a piece, in a space of its own, where
 other principals deliver offers to the identity, such as a chat room to join.
-Only the owner reads what is in it. Anyone can append to it, but only through
-its `receive` stream, which records who sent each offer. This document says
+Its offers are labeled readable by the owner alone. Anyone can append to it,
+through its `receive` stream, which keeps an offer only when the offer names
+the principal sending it as its sender. This document says
 where the inbox lives, who creates it and when, what access its space grants,
 what `receive` accepts, and the limits on what it keeps private.
 
@@ -82,32 +83,27 @@ confidential to `User(CurrentPrincipal)`, bound to the owner who created the
 inbox. An offer a sender appends is a document of its own, created in the
 sender's transaction, and binds to the inbox's owner rather than to the sender;
 [`current-principal.md`](current-principal.md) describes that binding. A
-runtime holding the inbox refuses to let another principal's code read the
-offers, or copy them anywhere.
+runtime holding the inbox refuses to let another principal's code copy the
+offers anywhere. The label does not stop another principal's runtime reading
+them, as the access section says.
 
-An offer holds:
+An offer is the envelope a loom share inbox keeps, its eight fields, and one
+more:
 
-- `kind`: what is offered, as lowercase words joined by hyphens, such as
-  `fabrichat-room`. A reader acts only on the kinds it knows.
-- `space`: the DID of the space the offered thing lives in, when the sender
-  names it. A sender that holds only a link to the offered piece leaves it out,
-  since a pattern has no way to read a link's space.
-- `host`: the origin of the host serving that space, when the sender names
-  one.
-- `entry`: a link to the offered piece, when the sender names one. A link
-  names the space it reaches into, and `spaceAccess()` takes it as it stands.
-- `title`: what the sender calls the offered thing, when it names one.
-- `from`: the DID of the event's actor, from `currentPrincipal()`. Nothing in
-  the event's payload can choose it. With server execution on, the serving loop
-  stamps the actor; with it off, the sender's own runtime does.
-- `id`: the event key of the event that delivered the offer, from
-  `eventKey()`, which [`event-key.md`](event-key.md) describes. Like `from`, it
-  is stamped by `receive`, and an `id` in the event's payload is never read.
-  Every run of one delivery stamps the same id, and every other delivery gets
-  another, except one that re-admits the same event id, which a reader keying
-  its receipts by `id` takes for the offer it already handled.
-- `receivedAt`: when the inbox received the offer. A handler's clock reads to
-  the second, so two offers can share it, and `id` is what tells them apart.
+- `kind`: what is offered, such as `loom` or `fabrichat-room`. A reader acts
+  only on the kinds it knows.
+- `id`: the sender's key for the offer, the same on every resend of it. No two
+  offers in the inbox share one.
+- `space`: the DID of the space the offered thing lives in.
+- `host`: the origin of the host serving that space.
+- `ownerOrigin`: the origin of the sender's own host, or empty.
+- `title`: what the sender calls the offered thing, or empty.
+- `from`: the DID of the sender, which `receive` requires to be the event's
+  actor, from `currentPrincipal()`.
+- `sharedAt`: when the sender shared the offer, in milliseconds since the
+  epoch, by the sender's clock.
+- `receivedAt`: when the inbox received the offer, by its own clock. A
+  handler's clock reads to the second, so two offers can share it.
 
 ## Sending one
 
@@ -119,27 +115,37 @@ as a stream event the space's server runs.
 The sender reads the pointer through `profile-home.tsx`'s own types, where
 `inbox.piece` is the typed link `Cell<ShareInboxPiece>`, for the reason the
 pointing step does: read as an untyped link, the pointer joins the offers'
-label into the sender's run, and the run's sends are refused. `receive` stamps the offer with the
-sender as `from`, including when the send comes from a handler that another
-of the sender's handlers queued.
+label into the sender's run, and the run's sends are refused.
 
-`receive` appends nothing for an event that has no actor, whose `kind` is not
-as described above or is longer than `OFFER_KIND_MAX_LENGTH`, whose `space` is
-not a DID, that names neither a `space` nor an `entry`, or whose `host` is not
-an `http` or `https` origin of at most `OFFER_HOST_MAX_LENGTH` characters.
-`receive` cannot tell whether `entry` names a piece: a value sent there that is
-not a link arrives as a link to the event's own copy of the value. So a reader
-checks what `entry` reaches before acting on it, and does not take an answer
-from `spaceAccess(entry)` as a sign that the link names the offered thing. A
-`title` longer than `OFFER_TITLE_MAX_LENGTH` is cut to that length. The sender
-is not told: a refusal inside `receive` happens in the inbox, which the sender
-cannot read.
+`receive` decides what it keeps from the event alone, as a loom share inbox
+does, and then checks the sender:
+
+- Every string is trimmed, then cut: `kind` to `OFFER_KIND_MAX_LENGTH` (32),
+  `id` to `OFFER_ID_MAX_LENGTH` (320), `title` to `OFFER_TITLE_MAX_LENGTH`
+  (200), and `space`, `host`, `from` and `ownerOrigin` to
+  `OFFER_ADDRESS_MAX_LENGTH` (256).
+- The event is dropped unless `space` and `from` are DIDs, `did:` and a
+  lowercase method then an identifier with no spaces or slashes, and `host`
+  is an `http` or `https` origin with no path. `host` is cut before it is
+  checked, so an origin longer than the limit is kept cut.
+- What a sender leaves out is filled in: `kind` with `OFFER_DEFAULT_KIND`
+  (`loom`), `sharedAt`, unless it is a positive number, with the time the
+  inbox received the offer, and `id` with `<space>@<sharedAt>`. An
+  `ownerOrigin` that is not an origin is kept empty. A field the envelope does
+  not name is not kept.
+- The event is dropped when its `from` is not the principal sending it, or
+  when an offer in the inbox already has its `id`. So a resend of one offer is
+  kept once, and the first one kept stays as it was.
+
+The sender is not told of a drop, but it can read the offers back and look
+for a row with its offer's `id`, `from` and `space`, as a loom sender does.
 
 ## Reading them
 
 The owner reads `offers`. Nothing marks an offer as read or removes it, so a
-reader keeps its own record of the offers it has handled, keyed by `id`,
-wherever it keeps its own state.
+reader keeps its own record of the offers it has handled, keyed by `from` and
+`id`, wherever it keeps its own state. Two senders may choose the same `id`;
+the inbox keeps only the first offer under it.
 
 ## What it does not protect
 

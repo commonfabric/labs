@@ -12,6 +12,11 @@ import {
 } from "commonfabric";
 import ProfileHome from "./profile-home.tsx";
 import PrivateInbox, {
+  type Offer,
+  OFFER_ADDRESS_MAX_LENGTH,
+  OFFER_DEFAULT_KIND,
+  OFFER_ID_MAX_LENGTH,
+  OFFER_KIND_MAX_LENGTH,
   OFFER_TITLE_MAX_LENGTH,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
@@ -20,6 +25,20 @@ import PrivateInbox, {
 
 /** A well-formed space DID for an offer to name. */
 const ROOM_SPACE = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/** A well-formed DID of a principal other than the test's. */
+const SOMEONE_ELSE = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
+
+/** A well-formed host origin for an offer to name. */
+const HOST = "https://example.com";
+
+/** The offer in `offers` with `id`, if any. */
+function offerWithId(
+  offers: readonly (Offer | undefined)[],
+  id: string,
+): Offer | undefined {
+  return offers.find((each) => each?.id === id);
+}
 
 /** An inbox's result, as the link a holder keeps. */
 function linkOf(inbox: unknown): Cell<PrivateInboxPiece>;
@@ -73,82 +92,135 @@ export default pattern(() => {
     introduceMe.send();
   });
 
-  const action_receive_room = action(() => {
+  // A loom-shaped offer, with all eight fields and one the envelope lacks.
+  const action_receive_loom_shaped = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
+      kind: "loom",
+      id: "loom-shaped",
       space: ROOM_SPACE,
-      host: "https://example.com",
+      host: HOST,
+      ownerOrigin: "https://owner.example.com",
       title: "Lunch",
+      from: me.get(),
+      sharedAt: 1_700_000_000_123,
+      extra: "dropped",
+    } as never);
+  });
+  const assert_loom_shaped_offer_kept_whole = assert(() => {
+    const offer = offerWithId(inbox.offers, "loom-shaped");
+    return me.get() !== "" && offer !== undefined &&
+      offer.kind === "loom" && offer.space === ROOM_SPACE &&
+      offer.host === HOST &&
+      offer.ownerOrigin === "https://owner.example.com" &&
+      offer.title === "Lunch" && offer.from === me.get() &&
+      offer.sharedAt === 1_700_000_000_123 &&
+      typeof offer.receivedAt === "number" && offer.receivedAt > 0 &&
+      !("extra" in offer);
+  });
+
+  // Strings are trimmed before they are checked and kept.
+  const action_receive_padded = action(() => {
+    inbox.receive.send({
+      kind: "  fabrichat-room  ",
+      id: "  padded  ",
+      space: `  ${ROOM_SPACE}  `,
+      host: `  ${HOST}  `,
+      ownerOrigin: `  ${HOST}  `,
+      title: "  Dinner  ",
+      from: `  ${me.get()}  `,
     });
   });
-  const assert_room_received_from_the_actor = assert(() =>
-    inbox.offers.length === 1 &&
-    inbox.offers[0]?.kind === "fabrichat-room" &&
-    inbox.offers[0]?.space === ROOM_SPACE &&
-    inbox.offers[0]?.host === "https://example.com" &&
-    inbox.offers[0]?.title === "Lunch" &&
-    me.get() !== "" &&
-    inbox.offers[0]?.from === me.get() &&
-    typeof inbox.offers[0]?.receivedAt === "number"
-  );
+  const assert_padded_offer_trimmed = assert(() => {
+    const offer = offerWithId(inbox.offers, "padded");
+    return offer !== undefined && offer.kind === "fabrichat-room" &&
+      offer.space === ROOM_SPACE && offer.host === HOST &&
+      offer.ownerOrigin === HOST && offer.title === "Dinner" &&
+      offer.from === me.get();
+  });
 
-  const action_receive_malformed = action(() => {
-    inbox.receive.send({ kind: "Fabri Chat", space: ROOM_SPACE });
-    inbox.receive.send({ kind: "", space: ROOM_SPACE });
-    inbox.receive.send({ kind: "x".repeat(65), space: ROOM_SPACE });
-    inbox.receive.send({ kind: "fabrichat-room", space: "not-a-did" });
+  // What an offer that leaves fields out is kept with.
+  const action_receive_bare = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
       space: ROOM_SPACE,
-      host: "ftp://example.com",
-    });
-    inbox.receive.send({
-      kind: "fabrichat-room",
-      space: ROOM_SPACE,
-      host: "https://example.com/path",
+      host: HOST,
+      ownerOrigin: "not an origin",
+      from: me.get(),
     });
   });
-  const assert_malformed_offers_dropped = assert(() =>
-    inbox.offers.length === 1
-  );
+  const assert_bare_offer_defaulted = assert(() => {
+    const offer = inbox.offers.find((each) =>
+      each?.id.startsWith(`${ROOM_SPACE}@`) === true
+    );
+    return offer !== undefined && offer.kind === OFFER_DEFAULT_KIND &&
+      offer.id === `${ROOM_SPACE}@${offer.sharedAt}` &&
+      offer.sharedAt === offer.receivedAt && offer.ownerOrigin === "" &&
+      offer.title === "";
+  });
 
-  const action_receive_long_title = action(() => {
+  // Over-long strings are cut, and a host is cut before it is checked.
+  const longHost = `https://${"h".repeat(OFFER_ADDRESS_MAX_LENGTH)}`;
+  const action_receive_long = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
+      kind: "k".repeat(OFFER_KIND_MAX_LENGTH * 2),
+      id: "i".repeat(OFFER_ID_MAX_LENGTH * 2),
       space: ROOM_SPACE,
+      host: longHost,
       title: "t".repeat(OFFER_TITLE_MAX_LENGTH * 2),
+      from: me.get(),
     });
   });
-  const assert_long_title_cut = assert(() =>
-    inbox.offers.length === 2 &&
-    inbox.offers[1]?.title === "t".repeat(OFFER_TITLE_MAX_LENGTH) &&
-    inbox.offers[1]?.host === undefined
+  const assert_long_offer_cut = assert(() => {
+    const offer = offerWithId(inbox.offers, "i".repeat(OFFER_ID_MAX_LENGTH));
+    return offer !== undefined &&
+      offer.kind === "k".repeat(OFFER_KIND_MAX_LENGTH) &&
+      offer.title === "t".repeat(OFFER_TITLE_MAX_LENGTH) &&
+      offer.host === longHost.slice(0, OFFER_ADDRESS_MAX_LENGTH);
+  });
+
+  // Each refused, by the one rule it breaks.
+  const action_receive_refused = action(() => {
+    const valid = {
+      kind: "loom",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+    };
+    inbox.receive.send({ ...valid, id: "bad-space", space: "not-a-did" });
+    inbox.receive.send({ ...valid, id: "no-space", space: undefined });
+    inbox.receive.send({ ...valid, id: "bad-from", from: "not-a-did" });
+    inbox.receive.send({ ...valid, id: "no-from", from: undefined });
+    inbox.receive.send({ ...valid, id: "ftp-host", host: "ftp://example.com" });
+    inbox.receive.send({ ...valid, id: "path-host", host: `${HOST}/path` });
+    inbox.receive.send({ ...valid, id: "no-host", host: undefined });
+    inbox.receive.send({ ...valid, id: "not-me", from: SOMEONE_ELSE });
+  });
+  const assert_refused_offers_dropped = assert(() =>
+    [
+      "bad-space",
+      "no-space",
+      "bad-from",
+      "no-from",
+      "ftp-host",
+      "path-host",
+      "no-host",
+      "not-me",
+    ].every((id) => offerWithId(inbox.offers, id) === undefined)
   );
 
-  // Two offers in one action land in the same second, and one names an `id`
-  // of its own.
-  const forged = {
-    kind: "fabrichat-room",
-    space: ROOM_SPACE,
-    title: "Second",
-    id: "forged-id",
-  };
-  const action_receive_two_in_one_second = action(() => {
+  // A second offer under an `id` the inbox holds is dropped.
+  const action_receive_duplicate = action(() => {
     inbox.receive.send({
-      kind: "fabrichat-room",
+      kind: "loom",
+      id: "loom-shaped",
       space: ROOM_SPACE,
-      title: "First",
+      host: HOST,
+      title: "Second",
+      from: me.get(),
     });
-    inbox.receive.send(forged);
   });
-  const assert_each_offer_has_its_own_id = assert(() =>
-    inbox.offers.length === 4 &&
-    inbox.offers[2]?.from === inbox.offers[3]?.from &&
-    typeof inbox.offers[2]?.id === "string" &&
-    inbox.offers[2]?.id !== "" &&
-    inbox.offers[2]?.id !== inbox.offers[3]?.id &&
-    inbox.offers[3]?.id !== "forged-id" &&
-    new Set(inbox.offers.map((each) => each?.id)).size === 4
+  const assert_duplicate_dropped = assert(() =>
+    inbox.offers.filter((each) => each?.id === "loom-shaped").length === 1 &&
+    offerWithId(inbox.offers, "loom-shaped")?.title === "Lunch"
   );
 
   // Pointing profiles at an inbox: of the current vintage and of an earlier
@@ -185,23 +257,6 @@ export default pattern(() => {
     home.get().piece !== undefined && elsewhere.get().piece !== undefined &&
     !equals(home.get().piece, elsewhere.get().piece)
   );
-  // An offer naming its piece by link alone, and one naming nothing.
-  const action_receive_entry_only = action(() => {
-    inbox.receive.send({
-      kind: "fabrichat-room",
-      entry: elsewhere.get().piece?.resolveAsCell(),
-    });
-  });
-  const action_receive_neither_space_nor_entry = action(() => {
-    inbox.receive.send({ kind: "fabrichat-room", title: "Nowhere" });
-  });
-  const assert_entry_only_offer_kept_without_space = assert(() =>
-    inbox.offers.length === 5 &&
-    inbox.offers[4]?.space === undefined &&
-    equals(inbox.offers[4]?.entry, elsewhere.get().piece) &&
-    !inbox.offers.some((each) => each?.title === "Nowhere")
-  );
-
   const assert_only_the_unpointed_profile_points_at_home_inbox = assert(() =>
     equals(pointed.inbox?.piece, elsewhere.get().piece) &&
     equals(earlierPointed.inbox?.piece, elsewhere.get().piece) &&
@@ -212,14 +267,18 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { action: action_introduce },
-      { action: action_receive_room },
-      { assertion: assert_room_received_from_the_actor },
-      { action: action_receive_malformed },
-      { assertion: assert_malformed_offers_dropped },
-      { action: action_receive_long_title },
-      { assertion: assert_long_title_cut },
-      { action: action_receive_two_in_one_second },
-      { assertion: assert_each_offer_has_its_own_id },
+      { action: action_receive_loom_shaped },
+      { assertion: assert_loom_shaped_offer_kept_whole },
+      { action: action_receive_padded },
+      { assertion: assert_padded_offer_trimmed },
+      { action: action_receive_bare },
+      { assertion: assert_bare_offer_defaulted },
+      { action: action_receive_long },
+      { assertion: assert_long_offer_cut },
+      { action: action_receive_refused },
+      { assertion: assert_refused_offers_dropped },
+      { action: action_receive_duplicate },
+      { assertion: assert_duplicate_dropped },
       { action: action_create_inboxes },
       { assertion: assert_inboxes_created },
       { action: action_point_one_elsewhere },
@@ -228,9 +287,6 @@ export default pattern(() => {
       // Pointing again changes nothing.
       { action: action_point_profiles },
       { assertion: assert_only_the_unpointed_profile_points_at_home_inbox },
-      { action: action_receive_entry_only },
-      { action: action_receive_neither_space_nor_entry },
-      { assertion: assert_entry_only_offer_kept_without_space },
     ],
   };
 });

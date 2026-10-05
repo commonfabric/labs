@@ -43,7 +43,17 @@ const writeRefusals = (
 };
 
 /** An offer as the owner reads it. */
-type ReadOffer = { kind: string; space: string; title?: string; from: string };
+type ReadOffer = {
+  kind: string;
+  id: string;
+  space: string;
+  host: string;
+  ownerOrigin: string;
+  title: string;
+  from: string;
+  sharedAt: number;
+  receivedAt: number;
+};
 
 describe("private inbox across runtimes", () => {
   let harness: MultiRuntimeHarness;
@@ -120,7 +130,7 @@ describe("private inbox across runtimes", () => {
     stream: "offer" | "queuedOffer" = "offer",
   ): Promise<void> => {
     const refusedBefore = await refusals();
-    await sender.send(stream, { space: harness.spaceDid, title });
+    await sender.send(stream, { id: title, space: harness.spaceDid, title });
     await harness.settleUntil(async () =>
       (await ownerOffers()).some((each) => each.title === title) ||
       await refusals() > refusedBefore
@@ -172,7 +182,7 @@ describe("private inbox across runtimes", () => {
     expect((await profileInbox(2)).id).toBe(inbox.id);
   });
 
-  it("delivers each offer a sender's own handler sends, stamped with the sender", async () => {
+  it("delivers each offer a sender's own handler sends, from the sender", async () => {
     const before = (await ownerOffers()).length;
 
     for (const title of ["first", "second", "third"]) await offer(title);
@@ -185,20 +195,26 @@ describe("private inbox across runtimes", () => {
     ]);
     for (const each of offers.slice(before)) {
       expect(each.kind).toBe("fabrichat-room");
+      expect(each.id).toBe(each.title);
       expect(each.space).toBe(harness.spaceDid);
+      expect(each.host).toBe("https://example.com");
+      expect(each.ownerOrigin).toBe("https://example.com");
       expect(each.from).toBe(sender.identity.did());
+      expect(typeof each.sharedAt).toBe("number");
+      expect(typeof each.receivedAt).toBe("number");
     }
   });
 
-  it("delivers each offer a queued handler of the sender's sends after reading the pointer, stamped with the sender", async () => {
+  it("delivers each offer a queued handler of the sender's sends after reading the pointer, from the sender", async () => {
     const before = (await ownerOffers()).length;
 
     for (const title of ["queued first", "queued second"]) {
       await offer(title, "queuedOffer");
     }
 
-    // `receive` stamps `from` with `currentPrincipal()`, which is the sender
-    // whose event started the cascade, not the inbox's owner.
+    // `receive` keeps an offer only when its `from` is `currentPrincipal()`,
+    // which is the sender whose event started the cascade, not the inbox's
+    // owner.
     const offers = (await ownerOffers()).slice(before);
     expect(offers.map((each) => each.title)).toEqual([
       "queued first",
@@ -215,8 +231,8 @@ describe("private inbox across runtimes", () => {
   it("lets a sender read the offers back and find its own", async () => {
     // The space grants every principal `WRITE`, which implies `READ`, and the
     // offers' label binds no runtime that reads without a ceiling, so a
-    // sender can confirm its delivery by reading the inbox, as a loom sender
-    // does.
+    // sender can confirm its delivery by reading the inbox for a row with its
+    // offer's `id`, `from` and `space`, as a loom sender does.
     await offer("read back");
 
     const offers = (await sender.read(["offers"], {
@@ -224,7 +240,8 @@ describe("private inbox across runtimes", () => {
     })) as ReadOffer[];
     expect(
       offers.some((each) =>
-        each.title === "read back" && each.from === sender.identity.did()
+        each.id === "read back" && each.from === sender.identity.did() &&
+        each.space === harness.spaceDid
       ),
     ).toBe(true);
   });
