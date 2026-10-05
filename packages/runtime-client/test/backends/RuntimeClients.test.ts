@@ -121,7 +121,7 @@ function harness(
     : Promise.resolve();
   const clients = new RuntimeClients({
     owner: owner.client,
-    setConsoleBridge: (enabled) => consoleBridge.push(enabled),
+    setConsoleBridge: (forward) => consoleBridge.push(forward !== undefined),
     initializeRuntime: async () => {
       initializeCount += 1;
       await held;

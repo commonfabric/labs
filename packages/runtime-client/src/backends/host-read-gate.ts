@@ -18,33 +18,62 @@
  */
 
 import {
+  canRenderLabelUnderPolicy,
   cellLabelRefusal,
   cellLabelSources,
+  CFC_POLICY_PLACEHOLDER_TEXT,
   type DisplayFitSources,
+  displayLabelView,
   type FitWatch,
+  normalizeRenderConfidentialityCeiling,
   readRefusal,
   type RenderLabelSummary,
   type RenderPolicy,
+  rootRenderPolicyFor,
 } from "@commonfabric/html/worker";
+import type { CellScope } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import { isPlainObject } from "@commonfabric/utils/types";
 import {
   type Cancel,
   type Cell,
+  cellDocumentHeld,
+  cellLinkHolders,
   hostValueOf,
   isStream,
+  type JSONSchema,
   type MetaField,
+  NavigationWithheldError,
+  parseAddressKey,
   readProjected,
+  type RuntimeTelemetryMarkerResult,
   type SinkConsumedLabel,
   sinkProjected,
   useCancelGroup,
 } from "@commonfabric/runner";
+import type {
+  SchedulerActionInfo,
+  SchedulerDiagnosisResult,
+  SchedulerGraphSnapshot,
+  TriggerTraceEntry,
+} from "@commonfabric/runner/shared";
+import { addressKey } from "@commonfabric/runner/shared";
 import {
+  type CfcConfClause,
+  cfcHolderLabelViewSourceForCell,
   type CfcLabelView,
+  cfcLabelViewForCellWithStatus,
   cfcLabelViewForResolvedCell,
-  redactCaveatSourcesForDisplay,
+  cfcLabelViewForResolvedCellWithStatus,
+  type CfcLabelViewSource,
+  cfcLabelViewSourceForCell,
+  isChannelStateDocument,
+  membershipSpacesInConfidentiality,
+  modulePolicyRefsInConfidentiality,
   reportCfcDenial,
 } from "@commonfabric/runner/cfc";
+import type { OperationFieldSnapshot } from "@commonfabric/memory/v2";
 
 import {
   type CellFieldsResponse,
@@ -52,12 +81,152 @@ import {
   type CellReadRefusal,
   type CellRef,
   type CellRefusedAnswer,
+  type CellResolveResponse,
   type CellUpdateNotification,
   type CellValueResponse,
+  type CfcLabelViewResponse,
+  type ConsoleNotification,
+  type DetectNonIdempotentResponse,
+  type ErrorNotification,
+  type ErrorReport,
+  type GraphSnapshotResponse,
   type HostReadDecided,
+  type IPCRemotePost,
+  type NavigateRequestNotification,
   NotificationType,
+  type OperationUpdateNotification,
+  type PatternSourceInfo,
+  type PatternSourcesResponse,
+  type PieceRef,
+  type RuntimeErrorCode,
+  type SlugReferenceResponse,
+  type SlugRefusal,
+  type SlugResponse,
+  type TelemetryNotification,
+  TransportNotificationType,
+  type TriggerTraceResponse,
+  type WorkerConsoleLevel,
+  type WorkerConsoleNotification,
 } from "@/protocol/mod.ts";
 import { createCellRef } from "./utils.ts";
+
+/**
+/**
+ * The document a diagnostic names by space and id, which a diagnostic is
+ * decided on: its root, whose labels cover everything it holds.
+ */
+export type DocumentAt = (
+  space: string,
+  id: string,
+  scope?: CellScope,
+) => Cell<unknown>;
+
+/**
+ * A document a slug's resolution read, at its root, with the labels it held
+ * when the walk read it ({@link HostReadGate.walkRead}).
+ */
+export type WalkedDocument = {
+  readonly root: Cell<unknown>;
+
+  /** Whether the replica held the document then. */
+  readonly held: boolean;
+
+  /**
+   * The labels the document stored then, or `undefined` for one in a
+   * channel's own state, which carries none a display could be decided on.
+   */
+  readonly sources: readonly CfcLabelViewSource[] | undefined;
+};
+
+/**
+ * The document a scheduler graph names by space, id and scope key (`space`
+ * for the space instance), at its root, or `undefined` where the key names
+ * an instance this worker cannot place.
+ */
+export type GraphDocumentAt = (
+  space: string,
+  id: string,
+  scopeKey: string,
+) => Cell<unknown> | undefined;
+
+/**
+ * An address a diagnostic names, split: the document it names, as the
+ * address spells it; its path inside that document; and the document's root,
+ * or `undefined` where the address cannot be placed.
+ */
+type PlacedAddress = {
+  document: string;
+  path: readonly string[];
+  root: Cell<unknown> | undefined;
+};
+
+/** Addresses as a host may see them, and an absent list as absent. */
+type ShownAddresses = {
+  (keys: readonly string[]): string[];
+  (keys: readonly string[] | undefined): string[] | undefined;
+};
+
+/**
+ * Splits and places an address, or `undefined` for a string that is none. A
+ * `data:` id holds its content, `/` included, so neither where it ends nor
+ * what it holds can be told apart from the address, and it is not placed.
+ */
+type AddressPlacement = (key: string) => PlacedAddress | undefined;
+
+/**
+ * An address as the scheduler graph spells it, `space/id/scopeKey/path`,
+ * placed by `documentAt`.
+ */
+const placeScoped =
+  (documentAt: GraphDocumentAt): AddressPlacement => (key) => {
+    const [space, id, scopeKey, ...path] = key.split("/");
+    if (
+      space === undefined || id === undefined || scopeKey === undefined ||
+      hasDataUriScheme(id)
+    ) {
+      return undefined;
+    }
+    return {
+      document: `${space}/${id}/${scopeKey}`,
+      path: path.filter((segment) => segment.length > 0),
+      root: documentAt(space, id, scopeKey),
+    };
+  };
+
+/**
+ * An address as telemetry spells it, `space/id/path`, which names no scope:
+ * the instance it names cannot be told, so it is not placed.
+ */
+const placeUnscoped: AddressPlacement = (key) => {
+  const [space, id, ...path] = key.split("/");
+  if (space === undefined || id === undefined || hasDataUriScheme(id)) {
+    return undefined;
+  }
+  return {
+    document: `${space}/${id}`,
+    path: path.filter((segment) => segment.length > 0),
+    root: undefined,
+  };
+};
+
+/**
+ * A document as the scheduler keys one, `space/scopeKey/id`, which names no
+ * path within it, and so is named as it is.
+ */
+const placeEntity: AddressPlacement = (key) => {
+  const [space, scopeKey, ...idParts] = key.split("/");
+  const id = idParts.join("/");
+  if (
+    space === undefined || scopeKey === undefined || id.length === 0 ||
+    hasDataUriScheme(id)
+  ) {
+    return undefined;
+  }
+  return { document: key, path: [], root: undefined };
+};
+
+/** What stands in a diagnostic for a value the ceiling refuses. */
+const WITHHELD = CFC_POLICY_PLACEHOLDER_TEXT;
 
 /**
  * The read that lists a record's fields: each field as a link to its own
@@ -68,6 +237,63 @@ const FIELDS_SCHEMA = {
   type: "object",
   additionalProperties: { asCell: ["cell"] },
 } as const;
+
+/** The label a decision is refused on where nothing measured what it is made of. */
+const UNMEASURED: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: [],
+  integrity: [],
+});
+
+/** The label a decision is refused on while its documents are not yet held. */
+const UNHELD: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: [],
+  integrity: [],
+});
+
+/** How the policy stands with what an action consumed (`#consumedVerdict`). */
+type ConsumedVerdict =
+  | { readonly kind: "admitted" | "unreadable" | "absent" }
+  | { readonly kind: "refused"; readonly labels: SinkConsumedLabel };
+
+const ADMITTED: ConsumedVerdict = Object.freeze({ kind: "admitted" });
+
+/**
+ * Whether the replica holds `cell`'s document and the one its path resolves
+ * to, or `false` when the resolution cannot be made.
+ */
+function documentsHeld(cell: Cell<unknown>): boolean {
+  try {
+    return cellDocumentHeld(cell) && cellDocumentHeld(cell.resolveAsCell());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `cell` and the nodes holding each link a resolution of its path follows
+ * (`cellLinkHolders()`), or `undefined` when the resolution cannot be made.
+ */
+function linkHoldersOf(cell: Cell<unknown>): Cell<unknown>[] | undefined {
+  try {
+    return [cell, ...cellLinkHolders(cell)];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The document `cell` addresses, as a key. */
+function documentKey(cell: Cell<unknown>): string {
+  return addressKey({ ...cell.getAsNormalizedFullLink(), path: [] });
+}
+
+/** The confidentiality clauses of every entry in `source`'s view. */
+function confidentialityIn(source: CfcLabelViewSource): CfcConfClause[] {
+  return source.view?.entries.flatMap((entry) =>
+    entry.label.confidentiality ?? []
+  ) ?? [];
+}
 
 /** What the display ceiling's refusal of a host's read says. */
 const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
@@ -80,6 +306,33 @@ const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
  */
 function decided<T>(answer: T): T & HostReadDecided {
   return answer as T & HostReadDecided;
+}
+
+/**
+ * `message` as the wire carries it. The mark `decided()` gives an answer
+ * exists only in its type, as a class's private field no value has, so a
+ * message holding a decided answer is not, to the compiler, a value the wire
+ * can encode. This is the one place the type is set aside, at the boundary
+ * every message the worker sends crosses, as `decided()` is the one place it
+ * is given; what is sent is the same value.
+ */
+export function onTheWire(message: IPCRemotePost): FabricValue {
+  return message as unknown as FabricValue;
+}
+
+/**
+ * The report the transport makes of its own failures: a message it cannot
+ * encode, or one from a client it cannot decode or act on. `reason` names
+ * the failure, and may quote the message, which was either the host's own or
+ * itself to be posted to the host, and so carries nothing the host would not
+ * have been sent. Given the gate's mark here, since only this module gives
+ * it.
+ */
+export function transportFailureReport(reason: string): ErrorNotification {
+  return decided({
+    type: NotificationType.ErrorReport as const,
+    message: reason,
+  });
 }
 
 /**
@@ -99,15 +352,6 @@ function fieldNamesOf(value: unknown): string[] | undefined {
   // A record is a plain object: a class instance such as `FabricBytes` holds
   // no fields to list, whatever own properties it has.
   return isPlainObject(value) ? Object.keys(value) : undefined;
-}
-
-/** The label view a read asked for, with each caveat's source redacted. */
-function displayLabel(
-  cfcLabel: CfcLabelView | undefined,
-): CfcLabelView | undefined {
-  return cfcLabel === undefined
-    ? undefined
-    : redactCaveatSourcesForDisplay(cfcLabel);
 }
 
 /**
@@ -134,6 +378,20 @@ export class HostReadGate {
   }
 
   /**
+   * A gate decided by the configured ceiling alone, `configured` as a host
+   * sends it, with none of the resolver and providers that admit a space's
+   * members: it refuses what a worker's full gate might admit, and admits
+   * nothing that gate would refuse. For what is decided before, or apart
+   * from, the runtime that holds those.
+   */
+  static forConfiguredCeiling(configured: unknown): HostReadGate {
+    return new HostReadGate(
+      rootRenderPolicyFor(normalizeRenderConfidentialityCeiling(configured)),
+      {},
+    );
+  }
+
+  /**
    * Reads `cell` once for a host: its value as `hostValueOf()` builds it, or
    * the refusal that stands in its place. `includeRef` adds the read cell's
    * own ref, and `includeCfcLabel` its display label, to a value.
@@ -147,7 +405,7 @@ export class HostReadGate {
     if (policy === undefined) {
       value = hostValueOf(cell.get());
     } else {
-      const read = readProjected(cell, hostValueOf);
+      const read = readProjected(cell, this.#hostValue);
       const refusal = readRefusal(
         cell,
         [read.consumed],
@@ -159,19 +417,138 @@ export class HostReadGate {
         if (!options.includeRef) return refused;
         // The address alone, without the label view a ref carries: a
         // refused read gives no label.
-        const { cfcLabelView: _withheld, ...address } = createCellRef(cell);
-        return decided({ ...refused, cell: address });
+        return decided({ ...refused, cell: createCellRef(cell) });
       }
       value = read.value;
     }
-    const refField = options.includeRef ? { cell: createCellRef(cell) } : {};
+    const refField = options.includeRef ? { cell: this.ref(cell) } : {};
     if (!options.includeCfcLabel) return decided({ value, ...refField });
     // The value read above resolved the same links and kicked any
     // cross-space targets already, so the label read kicks none of its own.
-    const cfcLabel = cfcLabelViewForResolvedCell(cell, {
+    const label = cfcLabelViewForResolvedCellWithStatus(cell, {
       kickCrossSpaceTargets: false,
     });
-    return decided({ value, ...refField, cfcLabel: displayLabel(cfcLabel) });
+    return decided({
+      value,
+      ...refField,
+      cfcLabel: label.view === undefined
+        ? undefined
+        : this.#displayView(cell, label.view, label.readFailed),
+    });
+  }
+
+  /**
+   * Waits for what a decision on `cells` consults and has not loaded: the
+   * access lists of the spaces their labels name, which a read of them
+   * would consult. Says whether it loaded any, so that a decision made before
+   * is made again. A decision made once and not again, as a host's one-shot
+   * read is, refuses a `Space(X)` label while X's access list has not
+   * loaded, and no watch would make it again; one made after this is made on
+   * what the access lists say. An access list that cannot be loaded leaves
+   * the refusal standing, as a refusal, not an error.
+   */
+  async settle(...cells: Cell<unknown>[]): Promise<boolean> {
+    return (await this.#loadAccessLists(cells)) === "loaded";
+  }
+
+  /**
+   * Loads what a decision on `cell` consults: its document, each document
+   * holding a link its path follows, the one it resolves to, and the access
+   * lists of the spaces their labels name. A document a link leads into can
+   * hold the next link, which the resolution follows only once that document
+   * is loaded, so they are loaded a link at a time, each at most once: one
+   * that does not load ends the walk, and a decision refuses it as unread.
+   * Resolves `false` where an access list could not be loaded, on which a
+   * decision is refused as unreadable. With no policy, nothing is decided,
+   * and nothing is loaded for it.
+   */
+  async hold(cell: Cell<unknown>): Promise<boolean> {
+    if (this.#policy === undefined) return true;
+    await this.#loadResolution(cell);
+    return (await this.#loadAccessLists([cell], cellLinkHolders(cell))) !==
+      "failed";
+  }
+
+  /**
+   * Loads what naming where the links along `cell`'s path lead consults
+   * ({@link linkRefusal}): the documents of the resolution, and the access
+   * lists the nodes holding its links name, and not those of what they lead
+   * to, on which the decision is not made. Resolves as {@link hold} does.
+   */
+  async #holdLinks(cell: Cell<unknown>): Promise<boolean> {
+    if (this.#policy === undefined) return true;
+    await this.#loadResolution(cell);
+    const holders = linkHoldersOf(cell) ?? [];
+    return (await this.#loadAccessListsNamedBy(
+      holders.flatMap((holder) =>
+        confidentialityIn(cfcHolderLabelViewSourceForCell(holder))
+      ),
+    )) !== "failed";
+  }
+
+  /**
+   * Loads `cell`'s document, each document holding a link its path follows,
+   * and the one it resolves to, a link at a time, each at most once.
+   */
+  async #loadResolution(cell: Cell<unknown>): Promise<void> {
+    await cell.sync();
+    const loaded = new Set<string>();
+    while (true) {
+      const pending = [...cellLinkHolders(cell), cell.resolveAsCell()].filter(
+        (document) =>
+          !cellDocumentHeld(document) && !loaded.has(documentKey(document)),
+      );
+      if (pending.length === 0) return;
+      for (const document of pending) loaded.add(documentKey(document));
+      await Promise.all(pending.map((document) => document.sync()));
+    }
+  }
+
+  /**
+   * Loads the access lists of the spaces `cells`' labels name, and those of
+   * the nodes `holders`, that the replica does not hold: `none` where there
+   * were none to load, `loaded` once they are held, and `failed` where one
+   * could not be loaded.
+   */
+  async #loadAccessLists(
+    cells: readonly Cell<unknown>[],
+    holders: readonly Cell<unknown>[] = [],
+  ): Promise<"none" | "loaded" | "failed"> {
+    return await this.#loadAccessListsNamedBy([
+      ...cells.flatMap((cell) => [
+        ...readProjected(cell, hostValueOf).consumed.confidentiality,
+        ...(cellLabelSources(cell) ?? []).flatMap(confidentialityIn),
+      ]),
+      ...holders.flatMap((holder) =>
+        confidentialityIn(cfcHolderLabelViewSourceForCell(holder))
+      ),
+    ]);
+  }
+
+  /**
+   * Loads the access lists of the spaces `labels` name that the replica does
+   * not hold, answering as {@link #loadAccessLists} does.
+   */
+  async #loadAccessListsNamedBy(
+    labels: readonly CfcConfClause[],
+  ): Promise<"none" | "loaded" | "failed"> {
+    const membership = this.#sources.membership;
+    const held = membership?.held?.bind(membership);
+    const whenHeld = membership?.whenHeld?.bind(membership);
+    if (
+      this.#policy === undefined || held === undefined ||
+      whenHeld === undefined
+    ) {
+      return "none";
+    }
+    const pending = membershipSpacesInConfidentiality(labels).filter((space) =>
+      !held(space)
+    );
+    if (pending.length === 0) return "none";
+    const loads = await Promise.allSettled(pending.map(whenHeld));
+    return loads.every((load) => load.status === "fulfilled")
+      ? "loaded"
+      : "failed";
   }
 
   /**
@@ -190,15 +567,8 @@ export class HostReadGate {
    * document is admitted, and what it leads to is read through {@link read}.
    */
   metadataRefusal(root: Cell<unknown>): CellGetResponse | undefined {
-    const policy = this.#policy;
-    if (policy === undefined) return undefined;
-    const refusal = cellLabelRefusal(
-      root,
-      cellLabelSources(root),
-      policy,
-      this.#sources,
-    );
-    return refusal === undefined ? undefined : this.#refuse(refusal, policy);
+    const refusal = this.#cellRefusal(root);
+    return refusal === undefined ? undefined : this.#refuse(refusal);
   }
 
   /** The answer for a read that found nothing to read, such as an absent link. */
@@ -240,7 +610,13 @@ export class HostReadGate {
         type: NotificationType.CellUpdate as const,
         cell: ref,
         value,
-        ...(includeCfcLabel ? { cfcLabel: displayLabel(cfcLabel) } : {}),
+        ...(includeCfcLabel
+          ? {
+            cfcLabel: cfcLabel === undefined
+              ? undefined
+              : this.#displayView(cell, cfcLabel),
+          }
+          : {}),
       });
     const policy = this.#policy;
     if (policy === undefined) {
@@ -269,7 +645,7 @@ export class HostReadGate {
         deliver(
           refusal === undefined
             ? update(
-              hostValueOf(event),
+              this.#hostValue(event),
               // An event carries the label of the stream's document, which
               // the decision above was made on.
               includeCfcLabel
@@ -309,13 +685,900 @@ export class HostReadGate {
     };
     addCancel(sinkProjected(cell, (value) => {
       inspect(value);
-      return hostValueOf(value);
+      return this.#hostValue(value);
     }, (value, read, cfcLabel) => {
       last = { value, cfcLabel };
       consumed = read;
       decide();
     }, { includeCfcLabel }));
     return cancel;
+  }
+
+  /**
+   * A ref to `cell` for a host: its address, and the label view the cell
+   * holds in the display form {@link #displayView} gives it. Refs minted
+   * anywhere else carry no view (`createCellRef()`), so a ref that reaches
+   * a host with a view had it decided here.
+   */
+  ref(cell: Cell<unknown>, schema?: JSONSchema): CellRef {
+    const ref = createCellRef(cell, schema);
+    const { view, readFailed } = cfcLabelViewForCellWithStatus(cell);
+    return view === undefined ? ref : {
+      ...ref,
+      cfcLabelView: this.#displayView(cell, view, readFailed),
+    };
+  }
+
+  /**
+   * The refusal of naming where the links along `cell`'s path lead, or
+   * `undefined` where the policy admits it. A link is part of what the node
+   * holding it holds, so each link the resolution follows is decided on the
+   * labels its document stores where it sits
+   * (`cfcHolderLabelViewSourceForCell()`), and not on those of what it links
+   * to: the address is the node's content, as a read of a record holding the
+   * link hands a host the same address as a ref. Naming where the path
+   * leads tells what each node along it holds, so every one is decided: a
+   * document anyone may see can link into one only its owner may, and the
+   * link that one holds is its content. A holding document the
+   * replica does not hold, one in a channel's own state, or a resolution
+   * that cannot be made, is refused as unreadable.
+   */
+  linkRefusal(
+    cell: Cell<unknown>,
+  ): (HostReadDecided & CellRefusedAnswer) | undefined {
+    const policy = this.#policy;
+    if (policy === undefined) return undefined;
+    const holders = linkHoldersOf(cell);
+    const refusal = holders !== undefined &&
+        holders.every((holder) =>
+          cellDocumentHeld(holder) &&
+          !isChannelStateDocument(holder.getAsNormalizedFullLink().id)
+        )
+      ? cellLabelRefusal(
+        cell,
+        holders.map(cfcHolderLabelViewSourceForCell),
+        policy,
+        this.#sources,
+      )
+      : UNHELD;
+    return refusal === undefined ? undefined : this.#refuse(refusal, policy);
+  }
+
+  /**
+   * What `read` reads of where the links at `cell` lead, once
+   * {@link linkRefusal} admits it, or the refusal in its place. Decided once
+   * what it consults is loaded, as {@link resolveAsCell} is, a decision whose
+   * access lists cannot be loaded refused as unreadable, and read straight
+   * after, with no wait between, so that what is read is what was decided.
+   */
+  async followLink<T>(
+    cell: Cell<unknown>,
+    read: () => T,
+  ): Promise<(HostReadDecided & CellRefusedAnswer) | { followed: T }> {
+    const refused = await this.#holdLinks(cell)
+      ? this.linkRefusal(cell)
+      : this.#refuse(UNHELD);
+    return refused ?? { followed: read() };
+  }
+
+  /**
+   * The cell the links along `cell`'s path lead to, as a ref {@link ref}
+   * makes, or the refusal that stands in its place where the policy refuses
+   * the node holding a link it followed ({@link linkRefusal}). A cell whose
+   * path follows no link resolves to itself, the address the host named.
+   * Decided once what the decision consults is loaded: the documents the
+   * resolution crosses, and the access lists the nodes holding its links
+   * name, not those of what they lead to. So a link into a document the
+   * worker has not loaded yet is followed, not refused as unread.
+   */
+  async resolveAsCell(cell: Cell<unknown>): Promise<CellResolveResponse> {
+    if (!await this.#holdLinks(cell)) return this.#refuse(UNHELD);
+    const resolved = cell.resolveAsCell();
+    if (this.#policy !== undefined && !cell.equalLinks(resolved)) {
+      const refused = this.linkRefusal(cell);
+      if (refused !== undefined) return refused;
+    }
+    return decided({ cell: this.ref(resolved) });
+  }
+
+  /** A ref to the piece `cell` holds, as {@link ref} makes one. */
+  pieceRef(cell: Cell<unknown>): PieceRef {
+    return { cell: this.ref(cell) };
+  }
+
+  /**
+   * `cell`'s display label, for a host that asked for it alone. A field's
+   * name is part of what the record holding it holds, and the path of each
+   * entry names a field, so where the policy refuses the cell the entries
+   * are joined at its root (§4.6.4.1). The cell is refused as a whole here,
+   * as `displayLabelView()` fits it, so a view can withhold the name of a
+   * field the record's own field list ({@link fields}), decided on the
+   * record's node, shows: of the two, the view is the stricter.
+   */
+  label(cell: Cell<unknown>): CfcLabelViewResponse {
+    // The value read elsewhere resolved the same links and kicked any
+    // cross-space targets already, so the label read kicks none of its own.
+    const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell, {
+      kickCrossSpaceTargets: false,
+    });
+    return decided({
+      cfcLabel: view === undefined
+        ? undefined
+        : this.#displayView(cell, view, readFailed),
+    });
+  }
+
+  /**
+   * The slug of the piece `root` is, or the refusal that stands in its
+   * place: a metadata field, decided as {@link readMetadata} decides one,
+   * once what the decision consults is loaded ({@link hold}).
+   */
+  async slug(root: Cell<unknown>): Promise<SlugResponse> {
+    if (!await this.hold(root)) return this.#refuse(UNHELD);
+    const refusal = this.metadataRefusal(root);
+    if (refusal?.refused !== undefined) return refusal;
+    const slug = root.getMetaRaw("slug");
+    return decided({ slug: typeof slug === "string" ? slug : undefined });
+  }
+
+  /**
+   * The answer to a host's slug reference: where it landed, as a ref to the
+   * piece it reached ({@link pieceRef}), or why it reached nothing, or the
+   * refusal that stands in place of either. A slug is its piece's metadata,
+   * and naming the piece a slug stands for, or why it stands for none, tells
+   * the host what that slug would. So the answer is decided as {@link slug}
+   * decides a slug, on every label each document the walk read stores
+   * (`walked`, each at its root), once each is loaded.
+   */
+  async slugReference(
+    walked: readonly WalkedDocument[],
+    answer:
+      | { piece: Cell<unknown>; pathAfter: string[] }
+      | { refusal: SlugRefusal },
+  ): Promise<SlugReferenceResponse> {
+    const policy = this.#policy;
+    for (const { root, held, sources } of walked) {
+      if (policy === undefined) break;
+      const loaded = await this.#loadAccessListsNamedBy(
+        (sources ?? []).flatMap(confidentialityIn),
+      );
+      const refusal = held && loaded !== "failed"
+        ? cellLabelRefusal(root, sources, policy, this.#sources)
+        : UNHELD;
+      if (refusal === undefined) continue;
+      const { refusedBy } = this.#refuse(refusal).refused;
+      return decided({
+        refusal: {
+          code: refusedBy,
+          message: `The worker refused to name what this slug stands for ` +
+            `(${refusedBy}).`,
+        },
+      });
+    }
+    return decided(
+      "refusal" in answer
+        ? { refusal: answer.refusal }
+        : { piece: this.pieceRef(answer.piece), pathAfter: answer.pathAfter },
+    );
+  }
+
+  /**
+   * `root`, a document a slug's resolution has just read, with the labels it
+   * holds now, as the read saw it. The answer is made from what the walk
+   * read, and the walk waits for each document it reaches, so its documents
+   * are decided on these, not on labels one holds by the time the walk ends.
+   * Each is decided on its own document alone: where it leads is a document
+   * the walk reads next, and records then, once it has loaded it.
+   */
+  walkRead(root: Cell<unknown>): WalkedDocument {
+    return {
+      root,
+      held: cellDocumentHeld(root),
+      sources: isChannelStateDocument(root.getAsNormalizedFullLink().id)
+        ? undefined
+        : [cfcLabelViewSourceForCell(root)],
+    };
+  }
+
+  /**
+   * An answer built from `root`'s metadata by `build`, such as a piece's
+   * source, or the refusal that stands in its place. `build` runs only once
+   * the document's labels admit a read of its metadata, so a refused piece's
+   * source is neither read for the host nor changed through it. `build` is
+   * handed the document the decision was made on, and builds from it alone.
+   */
+  async fromMetadata<T extends object>(
+    root: Cell<unknown>,
+    build: (root: Cell<unknown>) => Promise<T>,
+  ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
+    if (!await this.hold(root)) {
+      return decided({ refused: this.#refuse(UNHELD).refused });
+    }
+    const refusal = this.metadataRefusal(root);
+    if (refusal?.refused !== undefined) {
+      return decided({ refused: refusal.refused });
+    }
+    return decided(await build(root));
+  }
+
+  /**
+   * An answer built by `build` from what `cell` holds, such as the rows a
+   * query of a database returns or the state of a collaborative field, or
+   * the refusal that stands in its place. Decided on the labels `cell`
+   * carries, which cover everything inside it, since what `build` reads is
+   * reached through it and not through a read the gate can measure. `build`
+   * is handed the cell the decision was made on, and builds from it alone.
+   *
+   * `named`, when given, is the cell the host named to reach `cell`, such as
+   * one whose path led a collaborative session to the field it holds. It is
+   * decided as well, since the links along its path are part of what its
+   * document holds, and the host learns where they led from what is built.
+   */
+  async fromCell<T extends object>(
+    cell: Cell<unknown>,
+    build: (cell: Cell<unknown>) => Promise<T>,
+    named?: Cell<unknown>,
+  ): Promise<HostReadDecided & (T | CellRefusedAnswer)> {
+    const held = (named === undefined || await this.hold(named)) &&
+      await this.hold(cell);
+    const refusal = held ? this.#reachedRefusal(cell, named) : UNHELD;
+    if (refusal !== undefined) {
+      return decided({ refused: this.#refuse(refusal).refused });
+    }
+    return decided(await build(cell));
+  }
+
+  /**
+   * The refusal of an answer built from a read the gate did not make, which
+   * consumed `consumed`, such as a snapshot preview, decided as a read of
+   * `cell` is ({@link read}) once the access lists its labels name have
+   * loaded, or `undefined` where the policy admits it.
+   */
+  async consumedRefusal(
+    cell: Cell<unknown>,
+    consumed: SinkConsumedLabel,
+  ): Promise<(HostReadDecided & CellRefusedAnswer) | undefined> {
+    const policy = this.#policy;
+    if (policy === undefined) return undefined;
+    const loaded = await this.#loadAccessListsNamedBy(
+      consumed.confidentiality,
+    );
+    const refusal = loaded === "failed"
+      ? UNHELD
+      : readRefusal(cell, [consumed], policy, this.#sources);
+    return refusal === undefined ? undefined : this.#refuse(refusal, policy);
+  }
+
+  /**
+   * An update of the collaborative field `cell`, for subscription
+   * `subscriptionId`: the field as it now stands, or the refusal that stands
+   * in its place, decided again at each update, as {@link fromCell} decides,
+   * `named` included.
+   */
+  operationUpdate(
+    cell: Cell<unknown>,
+    subscriptionId: string,
+    field: OperationFieldSnapshot,
+    named?: Cell<unknown>,
+  ): OperationUpdateNotification {
+    const refusal = this.#reachedRefusal(cell, named);
+    return decided({
+      type: NotificationType.OperationUpdate as const,
+      subscriptionId,
+      ...(refusal === undefined
+        ? { field }
+        : { refused: this.#refuse(refusal).refused }),
+    });
+  }
+
+  /**
+   * A telemetry marker as a host may see it, each kind decided on what it
+   * carries:
+   *
+   * - A cell update's values and the path it changed are the changed
+   *   document's contents: where the policy refuses that document, the
+   *   marker names the document alone, with the placeholder in place of each
+   *   value.
+   * - An error's or a rejection's message, and a refused commit's reasons,
+   *   are text the runtime cannot vouch for, which can quote what the run or
+   *   commit handled. Each is decided as {@link error} decides an error, on
+   *   what the transaction the marker reports on had read (`consumed`), and
+   *   withheld under a policy where the marker carries no labels: a commit's
+   *   failure is reported after its transaction has closed.
+   * - Everything else a marker carries is an address, field paths included,
+   *   a label's atoms, a count or a time, or the name of a source, an action
+   *   or a failure's kind, and is not decided here (the dispositions name
+   *   the addresses as a follow-up).
+   *
+   * The cases are exhaustive, so a marker added to the runtime fails to
+   * type-check here until it is decided.
+   */
+  telemetry(
+    marker: RuntimeTelemetryMarkerResult,
+    documentAt: DocumentAt,
+    consumed?: () => SinkConsumedLabel,
+    graphDocumentAt: GraphDocumentAt = (space, id, scopeKey) =>
+      scopeKey === "space" ? documentAt(space, id) : undefined,
+  ): TelemetryNotification {
+    return decided({
+      type: NotificationType.Telemetry as const,
+      marker: this.#markerShown(marker, documentAt, consumed, graphDocumentAt),
+    });
+  }
+
+  #markerShown(
+    marker: RuntimeTelemetryMarkerResult,
+    documentAt: DocumentAt,
+    consumed: (() => SinkConsumedLabel) | undefined,
+    graphDocumentAt: GraphDocumentAt,
+  ): RuntimeTelemetryMarkerResult {
+    // Decided once, on the first text the marker carries.
+    let withheld: boolean | undefined;
+    const said = (text: string): string => {
+      withheld ??= this.#withheld(consumed);
+      return withheld ? WITHHELD : text;
+    };
+    // A marker's addresses name no scope, so the instance one names cannot
+    // be told: under a policy each names its document alone.
+    const addresses = this.#addressesShown(placeUnscoped);
+    const info = (
+      actionInfo: SchedulerActionInfo | undefined,
+    ): { actionInfo?: SchedulerActionInfo } =>
+      actionInfo === undefined ? {} : {
+        actionInfo: {
+          ...actionInfo,
+          reads: addresses(actionInfo.reads),
+          writes: addresses(actionInfo.writes),
+        },
+      };
+    const error = (text: string | undefined) =>
+      text === undefined ? {} : { error: said(text) };
+    switch (marker.type) {
+      case "cell.update": {
+        const error = marker.error === undefined
+          ? {}
+          : { error: said(marker.error) };
+        return this.#documentRefused(
+            documentAt,
+            marker.space,
+            marker.change.address.id,
+            marker.change.address.scope,
+          )
+          ? {
+            ...marker,
+            ...error,
+            change: {
+              address: { ...marker.change.address, path: [] },
+              before: WITHHELD,
+              after: WITHHELD,
+            },
+          }
+          : { ...marker, ...error };
+      }
+      case "scheduler.run":
+      case "scheduler.run.complete":
+        return {
+          ...marker,
+          ...info(marker.actionInfo),
+          ...error(marker.error),
+        };
+      case "scheduler.invocation":
+      case "scheduler.event.preflight": {
+        const { actionInfo: handlerInfo } = info(marker.handlerInfo);
+        return { ...marker, handlerInfo, ...error(marker.error) };
+      }
+      case "scheduler.event.commit": {
+        const { actionInfo: handlerInfo } = info(marker.handlerInfo);
+        return {
+          ...marker,
+          handlerInfo,
+          writes: addresses(marker.writes),
+          ...error(marker.error),
+        };
+      }
+      case "scheduler.materializer.register":
+        return { ...marker, writes: addresses(marker.writes) };
+      case "scheduler.dependencies.update":
+        return {
+          ...marker,
+          reads: addresses(marker.reads),
+          writes: addresses(marker.writes),
+        };
+      case "storage.push.start":
+      case "storage.push.complete":
+      case "storage.pull.start":
+      case "storage.pull.complete":
+        return marker.error === undefined
+          ? marker
+          : { ...marker, error: said(marker.error) };
+      case "storage.pull.error":
+        return { ...marker, error: said(marker.error) };
+      case "storage.push.error":
+        // `error` names the rejection's kind; `message` is its text.
+        return { ...marker, message: said(marker.message) };
+      case "cfc.prepare-reject":
+        // Each detail pairs with its reason by the reason's text, which it
+        // repeats.
+        return {
+          ...marker,
+          reasons: marker.reasons.map(said),
+          refusals: marker.refusals.map((refusal) => ({
+            ...refusal,
+            reason: said(refusal.reason),
+          })),
+        };
+      case "scheduler.graph.snapshot":
+        return {
+          ...marker,
+          graph: this.#graphShown(marker.graph, graphDocumentAt),
+        };
+      case "scheduler.read-attempt":
+      case "runner.piece.install":
+      case "runner.deferred-start.pending":
+      case "runner.deferred-start.settled":
+      case "runner.result-pattern.memoize":
+      case "runner.result-pattern.evict":
+      case "harness.implementation.register":
+      case "pattern.cache-write-back.start":
+      case "pattern.cache-write-back.complete":
+      case "scheduler.diagnosis.start":
+      case "scheduler.settle":
+      case "scheduler.subscribe":
+      case "scheduler.non-settling":
+        return marker;
+    }
+  }
+
+  /**
+   * Addresses as a host may see them. A diagnostic names what an action read
+   * or wrote by address, field path included, and a field's path names the
+   * document's fields, so under a policy an address in a document the policy
+   * refuses names the document alone, as the trigger trace does. `place`
+   * splits an address into the document it names, its path, and the
+   * document's root where it can be placed; one that cannot be placed is
+   * named alone, and a string that is no address is withheld. Each
+   * document is decided once per call.
+   */
+  #addressesShown(place: AddressPlacement): ShownAddresses {
+    const policy = this.#policy;
+    const shown = this.#addressShown(place);
+    function addresses(keys: readonly string[]): string[];
+    function addresses(
+      keys: readonly string[] | undefined,
+    ): string[] | undefined;
+    function addresses(
+      keys: readonly string[] | undefined,
+    ): string[] | undefined {
+      if (keys === undefined) return undefined;
+      return policy === undefined ? [...keys] : [...new Set(keys.map(shown))];
+    }
+    return addresses;
+  }
+
+  /** One address as {@link #addressesShown} shows it. */
+  #addressShown(place: AddressPlacement): (key: string) => string {
+    if (this.#policy === undefined) return (key) => key;
+    const verdicts = new Map<string, boolean>();
+    return (key) => {
+      const placed = place(key);
+      if (placed === undefined) return WITHHELD;
+      if (placed.path.length === 0) return placed.document;
+      let refused = verdicts.get(placed.document);
+      if (refused === undefined) {
+        refused = placed.root === undefined ||
+          this.#cellRefusal(placed.root) !== undefined;
+        verdicts.set(placed.document, refused);
+      }
+      return refused ? placed.document : key;
+    };
+  }
+
+  /**
+   * The source of the patterns the runtime runs, as `list` builds it, or the
+   * refusal that stands in its place. A live pattern's program can be made
+   * from a cell's contents, as `compileAndRun` compiles what it read, and
+   * nothing records what a program was made from, so under a policy no
+   * program text is built here. A piece's own source, decided on its
+   * document's labels, is read through `PieceGetSource`.
+   */
+  patternSources(list: () => PatternSourceInfo[]): PatternSourcesResponse {
+    if (this.#policy !== undefined) return this.#refuse(UNMEASURED);
+    return decided({ patterns: list() });
+  }
+
+  /**
+   * The scheduler's graph as a host may see it. Under a policy its nodes
+   * carry no `preview`, the first characters of a function's body, which is
+   * program text {@link patternSources} withholds; and an address a node
+   * read or wrote in a document the policy refuses names the document alone,
+   * since its path names the document's fields, as the trigger trace does.
+   * An address `documentAt` cannot place, such as another principal's
+   * instance, is treated as refused.
+   */
+  graphSnapshot(
+    snapshot: SchedulerGraphSnapshot,
+    documentAt: GraphDocumentAt,
+  ): GraphSnapshotResponse {
+    return decided({ snapshot: this.#graphShown(snapshot, documentAt) });
+  }
+
+  #graphShown(
+    snapshot: SchedulerGraphSnapshot,
+    documentAt: GraphDocumentAt,
+  ): SchedulerGraphSnapshot {
+    if (this.#policy === undefined) return snapshot;
+    const addresses = this.#addressesShown(placeScoped(documentAt));
+    return {
+      ...snapshot,
+      nodes: snapshot.nodes.map(({ preview: _withheld, ...node }) => ({
+        ...node,
+        reads: addresses(node.reads),
+        shallowReads: addresses(node.shallowReads),
+        writes: addresses(node.writes),
+      })),
+    };
+  }
+
+  /**
+   * The trigger trace as a host may see it: an entry whose changed document
+   * the policy refuses names the document alone, with no path and no preview
+   * or size of the values.
+   */
+  triggerTrace(
+    trace: readonly TriggerTraceEntry[],
+    documentAt: DocumentAt,
+  ): TriggerTraceResponse {
+    return decided({
+      trace: trace.map((entry) =>
+        this.#documentRefused(
+            documentAt,
+            entry.space,
+            entry.entityId,
+            entry.scope,
+          )
+          ? {
+            ...entry,
+            path: [],
+            before: { kind: entry.before.kind },
+            after: { kind: entry.after.kind },
+          }
+          : entry
+      ),
+    });
+  }
+
+  /**
+   * A diagnosis as a host may see it. Each run it reports keys what it read
+   * and wrote by `space/id/path`, the id naming its scope for a scoped
+   * instance (`parseAddressKey()`), and carries the values: those of a
+   * document the policy refuses, decided on the instance the key names, are
+   * joined under `space/id`, with the placeholder in place of their values,
+   * and the differing keys are named the same way. Under a policy, a key
+   * that names no document is withheld with its values, as an address is
+   * that cannot be placed.
+   */
+  diagnosis(
+    result: SchedulerDiagnosisResult,
+    documentAt: DocumentAt,
+  ): DetectNonIdempotentResponse {
+    const verdicts = new Map<string, boolean>();
+    const shown = (key: string): string => {
+      const address = parseAddressKey(key);
+      if (address === undefined) {
+        return this.#policy === undefined ? key : WITHHELD;
+      }
+      const [space, scopedId] = key.split("/", 2);
+      const document = `${space}/${scopedId}`;
+      let refused = verdicts.get(document);
+      if (refused === undefined) {
+        refused = this.#documentRefused(
+          documentAt,
+          address.space,
+          address.id,
+          address.scope,
+        );
+        verdicts.set(document, refused);
+      }
+      return refused ? document : key;
+    };
+    const values = (
+      entries: Record<string, FabricValue>,
+    ): Record<string, FabricValue> => {
+      const out: Record<string, FabricValue> = {};
+      for (const [key, value] of Object.entries(entries)) {
+        const named = shown(key);
+        out[named] = named === key ? value : WITHHELD;
+      }
+      return out;
+    };
+    // What an action is known to read and write is spelled as telemetry
+    // spells an address, naming no scope; the document a cycle's step writes,
+    // as the scheduler keys a document.
+    const addresses = this.#addressesShown(placeUnscoped);
+    const written = this.#addressShown(placeEntity);
+    return decided({
+      result: {
+        ...result,
+        cycles: result.cycles.map((report) => ({
+          ...report,
+          cycle: report.cycle.map((step) => ({
+            ...step,
+            writesCell: written(step.writesCell),
+          })),
+        })),
+        nonIdempotent: result.nonIdempotent.map((report) => ({
+          ...report,
+          ...(report.actionInfo === undefined ? {} : {
+            actionInfo: {
+              ...report.actionInfo,
+              reads: addresses(report.actionInfo.reads),
+              writes: addresses(report.actionInfo.writes),
+            },
+          }),
+          runs: report.runs.map((run) => ({
+            ...run,
+            reads: values(run.reads),
+            writes: values(run.writes),
+          })),
+          differingWriteKeys: [
+            ...new Set(report.differingWriteKeys.map(shown)),
+          ],
+        })),
+      },
+    });
+  }
+
+  /**
+   * A pattern's `console` call as a host may see it: the arguments, or the
+   * placeholder in their place where the policy refuses what the action that
+   * logged had read (`consumed`), which is what they can have been made
+   * from. A call made outside an action carries no labels to decide it on:
+   * it may be a continuation of an action, run after the action's
+   * transaction has gone, holding anything the action read. Under a policy
+   * it is withheld.
+   */
+  console(
+    message: { metadata?: ConsoleNotification["metadata"]; method: string },
+    args: FabricValue[],
+    consumed: (() => SinkConsumedLabel) | undefined,
+  ): ConsoleNotification {
+    return decided({
+      type: NotificationType.ConsoleMessage as const,
+      ...message,
+      args: this.#withheld(consumed) ? [WITHHELD] : args,
+    });
+  }
+
+  /**
+   * A pattern's request that the host navigate to `target`. Where to go is
+   * what the run that asked chose, from what it had read (`consumed`), so
+   * the request is decided as {@link console} decides what an action logged.
+   * A navigation is a side effect its caller records as done, as the effects
+   * channel acks a server's intent once it is enacted, so one the policy
+   * withholds is not returned as nothing: it throws
+   * `NavigationWithheldError`.
+   *
+   * The decision is made at once, as a one-shot read's is. Only a refusal
+   * whose labels name a space whose access list the replica does not hold
+   * waits for those lists and is decided again, so a navigation that needs
+   * no list is not held behind a load.
+   *
+   * A withhold is `definitive`, so that a caller may count the navigation
+   * as done, only where it cannot turn out otherwise for this viewer:
+   * labels were read and refused, and none of them depends on what the
+   * worker may yet learn, a space's access list (which can load late, fail
+   * to load, or grant access later) or a module policy's manifest. Any other
+   * withhold leaves the navigation undecided.
+   */
+  async navigate(
+    target: CellRef,
+    consumed: (() => SinkConsumedLabel) | undefined,
+  ): Promise<NavigateRequestNotification> {
+    let verdict = this.#consumedVerdict(consumed);
+    if (
+      verdict.kind === "refused" &&
+      await this.#loadAccessListsNamedBy(verdict.labels.confidentiality) ===
+        "loaded"
+    ) {
+      verdict = this.#consumedVerdict(consumed);
+    }
+    if (verdict.kind !== "admitted") {
+      // This rests on the ceiling being fixed for a worker's life, and on
+      // the resolver consulting no grant: a refusal of labels that name no
+      // space or module policy would be refused again. Display-boundary
+      // grant rules, such as a share grant, would be one more thing a later
+      // decision can learn, and must be added here before they exist.
+      throw new NavigationWithheldError(
+        verdict.kind === "refused" &&
+          membershipSpacesInConfidentiality(verdict.labels.confidentiality)
+              .length === 0 &&
+          modulePolicyRefsInConfidentiality(verdict.labels.confidentiality)
+              .length === 0,
+      );
+    }
+    return decided({
+      type: NotificationType.NavigateRequest as const,
+      targetCellRef: target,
+    });
+  }
+
+  /**
+   * One line of the worker's own console, as a host may see it, or
+   * `undefined` where none is forwarded. The worker's console holds whatever
+   * its code logged, the runtime's and every pattern's alike, and no read
+   * measured what that was made from, so under a policy nothing of it is
+   * forwarded. A pattern's own console calls reach the host as
+   * {@link console} decides them.
+   */
+  workerConsole(
+    level: WorkerConsoleLevel,
+    text: string,
+  ): WorkerConsoleNotification | undefined {
+    if (this.#policy !== undefined) return undefined;
+    return decided({
+      type: TransportNotificationType.WorkerConsole as const,
+      level,
+      text,
+    });
+  }
+
+  /**
+   * A pattern's error as a host may see it: as reported, or, where the
+   * policy refuses what the failing run had read (`consumed`), which its
+   * message and stack can quote, with both withheld. Under a policy, an error
+   * that carries no labels to decide it on is withheld as well, as a
+   * `console` call is: it may have been raised by a continuation of a run,
+   * after the run's transaction had gone, holding anything it read.
+   */
+  error(
+    report: Omit<ErrorReport, "type">,
+    consumed?: () => SinkConsumedLabel,
+  ): ErrorNotification {
+    if (!this.#withheld(consumed)) {
+      return decided({
+        type: NotificationType.ErrorReport as const,
+        ...report,
+      });
+    }
+    const { stackTrace: _withheld, ...rest } = report;
+    return decided({
+      type: NotificationType.ErrorReport as const,
+      ...rest,
+      message: `An error occurred. ${WITHHELD}.`,
+    });
+  }
+
+  /**
+   * An error the runtime raises about itself, as an unreachable host is, or
+   * as the renderer reports content it cannot render, as a host may see it:
+   * as reported. Its message is the runtime's own, made from no cell, so
+   * nothing in it is decided. `code` names it where the host's remedy
+   * depends on which error it is. Its stack can run through a pattern's
+   * code, whose text is withheld under a policy, so under one it is
+   * withheld too. A pattern's error goes through {@link error}.
+   */
+  runtimeError(
+    { stackTrace, ...report }: {
+      code?: RuntimeErrorCode;
+      message: string;
+      stackTrace?: string;
+    },
+  ): ErrorNotification {
+    return decided({
+      type: NotificationType.ErrorReport as const,
+      ...report,
+      ...(stackTrace === undefined || this.#policy !== undefined
+        ? {}
+        : { stackTrace }),
+    });
+  }
+
+  /**
+   * The view a link to `cell`, or a ref to it, carries for a host, as
+   * `displayLabelView()` makes every view that reaches one: `view` in display
+   * form, joined at its root where the policy refuses the cell.
+   */
+  #displayView = (
+    cell: Cell<unknown>,
+    view: CfcLabelView,
+    readFailed = false,
+  ): CfcLabelView =>
+    displayLabelView(cell, { view, readFailed }, this.#policy, this.#sources);
+
+  /** A value in the form a host is handed it, each link's view decided. */
+  #hostValue = (value: unknown): FabricValue =>
+    hostValueOf(value, this.#displayView);
+
+  /**
+   * The refusal of `cell`'s own labels, or `undefined` where they fit. A
+   * document the replica does not hold yet, or the one `cell`'s path
+   * resolves to, is refused as unreadable: a label read of it finds none,
+   * which says nothing of the labels it has, while what is built from it
+   * may be fetched from the store all the same.
+   */
+  #cellRefusal(cell: Cell<unknown>): RenderLabelSummary | undefined {
+    const policy = this.#policy;
+    if (policy === undefined) return undefined;
+    if (!documentsHeld(cell)) return UNHELD;
+    return cellLabelRefusal(
+      cell,
+      cellLabelSources(cell),
+      policy,
+      this.#sources,
+    );
+  }
+
+  /**
+   * The refusal of `cell`'s labels, or of those of the cell the host `named`
+   * to reach it, or `undefined` where both fit.
+   */
+  #reachedRefusal(
+    cell: Cell<unknown>,
+    named: Cell<unknown> | undefined,
+  ): RenderLabelSummary | undefined {
+    return (named === undefined ? undefined : this.#cellRefusal(named)) ??
+      this.#cellRefusal(cell);
+  }
+
+  /**
+   * Whether the policy refuses the document `id` in `space`, as a whole. With
+   * no policy, nothing is refused and no document is looked up.
+   */
+  #documentRefused(
+    documentAt: DocumentAt,
+    space: string,
+    id: string,
+    scope?: CellScope,
+  ): boolean {
+    return this.#policy !== undefined &&
+      this.#cellRefusal(documentAt(space, id, scope)) !== undefined;
+  }
+
+  /**
+   * Whether what an action said is withheld, such as what it logged, the
+   * message of an error it raised, or where it asked the host to go: under a
+   * policy, where the policy refuses what the action had read (`consumed`),
+   * which is what it can have been made from, and where it carries no labels
+   * to decide it on, since code that runs outside an action's transaction
+   * may be a continuation of one, holding anything it read. The one rule for
+   * everything an action says to a host.
+   */
+  #withheld(consumed: (() => SinkConsumedLabel) | undefined): boolean {
+    return this.#consumedVerdict(consumed).kind !== "admitted";
+  }
+
+  /**
+   * How the policy stands with labels an action consumed: `admitted` with
+   * no policy, or where it admits them (an action that consumed no labeled
+   * value included); `refused`, with the labels it refused, where it refuses
+   * them; `unreadable` where they cannot be read; and `absent` where there
+   * are none to decide on.
+   */
+  #consumedVerdict(
+    consumed: (() => SinkConsumedLabel) | undefined,
+  ): ConsumedVerdict {
+    const policy = this.#policy;
+    if (policy === undefined) return ADMITTED;
+    if (consumed === undefined) return { kind: "absent" };
+    let read: SinkConsumedLabel;
+    try {
+      read = consumed();
+    } catch {
+      return { kind: "unreadable" };
+    }
+    if (read.confidentiality.length === 0) return ADMITTED;
+    const spaces = [...read.modulePolicySpaces.values()].flatMap((set) => [
+      ...set,
+    ]);
+    return canRenderLabelUnderPolicy(
+        read.confidentiality,
+        read.integrity,
+        () => spaces,
+        policy,
+        this.#sources,
+      )
+      ? ADMITTED
+      : { kind: "refused", labels: read };
   }
 
   /**
@@ -359,21 +1622,16 @@ export class HostReadGate {
     // Nothing to list, which is not a record that holds no fields.
     if (names === undefined) return decided({});
     const fields: Record<string, CellRef> = {};
-    for (const name of names) {
-      const { cfcLabelView: _withheld, ...address } = createCellRef(
-        cell.key(name),
-      );
-      fields[name] = address;
-    }
+    for (const name of names) fields[name] = createCellRef(cell.key(name));
     return decided({ fields });
   }
 
   /** A refusal of a read, reported as a refused render is. */
   #refuse(
     refusal: RenderLabelSummary,
-    policy: RenderPolicy,
+    policy: RenderPolicy | undefined = this.#policy,
   ): CellGetResponse & CellRefusedAnswer {
-    this.#report(refusal, policy);
+    if (policy !== undefined) this.#report(refusal, policy);
     return decided({ refused: DISPLAY_CEILING_REFUSAL });
   }
 

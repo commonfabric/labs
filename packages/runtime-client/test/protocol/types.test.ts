@@ -1,7 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { HostReadGate } from "@/backends/host-read-gate.ts";
 import {
+  type CellGetResponse,
   type CellRefusedAnswer,
   type CellValueAnswer,
   ClientNotificationType,
@@ -100,5 +102,15 @@ describe("a read's answer", () => {
     const valued: CellValueAnswer = { value: "shown", refused: refusal };
 
     expect([both, labeled, valued]).toHaveLength(3);
+  });
+});
+
+describe("the host-read gate's mark", () => {
+  it("is not remade by a spread", () => {
+    const answer = new HostReadGate(undefined, {}).nothing();
+    // @ts-expect-error A spread of a decided answer is not decided.
+    const respread: CellGetResponse = { ...answer };
+
+    expect(respread).toEqual(answer);
   });
 });

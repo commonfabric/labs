@@ -232,7 +232,8 @@ describe("connection", () => {
     const messages: unknown[] = [];
     connection.on("operationupdate", (message) => messages.push(message));
 
-    const notification: OperationUpdateNotification = {
+    // What the worker's host-read gate posts; a test stands in for it.
+    const notification = {
       type: NotificationType.OperationUpdate,
       subscriptionId: "subscription:1",
       field: {
@@ -247,7 +248,7 @@ describe("connection", () => {
         materialized: "value",
         operations: [],
       },
-    };
+    } as unknown as OperationUpdateNotification;
     transport.emit("message", notification);
 
     expect(messages).toEqual([notification]);

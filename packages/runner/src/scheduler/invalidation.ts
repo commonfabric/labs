@@ -101,7 +101,7 @@ export function processStorageNotification(
   let changeIndex = 0;
   for (const change of notification.changes) {
     changeIndex++;
-    state.recordCellUpdate(change);
+    state.recordCellUpdate(space, change);
 
     if (!hasRegisteredTriggers(state.triggerIndex)) {
       continue;
@@ -402,6 +402,10 @@ export function createTriggerTraceEntry(state: {
     writerActionId: state.writerActionId,
     space: state.space,
     entityId: state.change.address.id,
+    ...(state.change.address.scope === undefined ||
+        state.change.address.scope === "space"
+      ? {}
+      : { scope: state.change.address.scope }),
     path: [...state.change.address.path],
     before: summarizeTriggerTraceValue(state.change.before),
     after: summarizeTriggerTraceValue(state.change.after),
@@ -519,7 +523,10 @@ export interface StorageNotificationState {
   readonly effects: ReadonlySet<Action>;
   readonly pending: ReadonlySet<Action>;
   readonly getActionId: (action: Action) => string;
-  readonly recordCellUpdate: (change: IMemoryChange) => void;
+  readonly recordCellUpdate: (
+    space: MemorySpace,
+    change: IMemoryChange,
+  ) => void;
   readonly recordTriggerTrace: (entry: TriggerTraceEntry) => void;
   readonly scheduleWithDebounce: (action: Action) => void;
   readonly markInvalid: (

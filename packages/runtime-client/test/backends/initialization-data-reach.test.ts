@@ -251,7 +251,7 @@ async function observeWorkerInitialization(): Promise<{
   try {
     const clients = new RuntimeClients({
       owner,
-      setConsoleBridge: (enabled) => consoleBridge.push(enabled),
+      setConsoleBridge: (forward) => consoleBridge.push(forward !== undefined),
       initializeRuntime: async (data) => {
         processor = await RuntimeProcessor.initialize(data);
         return processor;

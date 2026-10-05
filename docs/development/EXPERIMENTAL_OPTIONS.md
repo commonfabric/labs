@@ -1490,7 +1490,13 @@ the per-epic implementation notes).
   in and verifying its digest; a delegate's access to the session workspace
   requires its own membership evidence. Confidentiality the ceiling does not
   satisfy stays blocked, and author-supplied render-boundary declassification
-  is denied.
+  is denied. The worker decides a host's reads of cells under the same
+  ceiling: a read, a subscription, a binding, and what crosses beside them
+  (label views, a piece's slug and source, slug references, SQLite and
+  collaborative-field reads, telemetry, the trigger trace, diagnosis runs,
+  console arguments, error reports and navigation requests), so what the
+  ceiling refuses reaches the main thread neither as a render nor as a value
+  a host component shows.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the
@@ -1505,6 +1511,16 @@ the per-epic implementation notes).
   only to a viewer whose membership in that subject the render boundary
   already verified for another reason: the viewer's own or session space, or
   a `Space` atom the same label names. The commitment is never opened.
+- **Status on 2026-10-03.** The worker's host-read gate decides every channel
+  the Purpose lists, and each request and notification the worker sends a
+  host has a disposition (`host-read-dispositions.ts`) that type-checks
+  against its answer. A decision whose documents or access lists the worker
+  has not loaded waits for them; one that cannot load them is refused. Under
+  the ceiling, program text (pattern sources and graph previews) and the
+  worker's own console are not forwarded, and diagnostic addresses in a
+  refused document name the document alone. The action-run and write-stack
+  traces, a storage error's conflict set and a refused commit's inputs still
+  carry field paths, without values.
 - **Path to removal.** Retire the opt-out once no profile needs it, then make
   the ceiling unconditional.
 

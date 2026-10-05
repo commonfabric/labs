@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { NAME } from "@commonfabric/runtime-client";
+import { CellReadRefusedError, NAME } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   CFProfileBadge,
@@ -200,6 +200,32 @@ describe("CFProfileBadge", () => {
       expect(html).not.toContain("Ada");
       expect(html).not.toContain("Alex");
       expect(el._verified).toBe(false);
+    });
+
+    it("shows a profile whose resolution the worker refuses as withheld, and reports no error", async () => {
+      const errors: unknown[] = [];
+      const consoleError = console.error;
+      console.error = (...args: unknown[]) => errors.push(args);
+      try {
+        const el = new CFProfileBadge() as any;
+        markConnected(el);
+        el.fallbackName = "Alex";
+        el.profile = {
+          resolveAsCell: () =>
+            Promise.reject(
+              new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+            ),
+          runtime: () => ({ signal: { aborted: false } }),
+        };
+        await el._resolve();
+
+        expect(JSON.stringify(el.render())).toContain(
+          "Content hidden by policy",
+        );
+        expect(errors).toEqual([]);
+      } finally {
+        console.error = consoleError;
+      }
     });
 
     it("reports verified once a value and a label have both arrived", () => {

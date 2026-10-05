@@ -30,6 +30,7 @@ export {
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
 export {
+  cfcHolderLabelViewSourceForCell,
   cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
@@ -41,12 +42,14 @@ export {
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
   cfcLabelViewFromMetadata,
+  cfcLabelViewOriginSpaces,
   cfcLabelViewSourceForCell,
   cloneCfcLabelView,
   getCarriedCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
   redactCaveatSourcesForDisplay,
+  redactEntryPathsForDisplay,
 } from "./label-view.ts";
 export { cfcLabelViewFromSchema } from "./schema-label-view.ts";
 export type {
@@ -435,3 +438,5 @@ export {
   describeRefusalInputs,
   renderCfcAtom,
 } from "./refusal-detail.ts";
+
+export { isChannelStateDocument } from "@commonfabric/memory/v2";

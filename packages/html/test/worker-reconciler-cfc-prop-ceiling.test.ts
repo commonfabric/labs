@@ -310,6 +310,48 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     );
 
     await t.step(
+      "hands the host a bound reference's label in display form",
+      async () => {
+        // A reference binding is made whatever the ceiling decides, so its
+        // label view is the host's only view of the cell: joined at its root
+        // where the ceiling refuses the cell, since an entry's path names a
+        // field, and with each caveat's source redacted everywhere.
+        const FIELD = "field-named-behind-the-seal";
+        const SOURCE = "did:key:z6Mk-source-behind-the-seal";
+        const caveat = cfcAtom.caveat("derived-from", cfcAtom.user(SOURCE));
+        const sealed = await writeLabeled("prop-ceiling-sealed-fields", {
+          [FIELD]: SECRET,
+        }, [[[], [caveat]], [[FIELD], [secretAtom]]]);
+        const tree: WorkerVNode = {
+          type: "vnode",
+          name: "cf-custody-seal",
+          props: { $policy: sealed as never },
+          children: [],
+        };
+        const labelViews = (ops: VDomOp[]) =>
+          ops.flatMap((op) =>
+            op.op === "set-binding" && op.propName === "policy"
+              ? [op.cellRef.cfcLabelView]
+              : []
+          );
+        const refused = await mount(tree, HOST_CEILING);
+        const admitted = await mount(tree);
+        try {
+          const [joined] = labelViews(refused.ops);
+          expect(joined?.entries.map((entry) => entry.path)).toEqual([[]]);
+          expect(JSON.stringify(joined)).not.toContain(FIELD);
+          expect(JSON.stringify(joined)).not.toContain(SOURCE);
+          const [shown] = labelViews(admitted.ops);
+          expect(JSON.stringify(shown)).toContain(FIELD);
+          expect(JSON.stringify(shown)).not.toContain(SOURCE);
+        } finally {
+          refused.cancel();
+          admitted.cancel();
+        }
+      },
+    );
+
+    await t.step(
       "gates the properties and bindings of a node read from a cell",
       async () => {
         const root = await stored("prop-ceiling-cell-props", {

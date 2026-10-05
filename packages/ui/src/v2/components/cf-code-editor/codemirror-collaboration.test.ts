@@ -365,6 +365,50 @@ describe("CodeMirror operation collaboration", () => {
     expect(cancellations).toBe(1);
   });
 
+  it("ends the session when the worker refuses the field, sending nothing after", async () => {
+    let refuse: (() => void) | undefined;
+    let cancellations = 0;
+    const applied: ApplyRequest[] = [];
+    const { controller, view, errors } = controllerHarness({
+      initial: inactiveSnapshot("abc"),
+      apply: (request) => {
+        applied.push(request);
+        return acceptedResolution("abc", 1, "X");
+      },
+      subscribe: (_callback, onRefused) =>
+        refuse = () => onRefused({ refusedBy: "display-ceiling" }),
+      cancel: () => cancellations++,
+    });
+    await controller.start();
+
+    refuse?.();
+    view.dispatch({ changes: { from: 0, insert: "typed over the seal" } });
+    await controller.localDocChanged();
+
+    expect(errors.map((error) => error.name)).toEqual([
+      "CellReadRefusedError",
+    ]);
+    expect(cancellations).toBe(1);
+    expect(applied).toEqual([]);
+  });
+
+  it("ends a subscription the worker refused before it was made", async () => {
+    let cancellations = 0;
+    const { controller, errors } = controllerHarness({
+      initial: inactiveSnapshot("abc"),
+      apply: () => acceptedResolution("abc", 1, "X"),
+      subscribe: (_callback, onRefused) =>
+        onRefused({ refusedBy: "display-ceiling" }),
+      cancel: () => cancellations++,
+    });
+    await controller.start();
+
+    expect(errors.map((error) => error.name)).toEqual([
+      "CellReadRefusedError",
+    ]);
+    expect(cancellations).toBe(1);
+  });
+
   it("reports both sides of a reconciliation error", () => {
     const error = new CodeMirrorReconciliationError(
       "local",
@@ -1453,7 +1497,10 @@ function controllerHarness(options: {
     request: ApplyRequest,
   ) => ApplyOpResolution | Promise<ApplyOpResolution>;
   codecs?: string[];
-  subscribe?: (callback: (snapshot: OperationFieldSnapshot) => void) => void;
+  subscribe?: (
+    callback: (snapshot: OperationFieldSnapshot) => void,
+    onRefused: (refusal: { refusedBy: "display-ceiling" }) => void,
+  ) => void;
   subscription?: Promise<() => void>;
   cancel?: () => void;
   release?: () => void | Promise<void>;
@@ -1488,8 +1535,11 @@ function controllerHarness(options: {
     subscribeOperationField: (
       _cell: CellHandle<string>,
       callback: (snapshot: OperationFieldSnapshot) => void,
+      subscription: {
+        onRefused: (refusal: { refusedBy: "display-ceiling" }) => void;
+      },
     ) => {
-      options.subscribe?.(callback);
+      options.subscribe?.(callback, subscription.onRefused);
       return options.subscription ??
         Promise.resolve(() => options.cancel?.());
     },

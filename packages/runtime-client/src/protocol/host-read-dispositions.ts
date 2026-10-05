@@ -4,9 +4,10 @@
  * cell's contents to the host either has its answers built by the host-read
  * gate, or says here why it does not.
  *
- * The tables are typed as records over every `RequestType` and every
- * `NotificationType`, so a request or a notification added later fails to
- * type-check until it is given a disposition. A disposition of `decided` is
+ * The tables are typed as records over every `RequestType`,
+ * `NotificationType` and `TransportNotificationType`, so a request or a
+ * notification added later fails to type-check until it is given a
+ * disposition. A disposition of `decided` is
  * held to the answer types as well: the check below the tables fails to
  * type-check unless exactly the requests and notifications marked `decided`
  * have answers that carry the gate's mark, `HostReadDecided`, which only the
@@ -17,8 +18,10 @@ import {
   type CommandResponse,
   type HostReadDecided,
   type IPCRemoteNotification,
+  type IPCTransportNotification,
   NotificationType,
   RequestType,
+  TransportNotificationType,
 } from "./types.ts";
 
 /**
@@ -29,12 +32,13 @@ import {
  * - `rendered`: what it carries is a render, which the reconciler decides
  *   under the same ceiling.
  * - `no-cell-value`: it carries nothing of a cell's contents.
- * - `reference`: it carries a cell's reference, whose label view comes with
- *   it; that view is a label read, which the gate does not decide.
+ * - `reference`: it carries a cell's reference. A ref carries a label view
+ *   only where `HostReadGate.ref()` gave it one, joined at its root where
+ *   the ceiling refuses the cell; a ref minted anywhere else carries none.
  * - `trusted-operation`: a worker operation decides what it returns, as the
  *   operation's own rules say.
- * - `ungated`: it returns what it reads, and nothing decides it under the
- *   display ceiling. `why` names what it carries.
+ * - `ungated`: nothing decides it under the display ceiling. `why` names
+ *   what it carries, and why the ceiling is not what governs it.
  */
 export type HostReadDisposition =
   | { readonly kind: "decided" }
@@ -59,7 +63,7 @@ const setting = {
 } as const;
 const reference = {
   kind: "reference",
-  why: "a cell ref, with the label view a ref carries",
+  why: "a cell ref, with the label view the host-read gate gives it",
 } as const;
 
 /** Every request's disposition. */
@@ -78,16 +82,10 @@ export const REQUEST_DISPOSITIONS = {
     why: "whether a subscription opened; its values arrive as cell updates",
   },
   [RequestType.CellUnsubscribe]: write,
-  [RequestType.CellResolveAsCell]: reference,
-  [RequestType.CellGetCfcLabel]: {
-    kind: "ungated",
-    why: "a cell's display label, whatever the ceiling",
-  },
+  [RequestType.CellResolveAsCell]: DECIDED,
+  [RequestType.CellGetCfcLabel]: DECIDED,
   [RequestType.CellFields]: DECIDED,
-  [RequestType.SnapshotSharePrepare]: {
-    kind: "trusted-operation",
-    why: "the snapshot the owner is asked to confirm sharing",
-  },
+  [RequestType.SnapshotSharePrepare]: DECIDED,
   [RequestType.SnapshotShareCommit]: reference,
   [RequestType.SnapshotShareCancel]: write,
   [RequestType.CustodySealPrepare]: {
@@ -108,18 +106,12 @@ export const REQUEST_DISPOSITIONS = {
     kind: "no-cell-value",
     why: "the codecs a cell's operation field offers",
   },
-  [RequestType.OperationQuery]: {
-    kind: "ungated",
-    why: "a collaborative field's operations and materialized value",
-  },
-  [RequestType.OperationApply]: {
-    kind: "ungated",
-    why: "a collaborative field's resolution after the host's operation",
-  },
+  [RequestType.OperationQuery]: DECIDED,
+  [RequestType.OperationApply]: DECIDED,
   [RequestType.OperationRelease]: write,
   [RequestType.OperationSubscribe]: {
-    kind: "ungated",
-    why: "a collaborative field's operations and materialized value",
+    kind: "no-cell-value",
+    why: "whether a subscription opened; its operations arrive as updates",
   },
   [RequestType.OperationUnsubscribe]: write,
   [RequestType.OperationSessionClose]: write,
@@ -130,10 +122,7 @@ export const REQUEST_DISPOSITIONS = {
   },
   [RequestType.PresencePublish]: write,
   [RequestType.PresenceLeave]: write,
-  [RequestType.SqliteQuery]: {
-    kind: "ungated",
-    why: "the rows a query of a database cell returns",
-  },
+  [RequestType.SqliteQuery]: DECIDED,
   [RequestType.SqliteExec]: write,
   [RequestType.GetCell]: reference,
   [RequestType.GetHomeSpaceCell]: reference,
@@ -150,10 +139,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.RegisterSpaceHostDetailed]: lifecycle,
   [RequestType.RetrySpaceAccess]: lifecycle,
   [RequestType.FlushCompileCacheWrites]: lifecycle,
-  [RequestType.GetGraphSnapshot]: {
-    kind: "no-cell-value",
-    why: "the scheduler's graph of actions and the cells they touch",
-  },
+  [RequestType.GetGraphSnapshot]: DECIDED,
   [RequestType.GetLoggerCounts]: setting,
   [RequestType.GetStorageDiagnostics]: {
     kind: "no-cell-value",
@@ -170,66 +156,55 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.GetSettleStats]: setting,
   [RequestType.GetSettleStatsHistory]: setting,
   [RequestType.SetSettleStatsEnabled]: setting,
-  [RequestType.GetActionRunTrace]: setting,
-  [RequestType.SetActionRunTraceEnabled]: setting,
-  [RequestType.GetTriggerTrace]: {
+  [RequestType.GetActionRunTrace]: {
     kind: "ungated",
-    why: "a preview of a cell's value before and after each trigger",
+    why: "the addresses each action declared and wrote, field paths " +
+      "included, and no values",
   },
+  [RequestType.SetActionRunTraceEnabled]: setting,
+  [RequestType.GetTriggerTrace]: DECIDED,
   [RequestType.SetTriggerTraceEnabled]: setting,
   [RequestType.GetWriteStackTrace]: {
-    kind: "no-cell-value",
-    why: "where writes came from, by address and stack",
+    kind: "ungated",
+    why: "where writes came from: addresses, field paths included, value " +
+      "kinds and stacks, and no values",
   },
   [RequestType.SetWriteStackTraceMatchers]: setting,
-  [RequestType.DetectNonIdempotent]: {
-    kind: "ungated",
-    why: "the reads and writes of the runs it compares",
-  },
-  [RequestType.GetPatternSources]: {
-    kind: "no-cell-value",
-    why: "the source of the patterns the runtime runs",
-  },
+  [RequestType.DetectNonIdempotent]: DECIDED,
+  [RequestType.GetPatternSources]: DECIDED,
   [RequestType.SetBreakpoints]: setting,
   [RequestType.UploadBlob]: write,
   [RequestType.GetSpaceRootPattern]: reference,
   [RequestType.RecreateSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
-  [RequestType.PieceGet]: reference,
-  [RequestType.PieceGetSlug]: {
-    kind: "ungated",
-    why: "a piece's slug, a metadata field",
+  [RequestType.PieceGet]: {
+    kind: "reference",
+    why: "the piece a host names, or the one a redirect it names leads to, " +
+      "the redirect decided on its labels as a link's node is",
   },
-  [RequestType.SlugResolve]: reference,
+  [RequestType.PieceGetSlug]: DECIDED,
+  [RequestType.SlugResolve]: DECIDED,
   [RequestType.PieceRemove]: write,
   [RequestType.PieceStart]: write,
   [RequestType.PieceStop]: write,
   [RequestType.PieceGetAll]: reference,
   [RequestType.PieceSynced]: lifecycle,
-  [RequestType.PieceGetSource]: {
-    kind: "ungated",
-    why: "a piece's source state, from its metadata fields",
-  },
-  [RequestType.PieceGetSourceRevision]: {
-    kind: "ungated",
-    why: "a retained source revision of a piece",
-  },
+  [RequestType.PieceGetSource]: DECIDED,
+  [RequestType.PieceGetSourceRevision]: DECIDED,
   [RequestType.PieceClone]: reference,
-  [RequestType.PieceUpdateSource]: {
-    kind: "ungated",
-    why: "a piece's source state after a change, from its metadata fields",
-  },
+  [RequestType.PieceUpdateSource]: DECIDED,
   [RequestType.SpaceGetAcl]: {
     kind: "ungated",
-    why: "a space's access list",
+    why: "a space's access list: who may read and write the space, which " +
+      "the space's own access rules govern rather than a cell's labels",
   },
   [RequestType.SpaceSetAclEntry]: {
     kind: "ungated",
-    why: "a space's access list after a change",
+    why: "a space's access list after a change its access rules allowed",
   },
   [RequestType.SpaceRemoveAclEntry]: {
     kind: "ungated",
-    why: "a space's access list after a change",
+    why: "a space's access list after a change its access rules allowed",
   },
   [RequestType.VDomMount]: { kind: "rendered" },
   [RequestType.VDomUnmount]: { kind: "rendered" },
@@ -238,26 +213,14 @@ export const REQUEST_DISPOSITIONS = {
 /** Every notification's disposition. */
 export const NOTIFICATION_DISPOSITIONS = {
   [NotificationType.CellUpdate]: DECIDED,
-  [NotificationType.ConsoleMessage]: {
-    kind: "ungated",
-    why: "the arguments a pattern passes to `console`",
-  },
-  [NotificationType.NavigateRequest]: reference,
-  [NotificationType.ErrorReport]: {
-    kind: "ungated",
-    why: "a runtime error's message, which can quote a value",
-  },
+  [NotificationType.ConsoleMessage]: DECIDED,
+  [NotificationType.NavigateRequest]: DECIDED,
+  [NotificationType.ErrorReport]: DECIDED,
   [NotificationType.SpaceAccessLost]: lifecycle,
-  [NotificationType.Telemetry]: {
-    kind: "ungated",
-    why: "telemetry markers, including a cell update's values",
-  },
+  [NotificationType.Telemetry]: DECIDED,
   [NotificationType.VDomBatch]: { kind: "rendered" },
   [NotificationType.PendingWritesChanged]: lifecycle,
-  [NotificationType.OperationUpdate]: {
-    kind: "ungated",
-    why: "a collaborative field's operations and materialized value",
-  },
+  [NotificationType.OperationUpdate]: DECIDED,
   [NotificationType.PresenceUpdate]: {
     kind: "ungated",
     why: "the records a presence room's members publish, whose facets are " +
@@ -273,6 +236,15 @@ export const NOTIFICATION_DISPOSITIONS = {
   },
 } as const satisfies Record<NotificationType, HostReadDisposition>;
 
+/**
+ * Every notification the transport carries beside the runtime's. They are
+ * the channel's own traffic, but they reach the host all the same.
+ */
+export const TRANSPORT_NOTIFICATION_DISPOSITIONS = {
+  [TransportNotificationType.WorkerReady]: lifecycle,
+  [TransportNotificationType.WorkerConsole]: DECIDED,
+} as const satisfies Record<TransportNotificationType, HostReadDisposition>;
+
 /** The requests and notifications whose disposition is `decided`. */
 type DecidedRequest = {
   [K in RequestType]: (typeof REQUEST_DISPOSITIONS)[K]["kind"] extends "decided"
@@ -284,6 +256,13 @@ type DecidedNotification = {
     "decided" ? K : never;
 }[NotificationType];
 
+type DecidedTransportNotification = {
+  [K in TransportNotificationType]:
+    (typeof TRANSPORT_NOTIFICATION_DISPOSITIONS)[K]["kind"] extends "decided"
+      ? K
+      : never;
+}[TransportNotificationType];
+
 /** The requests and notifications whose answers carry the gate's mark. */
 type MarkedRequest = {
   [K in RequestType]: CommandResponse<K> extends HostReadDecided ? K : never;
@@ -292,6 +271,13 @@ type MarkedNotification = {
   [K in NotificationType]: Extract<IPCRemoteNotification, { type: K }> extends
     HostReadDecided ? K : never;
 }[NotificationType];
+
+type MarkedTransportNotification = {
+  [K in TransportNotificationType]: Extract<
+    IPCTransportNotification,
+    { type: K }
+  > extends HostReadDecided ? K : never;
+}[TransportNotificationType];
 
 /** Whether two unions hold the same members. */
 type Same<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;
@@ -303,4 +289,8 @@ type Same<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;
 export const DISPOSITIONS_MATCH_ANSWER_TYPES: {
   readonly requests: Same<DecidedRequest, MarkedRequest>;
   readonly notifications: Same<DecidedNotification, MarkedNotification>;
-} = { requests: true, notifications: true };
+  readonly transport: Same<
+    DecidedTransportNotification,
+    MarkedTransportNotification
+  >;
+} = { requests: true, notifications: true, transport: true };

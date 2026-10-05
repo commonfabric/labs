@@ -1189,6 +1189,18 @@ describe("cell-handle", () => {
       });
     }
 
+    it("rejects a refused `resolveAsCell()` and a refused SQL query, rather than answering with nothing", async () => {
+      const cell = new CellHandle<string>(
+        makeRuntime({ refused: refusal }),
+        ref,
+      );
+
+      await expect(cell.resolveAsCell()).rejects.toThrow(CellReadRefusedError);
+      await expect(cell.querySqlite("select 1")).rejects.toThrow(
+        CellReadRefusedError,
+      );
+    });
+
     for (const read of ["sync", "pull"] as const) {
       it(`tells its subscribers of a refused \`${read}()\`, as \`initialize()\` does`, async () => {
         const cell = new CellHandle<string>(

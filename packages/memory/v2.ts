@@ -621,6 +621,21 @@ export type EventAppendDecl = {
  */
 export const SERVER_EXECUTION_EFFECTS_DOC_ID = "of:server-execution-effects";
 
+/**
+ * Whether `id` names a document the runtime keeps as a channel's own state,
+ * which that channel reads raw and decides entry by entry: the session
+ * effects document, whose entries are a server's intents for its session,
+ * each decided by the client's effects channel on the labels it carries.
+ *
+ * The entries are written by an intent's own commit and carry no labels of
+ * their own, so a reader's measure of them would admit what the channel
+ * withholds. A host's read or render of such a document is therefore
+ * answered as unreadable, by the reader's consumed measure and by the
+ * display fit's view of a cell's own labels.
+ */
+export const isChannelStateDocument = (id: string): boolean =>
+  id === SERVER_EXECUTION_EFFECTS_DOC_ID;
+
 /** The navigation target an intent carries (builtins.md §4): an entity
  * link. `space` is absent for a target within the computing space (the
  * common case). A cross-space TARGET is legal — LT3 defers the
@@ -632,6 +647,21 @@ export type EffectIntentTarget = {
   id: EntityId;
   path: readonly string[];
   scope?: CellScope;
+};
+
+/**
+ * The labels of everything the served run that chose an intent's target
+ * had read, as the run's runtime measured them for a reader: what the
+ * choice can have been made from. A client decides whether its host may be
+ * told the target on them, as it decides a navigation its own run chose.
+ * Each clause and atom is the JSON value the label holds;
+ * `modulePolicySpaces` names, by module-policy artifact key, the spaces
+ * where a policy a clause selects has its manifest.
+ */
+export type EffectIntentLabels = {
+  confidentiality: FabricValue[];
+  integrity: FabricValue[];
+  modulePolicySpaces: Record<string, string[]>;
 };
 
 /**
@@ -656,7 +686,15 @@ export type EffectIntentTarget = {
 export type EffectIntentEntry = {
   nonce: string;
   kind: "navigate";
-  args: { target: EffectIntentTarget };
+  args: {
+    target: EffectIntentTarget;
+
+    /**
+     * What chose `target`. Absent from an intent written before servers
+     * carried it, which a client decides as one carrying no labels.
+     */
+    chosenFrom?: EffectIntentLabels;
+  };
   issuedIn: number | null;
 };
 

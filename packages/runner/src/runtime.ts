@@ -58,6 +58,7 @@ import {
   internCellLinkSchema,
   isCell,
   schemaCellScope,
+  type SinkConsumedLabel,
 } from "./cell.ts";
 import {
   buildCfcPolicySnapshot,
@@ -106,7 +107,11 @@ import {
   runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
-import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
+import {
+  collectConsumedLabel,
+  collectReaderConsumedLabel,
+  deriveFlowJoin,
+} from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
 import {
   type DelegatedCarriage,
@@ -274,10 +279,28 @@ export type ErrorWithContext = Error & {
   space: MemorySpace;
   patternId: string;
   spellId: string | undefined;
+
+  /**
+   * The labels of everything the action had read when it threw: what its
+   * message can quote, and so what a reader of it is to be decided on. Called
+   * during the handler, and it throws when the labels cannot be read. Absent
+   * for an error raised outside an action's transaction.
+   */
+  consumed?: () => SinkConsumedLabel;
 };
 
 export type ErrorHandler = (error: ErrorWithContext) => void;
-export type NavigateCallback = (target: Cell<any>) => void | Promise<void>;
+/**
+ * Asks the host to navigate to `target`. `consumed` is the labels of
+ * everything the action that asked had read, which is what it can have chosen
+ * `target` from, and so what the request is to be decided on. They were read
+ * while its transaction was open; calling it raises the failure where they
+ * could not be read.
+ */
+export type NavigateCallback = (
+  target: Cell<any>,
+  consumed?: () => SinkConsumedLabel,
+) => void | Promise<void>;
 export type PieceCreatedCallback = (piece: Cell<any>) => void;
 
 /**
@@ -2658,12 +2681,15 @@ export class Runtime {
         // this a mixed-reason refusal — one verdict plus one unevaluable
         // input — reaches a host as nothing but a graph that stopped
         // converging.
-        this.telemetry.submit({
-          type: "cfc.prepare-reject",
-          reasons: [...refusal.reasons],
-          refusals: [...refusal.refusals],
-          terminal: refusal.terminal,
-        });
+        this.telemetry.submit(
+          {
+            type: "cfc.prepare-reject",
+            reasons: [...refusal.reasons],
+            refusals: [...refusal.refusals],
+            terminal: refusal.terminal,
+          },
+          () => collectReaderConsumedLabel(refusal.transaction, this.readTx()),
+        );
       },
       onDigestInvalidation: () => {
         this.#cfcStats.cfcDigestInvalidations += 1;

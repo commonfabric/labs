@@ -52,7 +52,7 @@ import {
 import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import {
   type CfcLabelView,
-  cfcLabelViewForCell,
+  cfcLabelViewForCellWithStatus,
   cfcLabelViewForResolvedTarget,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
@@ -82,6 +82,7 @@ import {
   confidentialityLabels,
   confidentialityLabelsFromCellSchema,
   type DisplayFitSources,
+  displayLabelView,
   type FitWatch,
   integrityLabels,
   normalizeAtomBound,
@@ -376,7 +377,7 @@ export class WorkerReconciler {
   #rootCancel: Cancel | null = null;
 
   readonly #onOps: (ops: VDomOp[]) => number | void;
-  readonly #onError?: (error: Error) => void;
+  readonly #onError?: WorkerReconcilerOptions["onError"];
   readonly #renderDeclassificationPolicy: RenderDeclassificationPolicy;
 
   /**
@@ -570,6 +571,7 @@ export class WorkerReconciler {
             new Error(
               `Invalid VDOM content: expected WorkerVNode, string, or number, got ${typeof resolvedVnode}`,
             ),
+            "renderer",
           );
           return;
         }
@@ -697,6 +699,7 @@ export class WorkerReconciler {
       } catch (error) {
         this.#onError?.(
           error instanceof Error ? error : new Error(String(error)),
+          "handler",
         );
       }
       return true;
@@ -1088,7 +1091,7 @@ export class WorkerReconciler {
         op: "set-binding",
         nodeId: state.nodeId,
         propName,
-        cellRef: this.#cellRefForBinding(cell),
+        cellRef: this.#cellRefForBinding(cell, state.renderPolicy),
       }]);
     if (
       REFERENCE_BINDING_SINKS.get(state.tagName)?.has(propName) ||
@@ -1507,6 +1510,7 @@ export class WorkerReconciler {
     childState: ChildNodeState,
     resolvedChild: unknown,
     resultCell: Cell<unknown>,
+    policy: RenderPolicy,
   ): void {
     const shouldBind = isNestedPatternOutput(resolvedChild, resultCell);
     if (!childState.elementState) return;
@@ -1516,7 +1520,7 @@ export class WorkerReconciler {
       this.#queueOps([{
         op: "set-piece-boundary",
         nodeId: childState.elementState.nodeId,
-        cellRef: this.#cellRefForBinding(resultCell),
+        cellRef: this.#cellRefForBinding(resultCell, policy),
       }]);
     } else if (childState.hasPieceBoundary) {
       childState.hasPieceBoundary = false;
@@ -1645,14 +1649,26 @@ export class WorkerReconciler {
     };
   }
 
-  #cellRefForBinding(cell: Cell<unknown>): CellRef {
+  /**
+   * A ref to `cell` for a binding the host makes under `policy`. Its label
+   * view is the display form `displayLabelView()` gives it, as every view
+   * that reaches a host is.
+   */
+  #cellRefForBinding(cell: Cell<unknown>, policy: RenderPolicy): CellRef {
     const link = cell.getAsNormalizedFullLink();
     let labelView: CfcLabelView | undefined;
     try {
-      labelView = cfcLabelViewForCell(cell);
-      if (labelView === undefined) {
-        labelView = cfcLabelViewForCell(cell.resolveAsCell());
-      }
+      const held = cfcLabelViewForCellWithStatus(cell);
+      const viewed = held.view === undefined ? cell.resolveAsCell() : cell;
+      const { view, readFailed } = held.view === undefined
+        ? cfcLabelViewForCellWithStatus(viewed)
+        : held;
+      labelView = view === undefined ? undefined : displayLabelView(
+        viewed,
+        { view, readFailed: readFailed || held.readFailed },
+        policy,
+        this.#fitSources,
+      );
     } catch {
       labelView = undefined;
     }
@@ -4592,7 +4608,12 @@ export class WorkerReconciler {
           !blockedByPolicy && !blockedByIntegrity &&
           currentContentState === "rendered" && sameRemoteLoadDecision
         ) {
-          this.#updatePieceBoundary(childState, resolvedChild, resultCell);
+          this.#updatePieceBoundary(
+            childState,
+            resolvedChild,
+            resultCell,
+            policy,
+          );
           return;
         }
       }
@@ -4741,7 +4762,12 @@ export class WorkerReconciler {
               // node stops being a wrapper, and a later array must not adopt
               // the authored props it now carries.
               childState.elementState.isArrayWrapper = false;
-              this.#updatePieceBoundary(childState, resolvedChild, resultCell);
+              this.#updatePieceBoundary(
+                childState,
+                resolvedChild,
+                resultCell,
+                policy,
+              );
               // Same tag - update props in place
               this.#updatePropsInPlace(
                 ctx,
@@ -4873,7 +4899,12 @@ export class WorkerReconciler {
         childState.isText = newState.isText;
         currentCancel = newState.cancel;
         currentContentState = "rendered";
-        this.#updatePieceBoundary(childState, resolvedChild, resultCell);
+        this.#updatePieceBoundary(
+          childState,
+          resolvedChild,
+          resultCell,
+          policy,
+        );
 
         // Always insert the child into its parent. On initial render,
         // updateChildren also emits insert-child but may see nodeId=-1

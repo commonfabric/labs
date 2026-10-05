@@ -986,6 +986,10 @@ export class CellHandle<T = unknown> {
   /**
    * Resolve links in this cell to get the actual cell it points to.
    * Returns a new CellHandle pointing to the resolved cell.
+   *
+   * @throws {CellReadRefusedError} When the worker refuses to say where a
+   *   link it would follow leads, as it refuses a read of the node holding
+   *   the link.
    */
   async resolveAsCell(): Promise<CellHandle<T>> {
     const response = await this.#enqueueOperation(() =>
@@ -994,7 +998,9 @@ export class CellHandle<T = unknown> {
         cell: this.ref(),
       })
     );
-
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return new CellHandle<T>(this.#rt, response.cell);
   }
 
@@ -1057,6 +1063,9 @@ export class CellHandle<T = unknown> {
         }),
       })
     );
+    if ("refused" in response) {
+      throw new CellReadRefusedError(response.refused);
+    }
     return response.rows.map((row) =>
       Object.fromEntries(
         Object.entries(row).map(([key, value]) => [

@@ -7,7 +7,7 @@ import { isDeno } from "@commonfabric/utils/env";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import {
   ClientTransportNotificationType,
-  ErrorNotification,
+  type ErrorReport,
   IPCClientMessage,
   IPCClientNotification,
   IPCRemoteMessage,
@@ -185,12 +185,15 @@ export class WebWorkerRuntimeTransport
         return;
       }
 
-      this.emit("message", {
-        type: NotificationType.ErrorReport,
-        message: `Undecodable message from the worker: ${
-          describeFailure(error)
-        }`,
-      } as ErrorNotification);
+      this.emit(
+        "message",
+        {
+          type: NotificationType.ErrorReport,
+          message: `Undecodable message from the worker: ${
+            describeFailure(error)
+          }`,
+        } satisfies ErrorReport,
+      );
       return;
     }
 
@@ -239,10 +242,13 @@ export class WebWorkerRuntimeTransport
       return;
     }
 
-    this.emit("message", {
-      type: NotificationType.ErrorReport,
-      message: `${error}`,
-      stackTrace: error.stack,
-    } as ErrorNotification);
+    this.emit(
+      "message",
+      {
+        type: NotificationType.ErrorReport,
+        message: `${error}`,
+        stackTrace: error.stack,
+      } satisfies ErrorReport,
+    );
   };
 }

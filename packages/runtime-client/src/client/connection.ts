@@ -10,7 +10,7 @@ import {
   CommandResponse,
   Commands,
   ConsoleMessage,
-  ErrorNotification,
+  ErrorReport,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
@@ -131,7 +131,7 @@ export type SubscriptionDiagnostics = {
 export type RuntimeConnectionEvents = {
   console: [ConsoleMessage];
   navigaterequest: [NavigateRequestNotification];
-  error: [ErrorNotification];
+  error: [ErrorReport];
   spaceaccesslost: [SpaceAccessLostNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];
@@ -580,7 +580,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     this.#subscriptionDiagnostics.clear();
   }
 
-  #handleMessage = (message: IPCRemoteMessage): void => {
+  #handleMessage = (message: IPCRemoteMessage | ErrorReport): void => {
     // Once dead (disposed), the connection ignores incoming messages without
     // warning: notifications are dropped here, stray/late messages are dropped
     // below. The one exception is a reply to a still-pending request — the

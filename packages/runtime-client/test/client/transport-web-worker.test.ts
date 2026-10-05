@@ -161,6 +161,32 @@ describe("WebWorkerRuntimeTransport", () => {
     });
   });
 
+  describe("a worker error after the worker is ready", () => {
+    it("is reported as an error report, with the error's name, message and stack", async () => {
+      const { connection, worker } = connectWithFakeWorker();
+      worker.dispatchEvent(posted(readyNotification()));
+      const transport = await connection;
+      const emitted: unknown[] = [];
+      transport.on("message", (m) => emitted.push(m));
+      const failure = new RangeError("worker ran out of room");
+
+      const event = new ErrorEvent("error", {
+        error: failure,
+        message: failure.message,
+        cancelable: true,
+      });
+      worker.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(emitted).toEqual([{
+        type: NotificationType.ErrorReport,
+        message: "RangeError: worker ran out of room",
+        stackTrace: failure.stack,
+      }]);
+      expect(worker.terminated).toBe(false);
+    });
+  });
+
   describe("dispose()", () => {
     it("settles only once the worker has released the lock its ready notification names", async () => {
       const { connection, worker } = connectWithFakeWorker();

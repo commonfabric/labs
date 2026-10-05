@@ -1,7 +1,8 @@
 import { debugStr } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 
-import { type IPCRemotePost, NotificationType } from "@/protocol/mod.ts";
+import { type IPCRemotePost } from "@/protocol/mod.ts";
+import { onTheWire, transportFailureReport } from "./host-read-gate.ts";
 import { describeFailure } from "@/shared/utils.ts";
 
 /**
@@ -42,7 +43,7 @@ export function postThrough(
   message: IPCRemotePost,
 ): boolean {
   try {
-    send(realmFromFabricValue(message));
+    send(realmFromFabricValue(onTheWire(message)));
     return true;
   } catch (error) {
     // Defense in depth, and the mirror of the two decodes. Both steps above
@@ -57,7 +58,9 @@ export function postThrough(
     // where a throw is an uncaught error rather than something that becomes
     // an error reply. Losing one message loudly beats taking the worker's
     // dispatch with it.
-    send(realmFromFabricValue(undeliverableMessageFrom(message, error)));
+    send(
+      realmFromFabricValue(onTheWire(undeliverableMessageFrom(message, error))),
+    );
     return false;
   }
 }
@@ -86,5 +89,5 @@ function undeliverableMessageFrom(
 
   return typeof msgId === "number"
     ? { msgId, error: reason }
-    : { type: NotificationType.ErrorReport, message: reason };
+    : transportFailureReport(reason);
 }

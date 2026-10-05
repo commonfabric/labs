@@ -1,3 +1,4 @@
+import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import type {
   AnyBrandedCell,
   CollectionIndexData,
@@ -113,7 +114,10 @@ import {
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
 import { withLinkCfcLabelView } from "./cfc/link-label-view.ts";
-import { collectConsumedLabel } from "./cfc/prepare.ts";
+import {
+  type collectConsumedLabel,
+  collectReaderConsumedLabel,
+} from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -133,7 +137,11 @@ import {
   findAndInlineDataUriLinks,
 } from "./data-uri.ts";
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
-import { type LastNode, resolveLink } from "./link-resolution.ts";
+import {
+  type LastNode,
+  resolveLink,
+  resolveLinkTracingDereferences,
+} from "./link-resolution.ts";
 import { areNormalizedLinksSame } from "./link-types.ts";
 import {
   areLinksSame,
@@ -226,7 +234,7 @@ type SinkOptions = {
 
   /**
    * Join the CFC labels of everything the sink's read consumed, following
-   * links, as `collectConsumedLabel()` joins them for a transaction, and pass
+   * links, as `collectReaderConsumedLabel()` joins them for a reader, and pass
    * the join to the callback as a third argument. The label metadata is read
    * on the sink's transaction, so a label-only write to anything the read
    * reached re-fires the sink. Off by default.
@@ -4673,6 +4681,53 @@ export function cellRuntime(cell: AnyCell<unknown>): Runtime {
 }
 
 /**
+ * Whether the replica `cell`'s runtime reads from holds a complete basis for
+ * the document `cell` addresses: its value as stored, or its confirmed
+ * absence. Until it does, a read of the document, its labels included, finds
+ * nothing, which says nothing of what the document holds. A provider that
+ * cannot say holds none. A `data:` document is its own address, and always
+ * held. Host code only.
+ */
+export function cellDocumentHeld(cell: AnyCell<unknown>): boolean {
+  const link = cell.getAsNormalizedFullLink();
+  if (hasDataUriScheme(link.id)) return true;
+  return cellRuntime(cell).storageManager.open(link.space).replica
+    .hasLocalDocumentCoverage?.(link.id, link.scope) === true;
+}
+
+/**
+ * The nodes holding the links a resolution of `cell`'s path follows, in the
+ * order it follows them: each a cell at the path in its document where that
+ * link sits. Whoever learns where the path leads learns what each of these
+ * holds, the address of the next. Empty where the path follows no link.
+ * Host code only.
+ */
+export function cellLinkHolders(cell: AnyCell<unknown>): Cell<unknown>[] {
+  const runtime = cellRuntime(cell);
+  const tx = cellTx(cell);
+  // The caller loads what the walk reaches, so it kicks no pull of its own.
+  const { traces } = resolveLinkTracingDereferences(
+    runtime,
+    runtime.readTx(tx),
+    cell.getAsNormalizedFullLink(),
+    "value",
+    { kickCrossSpaceTargets: false },
+  );
+  return traces.map(({ source }) =>
+    runtime.getCellFromLink(
+      {
+        space: source.space,
+        id: toURI(source.id),
+        scope: source.scope,
+        path: source.path,
+      },
+      undefined,
+      tx,
+    )
+  );
+}
+
+/**
  * Returns the transaction `cell` reads and writes through, if it is bound to
  * one. Host code only.
  */
@@ -4817,8 +4872,10 @@ function subscribeToReferencedDocs<T>(
       // cover what it reads: a field the schema leaves untyped holds a value
       // that reads what it holds only once it is looked at.
       const delivered = project === undefined ? newValue : project(newValue);
+      // What the sink's read answers to for a reader, the sink's transaction
+      // being one that commits no write.
       const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx)
+        ? collectReaderConsumedLabel(tx)
         : undefined;
       sink.cleanup = callback(delivered, cfcLabel, consumed);
 
@@ -5246,6 +5303,13 @@ type CellLinkOptions = {
    */
   includeCfcLabelView?: boolean;
 
+  /**
+   * Under `includeCfcLabelView`, the view a link to `cell` carries in place
+   * of `view`, the display form of the view the cell holds. A reader who may
+   * not see the cell is given less of its label than one who may.
+   */
+  displayView?: (cell: Cell<unknown>, view: CfcLabelView) => CfcLabelView;
+
   /** Which `asCell` entries survive in a carried schema; see `KeepAsCell`. */
   keepAsCell?: KeepAsCell;
 };
@@ -5261,9 +5325,10 @@ function linkToCell(cell: Cell<any>, options: CellLinkOptions): SigilLink {
   if (options.includeCfcLabelView) {
     const cfcLabelView = getCarriedCfcLabelView(cell);
     if (cfcLabelView) {
+      const display = redactCaveatSourcesForDisplay(cfcLabelView);
       link = withLinkCfcLabelView(
         link,
-        redactCaveatSourcesForDisplay(cfcLabelView),
+        options.displayView?.(cell, display) ?? display,
       );
     }
   }
@@ -5300,13 +5365,19 @@ export function convertCellsToLinks(
  * are where a view crosses. What a host is sent is
  * decided on the read this walk makes, which is why `readProjected()` and
  * `sinkProjected()` take it as their projection where a host is the reader.
+ * `displayView`, when given, decides the view each link carries, as
+ * `CellLinkOptions.displayView` says.
  */
-export function hostValueOf(value: unknown): FabricValue {
+export function hostValueOf(
+  value: unknown,
+  displayView?: CellLinkOptions["displayView"],
+): FabricValue {
   return convertCellsToLinks(value as CellLinkInput, {
     includeSchema: true,
     keepAsCell: KeepAsCell.All,
     doNotConvertCellResults: true,
     includeCfcLabelView: true,
+    ...(displayView === undefined ? {} : { displayView }),
   });
 }
 
@@ -5327,7 +5398,7 @@ export function readProjected<R>(
   // dropped with it.
   const tx = cellRuntime(cell).readTx();
   const value = project(cell.withTx(tx).get());
-  return { value, consumed: collectConsumedLabel(tx) };
+  return { value, consumed: collectReaderConsumedLabel(tx) };
 }
 
 /**

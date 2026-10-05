@@ -503,6 +503,24 @@ const readerRestrictionOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
 };
 
 /**
+ * The entries a reader of `target`'s instance answers to beyond the envelope
+ * that instance stores: from each broader instance of the same document, the
+ * confidentiality of each entry a value read consumes, as
+ * {@link readStoredCfcLabelsForReader} joins them. Empty for a space-scoped
+ * target. Each envelope is read through `tx` under `policy`, and one this
+ * build cannot interpret fails the read.
+ */
+export const readBroaderReaderRestrictions = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+  policy: StoredCfcReadPolicy = DEPENDENT_READ,
+): LabelMapEntry[] =>
+  BROADER_SCOPES[normalizeCellScope(target.scope)].flatMap((scope) =>
+    readStoredCfcMetadata(tx, { ...target, scope }, policy)?.labelMap.entries
+      .flatMap(readerRestrictionOfEntry) ?? []
+  );
+
+/**
  * The labels a reader of `target`'s instance answers to: the envelope that
  * instance stores, joined with the confidentiality a value read of each
  * broader instance of the same document consumes. `undefined` where none of
@@ -543,7 +561,8 @@ const readerRestrictionOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
  * its own envelope, unchanged. This is a reader's answer, not an envelope:
  * what merges into or rewrites an instance's envelope reads that envelope
  * alone, through {@link readStoredCfcMetadata}. The readers that answer to it
- * are the cell label views and the runtime read ceiling; the flow join reads
+ * are the cell label views, the runtime read ceiling, and what a host or a
+ * render is decided on (`collectReaderConsumedLabel()`); the flow join reads
  * an instance's own envelope.
  */
 export const readStoredCfcLabelsForReader = (
@@ -551,11 +570,7 @@ export const readStoredCfcLabelsForReader = (
   target: StoredCfcTarget,
 ): StoredCfcLabels | undefined => {
   const own = readStoredCfcMetadata(tx, target);
-  const broader = BROADER_SCOPES[normalizeCellScope(target.scope)].flatMap(
-    (scope) =>
-      readStoredCfcMetadata(tx, { ...target, scope })?.labelMap.entries
-        .flatMap(readerRestrictionOfEntry) ?? [],
-  );
+  const broader = readBroaderReaderRestrictions(tx, target);
   if (broader.length === 0) return own;
   return {
     labelMap: {

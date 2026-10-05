@@ -305,12 +305,15 @@ export type CfcInstrumentationHooks = {
    * boundary); `refusals` are the structured descriptions their producers
    * recorded, paired to those texts; `terminal` is what the commit boundary
    * will decide the refusal is worth — a verdict on the data, or a refusal a
-   * fresh attempt may resolve.
+   * fresh attempt may resolve. `transaction` is the refused transaction,
+   * whose reads the reasons, prose that can quote a failure's own message,
+   * are decided on; readable while the hook runs.
    */
   onPrepareReject?(refusal: {
     reasons: readonly string[];
     refusals: readonly CfcRefusalDetail[];
     terminal: boolean;
+    transaction: IExtendedStorageTransaction;
   }): void;
 
   onDigestInvalidation?(reason: string): void;
@@ -3035,6 +3038,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         reasons: plainReasons,
         refusals,
         terminal: isTerminalRefusal(reasons),
+        transaction: this,
       });
       // A prepare that records reasons has decided: an enforcing transaction
       // can no longer commit whether or not it goes on to try. Below the

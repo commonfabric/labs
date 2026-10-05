@@ -11,6 +11,7 @@ import type { DID } from "@commonfabric/identity/did";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
   type CellHandle,
+  CellReadRefusedError,
   CellRef,
   cellRefToKey,
   NAME,
@@ -222,10 +223,17 @@ export class CFCellLink extends BaseElement {
         // cancellation, not a failure to surface. Read the cell's own runtime,
         // not the ambient `this.runtime` (cleared to undefined on logout).
         if (cell.runtime().signal.aborted) return;
-        console.error("Failed to resolve cell:", e);
         this.#linkTarget.cancel();
         this._prepareSubscriptionTarget(undefined);
         this._setResolvedCell(undefined);
+        // A link the worker will not say where it leads is named as
+        // withheld, an answer rather than a failure.
+        if (e instanceof CellReadRefusedError) {
+          this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+          this.requestUpdate();
+          return;
+        }
+        console.error("Failed to resolve cell:", e);
       }
       return;
     }
@@ -249,10 +257,17 @@ export class CFCellLink extends BaseElement {
         // cancellation, not a failure to surface. Read the runtime the linked
         // cell was built from, not the ambient `this.runtime` (cleared on logout).
         if (runtime.signal.aborted) return;
-        console.error("Failed to resolve link:", e);
         this.#linkTarget.cancel();
         this._prepareSubscriptionTarget(undefined);
         this._setResolvedCell(undefined);
+        // As for a cell: a link the worker will not say where it leads is
+        // named as withheld.
+        if (e instanceof CellReadRefusedError) {
+          this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+          this.requestUpdate();
+          return;
+        }
+        console.error("Failed to resolve link:", e);
       }
     } else {
       this.#linkTarget.cancel();
@@ -331,6 +346,12 @@ export class CFCellLink extends BaseElement {
 
   private _setResolvedCell(cell: CellHandle | undefined) {
     const nextCellKey = this._cellKey(cell);
+    // A name belongs to the cell it was read from: with none resolved, or
+    // another, the name shown goes until that cell's own arrives. A refusal
+    // sets its placeholder after this.
+    if (cell === undefined || nextCellKey !== this._resolvedCellKey) {
+      this._name = undefined;
+    }
     if (cell === this._resolvedCell && nextCellKey === this._resolvedCellKey) {
       // `_prepareSubscriptionTarget()` drops the `$NAME` subscription when the
       // cell being resolved differs from its target, and no update follows an

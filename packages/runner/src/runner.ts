@@ -1987,6 +1987,19 @@ type ScopedPieceRegistration = PieceRegistration & {
   wake(): void;
 };
 
+/**
+ * Marks `error` as raised by the run in `frame`, so that the scheduler's
+ * report of it carries the labels that run read (`ErrorWithContext.consumed`).
+ * A thrown value that cannot carry a mark, such as a string, is wrapped in an
+ * `Error` of its text, as the scheduler reports one, which carries it.
+ */
+function raisedIn(error: unknown, frame: Frame): unknown {
+  return error !== null &&
+      (typeof error === "object" || typeof error === "function")
+    ? Object.assign(error, { frame })
+    : Object.assign(new Error(String(error)), { frame });
+}
+
 /** A node group's local ownership within a shared piece registration. */
 type PieceVariantRegistration = {
   registrations: Map<string, PieceRegistration>;
@@ -11373,7 +11386,13 @@ export class Runner {
           : postRun(result);
         if (postRunResult instanceof Promise) {
           popFrameAfterReturn = false;
-          return postRunResult.finally(() => popFrame(frame));
+          // An async body that throws after an `await`, or the handling of
+          // its result, rejects past the synchronous catch below. Its error
+          // is marked with this run's frame as a synchronous one is, so that
+          // a report of it carries the labels the run read.
+          return postRunResult.catch((error: unknown) => {
+            throw raisedIn(error, frame);
+          }).finally(() => popFrame(frame));
         }
         return postRunResult;
       } catch (error) {
@@ -11388,8 +11407,7 @@ export class Runner {
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
             .finally(() => popFrame(frame));
         }
-        (error as Error & { frame?: Frame }).frame = frame;
-        throw error;
+        throw raisedIn(error, frame);
       } finally {
         if (popFrameAfterReturn) popFrame(frame);
       }
@@ -11604,12 +11622,7 @@ export class Runner {
         // untouched so the scheduler re-runs the action instead of writing an
         // error result into the binding.
         if (error instanceof RetryImmediately) throw error;
-        if (
-          error !== null &&
-          (typeof error === "object" || typeof error === "function")
-        ) {
-          (error as Error & { frame?: Frame }).frame = frame;
-        }
+        const raised = raisedIn(error, frame);
         try {
           sendValueToBinding(
             tx,
@@ -11625,7 +11638,7 @@ export class Runner {
             bindingError,
           );
         }
-        throw error;
+        throw raised;
       };
 
       let popFrameAfterReturn = true;

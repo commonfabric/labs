@@ -12,8 +12,10 @@ import {
   getTransactionReadDetails,
   getTransactionWriteDetails,
 } from "../storage/transaction-inspection.ts";
+import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import { ignoreReadForScheduling } from "../storage/reactivity-log.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";
+import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   CycleReport,
@@ -68,8 +70,36 @@ export interface SchedulerDiagnosisControlState {
   readonly runAction: (action: Action) => Promise<unknown>;
 }
 
+/**
+ * The key a diagnosis names an address by: `space/id/path`, with the id
+ * prefixed by its scope, as `user:of:…` or `session:of:…`, for a scoped
+ * instance of a document, which holds values of its own. No document id
+ * starts with a scope's name, so the prefix reads back unambiguously
+ * ({@link parseAddressKey}).
+ */
 export function makeAddressKey(addr: IMemorySpaceAddress): string {
-  return `${addr.space}/${addr.id}/${addr.path.join("/")}`;
+  const scope = normalizeCellScope(addr.scope);
+  const id = scope === "space" ? addr.id : `${scope}:${addr.id}`;
+  return `${addr.space}/${id}/${addr.path.join("/")}`;
+}
+
+/**
+ * The document a key {@link makeAddressKey} made names: its space, id and
+ * scope, or `undefined` for a string that is no such key. A `data:` id holds
+ * its content, `/` included, so where it ends cannot be read back out of a
+ * key, and a key naming one is read as naming no document.
+ */
+export function parseAddressKey(
+  key: string,
+): { space: string; id: string; scope: CellScope } | undefined {
+  const [space, scoped] = key.split("/", 2);
+  if (space === undefined || scoped === undefined) return undefined;
+  const scope =
+    (["user", "session"] as const).find((name) =>
+      scoped.startsWith(`${name}:`)
+    ) ?? "space";
+  const id = scope === "space" ? scoped : scoped.slice(scope.length + 1);
+  return hasDataUriScheme(id) ? undefined : { space, id, scope };
 }
 
 function unwrapTransactionDetailValue(
@@ -135,6 +165,7 @@ export function captureCommittedReads(
         {
           space: read.space,
           id: read.id,
+          ...(read.scope === undefined ? {} : { scope: read.scope }),
           path: [...read.path],
         },
         { meta: ignoreReadForScheduling },
@@ -218,11 +249,9 @@ function transactionReadInvariants(
   for (const space of spaces) {
     try {
       for (const detail of getTransactionReadDetails(tx, space)) {
-        // makeAddressKey ignores scope; include it so same id+path reads
-        // under different cell scopes don't collide.
-        const key = `${normalizeCellScope(detail.address.scope)}|${
-          makeAddressKey(detail.address)
-        }`;
+        // The key names the scope, so same id+path reads under different
+        // cell scopes don't collide.
+        const key = makeAddressKey(detail.address);
         invariants.set(key, {
           address: detail.address,
           value: detail.value,

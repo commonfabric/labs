@@ -1,7 +1,11 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import {
+  type CellHandle,
+  CellReadRefusedError,
+  type CellRef,
+} from "@commonfabric/runtime-client";
 
 import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
@@ -180,6 +184,36 @@ describe("CFCellLink", () => {
     refuse();
 
     expect(element._name).toBe("Content hidden by policy");
+  });
+
+  it("names a link whose resolution the worker refuses as withheld, and reports no error", async () => {
+    const errors: unknown[] = [];
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    try {
+      const element = new CFCellLink() as any;
+      markConnected(element);
+      element.cell = {
+        ref: () => ({
+          id: "of:refused-link",
+          space: "did:key:test-space",
+          scope: "space",
+          path: [],
+        }),
+        resolveAsCell: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+        runtime: () => ({ signal: { aborted: false } }),
+      };
+      await element._resolveCell();
+
+      expect(element._name).toBe("Content hidden by policy");
+      expect(element._resolvedCell).toBeUndefined();
+      expect(errors).toEqual([]);
+    } finally {
+      console.error = consoleError;
+    }
   });
 
   it("resubscribes when the resolved handle changes with the same ref", () => {
@@ -621,7 +655,7 @@ describe("CFCellLink disposal handling", () => {
 
   /** Starts resolving on an unconnected element holding `fields`. */
   function resolveCellOn(fields: Record<string, unknown>): {
-    element: Record<string, unknown>;
+    element: Record<string, unknown> & { _resolveCell(): Promise<void> };
     resolving: Promise<void>;
   } {
     const element = Object.assign(new CFCellLink(), fields) as unknown as
@@ -679,6 +713,71 @@ describe("CFCellLink disposal handling", () => {
       spy.restore();
     }
     expect(spy.calls.length).toBe(1);
+  });
+
+  it("drops the withheld name once the refused link is gone", async () => {
+    const refusing = {
+      signal: { aborted: false },
+      getCellFromRef: () => ({
+        ref: () => ({
+          id: "of:refused-link",
+          space: "did:key:test-space",
+          scope: "space",
+          path: [],
+        }),
+        resolveAsCell: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+      }),
+    };
+    const { element, resolving } = resolveCellOn({
+      ...baseFields(),
+      link: "/of:fid1:refused-link",
+      runtime: refusing,
+    });
+    await resolving;
+    expect(element._name).toBe("Content hidden by policy");
+
+    // The element is reused with no link at all.
+    element.link = undefined;
+    await element._resolveCell();
+
+    expect(element._name).toBeUndefined();
+  });
+
+  it("names a serialized link whose resolution the worker refuses as withheld, and reports no error", async () => {
+    const runtime = {
+      signal: { aborted: false },
+      getCellFromRef: () => ({
+        ref: () => ({
+          id: "of:refused-link",
+          space: "did:key:test-space",
+          scope: "space",
+          path: [],
+        }),
+        resolveAsCell: () =>
+          Promise.reject(
+            new CellReadRefusedError({ refusedBy: "display-ceiling" }),
+          ),
+      }),
+    };
+    const spy = captureConsoleError();
+    let element: Record<string, unknown>;
+    try {
+      const started = resolveCellOn({
+        ...baseFields(),
+        link: "/of:fid1:refused-link",
+        runtime,
+      });
+      element = started.element;
+      await started.resolving;
+    } finally {
+      spy.restore();
+    }
+    expect(element._name).toBe("Content hidden by policy");
+    expect(element._resolvedCell).toBeUndefined();
+    expect(spy.calls).toEqual([]);
   });
 
   it("suppresses the resolve-link log when the captured runtime is disposed", async () => {

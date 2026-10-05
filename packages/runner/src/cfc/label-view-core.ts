@@ -170,25 +170,62 @@ const redactCaveatSourceAtom = (atom: unknown): unknown => {
  */
 export const redactCaveatSourcesForDisplay = (
   view: CfcLabelView,
-): CfcLabelView => ({
-  version: 1,
-  entries: view.entries.map((entry) => {
-    const label: IFCLabel = {};
-    for (const key of LABEL_KEYS) {
-      const value = entry.label[key];
-      if (Array.isArray(value) && value.length > 0) {
-        // `value` is the union of both label-key array types, so `.map()`
-        // widens its callback parameter and loses the element type.
-        label[key] = value.map(redactCaveatSourceAtom) as CfcAtom[];
+): CfcLabelView =>
+  withCfcLabelViewOrigins({
+    version: 1,
+    entries: view.entries.map((entry) => {
+      const label: IFCLabel = {};
+      for (const key of LABEL_KEYS) {
+        const value = entry.label[key];
+        if (Array.isArray(value) && value.length > 0) {
+          // `value` is the union of both label-key array types, so `.map()`
+          // widens its callback parameter and loses the element type.
+          label[key] = value.map(redactCaveatSourceAtom) as CfcAtom[];
+        }
       }
-    }
-    return {
-      path: entry.path,
-      label,
-      ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-    };
-  }),
-});
+      return {
+        path: entry.path,
+        label,
+        ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+      };
+    }),
+  }, cfcLabelViewOriginSpaces(view));
+
+/**
+ * A label view joined at its root: one entry, at the cell itself, whose label
+ * is the join of every entry's. For display of a cell whose read the viewer is
+ * refused. An entry's path names a field of the document, and the name of a
+ * field is part of what the document holds, so such a view says what labels
+ * the cell carries without saying where in it they sit.
+ *
+ * The join is the label of the whole: every confidentiality clause any part
+ * carries, and only the integrity every part carries. Integrity one field
+ * holds, such as who authored it, is not a claim about the cell, and lifting
+ * it to the root would let a host claim it of the whole.
+ */
+export const redactEntryPathsForDisplay = (
+  view: CfcLabelView,
+): CfcLabelView => {
+  let label: IFCLabel = {};
+  for (const entry of view.entries) {
+    label = mergeLabel(label, {
+      confidentiality: entry.label.confidentiality ?? [],
+    });
+  }
+  const integrities = view.entries.map((entry) => entry.label.integrity ?? []);
+  const integrity = (integrities[0] ?? []).filter((atom) =>
+    integrities.every((carried) =>
+      carried.some((other) => deepEqual(other, atom))
+    )
+  );
+  return withCfcLabelViewOrigins({
+    version: 1,
+    entries: [{
+      path: [],
+      label: integrity.length === 0 ? label : { ...label, integrity },
+    }],
+  }, cfcLabelViewOriginSpaces(view));
+};
 
 const sortEntries = (entries: CfcLabelViewEntry[]): CfcLabelViewEntry[] => {
   if (entries.length < 2) return entries;
