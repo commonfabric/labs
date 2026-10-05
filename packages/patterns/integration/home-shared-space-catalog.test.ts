@@ -188,10 +188,10 @@ async function rejectInvocation<T>(
   expect(entries()[index].error).toContain(message);
 }
 
-/** Records tentative handler receipts and commit verdicts without extra writes. */
+/** Records tentative handler receipts and commit settlements without extra writes. */
 function watchHandlingCommits(runtime: Runtime) {
   const outcomes = new ArrivalLog<{ eventId: string; value: unknown }>();
-  const verdicts = new ArrivalLog<
+  const settlements = new ArrivalLog<
     Awaited<ReturnType<IExtendedStorageTransaction["commit"]>>
   >();
   const edit = runtime.edit.bind(runtime);
@@ -209,13 +209,13 @@ function watchHandlingCommits(runtime: Runtime) {
       });
       return (proceed() as ReturnType<IExtendedStorageTransaction["commit"]>)
         .then((result) => {
-          verdicts.record(result);
+          settlements.record(result);
           return result;
         });
     });
     return tx;
   });
-  return { outcomes, verdicts, [Symbol.dispose]: () => wrapped.restore() };
+  return { outcomes, settlements, [Symbol.dispose]: () => wrapped.restore() };
 }
 
 /** Independent replicas against an ACL-enforcing memory server. */
@@ -387,6 +387,105 @@ describe("Home catalog revisions across execution modes", () => {
   });
 });
 
+describe("Home catalog speculative revisions", () => {
+  it("refuses a choice based on an optimistic transition that loses to a peer", async () => {
+    await withHome(false, async (runtime, home, fresh, server) => {
+      await invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "seed",
+      );
+      const catalog = await backingCatalog(runtime, home);
+      const original = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space].revision;
+      const peer = await fresh();
+      server.options.subscriptionRefreshDelayMs = "manual";
+      const pending: Promise<unknown>[] = [];
+      try {
+        pending.push(invoke(
+          peer.runtime,
+          peer.home.key("changeSharedSpaceMembership"),
+          {
+            space: registration.space,
+            id: "peer-choice",
+            expectedRevision: original,
+            state: "saved",
+          },
+          "peer-choice",
+        ));
+        const engine = await server.engineForSpace(owner.did());
+        const id = catalog.getAsNormalizedFullLink().id;
+        await awaitAdmitted(server, () => {
+          const stored = Engine.read(engine, { id })
+            ?.value as unknown as SharedSpaceCatalog;
+          return stored.entries[registration.space].revision !== original;
+        });
+        const peerEntry =
+          (Engine.read(engine, { id })!.value as unknown as SharedSpaceCatalog)
+            .entries[registration.space];
+        expect(peerEntry.lastAction).toEqual({
+          id: "peer-choice",
+          expectedRevision: original,
+          state: "saved",
+        });
+        expect(catalog.key("entries", registration.space, "revision").getRaw())
+          .toBe(original);
+        using watch = watchHandlingCommits(runtime);
+        const first = invoke(runtime, home.key("changeSharedSpaceMembership"), {
+          space: registration.space,
+          id: "my-archive",
+          expectedRevision: original,
+          state: "archived",
+        }, "my-archive");
+        pending.push(first);
+        await watch.outcomes.reached(1);
+        const speculative = catalog.key(
+          "entries",
+          registration.space,
+          "revision",
+        ).getRaw();
+        expect(speculative).not.toBe(original);
+        const second = invoke(
+          runtime,
+          home.key("changeSharedSpaceMembership"),
+          {
+            space: registration.space,
+            id: "my-restore",
+            expectedRevision: speculative,
+            state: "saved",
+          },
+          "my-restore",
+        );
+        pending.push(second);
+        await watch.outcomes.reached(2);
+        expect(watch.outcomes.entries.slice(0, 2).map((entry) => entry.value))
+          .toEqual([
+            { status: "applied", space: registration.space, id: "my-archive" },
+            { status: "applied", space: registration.space, id: "my-restore" },
+          ]);
+        await watch.settlements.matching((verdict) =>
+          verdict.error !== undefined
+        );
+        server.options.subscriptionRefreshDelayMs = 0;
+        await server.flushSessions();
+        const results = await Promise.all([first, second]);
+        await runtime.idle();
+        const final = catalog.getRaw() as SharedSpaceCatalog;
+        expect(final.entries[registration.space]).toEqual(peerEntry);
+        expect(results).toEqual([
+          { status: "conflict", reason: "revision" },
+          { status: "conflict", reason: "revision" },
+        ]);
+      } finally {
+        server.options.subscriptionRefreshDelayMs = 0;
+        await server.flushSessions();
+        await Promise.allSettled(pending);
+      }
+    });
+  });
+});
+
 describe("Home shared-space catalog", () => {
   for (
     const scenario of ["existing", "rejected-predecessor", "first-registration"]
@@ -485,7 +584,7 @@ describe("Home shared-space catalog", () => {
                 },
               ]);
           }
-          await watch.verdicts.matching((verdict) =>
+          await watch.settlements.matching((verdict) =>
             verdict.error !== undefined
           );
           expect(completed.entries).toHaveLength(0);
@@ -895,8 +994,21 @@ describe("Home shared-space catalog", () => {
       await withHome(serving, async (runtime, home, _peer, server) => {
         for (
           const input of [
-            { ...registration, host: "https://room.example/path" },
-            { ...registration, host: "https://user:secret@room.example" },
+            ...[
+              "https://room.example/path",
+              "https://room.example/path/..",
+              "https://room.example/%2e%2e/",
+              "https://user:secret@room.example",
+              "https://@room.example",
+              "https://room.example?",
+              "https://room.example#",
+              "https://room.example/?region=west",
+              "https://room.example/#primary",
+              "https://room.example\\\\",
+              "https://ro\tom.example",
+              "https://[",
+              "ftp://room.example",
+            ].map((host) => ({ ...registration, host })),
             { ...registration, since: "bad" },
             { ...registration, since: -1 },
             { ...registration, space: "not-a-did" },
@@ -915,6 +1027,70 @@ describe("Home shared-space catalog", () => {
           entries: {},
           offers: {},
         });
+      });
+    });
+
+    it(`advances revisions exactly and refuses unsupported counters with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _peer, server) => {
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "seed",
+        );
+        const catalog = await backingCatalog(runtime, home);
+        const valid = catalog.getRaw() as SharedSpaceCatalog;
+        expect(valid.entries[registration.space].revision).toMatch(/^1:.+$/);
+        await runtime.editWithRetry((tx) =>
+          catalog.withTx(tx).key("entries", registration.space, "revision").set(
+            "9007199254740992:seed",
+          )
+        );
+        await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+          space: registration.space,
+          id: "large-counter",
+          expectedRevision: "9007199254740992:seed",
+          state: "archived",
+        }, "large-counter");
+        expect(
+          (await home.key("sharedSpaceCatalog").pull())
+            .entries[registration.space],
+        )
+          .toMatchObject({
+            state: "archived",
+            revision: expect.stringMatching(/^9007199254740993:.+$/),
+          });
+        for (
+          const revision of [
+            "0:seed",
+            "01:seed",
+            "-1:seed",
+            "2:",
+            "future-revision",
+            `${"9".repeat(318)}:x`,
+          ]
+        ) {
+          const entry = { ...valid.entries[registration.space], revision };
+          await runtime.editWithRetry((tx) =>
+            catalog.withTx(tx).key("entries", registration.space).set(entry)
+          );
+          await rejectInvocation(
+            runtime,
+            home.key("changeSharedSpaceMembership"),
+            {
+              space: registration.space,
+              id: "unsupported-counter",
+              expectedRevision: revision,
+              state: "archived",
+            },
+            server,
+            serving,
+          );
+          expect(catalog.getRaw()).toEqual({
+            ...valid,
+            entries: { ...valid.entries, [registration.space]: entry },
+          });
+        }
       });
     });
 

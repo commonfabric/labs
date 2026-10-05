@@ -16,7 +16,7 @@ export default pattern(() => {
   const action_register = action(() => {
     home.registerSharedSpace.send({
       space: SPACE,
-      host: "HTTPS://ROOM.EXAMPLE:443/",
+      host: " HTTPS://ROOM.EXAMPLE:443/ ",
       kind: "loom",
       title: "Our loom",
       since: 1000,
@@ -25,6 +25,7 @@ export default pattern(() => {
   });
   const assert_registered = assert(() =>
     home.sharedSpaceCatalog.entries[SPACE]?.state === "saved" &&
+    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("1:") &&
     home.sharedSpaceCatalog.entries[SPACE]?.host === "https://room.example" &&
     home.sharedSpaceCatalog.entries[SPACE]?.from === FROM &&
     home.sharedSpaceCatalog.entries[SPACE]?.since === 1000 &&
@@ -41,7 +42,7 @@ export default pattern(() => {
   });
   const assert_archived = assert(() =>
     home.sharedSpaceCatalog.entries[SPACE]?.state === "archived" &&
-    home.sharedSpaceCatalog.entries[SPACE]?.revision !== revision.get()
+    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("2:")
   );
   const action_replay_offer = action(() => {
     home.registerSharedSpace.send({
@@ -67,7 +68,8 @@ export default pattern(() => {
     });
   });
   const assert_restored = assert(() =>
-    home.sharedSpaceCatalog.entries[SPACE]?.state === "saved"
+    home.sharedSpaceCatalog.entries[SPACE]?.state === "saved" &&
+    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("3:")
   );
   const action_stale_archive = action(() => {
     home.changeSharedSpaceMembership.send({

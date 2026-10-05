@@ -22,6 +22,13 @@ provide a display title. The space DID is its identity; the host is a routing
 fact. Registration refuses an existing entry with a different host or kind.
 Applications resolve the current root from the space when opening it.
 
+Authored code validates routes with the sandbox's existing `URL` global. Stored
+hosts are canonical HTTP or HTTPS origins, the same rule used by inbox offers.
+Registration also accepts case differences, explicit default ports, surrounding
+whitespace, and a trailing root slash, then stores `URL.origin`. Credentials,
+paths (including dot paths), query strings, fragments, backslashes, and embedded
+whitespace are refused before parsing can erase them.
+
 Consumers discover the authenticated person's Home using their identity and
 configured Home host, independently of an offered space's host or profile.
 Pattern consumers can follow Home through the ordinary default-pattern link;
@@ -117,12 +124,29 @@ event after a later action can return the original successful outcome while the
 catalog shows the later choice. A new membership invocation carrying a stale
 observed revision conflicts. An ordinary transaction conflict can rerun the
 handler, but the request retains its original action ID and revision.
-Registration uses `eventKey()` for its initial revision. Each membership
-transition hashes the previous revision together with `eventKey()`, using the
-Fabric's canonical `hashStringOf`. This keeps revisions bounded and stable
-across retries and client/server execution of the same transition. An event ID
-can be admitted again, including across execution modes; its event key alone
-would let a later transition restore an old revision and accept a stale choice.
+A revision combines a positive decimal generation and the existing `eventKey()`
+as `<generation>:<event-key>`. Registration starts at generation 1; each
+membership transition increments it in the same transaction as the state and
+action evidence. `BigInt` arithmetic keeps the increment exact beyond
+JavaScript's safe integer range. The generation prevents a re-admitted
+invocation ID from restoring an earlier revision. The event key distinguishes
+two optimistic writes that start at the same generation, including competing
+first registrations. If a user acts on a tentative transition that later loses
+to a peer, that queued action conflicts instead of silently applying to the
+peer's different choice at the same generation.
+
+The writer refuses an uninterpretable generation or a resulting revision longer
+than 320 characters before changing any entry fields. Readers preserve
+unrecognized revision strings; consumers treat the whole revision as opaque and
+retain the value they observed rather than computing one. Retrying the same
+transition preserves the token.
+
+A revision is an optimistic concurrency token, not proof that a client observed
+the value or an authorization capability. Home's ACL authorizes its owner to
+invoke these handlers; callers retain the observed revision to express which
+choice their action may replace. Exceptional repair must preserve generation
+monotonicity as well as the entry and receipt evidence.
+
 Callers must retain the same payload when retrying an invocation ID: the
 ordinary receipt is first-writer-wins even if a later admission runs a handler.
 

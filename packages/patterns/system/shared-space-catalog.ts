@@ -7,9 +7,7 @@
 import {
   eventKey,
   handler,
-  hashStringOf,
   isWellFormedDID,
-  normalizeSpaceHost,
   toSchema,
   type Writable,
 } from "commonfabric";
@@ -159,6 +157,41 @@ function admissionTime(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Normalizes a bare HTTP or HTTPS origin for an admitted route. */
+function normalizeHost(host: string): string {
+  const source = host.trim();
+  // Check the spelling before URL parsing can erase dot paths, empty query or
+  // fragment markers, credentials, backslashes, or embedded whitespace.
+  if (!/^https?:\/\/[^/?#\\@\s]+\/?$/i.test(source)) {
+    throw new TypeError(
+      "Space host must contain only an HTTP or HTTPS origin.",
+    );
+  }
+  try {
+    return new URL(source).origin;
+  } catch {
+    throw new TypeError("Invalid space host URL.");
+  }
+}
+
+/** Names this event's transition at a bounded, exact generation. */
+function revisionAt(generation: bigint): string {
+  const revision = `${generation}:${eventKey()}`;
+  if (revision.length > 320) {
+    throw new RangeError("Shared-space membership revision is exhausted.");
+  }
+  return revision;
+}
+
+/** Advances the generation while distinguishing competing optimistic writes. */
+function nextRevision(revision: string): string {
+  const match = /^([1-9][0-9]*):.+$/.exec(revision);
+  if (!match) {
+    throw new TypeError("Unsupported shared-space membership revision.");
+  }
+  return revisionAt(BigInt(match[1]) + 1n);
+}
+
 /** Whether a stored target carries a canonical origin and well-formed DID. */
 function validTarget(value: Record<string, unknown>): boolean {
   if (
@@ -166,7 +199,7 @@ function validTarget(value: Record<string, unknown>): boolean {
     typeof value.host !== "string"
   ) return false;
   try {
-    return normalizeSpaceHost(value.host).origin === value.host;
+    return normalizeHost(value.host) === value.host;
   } catch {
     return false;
   }
@@ -194,7 +227,7 @@ function normalizeRegistration(
     }
     sharedSpaceOfferKey(value.offer.from, value.offer.id);
   }
-  return { ...value, host: normalizeSpaceHost(value.host).origin };
+  return { ...value, host: normalizeHost(value.host) };
 }
 
 /** Whether action evidence is understood by this writer. */
@@ -250,7 +283,7 @@ export const registerSharedSpace = handler<
         ...(offer === undefined ? {} : { from: offer.from }),
         since: registration.since ?? Date.now(),
         state: registration.initialState ?? "saved",
-        revision: eventKey(),
+        revision: revisionAt(1n),
       });
     }
     if (key && offer && !receipt) {
@@ -308,12 +341,9 @@ export const changeSharedSpaceMembership = handler<
         reason: "revision",
       };
     }
+    const revision = nextRevision(current.revision);
     catalog.key("entries", change.space, "state").set(change.state);
-    // An event ID can be admitted again. Include the predecessor so a later
-    // transition under that ID cannot make an old observed revision current.
-    catalog.key("entries", change.space, "revision").set(
-      hashStringOf([current.revision, eventKey()]),
-    );
+    catalog.key("entries", change.space, "revision").set(revision);
     catalog.key("entries", change.space, "lastAction").set({
       id: change.id,
       expectedRevision: change.expectedRevision,

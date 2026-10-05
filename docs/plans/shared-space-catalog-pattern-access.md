@@ -88,11 +88,6 @@ and handler settlement evidence. Consumer integration must provide evidence of
 recovery and failure handling before the catalog becomes the native collection
 authority; landing Home does not switch that authority.
 
-Deploy this Home source only to execution runtimes that expose
-`normalizeSpaceHost` and `hashStringOf`. Native Labs pins and serving runtimes
-must provide those helpers before following the updated Home source; merging
-the pattern does not upgrade a pinned client's runtime.
-
 ## Required evidence
 
 - Real Home creation and source upgrades expose the same catalog and handlers
@@ -159,13 +154,13 @@ For every proposed shim, record the required behavior, the ordinary platform
 operation attempted, the failing example, and whether a small general platform
 change would suffice. Keep any retained shim's responsibility explicit. This
 includes stable backing-cell discovery and result receipt access if a production
-consumer demonstrates a gap. `normalizeSpaceHost` is a general authoring helper
-backed by the runtime's canonical routing validator. `hashStringOf` exposes the
-Fabric's existing content hasher: Home combines a membership transition's
-predecessor revision and event key to keep a re-admitted event ID from restoring
-an old revision. Both helpers are generic value operations; catalog rules stay
-in Home. The direct-runtime Loom sidecar can use existing `sendEvent` receipts;
-a new runtime-client invocation API is not a prerequisite for that consumer.
+consumer demonstrates a gap. Home validates origins with the existing `URL`
+sandbox global. Revisions combine a per-entry decimal generation, incremented
+with `BigInt`, and the existing `eventKey()` so competing tentative writes have
+distinct tokens. Catalog rules need no new authoring API or coordinated
+runtime-helper rollout.
+The direct-runtime Loom sidecar can use existing `sendEvent` receipts; a new
+runtime-client invocation API is not a prerequisite for that consumer.
 
 Coordination with FabriChat is recorded in the
 [consumer Topic](https://estuary.saga-castor.ts.net/topics-dev-476ea34f/of:fid1:LWFAKJVz0hlcUUz6hlo9gGwYXajuXpUyblkS_MFOwlg).

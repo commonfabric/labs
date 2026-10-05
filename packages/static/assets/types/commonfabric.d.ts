@@ -4197,13 +4197,6 @@ export type DID = `did:${string}`;
 export declare function isWellFormedDID(value: unknown): value is DID;
 
 /**
- * Parses a space host as an HTTP or HTTPS origin. Credentials, paths, query
- * strings, and fragments are refused. The returned URL exposes the canonical
- * origin used for storage and compute routing.
- */
-export declare function normalizeSpaceHost(host: string | URL): URL;
-
-/**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.
  * Nothing in the event's payload can choose the value.
@@ -4676,13 +4669,6 @@ export type EqualsFunction = (
  * not resolve cells or links.
  */
 export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
-
-/**
- * Returns a Fabric value's canonical SHA-256 content hash as an unprefixed
- * base64url string. Equal content has the same hash across runtimes; object
- * property order is immaterial. Cells and links are not resolved.
- */
-export declare function hashStringOf(value: FabricValue): string;
 
 /**
  * Multi-user pattern test descriptor (`cf test`). Export it as the test
