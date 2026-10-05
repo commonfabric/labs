@@ -36,11 +36,12 @@ const saved: Observed = { state: "saved", revision: "R1" };
 const archived: Observed = { state: "archived", revision: "R2" };
 
 // `confirm` reports what it observed and writes nothing to the document it
-// observed, which is the shape a pin exists for. `count` touches neither of
-// those documents.
+// observed, which is the shape a pin exists for. `stamp` writes what it
+// observed back into one field of that same document. `count` touches none
+// of those documents.
 const PATTERN = `
 import { handler, pattern, Stream, Writable } from "commonfabric";
-type Observed = { state: string; revision: string };
+type Observed = { state: string; revision: string; confirmed?: string };
 type Outcome = { state?: string; revision?: string };
 const confirm = handler<
   unknown,
@@ -50,6 +51,12 @@ const confirm = handler<
   const seen = observed.get();
   outcome.set({ state: seen.state, revision: seen.revision });
 });
+const stamp = handler<unknown, { observed: Writable<Observed> }>(
+  (_event, { observed }) => {
+    observed.pinDocument();
+    observed.key("confirmed").set(observed.get().revision);
+  },
+);
 const count = handler<unknown, { tally: Writable<number> }>(
   (_event, { tally }) => {
     tally.set((tally.get() ?? 0) + 1);
@@ -61,9 +68,10 @@ export default pattern<
     outcome: Writable<Outcome>;
     tally: Writable<number>;
   },
-  { confirm: Stream<unknown>; count: Stream<unknown> }
+  { confirm: Stream<unknown>; stamp: Stream<unknown>; count: Stream<unknown> }
 >(({ observed, outcome, tally }) => ({
   confirm: confirm({ observed, outcome }),
+  stamp: stamp({ observed }),
   count: count({ tally }),
 }));
 `;
@@ -288,6 +296,7 @@ describe("pinDocument()", () => {
       await runtime.storageManager.synced();
       return {
         confirm: result.key("confirm"),
+        stamp: result.key("stamp"),
         count: result.key("count"),
       };
     };
@@ -323,6 +332,38 @@ describe("pinDocument()", () => {
         }
       }));
       return values;
+    };
+
+    /**
+     * A serving memory server whose first wave carrying a consequence waits
+     * at its commit step until `release()` is called. Disposing it releases
+     * the wave and closes the server.
+     */
+    const servingWithHeldWave = async () => {
+      const held = new ArrivalLog<void>();
+      const release = defer<void>();
+      let armed = true;
+      const serving = await startServingMemoryServer({
+        apiUrl: new URL(import.meta.url),
+        decorateWaveCommitSink: (sink) =>
+          withCommitWave(sink, async (batch) => {
+            if (armed && batch.consequenceOf.length > 0) {
+              armed = false;
+              held.record();
+              await release.promise;
+            }
+            return await sink.commitWave(batch);
+          }),
+      });
+      return {
+        server: serving.server,
+        held,
+        release: () => release.resolve(),
+        async [Symbol.asyncDispose]() {
+          release.resolve();
+          await serving.close();
+        },
+      };
     };
 
     it("re-runs a handler whose observation went stale, with server execution off", async () => {
@@ -379,38 +420,59 @@ describe("pinDocument()", () => {
       // The wave carrying `confirm`'s consequence is held at the commit step
       // while a peer commits, so the run being committed observed `saved`.
 
-      const held = new ArrivalLog<void>();
-      const release = defer<void>();
-      let armed = true;
+      await using serving = await servingWithHeldWave();
+      const runtime = connect(serving.server, true);
+      const streams = await standUp(runtime);
+      const outcomes = await admitted(serving.server, runtime, "pin-outcome");
+
+      const acks = new ArrivalLog<string>();
+      sendEvent(streams.confirm, {}, (tx) => acks.record(tx.status().status));
+      await serving.held.reached(1);
+      await commitObserved(connect(serving.server, true), archived);
+      serving.release();
+      await acks.reached(1);
+
+      expect(acks.entries).toEqual(["done"]);
+      expect(outcomes).toEqual([archived]);
+    });
+
+    it("commits a handler that pins a document and then writes it, against a document nobody else changed", async () => {
+      // The engine checks the pin against the store's value before the
+      // commit applies, not against the value the commit writes.
+
       await using serving = await startServingMemoryServer({
         apiUrl: new URL(import.meta.url),
-        decorateWaveCommitSink: (sink) =>
-          withCommitWave(sink, async (batch) => {
-            if (armed && batch.consequenceOf.length > 0) {
-              armed = false;
-              held.record();
-              await release.promise;
-            }
-            return await sink.commitWave(batch);
-          }),
       });
-      try {
-        const runtime = connect(serving.server, true);
-        const streams = await standUp(runtime);
-        const outcomes = await admitted(serving.server, runtime, "pin-outcome");
+      const runtime = connect(serving.server, true);
+      const streams = await standUp(runtime);
+      const observed = await admitted(serving.server, runtime, "pin-observed");
 
-        const acks = new ArrivalLog<string>();
-        sendEvent(streams.confirm, {}, (tx) => acks.record(tx.status().status));
-        await held.reached(1);
-        await commitObserved(connect(serving.server, true), archived);
-        release.resolve();
-        await acks.reached(1);
+      const acks = new ArrivalLog<string>();
+      sendEvent(streams.stamp, {}, (tx) => acks.record(tx.status().status));
+      await acks.reached(1);
 
-        expect(acks.entries).toEqual(["done"]);
-        expect(outcomes).toEqual([archived]);
-      } finally {
-        release.resolve();
-      }
+      expect(acks.entries).toEqual(["done"]);
+      expect(observed).toEqual([{ ...saved, confirmed: "R1" }]);
+    });
+
+    it("re-runs a handler that pinned a document and then wrote one field of it, when a peer changed other fields", async () => {
+      // A write by itself would be rebased past the peer's change to fields
+      // it does not touch; the pin refuses it instead.
+
+      await using serving = await servingWithHeldWave();
+      const runtime = connect(serving.server, true);
+      const streams = await standUp(runtime);
+      const observed = await admitted(serving.server, runtime, "pin-observed");
+
+      const acks = new ArrivalLog<string>();
+      sendEvent(streams.stamp, {}, (tx) => acks.record(tx.status().status));
+      await serving.held.reached(1);
+      await commitObserved(connect(serving.server, true), archived);
+      serving.release();
+      await acks.reached(1);
+
+      expect(acks.entries).toEqual(["done"]);
+      expect(observed).toEqual([archived, { ...archived, confirmed: "R2" }]);
     });
 
     it("requeues only the run whose pin failed, and commits the rest of its wave", async () => {

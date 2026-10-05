@@ -124,10 +124,13 @@ export const confirm = handler<
 });
 ```
 
-- **Pin before writing.** The first pin of a document holds for the rest of the
-  run: a later call is a no-op, and a write after the pin does not move it.
-  Pinning a document the handler has already written throws, since the run
-  would read back its own uncommitted write and pin that.
+- **Pin first, then decide and write.** The first pin of a document holds for
+  the rest of the run: a later call is a no-op, and a write after the pin does
+  not move it. Pinning a document the handler has already written throws,
+  since the run would read back its own uncommitted write and pin that. The
+  write is no substitute for the pin: a handler's write to some fields of a
+  document can be merged past a concurrent change to its other fields, which
+  the pin refuses.
 - **The whole document, and only it.** The pin covers the whole document,
   wherever in it the cell points, so `entry.key("state").pinDocument()` pins
   all of `entry`'s document. A cell that reaches its document through a link

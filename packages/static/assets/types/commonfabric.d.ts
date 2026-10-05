@@ -1181,6 +1181,11 @@ export interface IReadable<T> {
    * no-op. It is a read of the whole document, with the same consequences
    * for the handler's labels as `get()` of the document's root.
    *
+   * Pin first, then decide and write: a pin taken before the handler writes
+   * the document still holds the value the handler observed. A write alone
+   * does not stand in for one, because a write to some fields of a document
+   * can be merged past a concurrent change to its other fields.
+   *
    * @throws Error outside a handler; for a document that is not
    *   space-scoped; and for a document the handler has already written
    *   without pinning it first, since the run would then pin its own
