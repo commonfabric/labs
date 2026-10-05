@@ -29,6 +29,9 @@ import {
   RUNNER_RESTARTED,
 } from "./store.ts";
 
+/** Longest reason text a `command` event carries from a refused command. */
+export const LOCAL_JOB_ERROR_MAX_LENGTH = 500;
+
 /** The error code of a job whose profile the host no longer names. */
 export const PROFILE_UNAVAILABLE = "PROFILE_UNAVAILABLE";
 
@@ -93,6 +96,7 @@ export const localJobSpecOf = (
   const model = profile.model ?? runner.model;
   return {
     task: request.task,
+    commandJobId: job.id,
     taskRole: profile.taskRole,
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
     tools: profile.tools,
@@ -137,7 +141,7 @@ export const localJobEventsOf = (
   if (!isObjectNotArray(output)) return [];
   const { status, outcome, entry } = output as Record<string, unknown>;
   if (status !== "executed" || !isObjectNotArray(outcome)) return [];
-  const { ok, id } = outcome as Record<string, unknown>;
+  const { ok, id, code, hostCode } = outcome as Record<string, unknown>;
   const asked = argumentsOf(transcript, message.toolCallId).command;
   const command = typeof id === "string" ? id : asked;
   if (typeof command !== "string" || typeof ok !== "boolean") return [];
@@ -145,15 +149,27 @@ export const localJobEventsOf = (
       (entry as Record<string, unknown>).status === "admitted"
     ? (entry as Record<string, unknown>).value
     : undefined;
-  const outputs = isObjectNotArray(value)
-    ? (value as Record<string, unknown>).outputs
-    : undefined;
+  const answered = isObjectNotArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  // A refused command says why: the outcome's code, which survives a
+  // withheld answer, and the host's own reason from an admitted one.
+  const reason = [answered.error, answered.reason, answered.message].find((
+    text,
+  ) => typeof text === "string") as string | undefined;
   return [{
     kind: "command",
     body: {
       command,
       ok,
-      ...(isObjectNotArray(outputs) ? { outputs } : {}),
+      ...(isObjectNotArray(answered.outputs)
+        ? { outputs: answered.outputs }
+        : {}),
+      ...(!ok && typeof code === "string" ? { code } : {}),
+      ...(!ok && typeof hostCode === "string" ? { hostCode } : {}),
+      ...(!ok && reason !== undefined
+        ? { error: reason.slice(0, LOCAL_JOB_ERROR_MAX_LENGTH) }
+        : {}),
     },
   }];
 };
