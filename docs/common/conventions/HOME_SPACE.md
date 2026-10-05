@@ -146,8 +146,9 @@ The home default pattern holds the user's private inbox in
 other people deliver offers to the user. Home's `ensurePrivateInbox` stream
 creates it and points each profile that points at no inbox at it, through the
 profile's `inbox` field, which is how a sender finds it. The host sends that
-stream when it brings up Home. [The private inbox](../../features/private-inbox.md)
-describes the whole arrangement.
+stream once per runtime worker, the first time the worker brings up Home.
+[The private inbox](../../features/private-inbox.md) describes the whole
+arrangement.
 
 ## Spaces
 

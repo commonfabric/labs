@@ -2230,6 +2230,10 @@ export class PiecesController<T = unknown> {
    * at it, by sending Home's `ensurePrivateInbox`. Sending it again creates
    * and re-points nothing. A Home pattern without that stream is left as it
    * is. This controller must be over the identity's Home space.
+   *
+   * Resolves once the event is sent, which is before Home's handler runs, so
+   * it rejects only when Home cannot be brought up or the send itself throws;
+   * a failure inside the handler is not reported here.
    */
   async ensurePrivateInbox(): Promise<void> {
     this.#assertHomeSpace("ensure a private inbox");

@@ -3102,7 +3102,10 @@ describe("runtime-processor", () => {
      * is a stand-in holding `rows` as its space list and recording what is
      * sent to its streams. The space creation, the site table, and the
      * adoption run for real. `onEnsurePrivateInbox` runs as each event sent to
-     * `ensurePrivateInbox` is recorded, and a throw from it fails that send.
+     * `ensurePrivateInbox` is recorded, and a throw from it is a throw from the
+     * send itself. That is the one failure of the ensure the host sees: a
+     * stream's `send` returns before its handler runs, so a failure inside
+     * Home's handler never reaches the host, and this stand-in has none.
      */
     async function homeWorker(
       rows: readonly unknown[] | (() => unknown),
@@ -3128,10 +3131,9 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : {
               getRaw: () => ({ $stream: true }),
-              send: (event: unknown) => {
+              send: (event: unknown): void => {
                 sent.push({ stream: name, event });
                 if (name === "ensurePrivateInbox") onEnsurePrivateInbox();
-                return Promise.resolve();
               },
             },
       };
@@ -3307,7 +3309,7 @@ describe("runtime-processor", () => {
       });
     });
 
-    it("opens Home when ensuring the private inbox fails, and ensures it on the next ensure", async () => {
+    it("opens Home when sending the private inbox ensure throws, and sends it again on the next ensure", async () => {
       let attempts = 0;
       await using worker = await homeWorker([], () => {
         if (attempts++ === 0) throw new Error("transient send failure");

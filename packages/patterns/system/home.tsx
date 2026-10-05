@@ -108,7 +108,8 @@ export type HomeOutput = {
   privateInbox: Writable<PrivateInboxHolder>;
   createProfile: Stream<CreateProfileEvent>;
   // Creates the private inbox if there is none, and points every profile that
-  // points at no inbox at it. The host sends it once per sign-in.
+  // points at no inbox at it. The host sends it once per runtime worker, the
+  // first time the worker brings up Home.
   ensurePrivateInbox: Stream<void>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
