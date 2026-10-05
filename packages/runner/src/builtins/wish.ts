@@ -950,12 +950,13 @@ function searchByHashtag(
 }
 
 /**
- * Throws a `WishError` naming the remedy when the home pattern in
+ * Throws a `WishError` naming the remedies when the home pattern in
  * `homeSpaceCell` holds nothing at `field`, which it names to the user as
- * `what`. A home pattern gains a field its current source adds only when the
- * home space is next opened, since nothing updates a piece nobody opens, so a
- * home set up before the field existed lacks it until then. The wish does not
- * open the home itself.
+ * `what`. The system home pattern gains a field its current source adds only
+ * when the home space is next opened, since nothing updates a piece nobody
+ * opens, so a home set up before the field existed lacks it until then. A
+ * custom home pattern follows no source of the system's, and holds the field
+ * only if it says so. The wish does not open the home itself.
  */
 function requireHomeField(
   homeSpaceCell: Cell<unknown>,
@@ -966,9 +967,10 @@ function requireHomeField(
   const held = resolvePath(homeSpaceCell, ["defaultPattern", field], ctx);
   if (held.getRaw() === undefined) {
     throw new WishError(
-      `The home space holds no ${what}: its home pattern was set up before ` +
-        `it had one. Open the home space once, which brings its home ` +
-        `pattern up to date, and the wish resolves.`,
+      `The home space holds no ${what}. If its home pattern is the system ` +
+        `one, set up before it had one, open the home space once, which ` +
+        `brings it up to date. A custom home pattern needs to hold the ` +
+        `${what} itself.`,
     );
   }
 }

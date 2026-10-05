@@ -2702,7 +2702,8 @@ describe("wish built-in", () => {
       expect(resolved?.error).toContain(
         "The home space holds no agent queue",
       );
-      expect(resolved?.error).toContain("Open the home space once");
+      expect(resolved?.error).toContain("open the home space once");
+      expect(resolved?.error).toContain("A custom home pattern needs");
       expect(resolved?.result).toBeUndefined();
     });
 
@@ -2716,7 +2717,8 @@ describe("wish built-in", () => {
       expect(resolved?.error).toContain(
         "The home space holds no chat manager",
       );
-      expect(resolved?.error).toContain("Open the home space once");
+      expect(resolved?.error).toContain("open the home space once");
+      expect(resolved?.error).toContain("A custom home pattern needs");
       expect(resolved?.result).toBeUndefined();
     });
 
