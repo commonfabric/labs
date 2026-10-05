@@ -12,7 +12,7 @@
             "type": "string"
           },
           "id": {
-            "description": "The sender's key for the offer; no two offers in the inbox share one.",
+            "description": "The sender's key for the offer; no two offers in the inbox from one sender\nshare one.",
             "type": "string"
           },
           "kind": {
@@ -110,7 +110,7 @@
             "type": "string"
           },
           "id": {
-            "description": "The sender's key for the offer; no two offers in the inbox share one.",
+            "description": "The sender's key for the offer; no two offers in the inbox from one sender\nshare one.",
             "type": "string"
           },
           "kind": {
@@ -162,7 +162,7 @@
             "type": "string"
           },
           "id": {
-            "description": "The sender's key for the offer, the same on every resend of it. The inbox\nkeeps one offer per `id`.",
+            "description": "The sender's key for the offer, the same on every resend of it. The inbox\nkeeps one offer per sender and `id`.",
             "type": "string"
           },
           "kind": {
