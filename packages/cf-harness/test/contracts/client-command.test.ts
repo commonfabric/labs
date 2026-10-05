@@ -6,6 +6,7 @@ import {
   effectiveHarnessCommandApproval,
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_BODY_MAX_BYTES,
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
   harnessClientProtocolEcho,
   harnessCommandActorFor,
   harnessCommandResultProvenance,
@@ -766,8 +767,22 @@ describe("client command contract", () => {
           requires: [],
         }),
       ).toEqual({ protocolVersion: 1, requires: [] });
-      expect(checkHarnessClientProtocol({ protocolVersion: 1, requires: [] }))
-        .toEqual({ ok: true, protocol: harnessClientProtocolEcho() });
+      expect(checkHarnessClientProtocol(
+        { protocolVersion: 1, requires: [] },
+        HARNESS_SUPPORTED_CLIENT_FEATURES,
+      ))
+        .toEqual({
+          ok: true,
+          protocol: harnessClientProtocolEcho(
+            HARNESS_SUPPORTED_CLIENT_FEATURES,
+          ),
+        });
+      expect(
+        harnessClientProtocolEcho(["browser_host", "client_actions", "other"]),
+      ).toEqual({
+        protocolVersion: 1,
+        features: ["client_actions", "browser_host"],
+      });
     });
 
     it("shows a reader that knows three words each settlement's word", () => {

@@ -1280,7 +1280,8 @@ What the runner does, in order:
 | ----------------------------------------------------- | ---------------------------- |
 | produced a result the writer wrote                    | `completed`                  |
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
-| failed in the model, a tool, or its result            | `failed`, `PROVIDER_FAILURE` |
+| finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
+| failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 

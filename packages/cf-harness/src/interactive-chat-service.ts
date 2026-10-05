@@ -87,6 +87,7 @@ import {
 } from "./client-actions/coordinator.ts";
 import {
   checkHarnessClientProtocol,
+  HARNESS_SUPPORTED_CLIENT_FEATURES,
   type HarnessClientProtocolDeclaration,
   type HarnessClientProtocolEcho,
   harnessClientProtocolEcho,
@@ -340,7 +341,10 @@ const protocolMismatchError = (
   declaration: HarnessClientProtocolDeclaration | undefined,
 ): HarnessChatErrorResponse | undefined => {
   if (declaration === undefined) return undefined;
-  const check = checkHarnessClientProtocol(declaration);
+  const check = checkHarnessClientProtocol(
+    declaration,
+    HARNESS_SUPPORTED_CLIENT_FEATURES,
+  );
   if (check.ok) return undefined;
   const { message, ...details } = check.mismatch;
   return createHarnessChatErrorResponse(requestId, {
@@ -361,7 +365,10 @@ const withProtocolEcho = <Result extends object>(
   response.ok
     ? {
       ...response,
-      result: { ...response.result, protocol: harnessClientProtocolEcho() },
+      result: {
+        ...response.result,
+        protocol: harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES),
+      },
     }
     : response;
 

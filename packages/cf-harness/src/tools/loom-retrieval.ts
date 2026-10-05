@@ -29,6 +29,7 @@ import {
 import type { HarnessDocumentReferentDraft } from "../contracts/handle-table.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
 import {
+  LOOM_PAGE_DISCOVERY_KINDS,
   type LoomCalendarListInput,
   type LoomContextInput,
   type LoomPageDiscoverInput,
@@ -585,12 +586,17 @@ export const loomPageDiscoverTool: HarnessToolDefinition<
     title: "Loom Page Discover",
     effectClass: "read",
     description:
-      `List the user's canonical Pages, one identity row per Page (kind, page id, title, source path, capabilities). Inspect a Page for the rest. ${MEASUREMENT_NOTE}`,
+      `List the user's canonical project and entity Pages, one identity row per Page (kind, page id, title, source path, capabilities). Filter with all, project (or projects), or entity (or entities); all is the default. This lists Pages in the File Cabinet; looms and their panels are a separate inventory. Inspect a Page for the rest. ${MEASUREMENT_NOTE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        kind: { ...text, description: "Page kind filter; all by default." },
+        kind: {
+          type: "string",
+          enum: [...LOOM_PAGE_DISCOVERY_KINDS],
+          description:
+            "Page kind filter; all by default. projects and entities are plural aliases.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 500 },
       },
     },

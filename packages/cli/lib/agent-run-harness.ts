@@ -16,6 +16,7 @@
 import { join } from "@std/path";
 
 import {
+  type CfHarnessStructuredResultValidation,
   runCfHarnessCli,
   type RunCfHarnessCliDependencies,
 } from "@commonfabric/cf-harness/cli";
@@ -41,6 +42,7 @@ import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import {
+  INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
@@ -158,8 +160,8 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
  * A run ends `completed` with a link to the result document; `cancelled`
  * when its signal aborted; `refused` when the space's policy refused the
  * result write; `failed` as `LIMIT_REACHED` when the model-turn limit ended
- * it, and as `PROVIDER_FAILURE` when the model, a tool, or the result it
- * produced failed any other way.
+ * it; `INVALID_RESULT` when the completed loop supplied no result satisfying
+ * its schema; and `PROVIDER_FAILURE` for other model, tool, or storage errors.
  */
 export const createHarnessAgentRunExecutor = (
   options: HarnessAgentRunExecutorOptions,
@@ -244,6 +246,7 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
   // event the harness persists, and hands back the loop's full result.
   let loopResult: HarnessPromptLoopResult | undefined;
   let loopError: unknown;
+  let resultValidation: CfHarnessStructuredResultValidation | undefined;
   const createInnerLoop = options.harnessDeps?.createPromptLoop ??
     ((loopOptions: CreateHarnessPromptLoopOptions) =>
       new CfHarnessPromptLoop(loopOptions));
@@ -256,6 +259,10 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     // The runner owns the process's signals and its exit.
     registerSignalHandler: () => () => {},
     exit: () => {},
+    onStructuredResultValidation: (validation) => {
+      resultValidation = validation;
+      options.harnessDeps?.onStructuredResultValidation?.(validation);
+    },
     createPromptLoop: (loopOptions) => {
       const loop = createInnerLoop(loopOptions);
       return {
@@ -292,14 +299,20 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
   }
   const report = reportOf(loopResult);
   if (exitCode !== 0) {
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+    return {
+      outcome: "failed",
+      errorCode: resultValidation?.status === "invalid"
+        ? INVALID_RESULT
+        : PROVIDER_FAILURE,
+      report,
+    };
   }
 
   let structuredResult: unknown;
   try {
     structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
   } catch {
-    // The run finished without the result file it was asked for.
+    // A result the harness validated became unreadable before the write.
     return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
   }
 
@@ -350,7 +363,14 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
         error instanceof Error ? error.message : String(error)
       }${detail}`,
     );
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+    return {
+      outcome: "failed",
+      errorCode: error instanceof AgentResultWriteError &&
+          error.code === "invalid_result"
+        ? INVALID_RESULT
+        : PROVIDER_FAILURE,
+      report,
+    };
   } finally {
     if (ownsSession) await session?.pieces.runtime.dispose().catch(() => {});
   }

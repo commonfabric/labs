@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-10-04\
-Revision: `e8faf8f9ca`
+Last verified: 2026-10-05\
+Revision: `799e4fa93c`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -943,9 +943,13 @@ that interactive product path. The console's interactive path does browse: on a
 console launched with `--allow-browser-host`, a task that declares a browser
 host has its browser children drive the page that host shows the owner, under
 the confinements the [browser host section](../README.md#a-browser-host)
-describes. What a host shows enters the model's context under the unscreened
-prompt-injection caveat, sourced to the page's origin, and is withheld from a
-run whose read ceiling does not admit it. A child's return brings the child's
+describes. Only such a console lists `browser_host` among the client protocol
+features its `GET /api/status` publishes, so a host learns before a task whether
+to declare itself; the stdio transport never lists it. What a host shows, a
+screenshot included, enters the model's context under the unscreened
+prompt-injection caveat, sourced to the page's origin, and joined with the
+labels of every value a handle sent the session; it is withheld from a run whose
+read ceiling does not admit it. A child's return brings the child's
 model-context label into its parent's, for every child, so the caveat reaches
 the parent with whatever crosses.
 
@@ -1020,10 +1024,16 @@ mode.
   model-authored tool arguments through the address handle table; denial-path
   tool messages are not swapped, and interactive restore does not persist the
   handle table.
-- The session-local handle table covers cell addresses and the held referents
-  that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
-  consumed when the agent result writer links or observes a retrieved row; there
-  is no general-purpose value-handle dereference or release mechanism.
+- The session-local handle table covers cell addresses and three kinds of held
+  referent under `cfh:v:` tokens: documents, research kits, and strings a
+  child's structured return sealed. A document is a row Loom retrieval admits or
+  the retained result of a Weaver command. A retrieved row's referent is
+  consumed when the agent result writer links or observes the row, and
+  `describe_handle` reports a command result's label but never its content. A
+  research referent is read through `describe_handle`. A return referent is
+  dereferenced by the `browser` tool's `urlHandle` and `valueHandle` on a
+  browser host, which sends the string to the page. There is no general-purpose
+  value-handle dereference or release mechanism.
 - `estimatedCostUsd` is available for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6
   gateway models when the response includes cache reads and writes. It uses
   [public OpenAI pricing](https://developers.openai.com/api/docs/pricing);

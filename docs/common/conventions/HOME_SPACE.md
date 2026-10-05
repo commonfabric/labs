@@ -194,7 +194,8 @@ no runner is registered, the tab explains that requests remain queued until one
 starts. A queue with no entries shows "No agent runs yet."
 
 A request made in a home space that holds no queue — its home pattern does not
-exist, or is a version without the field — ends `refused`.
+exist, or is a version without the field — ends `refused`, and
+`wish({ query: "#agent_queue" })` there resolves to nothing.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
 
@@ -219,6 +220,13 @@ space is.
 Home holds it but renders it nowhere of its own: a page shows it at its path
 in home's result, `chatManager`, with the user's rooms, the room chosen among
 them, and the controls that start a direct or a group chat.
+
+A home space whose system home pattern was set up before it held a chat manager
+holds none until the home space is next opened, since nothing updates a piece
+nobody opens, and the wish does not open it; a custom home pattern
+([Custom Home Pattern](#custom-home-pattern)) holds one only if it says so.
+Until then `wish({ query: "#chatManager" })` reports an error naming both
+remedies, rather than resolving to nothing.
 
 ## Custom Home Pattern
 

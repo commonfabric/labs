@@ -198,6 +198,7 @@ function createMockConnection(
     },
     subscribe: () => Promise.resolve(),
     unsubscribe: () => Promise.resolve(),
+    peersOf: () => [],
     on: () => ({}) as any,
     off: () => ({}) as any,
     once: () => ({}) as any,
