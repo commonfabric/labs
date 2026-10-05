@@ -1825,7 +1825,7 @@ const swapSealedStringsForTokens = async (
   table: HarnessHandleTable,
   sanitized: unknown,
   raw: unknown,
-  child: { source: string; label: IFCLabel; returnReferents: boolean },
+  child: { source: string; referentLabel: IFCLabel | undefined },
 ): Promise<{ table: HarnessHandleTable; value: unknown; replaced: number }> => {
   if (isSealedOpaqueLinkObject(sanitized)) {
     if (typeof raw !== "string") {
@@ -1840,14 +1840,14 @@ const swapSealedStringsForTokens = async (
     // A return referent can go into a page, so only a string the web gave
     // a child becomes one; a string read out of the owner's space stays
     // sealed rather than reaching a page past its destination check.
-    if (!child.returnReferents) {
+    if (child.referentLabel === undefined) {
       return { table, value: sanitized, replaced: 0 };
     }
     const minted = await mintReferentHandle(table, {
       kind: "return",
       source: child.source,
       value: raw,
-      label: child.label,
+      label: child.referentLabel,
       labelSource: "child",
     });
     return { table: minted.table, value: minted.token, replaced: 1 };
@@ -1901,7 +1901,11 @@ const createStructuredSubagentReturn = async (
      */
     handleTable?: HarnessHandleTable;
 
-    /** Whether a sealed string that names no address becomes a referent. */
+    /**
+     * Whether a sealed string that names no address becomes a referent, which
+     * it does only under the child's model-context label: a child with none
+     * returns no referent.
+     */
     returnReferents: boolean;
   },
 ): Promise<{
@@ -1979,9 +1983,9 @@ const createStructuredSubagentReturn = async (
         parsedValue,
         {
           source: `delegate_task:${options.childRunId}`,
-          label: options.childEngine.getRunState().cfcModelContext?.label ??
-            {},
-          returnReferents: options.returnReferents,
+          referentLabel: options.returnReferents
+            ? options.childEngine.getRunState().cfcModelContext?.label
+            : undefined,
         },
       );
       returnValue = swapped.value;
@@ -5247,6 +5251,9 @@ export class CfHarnessPromptLoop {
       content: JSON.stringify(modelOutput),
       resultRef: result.resultRef,
     }, modelOutputResult.omissionRules ?? []);
+    const labeled = observations.length > 0
+      ? { cfcModelContextObservations: observations }
+      : {};
     if (toolId === "browser" && isBrowserScreenshotOutput(result.output)) {
       return {
         toolMessage,
@@ -5256,6 +5263,7 @@ export class CfHarnessPromptLoop {
             `Screenshot taken by browser (outputId: ${result.output.outputId}). Its pixels are the coordinates a click at a point takes.`,
           imageAttachments: [result.output.imageAttachment],
         }],
+        ...labeled,
       };
     }
     if (isViewImageToolSuccessOutput(result.output)) {
@@ -5271,6 +5279,7 @@ export class CfHarnessPromptLoop {
           content: followupContent,
           imageAttachments: [result.output.imageAttachment],
         }],
+        ...labeled,
       };
     }
     const taskOutcome = toolId === "finish_task" &&
@@ -5281,9 +5290,7 @@ export class CfHarnessPromptLoop {
     return {
       toolMessage,
       ...(taskOutcome !== undefined ? { taskOutcome } : {}),
-      ...(observations.length > 0
-        ? { cfcModelContextObservations: observations }
-        : {}),
+      ...labeled,
     };
   }
 
@@ -5304,7 +5311,7 @@ export class CfHarnessPromptLoop {
       // unscreened prompt-injection caveat, sourced to the page's origin, so
       // whatever the run derives from it carries the caveat on.
       const label = this.engine.browserHost !== undefined
-        ? browserHostResultLabel(output)
+        ? browserHostResultLabel(this.engine.browserHost, output)
         : undefined;
       const observations = label === undefined ? {} : {
         cfcModelContextObservations: [{
@@ -6299,10 +6306,17 @@ export class CfHarnessPromptLoop {
       if (parentHandleTableChanged) {
         await this.engine.recordHandleTable(parentHandleTable);
       }
-      summary = childFinalText +
-        (delegateInput.returnSchema === undefined
-          ? searchSourceSummary(nativeModelToolResults)
-          : "");
+      // Once a hand-off was sent, a page a browser host's child read may show
+      // the owner's account, which no label describes, so the child's words
+      // stay sealed, as its structured return's strings do.
+      summary = delegateInput.profile === BROWSER_SUBAGENT_PROFILE &&
+          this.engine.browserHost !== undefined &&
+          browserHostHandedOff(this.engine.browserHost)
+        ? "The browser child's reply is sealed: a hand-off to the owner was sent, so a page it read may show their account."
+        : childFinalText +
+          (delegateInput.returnSchema === undefined
+            ? searchSourceSummary(nativeModelToolResults)
+            : "");
       childModelTurns = childResult.modelTurns;
       if (childResult.runState.status !== "completed") {
         subagentStatus = "failed";

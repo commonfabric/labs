@@ -404,6 +404,12 @@ export interface RunCfHarnessCliDependencies {
    */
   sandboxHomeDir?: string;
   writeTextFile?: (path: string, text: string) => Promise<void>;
+
+  /** The structured-result validation verdict after a completed prompt loop. */
+  onStructuredResultValidation?: (
+    validation: CfHarnessStructuredResultValidation,
+  ) => void;
+
   readRunArtifacts?: typeof readHarnessRunArtifacts;
   createPromptLoop?: (
     options: CreateHarnessPromptLoopOptions,
@@ -3825,6 +3831,9 @@ export const runCfHarnessCli = async (
         config: effectiveStructuredResult,
         readTextFile,
       });
+    if (structuredResultValidation !== undefined) {
+      deps.onStructuredResultValidation?.(structuredResultValidation);
+    }
     if (parsed.resultJsonPath !== undefined) {
       await writeTextFile(
         parsed.resultJsonPath,

@@ -364,12 +364,14 @@ placeholders resolve only at the SQLite query boundary.
 4. **Incomplete opaque-reference boundary.** Address handles cover cell
    addresses but not the reserved value-handle form. Denial-path messages are
    not swapped, and cross-agent transfer exists only across an explicit
-   delegation boundary. Shape inspection does not expose values, and there is no
-   value dereference, release, or garbage-collection contract. Raw operator
-   reports may expose artifact paths and canonical references. Owner:
-   `cf-harness`. Retirement: every model-facing path uses held opaque handles
-   with explicit lifetime and release/readback semantics while operator tooling
-   retains resolvable provenance.
+   delegation boundary. Shape inspection does not expose values. A return
+   referent is dereferenced only by the `browser` tool's `urlHandle` and
+   `valueHandle` on a browser host; there is no general value dereference,
+   release, or garbage-collection contract. Raw operator reports may expose
+   artifact paths and canonical references. Owner: `cf-harness`. Retirement:
+   every model-facing path uses held opaque handles with explicit lifetime and
+   release/readback semantics while operator tooling retains resolvable
+   provenance.
 5. **Durable trusted-host pattern execution.** Each `run_pattern` call creates a
    detached Fabric piece whose source revision remains a retention root. The
    piece stays out of the piece list until `assign_slug` names it; abort stops

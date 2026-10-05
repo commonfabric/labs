@@ -47,6 +47,7 @@ import {
 } from "@commonfabric/memory/v2/execution-lease";
 import { selectSchedulerBasisRows } from "@commonfabric/memory/v2/scheduler-basis";
 import {
+  commitPreconditionValueHash,
   decodeMemoryBoundary,
   resolvePrincipalSessionKey,
   resolveScopeKey,
@@ -2856,6 +2857,91 @@ describe("stage D seal-into-wave", () => {
     ]);
     expect(outcome.requeuedEventIds).toEqual(["e-guarded"]);
     expect(outcome.committedEventIds).toEqual([]);
+    const guardedLink = guarded.getAsNormalizedFullLink();
+    expect(
+      Engine.selectDocHead(engine, { id: guardedLink.id, scopeKey: "space" }),
+    ).toBe(0);
+    const independentLink = independent.getAsNormalizedFullLink();
+    expect(
+      Engine.selectDocHead(engine, {
+        id: independentLink.id,
+        scopeKey: "space",
+      }),
+    ).toBe(outcome.seq);
+  });
+
+  it("resolves a failed value pin per owning contribution, never whole-wave", async () => {
+    const lease = liveLease();
+    const guarded = runtime.getCell<{ value: number }>(
+      space,
+      "wave-pinned-out",
+      undefined,
+    );
+    const independent = runtime.getCell<{ value: number }>(
+      space,
+      "wave-pin-independent-out",
+      undefined,
+    );
+
+    // The document the handler pinned holds a value other than the one the
+    // pin was taken over, as it does after a rival's commit lands between
+    // the run and the wave's commit. Written DIRECTLY against the engine, so
+    // only the engine's in-transaction validation sees it.
+    const pinnedId = "of:wave-pinned-moved";
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: pinnedId,
+          value: { value: { value: 2 } },
+        }],
+      },
+    });
+
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+
+    const handlerTx = runtime.edit();
+    stampWaveRunContext(handlerTx, {
+      actionId: "handle-pinned",
+      kind: "event-handler",
+      eventId: "e-pinned",
+      acting: { user: "did:key:alice" },
+    });
+    guarded.withTx(handlerTx).set({ value: 1 });
+    // Non-null assert rather than `?.`: a silently skipped pin would make
+    // this test vacuous.
+    handlerTx.addCommitPrecondition!(space, {
+      kind: "entity-value-hash",
+      id: pinnedId,
+      valueHash: commitPreconditionValueHash({ value: 1 }),
+    });
+    expect((await handlerTx.commit()).error).toBeUndefined();
+
+    const deriveTx = runtime.edit();
+    stampWaveRunContext(deriveTx, {
+      actionId: "derive-pin-independent",
+      kind: "derivation",
+    });
+    independent.withTx(deriveTx).set({ value: 2 });
+    expect((await deriveTx.commit()).error).toBeUndefined();
+    runtime.clearSealDestination();
+
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    // The handler REQUEUES on its failed pin; the unrelated derivation
+    // COMMITS in the same wave.
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions).toEqual([
+      { kind: "requeued" },
+      { kind: "committed" },
+    ]);
+    expect(outcome.requeuedEventIds).toEqual(["e-pinned"]);
     const guardedLink = guarded.getAsNormalizedFullLink();
     expect(
       Engine.selectDocHead(engine, { id: guardedLink.id, scopeKey: "space" }),

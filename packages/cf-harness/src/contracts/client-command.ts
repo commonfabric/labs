@@ -39,19 +39,23 @@ export const HARNESS_CLIENT_PROTOCOL_VERSION = 1 as const;
 /**
  * Features a host may require. `client_actions` is the final-action
  * vocabulary offered mid-turn through `weaver_action`; `typed_commands` is the
- * typed invocation, catalog, and settlement defined in this file.
+ * typed invocation, catalog, and settlement defined in this file;
+ * `browser_host` is a task's `browserHost` declaration, which only a console
+ * launched with `--allow-browser-host` accepts.
  */
 export const HARNESS_CLIENT_FEATURES = [
   "client_actions",
   "typed_commands",
+  "browser_host",
 ] as const;
 
 /** One feature a host may require. */
 export type HarnessClientFeature = typeof HARNESS_CLIENT_FEATURES[number];
 
 /**
- * The features this console serves. A host requiring any other is refused
- * before work starts.
+ * The features every console and stdio session serves. A host requiring any
+ * other is refused before work starts, unless the surface it reached serves
+ * that feature too.
  */
 export const HARNESS_SUPPORTED_CLIENT_FEATURES:
   readonly HarnessClientFeature[] = ["client_actions", "typed_commands"];
@@ -95,10 +99,12 @@ export interface HarnessClientProtocolMismatch {
   missing: string[];
 }
 
-/** The console's own protocol echo. */
-export const harnessClientProtocolEcho = (): HarnessClientProtocolEcho => ({
+/** The protocol echo of a surface serving `supported`. */
+export const harnessClientProtocolEcho = (
+  supported: readonly string[],
+): HarnessClientProtocolEcho => ({
   protocolVersion: HARNESS_CLIENT_PROTOCOL_VERSION,
-  features: [...HARNESS_SUPPORTED_CLIENT_FEATURES],
+  features: HARNESS_CLIENT_FEATURES.filter((name) => supported.includes(name)),
 });
 
 /**
@@ -133,22 +139,17 @@ export const readHarnessClientProtocolDeclaration = (
 };
 
 /**
- * Checks a declaration against what this console serves: the version must be
- * this one and every required feature served. Missing features are listed in
+ * Checks a declaration against the features a surface serves: the version must
+ * be this one and every required feature served. Missing features are listed in
  * the order the host named them.
  */
 export const checkHarnessClientProtocol = (
   declaration: HarnessClientProtocolDeclaration,
-  supported: readonly string[] = HARNESS_SUPPORTED_CLIENT_FEATURES,
+  supported: readonly string[],
 ):
   | { ok: true; protocol: HarnessClientProtocolEcho }
   | { ok: false; mismatch: HarnessClientProtocolMismatch } => {
-  const protocol: HarnessClientProtocolEcho = {
-    protocolVersion: HARNESS_CLIENT_PROTOCOL_VERSION,
-    features: HARNESS_CLIENT_FEATURES.filter((name) =>
-      supported.includes(name)
-    ),
-  };
+  const protocol = harnessClientProtocolEcho(supported);
   const missing = declaration.requires.filter((name) =>
     !supported.includes(name)
   );
