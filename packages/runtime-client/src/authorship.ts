@@ -623,8 +623,9 @@ class AuthorshipObservationState {
         result = { view: undefined, unloadedCell: undefined };
       } else {
         // Any other failure, such as a disposal race cancelling the read,
-        // decides nothing: the label stays unread, and no verdict is
-        // reported for it.
+        // decides nothing: the label is unread again, so no verdict is
+        // reported on what an earlier read of it found.
+        this.#labelPending.value = true;
         return;
       }
     }
@@ -672,7 +673,8 @@ class AuthorshipObservationState {
       if (this.#cancelled || requestId !== this.#authorRequestId) return;
       if (!(error instanceof CellReadRefusedError)) {
         // As for the value's label: a failure other than a refusal decides
-        // nothing, and no verdict is reported for it.
+        // nothing, and the claim is unread again.
+        this.#labelPending.author = true;
         return;
       }
       // A refused author makes no claim, as a refused subscription does.

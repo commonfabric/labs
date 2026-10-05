@@ -938,6 +938,51 @@ describe("authorship", () => {
       expect(observation.states()).toEqual([]);
     });
 
+    it("reports nothing on a label whose latest read failed, when the other source changes", async () => {
+      let fails = false;
+      const valueSubscribers = new Set<() => void>();
+      let author = { id: "alice" };
+      let notifyAuthor: ((value: unknown) => void) | undefined;
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            fails
+              ? Promise.reject(new Error("the connection closed"))
+              : Promise.resolve(authoredByLabel("alice")),
+          subscribe(callback: () => void) {
+            valueSubscribers.add(callback);
+            callback();
+            return () => valueSubscribers.delete(callback);
+          },
+        },
+        {
+          get: () => author,
+          sync: () => Promise.resolve(author),
+          subscribe: (callback: (value: unknown) => void) => {
+            notifyAuthor = callback;
+            callback(author);
+            return () => {};
+          },
+        },
+      );
+
+      try {
+        await settle();
+        expect(observation.states()).toEqual(["verified"]);
+
+        fails = true;
+        for (const callback of [...valueSubscribers]) callback();
+        await settle();
+        author = { id: "bob" };
+        notifyAuthor?.(author);
+        await settle();
+
+        expect(observation.states()).toEqual(["verified"]);
+      } finally {
+        observation.cancel();
+      }
+    });
+
     it("reports `unknown` for an author whose read the worker refuses", async () => {
       const observation = observe(
         { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
