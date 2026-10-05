@@ -33,7 +33,7 @@ import {
   matchAtomPattern,
   matchAtomPatternConjunction,
 } from "./atom-pattern.ts";
-import type { CfcConfClause } from "./clause.ts";
+import { type CfcConfClause, clausesEqual } from "./clause.ts";
 import {
   canonicalJson,
   containsAtomPatternVariable,
@@ -766,7 +766,7 @@ const inspect = async (
       );
     }
     confidentiality = [...consumed];
-    if (!confidentiality.some((clause) => deepEqual(clause, actorAtom))) {
+    if (!confidentiality.some((clause) => clausesEqual(clause, actorAtom))) {
       confidentiality.push(actorAtom);
     }
     for (const read of readEvidence(tx, "Reviewed intent")) evidence.push(read);
@@ -1003,6 +1003,15 @@ const writeRecordLink = (
   return target;
 };
 
+/** Whether two confidentiality lists hold the same clauses, in any order. */
+const sameClauses = (
+  left: readonly CfcConfClause[],
+  right: readonly CfcConfClause[],
+): boolean =>
+  left.length === right.length &&
+  left.every((a) => right.some((b) => clausesEqual(a, b))) &&
+  right.every((b) => left.some((a) => clausesEqual(a, b)));
+
 /**
  * Writes the reviewed intent after a host-trusted gesture on the surface: the
  * actor-private receipt, then the record, both in the actor's home space,
@@ -1042,7 +1051,10 @@ export async function commitReviewedIntent(
     !deepEqual(current.descriptor, state.descriptor) ||
     !deepEqual(current.descriptorLocation, state.descriptorLocation) ||
     !deepEqual(current.bound, state.bound) ||
-    !deepEqual(current.resultLocation, state.resultLocation)
+    !deepEqual(current.resultLocation, state.resultLocation) ||
+    // The record carries the labels the preview read; one that changed
+    // since the review would carry labels nobody reviewed.
+    !sameClauses(current.confidentiality, state.confidentiality)
   ) {
     throw new Error(STALE_REVIEW);
   }

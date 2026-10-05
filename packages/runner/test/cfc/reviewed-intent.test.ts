@@ -756,7 +756,10 @@ describe("reviewed-intent", () => {
         wide.getCell(sender.did(), "messaging-descriptor", {
           type: "object",
           ifc: {
-            confidentiality: [cfcAtom.user(sender.did()), "address-book-pinned"],
+            confidentiality: [
+              cfcAtom.user(sender.did()),
+              "address-book-pinned",
+            ],
             writeAuthorizedBy: [CONSUMER_WRITER],
           },
         } as never, tx).set(DESCRIPTOR as never);
