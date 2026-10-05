@@ -86,6 +86,45 @@ describe("fabrichat spaces across runtimes", () => {
       .toThrow(`lacks READ on space ${room.space}`);
   });
 
+  it("reads a group room's message count through the manager's link, and starts a room after it", async () => {
+    // The link is part of every manager handler's declared reads, so a room
+    // started with one already listed shows that the link reaches nothing a
+    // served handler may not read.
+    await start("createGroup", {
+      requestId: "g-count",
+      title: "Counted",
+      members: [member.identity.did()],
+    });
+
+    expect(
+      await starter.read([
+        "requests",
+        "g-count",
+        "entry",
+        "room",
+        "messages",
+        "count",
+      ]),
+    ).toBe(0);
+    // The member, who started nothing, reads the same count through the
+    // starter's manager, in either posture.
+    expect(
+      await member.read([
+        "requests",
+        "g-count",
+        "entry",
+        "room",
+        "messages",
+        "count",
+      ]),
+    ).toBe(0);
+    await start("createGroup", {
+      requestId: "g-count-next",
+      title: "Counted next",
+      members: [member.identity.did()],
+    });
+  });
+
   it("lets anyone read a group room made joinable by its link", async () => {
     const room = await start("createGroup", {
       requestId: "g-open",

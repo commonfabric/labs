@@ -486,6 +486,12 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     return;
   }
 
+  /** The handles other than `cell` subscribed under its ref key. */
+  peersOf(cell: CellHandle<any>): CellHandle[] {
+    const subscribed = this.#subscribed.get(cellRefToKey(cell.ref()));
+    return [...subscribed ?? []].filter((instance) => instance !== cell);
+  }
+
   async dispose(): Promise<void> {
     if (this.#lifetime.signal.aborted) return;
     // Abort synchronously first. This runs every registered consumer teardown
