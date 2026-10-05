@@ -223,6 +223,99 @@ describe("CFC builtin implementation identity", () => {
     tx.abort("test-complete");
   });
 
+  it("resolves the runtime's own registered builtins as builtins, plain and scoped", () => {
+    storageManager = StorageManager.emulate({
+      as: signer,
+    });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+
+    for (
+      const ref of [
+        "ifElse",
+        "map",
+        "filter",
+        "flatMap",
+        "fetchJson",
+        "fetchText",
+        "fetchBinary",
+        "wish",
+        "navigateTo",
+      ]
+    ) {
+      expect(
+        resolvePolicyFacingImplementationIdentity(
+          runtime.moduleRegistry.getModule(ref),
+        ),
+      ).toEqual({ kind: "builtin", builtinId: ref });
+      expect(
+        resolvePolicyFacingImplementationIdentity(
+          runtime.moduleRegistry.getModule(ref, "user"),
+        ),
+      ).toEqual({ kind: "builtin", builtinId: ref });
+    }
+  });
+
+  it("gives a raw module that only carries a debugName no builtin identity", () => {
+    storageManager = StorageManager.emulate({
+      as: signer,
+    });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+
+    // The name of a real builtin, on a module no registry handed out: a
+    // builtin identity is registry membership, never a member the module
+    // carries.
+    const captured: Array<unknown> = [];
+    const module = Object.assign(
+      raw((inputsCell) => {
+        captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
+        return () => undefined;
+      }),
+      { debugName: "ifElse" },
+    );
+
+    const tx = runtime.edit();
+    const resultCell = runtime.getCell(
+      signer.did(),
+      "cfc-debug-named-raw",
+      undefined,
+      tx,
+    );
+    runtime.runner.run(tx, module, {}, resultCell);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toBeUndefined();
+    tx.abort("test-complete");
+  });
+
+  it("gives a copy of a registered module no builtin identity, even with its name", () => {
+    storageManager = StorageManager.emulate({
+      as: signer,
+    });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+
+    const registered = runtime.moduleRegistry.getModule("ifElse");
+    // Every own property, the non-enumerable name included: the copy looks
+    // like the registered module member for member, but no registry handed
+    // it out.
+    const copy = Object.defineProperties(
+      {},
+      Object.getOwnPropertyDescriptors(registered),
+    ) as typeof registered;
+    expect(Object.getOwnPropertyDescriptor(copy, "debugName")?.value).toBe(
+      "ifElse",
+    );
+    expect(resolvePolicyFacingImplementationIdentity(copy)).toBeUndefined();
+  });
+
   it("leaves the frame stack as it found it when a raw module has no builtin identity", () => {
     storageManager = StorageManager.emulate({
       as: signer,

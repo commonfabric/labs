@@ -983,10 +983,10 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
 
   describe("attack 12: host artifacts execute but never resolve verified", () => {
     // Attack 12 — host-artifact escalation. A host-trusted callable EXECUTES
-    // but yields NO `kind:"verified"` CFC identity, by two independent
-    // defenses: the `unsafe-host:` debugName short-circuit AND the absence of
-    // provenance. A genuine canonical `fn.src` on a host fn does NOT
-    // manufacture verification.
+    // but yields NO `kind:"verified"` CFC identity: it has no provenance. A
+    // genuine canonical `fn.src` on a host fn does NOT manufacture
+    // verification, and a `debugName` on its module does not manufacture a
+    // builtin identity either — that comes only from registry membership.
 
     it("a host fn with an EMPTY debugName falls into the provenance arm and resolves undefined (src alone is not proof)", () => {
       const hostFn = Object.assign(() => 42, {
@@ -1001,7 +1001,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
       expect(identity).toBeUndefined();
     });
 
-    it("a host fn given a forged BUILTIN debugName resolves builtin (not verified) and so cannot satisfy a verified-binding claim", async () => {
+    it("a host fn given a forged BUILTIN debugName resolves no identity: a builtin identity comes only from the registry", () => {
       const hostFn = Object.assign(() => 42, {
         src: "cf:module/SOME_MODULE/main.tsx:1:1",
       });
@@ -1009,10 +1009,32 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
         { type: "javascript", debugName: "forgedBuiltin" } as unknown as Module,
         { implementation: hostFn },
       );
-      expect(identity?.kind).toBe("builtin");
-      // A builtin identity is rejected by a verified-BINDING writeAuthorizedBy
-      // claim (it demands `identity.kind === "verified"`), so the forged-builtin
-      // dodge buys no ownership.
+      // The name is a member the module carries, as a module read from a
+      // stored graph carries whatever the data said. No registry handed this
+      // module out, so it is no builtin; and its fn has no provenance.
+      expect(identity).toBeUndefined();
+    });
+
+    it("a verified fn whose module carries a debugName resolves verified: the name never overrides provenance", () => {
+      const fn = (() => 42) as unknown as HarnessedFunction;
+      recordVerifiedProvenance(fn, {
+        identity: "attack12-module",
+        symbol: "named",
+      });
+      const identity = resolvePolicyFacingImplementationIdentity(
+        { type: "javascript", debugName: "fetchJson" } as unknown as Module,
+        { implementation: fn },
+      );
+      expect(identity?.kind).toBe("verified");
+      expect((identity as { moduleIdentity?: string }).moduleIdentity).toBe(
+        "attack12-module",
+      );
+    });
+
+    it("a builtin identity cannot satisfy a verified-binding claim", async () => {
+      // A verified-BINDING writeAuthorizedBy claim demands
+      // `identity.kind === "verified"`, so even a genuine builtin identity
+      // buys no ownership of a binding-claimed slot.
       const { digest, result } = await driveE2Claim(
         {
           __ctWriterIdentityOf: {
@@ -1021,7 +1043,7 @@ describe("content-addressed identity — adversarial (C5 red-team gate)", () => 
             path: ["ownerHandler"],
           },
         },
-        { kind: "builtin", builtinId: "forgedBuiltin" },
+        { kind: "builtin", builtinId: "someBuiltin" },
         "attack12-builtin-vs-binding",
       );
       expect(digest).toBe("");
@@ -1154,6 +1176,58 @@ export default pattern<{ from: string }>(({ from }) => {
       const stamps = await stampsFromCopy("attack13-control", (m) => m);
       expect(kindsOf(stamps)).toContain("verified");
       expect(kindsOf(stamps)).not.toContain("builtin");
+    });
+
+    it("control: a host operation's identity, set on its transaction, still stamps as that builtin", async () => {
+      // Host operations (the custody seal, snapshot copies) name themselves on
+      // their own transaction rather than through a module, so registry
+      // membership is not what attributes them.
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const source = runtime.getCell<string>(
+        signer.did(),
+        "attack13-host-source",
+        {
+          type: "string",
+          ifc: { confidentiality: [cfcAtom.space(signer.did())] },
+        } as JSONSchema,
+      );
+      const target = runtime.getCell<string>(
+        signer.did(),
+        "attack13-host-target",
+      );
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          source.withTx(tx).set("confidential");
+        })).error,
+      ).toBeUndefined();
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: CUSTODY_SEAL_WRITER,
+          });
+          target.withTx(tx).set(source.withTx(tx).get());
+        })).error,
+      ).toBeUndefined();
+      const readTx = runtime.edit();
+      try {
+        const envelope = loadStoredCfcEnvelope(
+          readTx,
+          target.getAsNormalizedFullLink(),
+        );
+        expect(envelope.status).toBe("loaded");
+        expect(
+          transformedByIn(envelope).map((atom) => atom.identity),
+        ).toContainEqual({ kind: "builtin", builtinId: CUSTODY_SEAL_WRITER });
+      } finally {
+        readTx.abort();
+      }
     });
 
     it("a stored handler module naming the custody seal writes unattributed, never as the seal", async () => {
