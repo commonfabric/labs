@@ -96,7 +96,10 @@ in it needs to be `PerUser` or `PerSession`.
 - **`rooms`** holds a [`ChatIndexEntry`](ChatIndexEntry.md) for every room this
   user belongs to and hasn't forgotten, newest first. An entry is a link to its
   room and never a copy of the room's data: what a room holds is read from the
-  room, under the reader's own access.
+  room, under the reader's own access. Through the link a reader finds the
+  room's `about`, and where its conversation stands, `messages.count` and
+  `messages.newestAt`; [`ChatIndexEntry`](ChatIndexEntry.md) says why the link
+  declares those and no more.
 - **`direct`** holds, for each counterpart principal, the entry of the direct
   room this user shares with them. It has at most one entry per counterpart. It
   keeps a direct room's entry even after the room is forgotten, so the

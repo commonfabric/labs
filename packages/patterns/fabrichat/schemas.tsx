@@ -353,14 +353,33 @@ export const reactionTalliesOf = (
  * reads through the link. The manager runs in its user's home, not in the
  * room's space, and a server running it reads only the documents the room's
  * space shares with every member, never the ones each member has of their
- * own. The room's rendering and its data face reach those, and a served
- * handler whose declared reads reach one never runs, so neither is part of
- * the link. `cf-render` still draws the room through it, since a render reads
- * the rendering whatever the link declares.
+ * own. A served handler whose declared reads reach one of those never runs,
+ * and the link's schema is part of every manager handler's declared reads.
+ *
+ * So the link carries what the room's space shares with every member and
+ * costs little to read: what the room says about itself, and how many
+ * messages it holds and when the newest was sent, which the room derives from
+ * its messages alone. It leaves out the rest of the room's data face. A
+ * room's `canSend` is decided per reader, from their own profile, and its
+ * `messages.windows` are each session's own, so both reach documents of a
+ * member's own. Its `messages.latest` is shared, but holds up to
+ * `maxWindowCount` messages and their reactions, which every manager handler
+ * would then load for every room; a reader that wants the messages reads them
+ * through the room. `cf-render` still draws the room through the link, since a
+ * render reads the rendering whatever the link declares.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */
   about?: ChatRoomAbout;
+
+  /** Where the conversation stands: what of `messages` every member shares. */
+  messages?: {
+    /** How many messages the room holds, obliterated tombstones included. */
+    count: number;
+
+    /** The newest message's `sentAt`; absent while there are none. */
+    newestAt?: FabricEpochNsec;
+  };
 }
 
 /** One room in a user's chat manager. */
