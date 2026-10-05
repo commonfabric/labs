@@ -73,7 +73,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/agent-queue.tsx",
-                  "moduleIdentity": "SEujS_7ipQsvMj44d8OiaVaDYObe2QZZOhBdJgxw1hM",
+                  "moduleIdentity": "4dscjSB5Y6NQkKYqcC3b5uCsNVBkh0VAqAqNWaF2HlU",
                   "path": [
                     "setAgentRunner"
                   ]
@@ -223,6 +223,7 @@
       "AgentRunErrorCode": {
         "enum": [
           "INVALID_INPUT",
+          "INVALID_RESULT",
           "LIMIT_REACHED",
           "PROVIDER_FAILURE",
           "RUNNER_LOST",
