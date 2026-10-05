@@ -24,102 +24,16 @@ first.
 The assessment found neither property holding. This plan says how an agent
 working here keeps them, and what fails when one does not.
 
-## Vocabulary
+## The procedure and its vocabulary
 
-- **Critical function.** A function the specification states as pseudocode and
-  the Lean development mechanizes. The set is the rows of the "Pseudocode
-  Coverage Matrix" in `cfc/formal/FORMALIZATION.md`, narrowed to the ones a
-  reactive runtime executes (the §18.6 profile). The initial set is listed
-  under stage 3.
-- **Kernel.** The runtime's copies of the critical functions under
-  `packages/runner/src/cfc/kernel/`, grouped as the spec groups them: one
-  file per chapter that contributes critical functions (`label.ts` for §3.1,
-  `exchange.ts` for §4.4, `propagation.ts` for §8.9, `boundary.ts` for §8.10,
-  `store-labels.ts` for §8.12, and so on), each function in chapter order.
-  Every kernel function opens with a header naming its chapter file, section,
-  pseudocode name, and the hash of the block it was derived from; the checks
-  work per function, so the files can stay readable. A kernel function is
-  pure, with the pseudocode's argument list and return type: it takes no
-  transaction, reads no dial, calls no hook, and records no diagnostic.
-- **Adapter.** Everything else under `packages/runner/src/cfc/`. An adapter
-  gathers a kernel function's inputs from the transaction, calls it, and
-  interprets its result for this runtime: retry versus terminal verdict,
-  diagnostics, dial posture, persistence. `prepare.ts` is the boundary
-  adapter.
-- **Pin.** The specs commit the kernel was last derived from, recorded once in
-  the spec snapshot. The snapshot is the only thing that crosses the repository
-  boundary; it is committed here so CI can read it without the specs tree,
-  and it holds no spec text (see "Two repositories, one of them public").
-- **Ruling.** A specs pull request that settles a question the specification
-  did not answer, in the form `13-11-decisions.md` uses: the question, the
-  options, the proposed text, who ruled, who reviewed.
-
-## The procedure
-
-This is what an agent does. The rest of the plan is what makes each step
-checkable.
-
-1. **Read the spec before the code.** A change under `packages/runner/src/cfc/`,
-   `packages/html/src/worker/reconciler.ts` (render boundaries), the CFC parts
-   of `packages/cf-harness/`, or `docs/specs/cfc-*.md` starts by reading the
-   governing section of `commonfabric/specs` `cfc/` at the pinned commit, and
-   the kernel file for any critical function the change touches. The path is
-   `~/src/specs/cfc`, or `CF_SPECS_DIR`; an agent without a checkout reads the
-   specification on GitHub at the pin.
-
-2. **Classify the change.** One of three:
-   - **Host arrangement.** The specification is silent by design (§18 leaves it
-     to the implementation profile): where the pass runs, storage bytes,
-     diagnostics, dial plumbing, performance. No spec action. The change may
-     not touch `kernel/`.
-   - **Conforming implementation.** The specification already says what the
-     change does. The pull request names the section; a kernel change carries
-     the pseudocode hash it was derived from; the correspondence manifest row
-     is updated.
-   - **Semantic gap.** The specification does not answer, answers differently,
-     or the runtime needs a kernel function to take an input the pseudocode
-     does not. This is the only class that touches the design, and it goes
-     through step 3 before code.
-
-   A reviewer may reclassify. A change that adds an argument to a kernel
-   function, adds a case the pseudocode lacks, or states a rule with MUST force
-   in a labs document is a semantic gap whatever its author called it.
-
-3. **For a semantic gap, open the specs pull request first.** It carries the
-   prose delta, the pseudocode delta, and the Lean delta or a dated entry in
-   `cfc/notes/FUTURE-SPEC-WORK.md` naming the proof it owes, and it touches
-   `cfc/paper/README-paper-notes.md` when a paper claim is affected. It is
-   written as a ruling when the question has more than one defensible answer.
-   The labs pull request links it.
-
-4. **Land code behind the ruling, or behind a marker.** The labs change lands
-   when the specs pull request has merged, and the kernel is re-derived from
-   the new pin in the same change. Where waiting would block other work, the
-   code may land first behind a dial that defaults to the current behavior,
-   with the deciding site marked `// SPEC-PENDING <specs PR url>`. The
-   correspondence check counts those markers and fails above a budget of
-   three, so the backlog cannot grow silently; a marker is removed by the
-   change that re-derives the kernel at the merged pin. Marked code may run at
-   the `enforce-strict` default only when it is fail-closed, refusing more
-   than the ruled behavior would and persisting nothing new, since a ruling
-   can then only loosen it; anything that admits more or changes what is
-   stored waits behind a dial until ruled.
-
-5. **Keep the pin current.** When `specs` main changes a critical function's
-   pseudocode, the specs repository's own check (below) goes red against labs
-   main, and the next CFC pull request here regenerates the snapshot, after
-   which the correspondence check names every kernel function whose recorded
-   hash no longer matches. Each is re-derived or the change is argued in review as a
-   conforming divergence and recorded in the manifest with its reason. Nothing
-   lands against a stale snapshot while a mismatch is open.
-
-6. **Write the document where it governs.** A rule with MUST force, a label
-   transition, a read exclusion, an atom's meaning or a claim's semantics is
-   spec text and goes to `commonfabric/specs`. A labs document under
-   `docs/specs/` describes how this runtime arranges what the spec requires,
-   and cites the section it arranges. The conformance statement (stage 2) is
-   where this runtime answers §18.6.4's checklist, and is the one labs document
-   the spec asks for by name.
+Both live in
+[`docs/development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md):
+what a critical function, the kernel, an adapter, the pin and a ruling are;
+the six steps an agent follows; the three classes of change and the fourth
+activity of filing a ruling; the `SPEC-PENDING` marker with its budget of three
+and its fail-closed condition; and what a contributor without access to the
+private specs repository does. This plan does not restate them. It holds what
+enforces them, the stages that build the enforcement, and the decisions taken.
 
 ## Two repositories, one of them public
 
@@ -141,7 +55,11 @@ That fixes where each check lives:
   turns that job red until a labs change re-derives the kernel. The checks
   that need the spec's text, that every critical block type-checks and that
   the coverage matrix's runtime column names symbols that exist in labs, run
-  there too.
+  there too. The cross-repository job is a report on specs `main`, not a gate
+  on a specs pull request: a ruling that changes a critical block merges
+  first, the job goes red, and the labs re-derivation turns it green. Gating
+  the ruling on labs would deadlock with the labs rule that the ruling merges
+  first.
 
 Each direction of drift is therefore caught in CI, in the repository that can
 see the inputs. What no check can do is make a spec change land in labs; it can
@@ -220,7 +138,7 @@ re-stated every time either side moves.
 ### The conformance statement (stage 2)
 
 §18.6.4 says a deployment claiming the reactive-runtime profile MUST document
-nine things: its relevance mechanism, its read exclusions, its reference
+eight things: its relevance mechanism, its read exclusions, its reference
 residuals, its integrity staging level, its matrix position, its persistence
 idempotence, its trigger-read treatment, and its observation-class residuals.
 No labs document answers that list. `docs/specs/cfc-conformance-statement.md`
@@ -264,7 +182,7 @@ sections and go after the three groups.
 ### The kernel (stage 3)
 
 The runtime's critical functions move into `packages/runner/src/cfc/kernel/`
-with the pseudocode's names and shapes. The adapters in `prepare.ts` and its
+with the pseudocode's names and shapes. The adapters in `packages/runner/src/cfc/prepare.ts` (`prepare.ts` below) and its
 siblings keep their runtime concerns and call the kernel. Where today's
 runtime function carries an input the pseudocode lacks, the move is itself a
 semantic gap and follows the procedure: the specs pull request adds the input
@@ -301,10 +219,11 @@ the first is a stage on the way to it rather than an alternative.
 Changes proposed for `commonfabric/specs`, recorded here because labs is where
 they were found:
 
-- Continuous integration running `lake build`, `check-architecture.py`, and
-  the pseudocode check. The full build took 56 seconds of wall-clock time on
-  one machine on 2026-10-05 and produced no errors, so the gate is cheap; its
-  absence is why nothing recorded whether head built for four weeks.
+- The continuous-integration workflow proposed as `commonfabric/specs#46`
+  beside stage 1 (`lake build`, `check-architecture.py`, the §8.10.3
+  pseudocode check; the full build took 56 seconds of wall-clock time on one
+  machine on 2026-10-05) gains the generalized pseudocode check and the
+  cross-repository correspondence job.
 - `check-input-requirement-pseudocode.py` generalized to every critical
   function, so a pseudocode block that stops type-checking fails there.
 - A "Runtime counterpart" column in the Pseudocode Coverage Matrix naming the
@@ -314,10 +233,6 @@ they were found:
 - The ruling form of `13-11-decisions.md` adopted as the template for a specs
   pull request that settles a question, so that who ruled and who reviewed is
   recorded for every ruling and not only the §13.11 set.
-
-The `lake build` and architecture-check workflow is independent of the rest
-and is proposed beside stage 1 as `commonfabric/specs#46`; the
-cross-repository correspondence job joins that workflow at stage 2.
 
 ## Where a document goes
 
@@ -386,9 +301,10 @@ loop that calls the others, and its runtime form is the prepare-and-digest
 factoring the spec blessed in `SC-5`. Done when no manifest row reads
 `missing` and `prepare.ts` contains no decision a kernel function makes.
 
-**Stage 4: the specs side and the stronger form.** The specs repository gains
-its CI, the generalized pseudocode check, the runtime column, and the paper
-hook check; then, function by function, the kernel files become the extracted
+**Stage 4: the specs side and the stronger form.** The specs workflow of
+`commonfabric/specs#46` gains the generalized pseudocode check and the
+cross-repository job, the coverage matrix gains the runtime column and its
+missing rows, and the paper hook check is added; then, function by function, the kernel files become the extracted
 pseudocode and the manifest relation becomes a generated diff.
 
 ## What this costs, and what it does not do
