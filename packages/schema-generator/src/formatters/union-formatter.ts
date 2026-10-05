@@ -186,11 +186,19 @@ export class UnionFormatter implements TypeFormatter {
     return (type.flags & ts.TypeFlags.Union) !== 0;
   }
 
-  /** Adds the checker's optional-property alternative to a declared reading. */
+  /**
+   * Adds the checker's optional-property alternative to a declared reading.
+   * A reading whose root carries CFC labels is returned unchanged: its labels
+   * stay on the property, since the runtime's policy merge refuses labels on
+   * one branch of a union whose other branches it cannot prove type-disjoint,
+   * as a labeled `$ref` is not. The property's optionality already admits an
+   * absent value.
+   */
   withUndefined(
     schema: MutableJSONSchema,
     context: GenerationContext,
   ): MutableJSONSchema {
+    if (isObjectNotArray(schema) && schema.ifc !== undefined) return schema;
     const { default: value, ...payload } = typeof schema === "object"
       ? schema
       : { default: undefined };

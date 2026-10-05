@@ -334,8 +334,15 @@ unions and intersections, and through alias bodies such as `Array<T>`,
 remain outside `required`. When the checker adds `undefined` for an optional
 property, the declared bound value retains that alternative, including an
 optional cell reference. A synthetic reference with no checker instantiation
-reads that alternative from the member's optional flag. Explicit `T | undefined`
-and optional tuple elements also retain `undefined`.
+reads that alternative from the member's optional flag. A bound value whose
+schema carries CFC labels at its root, such as an optional
+`Confidential<Node<T>, …>` member, takes no `undefined` alternative: its labels
+stay on the property, because the runtime's policy merge refuses labels on one
+`anyOf` branch whose siblings it cannot prove type-disjoint, and a labeled
+`$ref` cannot be (`assertNoDivergentIfcBranches`,
+`packages/runner/src/cfc/schema-merge.ts`). The property remains outside
+`required`. Explicit `T | undefined` and optional tuple elements also retain
+`undefined`.
 
 Library key arguments also read their bindings: `Pick<T, K>` and `Omit<T, K>`
 accept a `K` bound to a literal key union, and `Record<K, T>` accepts a bound

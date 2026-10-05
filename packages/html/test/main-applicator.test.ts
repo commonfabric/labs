@@ -26,12 +26,14 @@ const createMockRuntimeClient = () => {
     request: () => Promise.resolve({}),
     subscribe: () => Promise.resolve(),
     unsubscribe: () => Promise.resolve(),
+    peersOf: () => [],
   };
   return {
     [$conn]: () => conn,
     getConnection: () => ({
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
+      peersOf: () => [],
     }),
   } as any;
 };
