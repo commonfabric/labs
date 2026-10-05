@@ -586,7 +586,6 @@
         },
         "required": [
           "$NAME",
-          "$UI",
           "name",
           "avatar",
           "bio",
@@ -598,7 +597,8 @@
           "addElement",
           "removeElement",
           "isEditing",
-          "initialNameApplied"
+          "initialNameApplied",
+          "$UI"
         ],
         "type": "object"
       },
@@ -748,6 +748,23 @@
           "about": {
             "$ref": "#/$defs/ChatRoomAbout",
             "description": "What the room says about itself."
+          },
+          "messages": {
+            "description": "Where the conversation stands: what of `messages` every member shares.",
+            "properties": {
+              "count": {
+                "description": "How many messages the room holds, obliterated tombstones included.",
+                "type": "number"
+              },
+              "newestAt": {
+                "description": "The newest message's `sentAt`; absent while there are none.",
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
           }
         },
         "type": "object"

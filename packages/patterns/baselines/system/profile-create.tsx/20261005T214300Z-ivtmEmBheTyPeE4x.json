@@ -281,7 +281,6 @@
         },
         "required": [
           "$NAME",
-          "$UI",
           "name",
           "avatar",
           "bio",
@@ -293,16 +292,9 @@
           "addElement",
           "removeElement",
           "isEditing",
-          "initialNameApplied"
+          "initialNameApplied",
+          "$UI"
         ],
-        "type": "object"
-      },
-      "DefaultProfileSlot": {
-        "properties": {
-          "profile": {
-            "$ref": "#/$defs/BackwardsCompatibleProfile"
-          }
-        },
         "type": "object"
       },
       "ExternalIdentityAssertion": {
@@ -547,37 +539,11 @@
       }
     },
     "properties": {
-      "defaultProfile": {
-        "$ref": "#/$defs/DefaultProfileSlot",
-        "asCell": [
-          "cell"
-        ]
+      "defaultName": {
+        "type": "string"
       },
-      "legacyDefaultProfile": {
-        "anyOf": [
-          {
-            "type": "undefined"
-          },
-          {
-            "$ref": "#/$defs/BackwardsCompatibleProfile"
-          }
-        ],
-        "asCell": [
-          "cell"
-        ]
-      },
-      "mru": {
-        "asCell": [
-          "cell"
-        ],
-        "items": {
-          "$ref": "#/$defs/BackwardsCompatibleProfile"
-        },
-        "type": "array"
-      },
-      "offersSetDefault": {
-        "default": true,
-        "type": "boolean"
+      "inputId": {
+        "type": "string"
       },
       "profiles": {
         "asCell": [
@@ -590,20 +556,58 @@
       }
     },
     "required": [
-      "profiles",
-      "offersSetDefault",
-      "mru"
+      "profiles"
     ],
     "type": "object"
   },
-  "pattern": "system/profile-picker.tsx",
+  "pattern": "system/profile-create.tsx",
   "resultSchema": {
+    "$defs": {
+      "CreateProfileEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
     "properties": {
+      "$NAME": {
+        "type": "string"
+      },
       "$UI": {
         "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "createProfile": {
+        "$ref": "#/$defs/CreateProfileEvent",
+        "asCell": [
+          "stream"
+        ]
       }
     },
     "required": [
+      "createProfile",
+      "$NAME",
       "$UI"
     ],
     "type": "object"
