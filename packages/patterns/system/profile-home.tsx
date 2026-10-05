@@ -160,15 +160,15 @@ export type ShareInboxPiece = {
 
 /**
  * Where things shared with this profile's owner are delivered: a link to the
- * owner's share inbox piece — the piece whose `receive` stream other daemons
- * call, in the dedicated inbox space the owner's daemon minted (loom
- * `shares/inbox.py`; the design is loom's weaver-multiuser-sharing D8 and
- * share-inbox proposal). The link names the piece and its space together;
- * it carries no memory host because the inbox lives on the host the profile
- * pointing at it lives on, so a reader uses the host it read the profile
- * from. Public on purpose and no secret in it: the inbox space's ACL is the
- * gate, the link only says where to knock. Stored as the `link@1` sigil,
- * `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
+ * owner's share inbox piece, the piece whose `receive` stream senders call, in
+ * a space of its own. That is either the private inbox the owner's Home
+ * creates (`private-inbox.tsx`) or one the owner's loom daemon created; both
+ * take the same offer envelope. The link names the piece and its space
+ * together; it carries no memory host because the inbox lives on the host the
+ * profile pointing at it lives on, so a reader uses the host it read the
+ * profile from. Public on purpose and no secret in it: the link only says
+ * where to knock, and the inbox decides what it keeps. Stored as the `link@1`
+ * sigil, `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
  * the same form the profile's pinned-piece elements take; `piece` is absent
  * when the owner has no inbox.
  *
